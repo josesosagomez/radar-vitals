@@ -1,0 +1,40 @@
+# exp001 — offline baseline: estimate HR from a recorded capture, compare to Masimo.
+# No magic numbers in code — everything tunable lives here (CLAUDE.md s.2).
+
+seed: 0
+
+# --- inputs (place files in data/raw/, never edit them) ---
+data:
+  radar_bin: ../../data/raw/REPLACE_capture.bin
+  masimo_csv: ../../data/raw/REPLACE_masimo.csv
+  # PC wall-clock (UTC Unix seconds) at the radar capture start, logged during the session.
+  radar_start_epoch: 1778672295
+
+# --- chirp / frame geometry (fill from your mmWave Studio profile) ---
+chirp:
+  num_adc_samples: 256
+  num_rx: 4
+  num_tx: 2
+  num_chirps_per_frame: 2
+  num_frames: 2400          # e.g. 120 s at 20 Hz
+  frame_rate_hz: 20.0       # = slow-time / phase sample rate
+  range_resolution_m: 0.044 # c / (2 * sweep_bandwidth) — compute from your profile
+  # Enforce Low Power ADC mode + IF bandwidth <= 5 MHz in the profile (TI xWR1642).
+
+# --- vitals processing ---
+vitals:
+  gate_min_m: 1.3
+  gate_max_m: 1.6
+  heart_band_hz: [0.8, 2.0]
+  resp_band_hz: [0.1, 0.5]
+  window_s: 20            # sliding-window length for each HR estimate
+  hop_s: 5                # step between windows
+
+# --- comparison ---
+compare:
+  min_pi: 0.5             # Masimo Perfusion Index quality gate
+
+# --- logging ---
+wandb:
+  enabled: false          # set true once WANDB_API_KEY is exported
+  project: radar-vitals

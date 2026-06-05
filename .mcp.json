@@ -1,0 +1,27 @@
+{
+  "mcpServers": {
+    "context7": {
+      "command": "npx",
+      "args": ["-y", "@upstash/context7-mcp@latest"]
+    },
+    "arxiv": {
+      "type": "http",
+      "url": "https://api.alphaxiv.org/mcp/v1"
+    },
+    "arxiv-latex": {
+      "command": "uvx",
+      "args": ["arxiv-latex-mcp"]
+    },
+    "wandb": {
+      "command": "uvx",
+      "args": [
+        "--from",
+        "git+https://github.com/wandb/wandb-mcp-server.git",
+        "wandb-mcp-server"
+      ],
+      "env": {
+        "WANDB_API_KEY": "${WANDB_API_KEY}"
+      }
+    }
+  }
+}

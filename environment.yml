@@ -1,0 +1,25 @@
+name: radar-vitals
+# Pinned starter environment. After your FIRST successful build, lock it exactly with:
+#   conda env export --no-builds > environment.lock.yml
+# and commit that lock. Bump versions deliberately, not accidentally.
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - numpy=1.26.*
+  - scipy=1.13.*          # signal processing: butterworth filters, FFT, find_peaks
+  - pandas=2.2.*          # Masimo CSV handling, time alignment
+  - matplotlib=3.8.*      # static figures (overlay plots, Bland-Altman)
+  - pyyaml=6.0.*          # experiment configs
+  - pyqtgraph=0.13.*      # fast real-time plotting (Rung C live display)
+  - pyside6=6.7.*         # Qt backend for pyqtgraph
+  - h5py=3.11.*           # optional: store processed signals
+  - pytest=8.*            # synthetic sanity checks
+  - pip
+  - pip:
+      - wandb             # experiment tracking (latest; pin in lock file)
+      # --- Rung C live raw-ADC capture from the DCA1000 (choose ONE when you get there) ---
+      # The DCA1000 streams LVDS as UDP; these libs capture/parse it in Python.
+      # They are NOT needed for Rung A/B. Uncomment the one you adopt and pin it.
+      # - openradar          # github: PreSenseRadar/OpenRadar (DSP + DCA1000 helpers)
+      # - <your-chosen-dca1000-udp-capture-lib>

@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.ipynb_checkpoints/
+
+# Environment / secrets
+.env
+*.key
+
+# Large raw/processed data — keep the folder, ignore big blobs.
+# Radar captures and exports can be huge; track configs + metrics, not raw binaries.
+data/raw/*.bin
+data/raw/*.dat
+data/processed/*.parquet
+data/processed/*.npy
+
+# Results: keep configs + metrics (json/yaml), ignore heavy artifacts
+results/**/*.npy
+results/**/*.bin
+results/**/*.png
+
+# W&B local cache
+wandb/
+
+# OS / editor
+.DS_Store
+.vscode/
+*.swp
