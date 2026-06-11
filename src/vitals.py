@@ -101,6 +101,60 @@ def remove_impulse_noise(phase: np.ndarray, thresh: float = 1.5) -> np.ndarray:
     return np.cumsum(d)
 
 
+def run_pipeline_locked(
+    cube: np.ndarray,
+    range_axis: np.ndarray,
+    params: VitalsParams,
+    window_frames: int,
+    hop_frames: int,
+) -> list[dict]:
+    """Phase-locked variant: selects the range bin ONCE for the entire cube.
+
+    Avoids bin-hopping and phase discontinuities that occur when select_range_bin
+    is called independently on each window slice.
+
+    Steps:
+      1. Select the range bin from the full cube.
+      2. Extract and denoise the full slow-time phase (all frames).
+      3. Run per-window spectral estimation on the continuous, clean phase.
+
+    Each returned dict has the same keys as run_pipeline() plus:
+      - "bin_locked": True
+      - "chosen_bin" / "chosen_range_m": the single locked bin (same for every window)
+      - "window_start_frame" / "window_end_frame": frame indices into the cube
+    """
+    sel = select_range_bin(cube, range_axis, (params.gate_min_m, params.gate_max_m))
+    locked_bin = sel["bin_idx"]
+    locked_range_m = sel["range_m"]
+
+    phase = phase_at_bin(cube, locked_bin)
+    phase_clean = remove_impulse_noise(phase)
+
+    n = len(phase_clean)
+    results: list[dict] = []
+    for s in range(0, n - window_frames + 1, hop_frames):
+        e = s + window_frames
+        win_phase = phase_clean[s:e]
+        heart = estimate_rate_from_phase(win_phase, params.fs_hz, params.heart_band_hz)
+        resp = estimate_rate_from_phase(win_phase, params.fs_hz, params.resp_band_hz)
+        results.append({
+            "hr_bpm": heart["rate_bpm"],
+            "rr_bpm": resp["rate_bpm"],
+            "chosen_bin": locked_bin,
+            "chosen_range_m": locked_range_m,
+            "bin_locked": True,
+            "bin_energy": sel["energy"],
+            "phase_unwrapped": phase[s:e],
+            "phase_clean": win_phase,
+            "heart_spectrum": heart["spectrum"],
+            "heart_freqs_hz": heart["freqs_hz"],
+            "heart_peak_hz": heart["peak_hz"],
+            "window_start_frame": s,
+            "window_end_frame": e,
+        })
+    return results
+
+
 def run_pipeline(cube: np.ndarray, range_axis: np.ndarray, params: VitalsParams) -> dict:
     """Full offline estimate from a radar cube. Returns HR, RR, and all intermediates.
 
