@@ -30,6 +30,8 @@ vitals:
   resp_band_hz: [0.1, 0.5]
   window_s: 20            # sliding-window length for each HR estimate
   hop_s: 5                # step between windows
+  locked_bin: 29          # confirmed chest bin (1.264 m); explicit pin decouples
+                          # bin selection from trim window length
 
 # --- comparison ---
 compare:

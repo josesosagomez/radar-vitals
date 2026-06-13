@@ -7,13 +7,113 @@
 
 ## Current state
 
-- **Where we are:** exp001 full pipeline running end-to-end on real capture. Bin locking
-  active (`run_pipeline_locked`). Harmonic rejection reverted (over-triggered, deferred).
-- **Last verified result:** MAE 6.21 bpm, RMSE 8.80 bpm, bias -4.51 bpm over 21 windows
-  (locked bin 29, 1.264 m). 9/9 tests pass. `config.yaml` uses confirmed
-  range_resolution_m = 0.0436 m/bin, gate [1.1–1.5 m].
-- **Open question / blocker:** Harmonic rejection needs principled approach (cepstrum,
-  notch-then-search, or longer window) — defer to exp002 after literature review.
+- **Where we are:** exp002 closed. Final form: ECA+AHET + physiological outlier gate,
+  30 s trim, bin 29 pinned. Reproducible baseline: MAE 5.29, RMSE 7.03, bias −2.27 bpm
+  (AHET-verified windows). Tagged `exp002-baseline`. 12/12 tests pass.
+- **Last verified result:** exp002 MAE 5.29, RMSE 7.03, bias −2.27 bpm (AHET-verified).
+  Evidence: `results/exp002_harmonic_rejection/20260613_171020/`. Run: 2026-06-13.
+  All-windows (incl gated): MAE 5.16, RMSE 6.88, bias −2.28.
+- **Open question / blocker:** Respiratory-dominance failure mode documented (windows 9-12,
+  ~60 bpm harmonic passes AHET; physics limit of single-bin extraction). Second capture
+  required to assess generalisation before any paper-grade claim.
+
+---
+
+## Log (newest first)
+
+### 2026-06-13 — exp002 closed: final cleanup + outlier gate + tag
+
+**Worked:**
+- ECA+AHET final form confirmed reproducible: MAE 5.29, RMSE 7.03, bias −2.27 bpm
+  (AHET-verified windows only). All-windows: MAE 5.16, RMSE 6.88, bias −2.28.
+  Evidence: `results/exp002_harmonic_rejection/20260613_171020/`. Tagged: `exp002-baseline`.
+- Physiological outlier gate on f_r moved into `estimate_rate_from_phase()`:
+  if f_r_hz outside [0.15, 0.60] Hz, falls back to no-ECA bandpass+argmax and sets
+  `f_r_outlier=True`. Correctly fired at window 10 (f_r=8.8 bpm); produced HR=69.0 bpm
+  (error -2.5 bpm) instead of NaN — a real improvement over the unprotected NaN.
+- All algorithm decisions cross-reviewed (ChatGPT plan review, Codex implementation
+  review) and findings applied before implementation.
+- bin 29 pinned explicitly in config for both exp001 and exp002 — decouples bin
+  selection from trim window length, makes experiments directly comparable.
+- 12/12 tests passing throughout. Evidence: `pytest tests/ -v`.
+
+**Failed / documented negative results:**
+- EMA f_r smoothing (alpha=0.3): adds lag, net MAE regression +0.79 bpm vs no-EMA.
+  Removed. Documented in notes/approach.md.
+- 45 s trim: started analysis in more volatile stretch of this capture, MAE
+  regression +2.28 bpm. Reverted to 30 s. Documented in notes/approach.md.
+
+**Known limitation:**
+- Windows 9-12: respiratory-dominance event causes ~60 bpm estimate despite AHET
+  verification. Physics limitation of single-range-bin extraction, not algorithm.
+  Documented in notes/approach.md §exp002 Final Assessment.
+  Candidate fix: multi-bin coherent combination (deferred to exp004).
+
+**Next:**
+- [ ] Second capture: different day, same setup (1.4 m seated)
+  Protocol: 2 min settle, 2 min record, same Masimo export procedure
+  Goal: confirm MAE ~5 bpm generalises beyond this recording
+- [ ] If second capture confirms generalisation: add standing posture capture
+- [ ] exp003: window length study (25 s, 30 s vs current 20 s)
+- [ ] exp004: multi-bin coherent combination for respiratory dominance robustness
+
+---
+
+### 2026-06-12 — exp002: ECA + AHET harmonic rejection
+
+**Worked:**
+- ECA + AHET implemented in `src/vitals.py` per arXiv:2503.07062 (Tang et al., 2025),
+  with all four OpenAI cross-review improvements applied:
+  1. QR projection (`np.linalg.qr`) — not explicit matrix inverse
+  2. Parabolic interpolation for f_r refinement beyond FFT bin width
+  3. Local AHET 2nd-harmonic search [2×f_h ± 0.1 Hz] — not global to 4.0 Hz
+  4. Adaptive K_b guard: exclude harmonic k if within 0.15 Hz of cardiac candidate;
+     hard floor k = 1..4 (covers known 60 bpm / 4th-harmonic failure).
+  5. f_final blends fundamental and halved 2nd harmonic estimates.
+- `compare.metrics()` made NaN-safe; `n_nan_windows` reported separately.
+- `experiments/exp002_harmonic_rejection/` created with config + run.py.
+- 12/12 tests passing (9 existing + 3 new ECA/AHET unit tests). Evidence: `pytest tests/ -v`.
+
+- **exp002 vs exp001 metrics (same capture, locked bin 29, 1.264 m):**
+
+  | Metric   | exp001 baseline | exp002 ECA+AHET | Δ        |
+  |----------|-----------------|-----------------|----------|
+  | MAE      | 6.21 bpm        | 5.29 bpm        | −0.92    |
+  | RMSE     | 8.80 bpm        | 7.03 bpm        | −1.77    |
+  | Bias     | −4.51 bpm       | −2.27 bpm       | +2.24    |
+  | N windows| 21              | 20 (+ 1 NaN)    |          |
+
+  RMSE improvement larger than MAE: confirms ECA+AHET specifically reduced large-error
+  outlier windows (harmonic-contaminated windows), as designed.
+
+- Window 10 correctly produced NaN: f_r misestimated at 8.8 bpm (implausible —
+  irregular breathing segment). Pipeline refused to fabricate per CLAUDE.md §4.
+  This is correct behaviour.
+- 20/20 non-NaN windows AHET-verified.
+
+**Remaining issues / not yet resolved:**
+- 5 windows still have errors > 10 bpm despite AHET verification. ECA removed the
+  harmonic cause; remaining errors likely spectral leakage or genuine HR variability
+  unresolvable at 20 s window length.
+- Bias −2.27 bpm still present. Parabolic interpolation halved it vs exp001 (−4.51 bpm)
+  but did not eliminate. Candidate: 20 s window too short for sub-bin precision at
+  resting HR (~60–75 bpm → 1.0–1.25 Hz, where bin spacing is 0.05 Hz = 3 bpm).
+- Window 10 NaN: f_r misestimation during irregular breathing segment. Needs a
+  more robust f_r estimator (e.g., median over multiple sub-windows).
+
+**Decisions:**
+- exp002 is the new performance baseline: MAE 5.29, RMSE 7.03, bias −2.27 bpm.
+- Tag this commit as `exp002-baseline` before any further changes.
+- exp001 results remain archived in `results/exp001_offline_baseline/` at git
+  commit 2ae18de — reproducible independently.
+- `run_pipeline_locked()` now always applies ECA + AHET. exp001 re-runs with the new
+  code will differ; original exp001 results are pinned to the archived results dir.
+
+**Next:**
+- [ ] Analyse overlay plot for large-error window pattern (leakage vs HR variability)
+- [ ] `git tag exp002-baseline`
+- [ ] Collect second capture (different session) to test generalisation
+- [ ] exp003: window length and hop tuning (30 s vs 20 s tradeoff study)
 
 ---
 
@@ -41,15 +141,12 @@
 - [x] Rung B: first paired offline capture; run exp001; inspect overlay plot.
       → MAE 6.21 bpm (locked bin), 7.37 bpm (per-window, pre-locking). Pipeline green.
 - [ ] Tune distance gate + filter bands from real data.
-- [ ] DEFERRED: exp002 — harmonic rejection (literature-first: cepstrum / notch-then-search
-      / longer window). Do not retry fixed-threshold approach.
+- [x] DONE: exp002 — ECA + AHET harmonic rejection. MAE 5.29, RMSE 7.03, bias −2.27 bpm.
 - [ ] DEFERRED (write-up): quantitative validation — MAE/RMSE + Bland-Altman across
       subjects/postures. Rig is the same; just start logging paired numbers.
 - [ ] DEFERRED: validate respiration-band extraction against Masimo `Breaths / min`.
 
 ---
-
-## Log (newest first)
 
 ### 2026-06-10 — Part 7: revert verification and SESSION update
 **Worked:**

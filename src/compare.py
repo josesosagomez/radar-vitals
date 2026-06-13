@@ -38,13 +38,23 @@ def compare(radar_df: pd.DataFrame, masimo_df: pd.DataFrame, min_pi: float = 0.5
 
 
 def metrics(merged: pd.DataFrame, drop_low_quality: bool = True) -> dict:
-    """MAE / RMSE / bias over the merged comparison (optionally excluding low-PI windows)."""
+    """MAE / RMSE / bias over the merged comparison (optionally excluding low-PI windows).
+
+    NaN hr_bpm rows (ECA+AHET low-confidence windows) are excluded from error stats
+    and counted separately under 'n_nan_windows'.
+    """
     d = merged[~merged["low_quality"]] if drop_low_quality else merged
     if len(d) == 0:
         raise ValueError("No usable windows after quality filtering.")
-    err = d["error_bpm"].to_numpy()
+    nan_mask = d["hr_bpm"].isna()
+    n_nan = int(nan_mask.sum())
+    d_valid = d[~nan_mask]
+    if len(d_valid) == 0:
+        raise ValueError("All windows are NaN after ECA+AHET; no credible estimates.")
+    err = d_valid["error_bpm"].to_numpy()
     return {
-        "n_windows": int(len(d)),
+        "n_windows": int(len(d_valid)),
+        "n_nan_windows": n_nan,
         "mae_bpm": float(np.mean(np.abs(err))),
         "rmse_bpm": float(np.sqrt(np.mean(err ** 2))),
         "bias_bpm": float(np.mean(err)),

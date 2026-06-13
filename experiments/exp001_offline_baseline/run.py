@@ -76,9 +76,11 @@ def main(config_path: Path) -> None:
         heart_band_hz=tuple(v["heart_band_hz"]), resp_band_hz=tuple(v["resp_band_hz"]),
     )
     window_frames = int(v["window_s"] * c["frame_rate_hz"])
-    hop_frames = int(v["hop_s"] * c["frame_rate_hz"])
+    hop_frames    = int(v["hop_s"]    * c["frame_rate_hz"])
+    cfg_locked_bin = v.get("locked_bin", None)
     window_results = vitals.run_pipeline_locked(
-        profiles[trim_frames:], raxis, params, window_frames, hop_frames
+        profiles[trim_frames:], raxis, params, window_frames, hop_frames,
+        locked_bin=cfg_locked_bin,
     )
     locked_bin = window_results[0]["chosen_bin"] if window_results else None
     locked_range_m = window_results[0]["chosen_range_m"] if window_results else None
