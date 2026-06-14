@@ -1,0 +1,35 @@
+# exp000 — diagnostic range-profile visualisation.
+# Loads exp002_sit_chair_back data and produces mean profile, heatmap, and animation.
+# No magic numbers in code — all parameters live here (CLAUDE.md §2).
+
+seed: 0
+
+# --- inputs ---
+data:
+  radar_bin: data/raw/exp002_sit_chair_back_radar.bin
+  logfile_csv: data/raw/exp002_sit_chair_back_radar_LogFile.csv
+  utc_offset_hours: 3          # Saudi Arabia local time → UTC
+
+# --- chirp / frame geometry ---
+# num_rx=2 confirmed from file size: 629145600 B / (32×2×256×4 B) = 9600 frames.
+chirp:
+  num_adc_samples: 256
+  num_rx: 4
+  num_tx: 2
+  num_chirps_per_frame: 32
+  num_frames: 4800            # overridden by infer_num_frames at runtime
+  frame_rate_hz: 20.0
+  range_resolution_m: 0.0436   # confirmed from mmWave Studio Calculated Parameters
+
+# --- plot / visualisation ---
+plot:
+  max_range_m: 4.0
+  locked_bin: 29               # confirmed chest bin (1.264 m)
+  gate_min_m: 1.1
+  gate_max_m: 1.6
+  animation_fps: 20
+
+# --- logging ---
+wandb:
+  enabled: false
+  project: radar-vitals

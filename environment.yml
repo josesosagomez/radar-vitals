@@ -10,6 +10,7 @@ dependencies:
   - scipy=1.13.*          # signal processing: butterworth filters, FFT, find_peaks
   - pandas=2.2.*          # Masimo CSV handling, time alignment
   - matplotlib=3.8.*      # static figures (overlay plots, Bland-Altman)
+  - ffmpeg                # mp4 animation writer for exp000_range_plot
   - pyyaml=6.0.*          # experiment configs
   - pyqtgraph=0.13.*      # fast real-time plotting (Rung C live display)
   - pyside6=6.7.*         # Qt backend for pyqtgraph

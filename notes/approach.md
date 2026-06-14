@@ -265,6 +265,63 @@ APPROVED — OpenAI cross-review completed. Four implementation improvements man
    Hard floor: always include k=1..4 for this capture (4th harmonic = known failure)
 Full review recorded in SESSION.md.
 
+#### AHET second-harmonic criterion — known limitations (as of 2026-06-14)
+
+**Pass rule:** `second_peak_magnitude > comparison_floor`, where `comparison_floor` is
+the median cardiac-band magnitude on the candidate-specific second-pass ECA spectrum.
+The ratio is `second_peak_magnitude / comparison_floor`; a ratio > 1.0 is a pass.
+
+**Ratio distribution observed in exp002 (`20260614_161352`):**
+- min 1.035, median 1.233, max 2.385 (0.30, 1.82, 7.55 dB).
+- 16/20 AHET-verified windows fall in the [1.0, 1.5] range — the threshold is very soft.
+- A hypothetical threshold of 1.5 would retain only 4/20 estimates; any threshold
+  tuning requires independent capture data and cannot be derived from exp002 alone.
+
+**HR accuracy is not guaranteed by a passing ratio:**
+- 5 of the 20 verified windows have absolute HR error ≥ 10 bpm, with ratios spanning
+  1.060–1.233. The ratio confirms second-harmonic structure is present but does not
+  confirm the fundamental is the cardiac peak rather than a respiratory harmonic.
+
+**Window-length-dependent search-region bin count:**
+- The ±0.1 Hz search region around 2×f_h contains approximately 5, 5, and 7 FFT bins
+  at window lengths of 20, 25, and 30 s respectively (at a representative 1.2 Hz
+  candidate with production rFFT sizes 400/500/600, not zero-padded).
+- Under an idealised null (equal independent noise), the probability that the maximum
+  of m bins exceeds the cardiac-band median is 1 − 0.5^m ≈ 0.969 / 0.969 / 0.992.
+- This means longer windows mechanically inflate AHET pass rates independent of true
+  second-harmonic evidence. exp004 pass-rate comparisons across window lengths must
+  carry the explicit caveat: "AHET pass rates are indicative only; criterion not
+  independently validated; window-length-dependent search-region bin counts
+  (~5/5/7 at 20/25/30 s) may inflate pass rates at longer windows."
+
+**No rejection population in exp002:**
+- exp002 produced 20 AHET passes, 0 AHET-rejection failures, and 1 respiratory
+  fallback (no AHET attempted). There is no failed-window population from which to
+  estimate rejection performance; the criterion cannot be validated or tuned on
+  this capture alone.
+
+**Planned evaluation (deferred until second capture):**
+- Monte Carlo framework with four synthetic conditions per window length (20/25/30 s):
+  genuine_harmonic (cardiac fundamental + second harmonic present),
+  missing_harmonic (fundamental only, no second harmonic),
+  noise_only (no cardiac signal),
+  resp_competitor (respiratory harmonic inside cardiac band, separated from true HR).
+- Development/held-out seed split: criterion and threshold selected on development
+  seeds, evaluated once on held-out seeds.
+- Adequacy rule: Wilson 95% CI upper bound on false-pass rate < 0.10.
+- Predeclared alternative criteria to compare against the current floor ratio:
+  `local_prominence` (second-harmonic peak prominence relative to local background)
+  and `peak_local_median` (second-harmonic peak divided by local-neighbourhood median,
+  with defined guard bins and edge handling).
+- ROC curves for criteria with continuous scores; operating-point plots for binary criteria.
+- Production rFFT sizes (400/500/600, not zero-padded) must be used throughout to
+  match the real search-bin counts.
+
+**Required condition for any criterion change:**
+Any new threshold or alternative criterion selected on synthetic/development data must
+be confirmed on an independent real capture before it is used to interpret exp004
+pass-rate differences.
+
 ---
 
 ## 8. Evaluation plan

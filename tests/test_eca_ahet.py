@@ -47,6 +47,26 @@ def _make_harmonic_signal(seed: int = 0) -> np.ndarray:
     return sig
 
 
+def _run_single_window(phase: np.ndarray) -> dict:
+    """Run one synthetic phase window through the locked-bin production path."""
+    cube = np.exp(1j * phase)[:, None, None, None]
+    params = vitals.VitalsParams(
+        fs_hz=FS,
+        gate_min_m=1.3,
+        gate_max_m=1.6,
+    )
+    results = vitals.run_pipeline_locked(
+        cube,
+        np.array([1.4]),
+        params,
+        window_frames=N,
+        hop_frames=N,
+        locked_bin=0,
+    )
+    assert len(results) == 1
+    return results[0]
+
+
 def test_eca_removes_respiratory_harmonic():
     """ECA projection removes the 4th respiratory harmonic from the cardiac band.
 
@@ -117,3 +137,147 @@ def test_nan_on_no_credible_candidate():
     )
     assert out["harmonic_suspect"] is True
     assert out["ahet_verified"] is False
+
+
+def test_successful_ahet_window_records_consistent_intermediates():
+    out = _run_single_window(_make_harmonic_signal())
+
+    required_fields = {
+        "phase_unwrapped",
+        "phase_clean",
+        "phase_eca",
+        "resp_freqs_hz",
+        "resp_spectrum",
+        "resp_peak_raw_index",
+        "resp_peak_raw_hz",
+        "resp_peak_refined_hz",
+        "heart_freqs_hz",
+        "heart_spectrum_first_pass",
+        "heart_spectrum",
+        "heart_spectrum_stage",
+        "heart_peak_hz",
+        "accepted_candidate_rank",
+        "accepted_candidate_initial_hz",
+        "accepted_candidate_refined_hz",
+        "accepted_second_harmonic_refined_hz",
+        "candidate_attempted",
+        "candidate_peak_bin_index",
+        "candidate_initial_hz",
+        "candidate_refined_hz",
+        "candidate_peak_magnitude",
+        "candidate_prominence",
+        "candidate_argmax_fallback",
+        "second_peak_bin_hz",
+        "second_peak_refined_hz",
+        "second_peak_magnitude",
+        "comparison_floor",
+        "peak_to_floor_ratio",
+        "peak_to_floor_ratio_db",
+        "region_available",
+        "candidate_passed",
+        "ahet_attempt_spectrum",
+        "schema_version",
+        "window_index",
+        "start_frame",
+        "end_frame",
+        "window_frames",
+        "hop_frames",
+        "frame_rate_hz",
+        "range_bin",
+        "range_m",
+        "eca_applied",
+        "f_r_outlier",
+        "ahet_verified",
+    }
+    assert required_fields <= out.keys()
+    assert "start_epoch" not in out
+    assert "end_epoch" not in out
+
+    rank = out["accepted_candidate_rank"]
+    assert out["heart_spectrum_stage"] == 2
+    assert out["ahet_verified"] is True
+    assert 0 <= rank < vitals.AHET_MAX_CANDIDATES
+    assert out["candidate_passed"].shape == (vitals.AHET_MAX_CANDIDATES,)
+    assert out["ahet_attempt_spectrum"].shape == (
+        vitals.AHET_MAX_CANDIDATES,
+        len(out["heart_freqs_hz"]),
+    )
+    assert out["candidate_passed"].sum() == 1
+    assert bool(out["candidate_passed"][rank])
+    assert out["accepted_candidate_initial_hz"] == pytest.approx(
+        out["candidate_initial_hz"][rank]
+    )
+    assert out["accepted_candidate_refined_hz"] == pytest.approx(
+        out["candidate_refined_hz"][rank]
+    )
+    assert out["accepted_second_harmonic_refined_hz"] == pytest.approx(
+        out["second_peak_refined_hz"][rank]
+    )
+    np.testing.assert_allclose(
+        out["heart_spectrum"], out["ahet_attempt_spectrum"][rank]
+    )
+
+    assert out["schema_version"] == vitals.INTERMEDIATE_SCHEMA_VERSION
+    assert out["window_index"] == 0
+    assert out["start_frame"] == 0
+    assert out["end_frame"] == N
+    assert out["window_frames"] == N
+    assert out["hop_frames"] == N
+    assert out["frame_rate_hz"] == FS
+    assert out["range_bin"] == 0
+    assert out["range_m"] == pytest.approx(1.4)
+
+
+def test_failed_ahet_window_uses_first_pass_stage():
+    t = np.arange(N) / FS
+    phase = (
+        3.00 * np.sin(2 * np.pi * 1 * F_R * t)
+        + 1.50 * np.sin(2 * np.pi * 2 * F_R * t)
+        + 1.00 * np.sin(2 * np.pi * 3 * F_R * t)
+        + 0.75 * np.sin(2 * np.pi * 4 * F_R * t)
+    )
+    out = _run_single_window(phase)
+
+    assert out["accepted_candidate_rank"] == -1
+    assert out["heart_spectrum_stage"] == 1
+    assert out["ahet_verified"] is False
+    assert not out["candidate_passed"].any()
+    assert np.isnan(out["accepted_candidate_initial_hz"])
+    assert np.isnan(out["accepted_candidate_refined_hz"])
+    assert np.isnan(out["accepted_second_harmonic_refined_hz"])
+    np.testing.assert_allclose(
+        out["heart_spectrum"], out["heart_spectrum_first_pass"]
+    )
+
+
+def test_respiratory_outlier_window_uses_no_eca_stage():
+    t = np.arange(N) / FS
+    phase = (
+        3.0 * np.sin(2 * np.pi * 0.1 * t)
+        + 0.4 * np.sin(2 * np.pi * 1.2 * t)
+    )
+    out = _run_single_window(phase)
+
+    assert out["f_r_outlier"] is True
+    assert out["eca_applied"] is False
+    assert out["heart_spectrum_stage"] == 0
+    assert out["accepted_candidate_rank"] == -1
+    assert np.isnan(out["phase_eca"]).all()
+    assert np.isnan(out["heart_spectrum_first_pass"]).all()
+    assert not out["candidate_attempted"].any()
+    assert not out["candidate_passed"].any()
+
+
+def test_argmax_fallback_flag_when_find_peaks_returns_nothing(monkeypatch):
+    monkeypatch.setattr(
+        vitals,
+        "find_peaks",
+        lambda *args, **kwargs: (np.array([], dtype=int), {}),
+    )
+
+    out = _run_single_window(_make_harmonic_signal())
+
+    assert bool(out["candidate_attempted"][0])
+    assert bool(out["candidate_argmax_fallback"][0])
+    assert not out["candidate_argmax_fallback"][1:].any()
+    assert np.isnan(out["candidate_prominence"][0])

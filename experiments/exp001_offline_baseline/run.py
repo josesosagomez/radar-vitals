@@ -78,9 +78,11 @@ def main(config_path: Path) -> None:
     window_frames = int(v["window_s"] * c["frame_rate_hz"])
     hop_frames    = int(v["hop_s"]    * c["frame_rate_hz"])
     cfg_locked_bin = v.get("locked_bin", None)
+    cfg_use_eca    = bool(v.get("use_eca", False))
     window_results = vitals.run_pipeline_locked(
         profiles[trim_frames:], raxis, params, window_frames, hop_frames,
-        locked_bin=cfg_locked_bin,
+        locked_bin=cfg_locked_bin, use_eca=cfg_use_eca,
+        k_max=6, ahet_deviation_hz=0.1,
     )
     locked_bin = window_results[0]["chosen_bin"] if window_results else None
     locked_range_m = window_results[0]["chosen_range_m"] if window_results else None
@@ -101,6 +103,10 @@ def main(config_path: Path) -> None:
 
     # 3) Compare to Masimo
     mas = masimo.load_masimo(REPO_ROOT / d["masimo_csv"])
+    radar_df["masimo_br"] = [
+        masimo.reference_br(mas, row["start_epoch"], row["end_epoch"])
+        for _, row in radar_df.iterrows()
+    ]
     merged = compare.compare(radar_df, mas, min_pi=cfg["compare"]["min_pi"])
     m = compare.metrics(merged)
     compare.overlay_plot(merged, run_dir / "overlay.png", title="exp001 radar vs Masimo")

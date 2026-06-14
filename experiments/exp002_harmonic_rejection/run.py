@@ -22,7 +22,7 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
-from src import masimo, radar_io, vitals, compare  # noqa: E402
+from src import compare, intermediates, masimo, radar_io, vitals  # noqa: E402
 
 
 def main(config_path: Path) -> None:
@@ -75,39 +75,74 @@ def main(config_path: Path) -> None:
     window_frames  = int(v["window_s"] * c["frame_rate_hz"])
     hop_frames     = int(v["hop_s"]    * c["frame_rate_hz"])
     cfg_locked_bin = v.get("locked_bin", None)
+    eca_k_max = cfg["eca"]["k_max"]
+    eca_ahet_dev = cfg["eca"]["ahet_deviation_hz"]
+    analysis_profiles = profiles[trim_frames:]
     window_results = vitals.run_pipeline_locked(
-        profiles[trim_frames:], raxis, params, window_frames, hop_frames,
-        locked_bin=cfg_locked_bin,
+        analysis_profiles, raxis, params, window_frames, hop_frames,
+        locked_bin=cfg_locked_bin, k_max=eca_k_max, ahet_deviation_hz=eca_ahet_dev,
     )
 
     locked_bin     = window_results[0]["chosen_bin"]     if window_results else None
     locked_range_m = window_results[0]["chosen_range_m"] if window_results else None
     print(f"Locked bin: {locked_bin}  ({locked_range_m:.3f} m)")
 
-    # 3) Build radar DataFrame (includes ECA+AHET diagnostic columns)
+    # 3) Add runner-owned epochs and persist all per-window intermediate evidence
+    for out in window_results:
+        out["start_epoch"] = t0 + out["start_frame"] / c["frame_rate_hz"]
+        out["end_epoch"] = t0 + out["end_frame"] / c["frame_rate_hz"]
+
+    intermediates_path = intermediates.write_intermediates_npz(
+        run_dir / "intermediates.npz",
+        window_results,
+        total_cube_frames=analysis_profiles.shape[0],
+    )
+    print(f"Intermediates -> {intermediates_path}")
+
+    # 4) Build radar DataFrame (includes ECA+AHET diagnostic columns)
     rows = []
     for out in window_results:
-        s = out["window_start_frame"]
-        e = out["window_end_frame"]
         rows.append({
-            "start_epoch":       t0 + s / c["frame_rate_hz"],
-            "end_epoch":         t0 + e / c["frame_rate_hz"],
+            "start_epoch":       out["start_epoch"],
+            "end_epoch":         out["end_epoch"],
             "hr_bpm":            out["hr_bpm"],
             "rr_bpm":            out["rr_bpm"],
             "chosen_range_m":    out["chosen_range_m"],
-            "ahet_verified":     out.get("ahet_verified", False),
+            "heart_spectrum_stage": out["heart_spectrum_stage"],
+            "heart_peak_hz": out["heart_peak_hz"],
+            "accepted_candidate_rank": out["accepted_candidate_rank"],
+            "accepted_candidate_initial_hz": out["accepted_candidate_initial_hz"],
+            "accepted_candidate_refined_hz": out["accepted_candidate_refined_hz"],
+            "accepted_second_harmonic_refined_hz": out[
+                "accepted_second_harmonic_refined_hz"
+            ],
+            "schema_version": out["schema_version"],
+            "window_index": out["window_index"],
+            "start_frame": out["start_frame"],
+            "end_frame": out["end_frame"],
+            "window_frames": out["window_frames"],
+            "hop_frames": out["hop_frames"],
+            "frame_rate_hz": out["frame_rate_hz"],
+            "range_bin": out["range_bin"],
+            "range_m": out["range_m"],
+            "eca_applied": out["eca_applied"],
+            "ahet_verified": out["ahet_verified"],
             "harmonic_suspect":  out.get("harmonic_suspect", False),
             "f_r_hz_used":       out.get("f_r_hz_used",  float("nan")),
             "f_r_raw_hz":        out.get("f_r_raw_hz",   float("nan")),
-            "f_r_outlier":       out.get("f_r_outlier",  False),
+            "f_r_outlier":       out["f_r_outlier"],
         })
     radar_df = pd.DataFrame(rows)
 
-    # 4) Compare to Masimo
-    mas    = masimo.load_masimo(REPO_ROOT / d["masimo_csv"])
+    # 5) Compare to Masimo
+    mas = masimo.load_masimo(REPO_ROOT / d["masimo_csv"])
+    radar_df["masimo_br"] = [
+        masimo.reference_br(mas, row["start_epoch"], row["end_epoch"])
+        for _, row in radar_df.iterrows()
+    ]
     merged = compare.compare(radar_df, mas, min_pi=cfg["compare"]["min_pi"])
 
-    # 5) Metrics — all windows, then AHET-verified only
+    # 6) Metrics — all windows, then AHET-verified only
     m_all = compare.metrics(merged)
 
     merged_verified = merged[merged["ahet_verified"] == True].copy()  # noqa: E712
@@ -116,12 +151,12 @@ def main(config_path: Path) -> None:
     else:
         m_verified = None
 
-    # 6) Per-window summary table
-    _SEP = "-" * 116
+    # 7) Per-window summary table
+    _SEP = "-" * 127
     print(f"\n{_SEP}")
     print(
         f"{'win':>3}  {'t_start':>10}  {'radar_HR':>8}  {'masimo_PR':>9}  "
-        f"{'error':>6}  {'f_r_bpm':>7}  {'outlier':>7}  {'AHET':>6}  {'suspect':>7}"
+        f"{'error':>6}  {'f_r_bpm':>7}  {'masimo_br':>9}  {'outlier':>7}  {'AHET':>6}  {'suspect':>7}"
     )
     print(_SEP)
     for i, row in merged.iterrows():
@@ -130,17 +165,19 @@ def main(config_path: Path) -> None:
         err_str    = f"{row['error_bpm']:+6.1f}" if not pd.isna(row.get("error_bpm")) else "   NaN"
         f_r_raw_hz = row.get("f_r_raw_hz", float("nan"))
         f_r_str    = f"{f_r_raw_hz * 60:7.1f}" if not pd.isna(f_r_raw_hz) else "    NaN"
+        br_val     = row.get("masimo_br", float("nan"))
+        br_str     = f"{br_val:9.1f}" if not pd.isna(br_val) else "      NaN"
         outl_str   = "    YES" if row.get("f_r_outlier") else "     no"
         ahet_str   = "  YES" if row.get("ahet_verified") else "   no"
         susp_str   = "    YES" if row.get("harmonic_suspect") else "     no"
         print(
             f"{i:>3}  {row['start_epoch']:>10.0f}  {hr_str}  "
-            f"{row['masimo_pr_bpm']:>9.1f}  {err_str}  {f_r_str}  "
+            f"{row['masimo_pr_bpm']:>9.1f}  {err_str}  {f_r_str}  {br_str}  "
             f"{outl_str}  {ahet_str}  {susp_str}"
         )
     print(_SEP)
 
-    # 7) Summary statistics
+    # 8) Summary statistics
     n_nan      = int(radar_df["hr_bpm"].isna().sum())
     n_verified = int(radar_df["ahet_verified"].sum())
     n_suspect  = int(radar_df["harmonic_suspect"].sum())
@@ -157,7 +194,7 @@ def main(config_path: Path) -> None:
         print("\n--- Metrics: AHET-verified windows only ---")
         print(json.dumps(m_verified, indent=2))
 
-    # 8) Save outputs
+    # 9) Save outputs
     merged.to_csv(run_dir / "comparison.csv", index=False)
     (run_dir / "metrics_all.json").write_text(json.dumps(m_all, indent=2))
     if m_verified is not None:
