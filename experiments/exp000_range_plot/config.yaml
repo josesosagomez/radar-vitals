@@ -1,32 +1,27 @@
 # exp000 — diagnostic range-profile visualisation.
-# Loads exp002_sit_chair_back data and produces mean profile, heatmap, and animation.
-# No magic numbers in code — all parameters live here (CLAUDE.md §2).
+# Run for any session listed in data/manifest.local.csv.
+# Usage: python experiments/exp000_range_plot/run.py --session exp003
+#        python experiments/exp000_range_plot/run.py   (lists available sessions)
 
 seed: 0
 
-# --- inputs ---
-data:
-  radar_bin: data/raw/exp002_sit_chair_back_radar.bin
-  logfile_csv: data/raw/exp002_sit_chair_back_radar_LogFile.csv
-  utc_offset_hours: 3          # Saudi Arabia local time → UTC
+manifest: data/manifest.local.csv
 
-# --- chirp / frame geometry ---
-# num_rx=2 confirmed from file size: 629145600 B / (32×2×256×4 B) = 9600 frames.
+# Distance gate: ±gate_margin_m around the manifest distance_cm value.
+gate_margin_m: 0.20
+
+# --- chirp / frame geometry (hardware constants — do not change) ---
 chirp:
   num_adc_samples: 256
   num_rx: 4
-  num_tx: 2
+  num_tx: 1
   num_chirps_per_frame: 32
-  num_frames: 4800            # overridden by infer_num_frames at runtime
   frame_rate_hz: 20.0
   range_resolution_m: 0.0436   # confirmed from mmWave Studio Calculated Parameters
 
 # --- plot / visualisation ---
 plot:
   max_range_m: 4.0
-  locked_bin: 29               # confirmed chest bin (1.264 m)
-  gate_min_m: 1.1
-  gate_max_m: 1.6
   animation_fps: 20
 
 # --- logging ---

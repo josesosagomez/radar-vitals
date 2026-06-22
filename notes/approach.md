@@ -322,6 +322,48 @@ Any new threshold or alternative criterion selected on synthetic/development dat
 be confirmed on an independent real capture before it is used to interpret exp004
 pass-rate differences.
 
+#### Known failure mode: respiratory-harmonic coincidence with cardiac band
+
+**Coincidence condition:** when the 4th respiratory harmonic (4 × f_r) falls near the
+true cardiac fundamental (HR), i.e. 4 × f_r ≈ HR. Example: f_r ≈ 20 bpm = 0.33 Hz →
+4th harmonic at 80 bpm = 1.33 Hz, while true HR ≈ 80–84 bpm = 1.33–1.40 Hz.
+
+**Why ECA cannot suppress it:** ECA builds a harmonic Vandermonde subspace from
+estimated f_r and projects the phase signal onto its complement. The 4th harmonic is
+at the same frequency as the cardiac fundamental. The projection removes both the
+respiratory harmonic and the cardiac signal simultaneously — the cancellation is
+correct for respiration but destructive for the cardiac component.
+
+**Pipeline behaviour under this failure mode:**
+- AHET correctly abstains (NaN) when all candidate peak-to-floor ratios are < 1.0 —
+  no second-harmonic evidence survives above the cardiac-band floor. This is correct
+  pipeline behaviour, not a false rejection.
+- When AHET passes, the accepted candidate may be the respiratory harmonic itself
+  (3×f_r ≈ 60 bpm or 4×f_r ≈ 80 bpm). The second-harmonic peak-to-floor ratio is
+  genuinely above 1.0 for a respiratory harmonic; AHET cannot distinguish it from a
+  cardiac second harmonic at the same frequency.
+- Result: large negative bias (estimated HR < true HR) on the finite windows; high
+  NaN rate on the rest.
+
+**Evidence:** cap3 (`exp002_sit_chair_no_back_radar.bin`), 2026-06-13.
+- f_r 19–20 bpm (mean 19.2 bpm) throughout the recording.
+- True HR 78–84 bpm (Masimo PR mean ≈ 82 bpm).
+- 4 × 20 bpm = 80 bpm ≈ HR → coincidence throughout.
+- NaN rate: 17/37 = 46% at 20 s windows; 9/37 = 24% at 25 s.
+- Bias on finite windows: −12 to −14 bpm across all window lengths.
+- Longer windows do not resolve the ambiguity (SNR problem, not frequency resolution).
+- Full diagnostic: `results/exp004_window_length/20260614_234744/cap3_diagnostic.md`.
+
+**Detection heuristic:** monitor Masimo BR and radar-estimated f_r before the
+recording window. If |HR − 4 × f_r| < 10 bpm, the capture is at high risk of this
+failure mode. Typical resting HR ≈ 60–80 bpm; the failure zone is f_r ≈ 15–20 bpm.
+
+**Remediation:** ensure |HR − k × f_r| > 10 bpm for k = 1, 2, 3, 4, 5 at capture
+time. In practice, instruct the subject to breathe at a steady 13–16 bpm (slow, deep
+breathing) before the recording starts. At f_r = 15 bpm, 4 × f_r = 60 bpm — well
+below resting HR ≈ 72 bpm. Verify by checking the radar-estimated f_r from the first
+30 s of the pre-trim phase signal before committing to the full recording.
+
 ---
 
 ## 8. Evaluation plan

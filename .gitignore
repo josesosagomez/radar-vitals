@@ -10,15 +10,11 @@ __pycache__/
 
 # Large raw/processed data — keep the folder, ignore big blobs.
 # Radar captures and exports can be huge; track configs + metrics, not raw binaries.
-data/raw/*.bin
-data/raw/*.dat
-data/processed/*.parquet
-data/processed/*.npy
+data*/
 
 # Results: keep configs + metrics (json/yaml), ignore heavy artifacts
-results/**/*.npy
-results/**/*.bin
-results/**/*.png
+results*/
+notes*/
 
 # W&B local cache
 wandb/

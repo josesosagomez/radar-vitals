@@ -18,7 +18,7 @@ data:
 chirp:
   num_adc_samples: 256
   num_rx: 4
-  num_tx: 2
+  num_tx: 1
   num_chirps_per_frame: 32
   num_frames: 3040          # overridden by infer_num_frames at runtime
   frame_rate_hz: 20.0

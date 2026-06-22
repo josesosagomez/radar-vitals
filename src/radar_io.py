@@ -21,6 +21,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
+from typing import List, Union
 import numpy as np
 
 
@@ -107,11 +108,19 @@ def infer_num_frames(bin_path: str | Path, cfg: ChirpConfig) -> int:
 
 
 def read_adc_bin(
-    bin_path: str | Path, cfg: ChirpConfig, trim_frames: int = 0
+    path: Union[str, Path, List[Union[str, Path]]],
+    cfg: ChirpConfig,
+    trim_frames: int = 0,
 ) -> np.ndarray:
     """Read a DCA1000 raw .bin into a complex radar cube.
 
     4-word-packet de-interleaving per rawDataReader.m lines 607-609.
+
+    path: a single file path, or a list of paths to concatenate in order.
+      When mmWave Studio splits a recording across multiple files (e.g. at the
+      1 GB boundary), pass the parts as a list.  The split need NOT fall on a
+      frame boundary — raw bytes are concatenated before decoding so mid-frame
+      splits are handled correctly.
 
     trim_frames: leading frames to skip in the range-profile sanity check (the
       walk-in/settle period).  Range-FFT energy is checked on frames
@@ -120,23 +129,77 @@ def read_adc_bin(
 
     Output: (num_frames, num_chirps_per_frame, num_rx, num_adc_samples), complex64.
     """
-    bin_path = Path(bin_path)
-
-    # Validate file geometry before any memory allocation.
-    file_size = bin_path.stat().st_size
     bytes_per_frame = cfg.num_chirps_per_frame * cfg.num_rx * cfg.num_adc_samples * 4
-    inferred = file_size // bytes_per_frame
-    remainder = file_size % bytes_per_frame
-    if remainder != 0:
-        raise ValueError(
-            f"{bin_path.name}: file size {file_size} bytes is not a multiple of "
-            f"{bytes_per_frame} bytes/frame (remainder {remainder} bytes). "
-            f"The capture may be truncated. Got {inferred} complete frames."
+
+    if isinstance(path, list):
+        # ------------------------------------------------------------------ #
+        # Multi-file path: validate all files exist, concatenate raw bytes,  #
+        # then decode the combined stream.  Raw-byte concatenation handles    #
+        # splits that do not fall on a frame boundary (e.g. mmWave Studio    #
+        # 1 GB limit splitting mid-frame).                                    #
+        # ------------------------------------------------------------------ #
+        paths = [Path(p) for p in path]
+        for p in paths:
+            if not p.exists():
+                raise FileNotFoundError(
+                    f"read_adc_bin: file not found: {p}"
+                )
+
+        # Validate combined size before allocating.
+        file_sizes = [p.stat().st_size for p in paths]
+        total_bytes = sum(file_sizes)
+        remainder = total_bytes % bytes_per_frame
+        if remainder != 0:
+            raise ValueError(
+                f"Combined size of {len(paths)} files is {total_bytes} bytes, "
+                f"not a multiple of {bytes_per_frame} bytes/frame "
+                f"(remainder {remainder} bytes)."
+            )
+        num_frames = total_bytes // bytes_per_frame
+        if num_frames == 0:
+            raise ValueError("Combined files contain no complete frames.")
+
+        for p, sz in zip(paths, file_sizes):
+            print(
+                f"  {p.name}: {sz} B "
+                f"({sz / bytes_per_frame:.6f} raw frames)"
+            )
+        print(
+            f"Config num_frames: {cfg.num_frames} | "
+            f"Inferred from {len(paths)} files: {num_frames}"
         )
-    if inferred == 0:
-        raise ValueError(f"{bin_path.name}: file is empty or smaller than one frame.")
-    num_frames = inferred
-    print(f"Config num_frames: {cfg.num_frames} | Inferred from file: {num_frames}")
+
+        # Concatenate raw int16 words into a single contiguous array.
+        total_words = total_bytes // 2   # int16 = 2 bytes
+        raw = np.empty(total_words, dtype="<i2")
+        offset = 0
+        for p in paths:
+            mm = np.memmap(p, dtype="<i2", mode="r")
+            n = len(mm)
+            raw[offset: offset + n] = mm
+            offset += n
+
+    else:
+        # ------------------------------------------------------------------ #
+        # Single-file path — original behaviour, unchanged.                  #
+        # ------------------------------------------------------------------ #
+        bin_path = Path(path)
+
+        file_size = bin_path.stat().st_size
+        inferred = file_size // bytes_per_frame
+        remainder = file_size % bytes_per_frame
+        if remainder != 0:
+            raise ValueError(
+                f"{bin_path.name}: file size {file_size} bytes is not a multiple of "
+                f"{bytes_per_frame} bytes/frame (remainder {remainder} bytes). "
+                f"The capture may be truncated. Got {inferred} complete frames."
+            )
+        if inferred == 0:
+            raise ValueError(f"{bin_path.name}: file is empty or smaller than one frame.")
+        num_frames = inferred
+        print(f"Config num_frames: {cfg.num_frames} | Inferred from file: {num_frames}")
+
+        raw = np.memmap(bin_path, dtype="<i2", mode="r")
 
     # Validate trim_frames before using it as a slice index.
     if not (0 <= trim_frames < num_frames):
@@ -145,11 +208,7 @@ def read_adc_bin(
             f"Check trim_start_s and frame_rate_hz in config."
         )
 
-    # memmap instead of fromfile: OS pages the 393 MB file on demand so peak RSS
-    # stays low while the decode runs.  Confirmed little-endian int16 (SWRA581).
-    raw = np.memmap(bin_path, dtype="<i2", mode="r")
-
-    # 2-lane LVDS 4-word-packet de-interleaving.
+    # 2-lane LVDS 4-word-packet de-interleaving (shared for single and multi-file).
     # Each 4-word packet: [I_n, I_{n+1}, Q_n, Q_{n+1}].
     # Lane 1 (words 0-1) = I samples; lane 2 (words 2-3) = Q samples.
     # Ref: rawDataReader.m lines 607-609 (dp_reshape2LaneLVDS).
@@ -189,28 +248,36 @@ def read_adc_bin(
     # A stronger peak outside [gate_lo, gate_hi] is normal (static leakage, far
     # walls) and does not indicate a parsing problem.
     gate_lo, gate_hi = 20, 45
-    overall_peak_bin   = int(np.argmax(energy[1:])) + 1
-    overall_peak_range = overall_peak_bin * cfg.range_resolution_m
-    gate_peak_bin      = int(np.argmax(energy[gate_lo:gate_hi + 1])) + gate_lo
-    gate_peak_range    = gate_peak_bin * cfg.range_resolution_m
+    if len(energy) > 1:
+        overall_peak_bin   = int(np.argmax(energy[1:])) + 1
+        overall_peak_range = overall_peak_bin * cfg.range_resolution_m
+        print(f"Peak energy bin (excl DC): {overall_peak_bin} = {overall_peak_range:.3f} m")
 
-    print(f"Peak energy bin (excl DC): {overall_peak_bin} = {overall_peak_range:.3f} m")
-    print(f"Peak in gate [{gate_lo}-{gate_hi}]:   {gate_peak_bin} = {gate_peak_range:.3f} m")
+        gate_slice = energy[gate_lo: gate_hi + 1]
+        if gate_slice.size > 0:
+            gate_peak_bin   = int(np.argmax(gate_slice)) + gate_lo
+            gate_peak_range = gate_peak_bin * cfg.range_resolution_m
+            print(f"Peak in gate [{gate_lo}-{gate_hi}]:   {gate_peak_bin} = {gate_peak_range:.3f} m")
 
-    if overall_peak_bin < gate_lo or overall_peak_bin > gate_hi:
-        print(
-            f"NOTE: strongest bin ({overall_peak_bin}, {overall_peak_range:.3f} m) is "
-            f"outside gate [{gate_lo}-{gate_hi}] — likely static leakage or an off-gate "
-            f"reflector.  Not a decoding error; check range_resolution_m "
-            f"({cfg.range_resolution_m} m/bin) if the subject peak is not visible."
-        )
+            if overall_peak_bin < gate_lo or overall_peak_bin > gate_hi:
+                print(
+                    f"NOTE: strongest bin ({overall_peak_bin}, {overall_peak_range:.3f} m) is "
+                    f"outside gate [{gate_lo}-{gate_hi}] — likely static leakage or an off-gate "
+                    f"reflector.  Not a decoding error; check range_resolution_m "
+                    f"({cfg.range_resolution_m} m/bin) if the subject peak is not visible."
+                )
 
-    if abs(gate_peak_range - 1.4) > 0.2:
-        print(
-            f"WARNING: gate peak at {gate_peak_range:.3f} m differs from nominal 1.4 m "
-            f"by {abs(gate_peak_range - 1.4):.3f} m (> 0.2 m threshold). "
-            f"Recalculate range_resolution_m from actual chirp slope and sample rate."
-        )
+            if abs(gate_peak_range - 1.4) > 0.2:
+                print(
+                    f"WARNING: gate peak at {gate_peak_range:.3f} m differs from nominal 1.4 m "
+                    f"by {abs(gate_peak_range - 1.4):.3f} m (> 0.2 m threshold). "
+                    f"Recalculate range_resolution_m from actual chirp slope and sample rate."
+                )
+        else:
+            print(
+                f"NOTE: num_adc_samples={cfg.num_adc_samples} too small for gate "
+                f"[{gate_lo}-{gate_hi}] sanity check — skipped."
+            )
 
     return cube
 

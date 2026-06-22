@@ -1,0 +1,172 @@
+# Quality mask configuration for radar time-domain cubes.
+# Used by scripts/add_quality_mask.py.
+#
+# Adding a new criterion later:
+#   1. Add its parameters under soft_failures below (uncomment + tune).
+#   2. Implement a _check_<name>(frame, ...) function in add_quality_mask.py.
+#   3. Call it inside _compute_quality_mask() and OR the result into flagged.
+
+# --- Trim ---------------------------------------------------------------
+# Frames to drop from the start of every session before health-checking.
+# 600 frames = 30 s at 20 Hz = subject accommodation period.
+# Do not change this without updating SESSION.md and re-running all sessions.
+trim_frames: 600
+
+# --- Hard failures ------------------------------------------------------
+# These make a frame scientifically unusable. No tuning needed — they are
+# determined by hardware limits, not signal statistics.
+hard_failures:
+
+  # ADC clipping threshold (absolute ADC units, int16 range = ±32767).
+  # A sample at this limit means the ADC saturated: the beat-frequency
+  # waveform is clipped and the range FFT for that frame is distorted.
+  # HOW TO CHOOSE: always 32767 (the hardware limit). Only lower this if
+  # you observe systematic near-saturation that corrupts phase without
+  # reaching the hard rail (inspect quality_metrics/max_abs_adc histogram).
+  clip_threshold: 32767
+
+  # Dead-frame energy floor (fraction of the session median frame energy).
+  # A frame whose energy is below this fraction of the session median is
+  # treated as a dropped or glitch frame (DCA1000 packet loss, hardware reset).
+  # HOW TO CHOOSE: plot quality_metrics/frame_energy for a healthy session
+  # and look for the gap between real frames and any near-zero outliers.
+  # 0.01 (1 % of median) is a safe default — raise only if you see healthy
+  # low-motion frames being flagged.
+  dead_frame_fraction: 0.01
+
+# --- Soft failures -------------------------------------------------------
+# Soft failures flag frames that are suspicious but not hardware-dead.
+# Each check has an `enabled` flag so it can be turned on/off without
+# editing the threshold. The metric is always computed and saved to
+# quality_metrics/ so you can inspect it even when the check is disabled.
+soft_failures:
+
+  # RX channel imbalance.
+  # Flags frames where max(energy_per_rx) / min(energy_per_rx) exceeds the
+  # threshold. A dead or heavily-attenuated RX channel (antenna dropout,
+  # cable fault, strong interference on one element) produces a very large
+  # ratio and corrupts the phase extracted from that channel.
+  # HOW TO CHOOSE: In a healthy session all 4 RX channels should be within
+  # ~3–4× of each other. Start at 10.0 and inspect quality_metrics/
+  # rx_energy_ratio for your sessions. Lower toward 5.0 if intermittent
+  # dropouts are subtle; raise toward 20.0 if multipath causes legitimate
+  # asymmetry at your geometry.
+  rx_imbalance:
+    enabled: false
+    rx_imbalance_ratio: 10.0
+
+  # Subject-bin energy spike detector.
+  # Flags frames where the range-FFT energy at the subject's locked range bin
+  # spikes above the local rolling median. This catches gross subject movement
+  # (cough, posture shift) that corrupts the phase signal. It does NOT detect
+  # slow drift or subtle motion — treat it as a burst/spike detector only.
+  #
+  # HOW TO CHOOSE motion_spike_factor:
+  #   Start at 5.0. Inspect quality_metrics/subject_bin_energy for a session
+  #   and look for obvious isolated bursts. Lower toward 3.0 if subtle shifts
+  #   are being missed; raise toward 10.0 if normal breathing variation is
+  #   being mis-flagged (breathing causes slow energy changes, not spikes).
+  #
+  # HOW TO CHOOSE motion_window_frames:
+  #   50 (±2.5 s at 20 Hz) is a safe default. Wider windows (100) are more
+  #   stable for slow sessions; narrower windows (20) are more responsive but
+  #   may flag rapid legitimate breathing excursions.
+  #
+  # chunk_frames:
+  #   null means all frames at once. For the largest sessions (~8400 frames)
+  #   the FFT peak allocation is ~4.4 GB. Set to 500 to keep peak memory
+  #   under ~300 MB per chunk.
+  # Subject-bin SNR.
+  # Flags frames where the subject's range-bin energy is too weak relative to
+  # the background noise/clutter floor. Low SNR means the phase extracted from
+  # that frame is unreliable — the subject signal is indistinguishable from noise.
+  #
+  # Background is the MEDIAN energy across all bins outside the guard band.
+  # Median is used (not mean) to stay robust against DC leakage (bins 0–1 are
+  # always elevated) and other incidental reflectors in the scene.
+  #
+  # HOW TO CHOOSE snr_threshold:
+  #   Inspect quality_metrics/subject_bin_snr for a known-good session first.
+  #   exp008 (best performer) should show consistently high SNR. A frame with
+  #   SNR < 2–3 is unlikely to yield a reliable phase estimate. Start at 3.0;
+  #   lower toward 2.0 if too many good frames are being flagged.
+  #
+  # HOW TO CHOOSE guard_half_width:
+  #   Excludes bins [locked_bin - guard_half_width, locked_bin + guard_half_width]
+  #   from the background, preventing subject-signal leakage from inflating the
+  #   background estimate. 3 bins (±3) covers the main lobe of a rectangular
+  #   range FFT at 0.0436 m/bin. Widen to 5 if you see sidelobes in the profile.
+  subject_bin_snr:
+    enabled: false
+    snr_threshold: 5.0
+    guard_half_width: 3    # bins excluded each side of locked_bin for background
+    chunk_frames: null     # null = all at once; integer = frames per FFT chunk
+
+  motion_spike:
+    enabled: false
+    motion_spike_factor: 5.0
+    motion_window_frames: 50   # half-width of rolling median window (half_window)
+    locked_bin: null           # null = read from manifest; integer = explicit override
+    chunk_frames: null         # null = all at once; integer = frames per FFT chunk
+
+  # Subject-bin energy dropout detector.
+  # Flags frames where the range-FFT energy at the subject's locked range bin
+  # drops far below its local rolling median. This catches the inverse of the
+  # motion-spike: frames where the subject has shifted out of the locked bin,
+  # the radar beam is temporarily nulled, or the radar hardware glitched without
+  # reaching a full dead-frame (caught separately by dead_frame_fraction).
+  # Phase extracted from a dropout frame is unreliable because the subject signal
+  # is too weak — the opposite failure mode of a motion spike.
+  #
+  # Energy is REUSED from the motion_spike check when that block is also present
+  # and not skipped. No additional FFT pass is needed in that case.
+  # locked_bin and chunk_frames below are only used if subject_bin_energy is not
+  # yet available (i.e. motion_spike block is absent or was skipped).
+  #
+  # HOW TO CHOOSE dropout_factor:
+  #   Must be in (0, 1). Start at 0.1 (flag when energy < 10% of rolling median).
+  #   Lower toward 0.05 to catch only severe nulls; raise toward 0.2 if subtle
+  #   subject shifts are producing partially-degraded frames. Inspect
+  #   quality_metrics/subject_bin_energy for a known-good session and look for
+  #   transient dips before tuning.
+  #
+  # HOW TO CHOOSE dropout_window_frames:
+  #   50 (±2.5 s at 20 Hz) is a safe default — same as motion_spike so both
+  #   checks share the same local-baseline time scale. Use the same value as
+  #   motion_window_frames unless you have a specific reason to differ.
+  subject_bin_dropout:
+    enabled: false
+    dropout_factor: 0.1          # flag when energy < 10% of local rolling median
+    dropout_window_frames: 50    # half-width of rolling median (full = 2*value + 1)
+    locked_bin: null             # null = manifest; ignored when energy is reused
+    chunk_frames: null           # ignored when energy is reused
+
+  # Phase jump detector.
+  # Flags frames where the wrapped frame-to-frame rotation of the complex phasor
+  # at the subject's locked range bin exceeds threshold_rad radians.
+  # This catches phase discontinuities that energy-based checks miss: a frame
+  # may have healthy energy but a corrupted phase (subject startle, hardware
+  # glitch, short-range multipath flip).
+  #
+  # Method: conjugate-product phase difference — angle(z[i] * conj(z[i-1])) —
+  # which is numerically stable and handles the ±π wrap boundary correctly.
+  # No unwrapping is used; the detector measures instantaneous rotation only.
+  # Downstream unwrapping artifacts are NOT caught by this check.
+  #
+  # HOW TO CHOOSE threshold_rad:
+  #   At 77 GHz (λ ≈ 3.9 mm), 1 rad ≈ 0.31 mm of displacement. Normal seated
+  #   respiratory motion (1–3 mm amplitude, 0.3 Hz) produces peak frame-to-frame
+  #   phase steps of 0.3–0.9 rad at 20 Hz. A genuine instantaneous phase jump
+  #   from a gross movement or hardware glitch is typically >>1 rad.
+  #   Start at 1.5 rad (≈ 0.47 mm in one frame at 20 Hz) and inspect
+  #   quality_metrics/phase_diff on a known-good seated session before lowering.
+  #   Lowering toward 0.8 rad risks flagging deep-breath peaks; raising toward
+  #   2.5 rad catches only the most severe glitches.
+  #
+  # chunk_frames: same memory-control mechanism as motion_spike / SNR checks.
+  phase_jump:
+    enabled: false
+    threshold_rad: 1.5       # flag when |Δphase| > threshold (radians per frame)
+    locked_bin: null         # null = manifest; integer = explicit override
+    chunk_frames: null
+    method: mean_phasor      # mean_phasor | delta_before_mean

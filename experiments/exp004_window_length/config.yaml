@@ -1,0 +1,122 @@
+# exp004: multi-capture window-length study
+# Subject: S01. Sessions: 2026-06-09 (cap1) and 2026-06-13 (cap2, cap3).
+# Same subject, two sessions. Same radar config (20 Hz, num_tx=1).
+# AHET pass-rate comparisons are indicative only — see notes/approach.md.
+
+seed: 42
+utc_offset_hours: 3
+
+subject:
+  id: S01
+  posture: seated
+
+radar:
+  num_rx: 4
+  num_tx: 1
+  num_chirps_per_frame: 32
+  num_adc_samples: 256
+  sample_rate_msps: 5.2093
+  freq_slope_mhz_per_us: 70.006
+  idle_time_us: 7.0
+  ramp_end_time_us: 57.0
+  frame_rate_hz: 20.0
+  range_resolution_m: 0.0436
+
+processing:
+  trim_s: 30
+  range_gate_m: [1.1, 1.6]
+
+compare:
+  min_pi: 0.5
+
+eca:
+  k_max: 6
+  ahet_deviation_hz: 0.1
+
+exp004:
+  window_lengths_s: [20, 25, 30]
+  center_spacing_s: 5
+  first_center_s: 15
+  baseline_window_s: 20
+  baseline_hop_s: 5
+  results_dir: results/exp004_window_length
+  allow_frame_count_mismatch: false
+
+captures:
+  - id: cap1
+    bin_file: data/raw/exp001_sit_140cm_radar.bin
+    masimo_file: data/raw/exp001_sit_140cm_masimo.csv
+    logfile: data/raw/exp001_sit_140cm_radar_LogFile.csv
+    locked_bin: 29
+    locked_bin_range_m: 1.264
+    expected_frames: 3000
+    session_date: "2026-06-09"
+    chair_condition: none
+    recording_order: 1
+
+  - id: cap2
+    bin_file: data/raw/exp002_sit_chair_back_radar.bin
+    masimo_file: data/raw/exp002_sit_chair_back_masimo.csv
+    logfile: data/raw/exp002_sit_chair_back_radar_LogFile.csv
+    locked_bin: 33
+    locked_bin_range_m: 1.439
+    expected_frames: 4800
+    session_date: "2026-06-13"
+    chair_condition: with_back
+    recording_order: 1
+
+  - id: cap3
+    bin_file: data/raw/exp002_sit_chair_no_back_radar.bin
+    masimo_file: data/raw/exp002_sit_chair_no_back_masimo.csv
+    logfile: data/raw/exp002_sit_chair_no_back_radar_LogFile.csv
+    locked_bin: 30
+    locked_bin_range_m: 1.308
+    expected_frames: 4800
+    session_date: "2026-06-13"
+    chair_condition: no_back
+    recording_order: 2
+
+  - id: cap3_retake
+    bin_files:
+      - "data/raw/cap3_retake_20260615_160417_0.bin"
+      - "data/raw/cap3_retake_20260615_160417_1.bin"
+    logfile: data/raw/cap3_retake_20260615_160417_LogFile.csv
+    masimo_file: data/raw/cap3_retake_20260615_160417_masimo.csv
+    locked_bin: 28
+    locked_bin_range_m: 1.221
+    expected_frames: 9000
+    session_id: "20260615"
+    posture: supine
+    role: development
+    br_target_bpm: 14
+    notes: "supine floor mat, radar overhead, BR 14 bpm stable, HR elevated at start (~96 bpm) settling to ~75-80 bpm"
+
+  - id: cap4
+    bin_files:
+      - "data/raw/cap4_20260615_165356_0.bin"
+      - "data/raw/cap4_20260615_165356_1.bin"
+    logfile: data/raw/cap4_20260615_165356_LogFile.csv
+    masimo_file: data/raw/cap4_20260615_165356_masimo.csv
+    locked_bin: 28
+    locked_bin_range_m: 1.221
+    expected_frames: 9000
+    session_id: "20260615"
+    posture: supine
+    role: development
+    br_target_bpm: 17
+    notes: "supine floor mat, radar overhead, BR 17-19 bpm, PI low first minute, same radar mount as cap3_retake"
+
+  - id: cap5
+    bin_files:
+      - "data/raw/cap5_20260615_172410_0.bin"
+      - "data/raw/cap5_20260615_172410_1.bin"
+    logfile: data/raw/cap5_20260615_172410_LogFile.csv
+    masimo_file: data/raw/cap5_20260615_172410_masimo.csv
+    locked_bin: 28
+    locked_bin_range_m: 1.221
+    expected_frames: 9000
+    session_id: "20260615"
+    posture: supine
+    role: held_out
+    br_target_bpm: 13
+    notes: "supine floor mat, radar overhead, BR 13 bpm stable, HR rises in second half, held-out capture"

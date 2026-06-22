@@ -7,35 +7,886 @@
 
 ## Current state
 
-- **Where we are:** exp002 closed. Masimo parser fully fixed (half-open interval +
-  deduplication). ECA+AHET pipeline confirmed correct. 32/32 tests pass.
-  **Blocker 1 resolved:** `eca.k_max` and `eca.ahet_deviation_hz` are now actively
-  wired from config through `run.py` → `run_pipeline_locked()` → `estimate_rate_from_phase()`
-  → `eca_project()`.
-  **Blocker 2 resolved:** exp002 now writes validated per-window evidence to
-  `intermediates.npz` and alignment/AHET scalars to `comparison.csv`. The latest
-  cross-artifact test passed on
-  `results/exp002_harmonic_rejection/20260614_160204/` with 21 aligned rows.
-  **Blocker 3: deferred** — criterion documented as known limitation (soft ratio
-  threshold, no rejection population in exp002, window-length-dependent search-region
-  bin counts); full evaluation deferred until second capture collected. exp004 may
-  proceed with explicit caveat.
-  **Blocker 4: open** — refine the no-ECA fallback peak beyond the raw FFT bin centre.
-- **Last verified result (post all fixes):**
-  - exp001 baseline (no ECA): MAE 6.202, RMSE 8.773, bias −4.457 bpm (N=21).
-    Evidence: `results/exp001_offline_baseline/20260614_133858/`.
-    (Supersedes previous canonical: MAE 6.214, RMSE 8.778, bias −4.448 bpm at `20260614_120843/`;
-    difference < 0.015 bpm on all metrics — deduplication effect.)
-  - exp002 all windows (ECA+AHET): MAE 5.189, RMSE 6.902, bias −2.228 bpm (N=21).
-  - exp002 AHET-verified: MAE 5.326, RMSE 7.051, bias −2.217 bpm (N=20).
-    Evidence: `results/exp002_harmonic_rejection/20260614_133839/`. Run: 2026-06-14.
-- **Open question / blocker:** Respiratory-dominance failure mode documented (windows 9-12,
-  ~60 bpm harmonic passes AHET; physics limit of single-bin extraction). Second capture
-  required to assess generalisation before any paper-grade claim.
+- **Where we are (2026-06-21):** Cross-session ECA+AHET run (`exp_eca_all`) on all 10
+  sessions completed. Only 2 sessions work well (exp008 MAE 5.20, exp009 MAE 8.40).
+  All supine sessions (exp001, exp002, exp007) fail with known Blocker 6 (harmonic chain).
+  Seated no-back sessions (exp003-005, exp010) fail with ~20 bpm negative bias, suspected
+  4th respiratory harmonic at ~4×0.3 Hz ≈ 72 bpm landing in the cardiac band.
+  Data pipeline fully built: 10 time-domain HDF5 cubes in `data/processed/time_domain_cubes/`
+  (~7.9 GB total) and quality mask script ready to run (19/19 unit tests pass).
+
+- **Confirmed working (seated frontal, 1.3–1.5 m):**
+  - exp008 (ECA+AHET, k_max=6, locked_bin=29, 1.264 m): MAE 5.20, RMSE 6.82, NaN 0.
+    Evidence: `results/exp_eca_all/20260621_095804/`.
+  - exp009 (seated chair-back, 1.44 m, bin 33): MAE 8.40.
+  - Historical exp002/cap1: MAE 5.17, RMSE 6.90, bias −2.21 bpm (N=21).
+    Evidence: `results/exp002_harmonic_rejection/20260615_110410/`.
+
+- **Failing:**
+  - Supine overhead (exp001, exp002, exp007): Blocker 6 — k×f_r harmonics overlap
+    cardiac band; ECA cannot distinguish or leaves respiratory harmonics dominant.
+  - Seated no-back (exp003 MAE 11.37, exp004 MAE 20.76, exp005 MAE 22.70, exp010 MAE 20.43):
+    ~20 bpm negative bias; heart_spectrum inspection needed.
+  - Seated chair-back (exp006 MAE 11.47): partial failure.
+
+- **Open blockers:**
+  - **Blocker 5: open** — harmonic exclusion at candidate selection.
+  - **Blocker 6: REVISED — partially refuted.** k_max reduction alone insufficient.
+  - **Blocker 3: deferred.**
+  - Blockers 1, 2, 4: resolved.
+
+- **Immediate next steps:**
+  1. Run `python -X utf8 scripts/add_quality_mask.py --all` → check `results/save_quality_mask.log`.
+  2. Inspect heart_spectrum intermediates from exp_eca_all for exp003–005 to determine
+     whether 4th respiratory harmonic is the dominant candidate in the cardiac band.
+  3. Based on (2): implement Blocker 5 harmonic exclusion or investigate geometry fix.
 
 ---
 
 ## Log (newest first)
+
+### 2026-06-21 — Cross-session ECA+AHET; bin correction; num_tx fix; HDF5 pipeline; quality mask
+
+**What was done:**
+
+**1. Cross-session ECA+AHET (`exp_eca_all`) — all 10 sessions**
+
+Ran `experiments/exp_eca_all/run.py` on all 10 sessions via `data/manifest.local.csv`.
+Results: `results/exp_eca_all/20260621_095804/`.
+
+| Session | Posture | Bin | Distance | MAE (bpm) | RMSE (bpm) | NaN/total |
+|---|---|---|---|---|---|---|
+| exp001 | supine overhead | 28 | 1.221 m | 17.12 | 22.07 | 15/36 |
+| exp002 | supine overhead | 28 | 1.221 m | 17.85 | 23.16 | 26/56 |
+| exp003 | seated no-back | 31 | 1.351 m | 11.37 | 14.32 | 7/17 |
+| exp004 | seated no-back | 31 | 1.351 m | 20.76 | 23.71 | 1/17 |
+| exp005 | seated no-back | 30 | 1.307 m | 22.70 | 26.02 | 0/17 |
+| exp006 | seated chair-back | 31 | 1.351 m | 11.47 | 14.35 | 7/17 |
+| exp007 | supine overhead | 28 | 1.221 m | 23.22 | 26.15 | 36/56 |
+| exp008 | seated no-back | 29 | 1.264 m | 5.20 | 6.82 | 0/9 |
+| exp009 | seated chair-back | 33 | 1.439 m | 8.40 | 10.89 | 2/13 |
+| exp010 | seated no-back | 30 | 1.307 m | 20.43 | 23.76 | 0/13 |
+| **Overall** | | | | **16.38** | **21.13** | 94/271 |
+
+Only exp008 and exp009 meet the target. Per-session overlay plots saved alongside comparison.csv.
+
+**2. Bin correction — exp008 locked_bin 27 → 29**
+
+Root cause: initial bin 27 came from visual inspection of `mean_range_profile` image
+(uses mean of |magnitude|). The correct method is `vitals.select_range_bin()` which
+uses `mean(|.|²)` over ALL analysis frames. These give different results when adjacent
+bins have similar magnitude but different energy distributions. Script
+`scripts/reselect_bins.py` re-ran energy-based selection on all 10 sessions; only
+exp008 changed (27→29, 1.177 m→1.264 m). Effect: MAE 9.39→5.20, NaN 11→0.
+Manifest updated: `data/manifest.local.csv`.
+
+**3. num_tx corrected across all configs (2 → 1)**
+
+User confirmed only 1 TX used in all captures. Fixed `num_tx: 2 → num_tx: 1` in all
+7 active experiment configs. This field is metadata only — not used in decode math —
+so no data was corrupted. Results/config_used.yaml snapshots left unchanged (frozen).
+Files changed: `experiments/exp_eca_all/config.yaml`,
+`experiments/exp000_range_plot/config.yaml`,
+`experiments/exp004_window_length/config.yaml`,
+`experiments/exp002_harmonic_rejection/config.yaml`,
+`experiments/exp001_offline_baseline/config.yaml`,
+`experiments/exp003_generalisation/config_chair_back.yaml`,
+`experiments/exp003_generalisation/config_chair_no_back.yaml`.
+
+**4. HDF5 time-domain cubes — `scripts/save_time_domain_cubes.py`**
+
+Saved all 10 sessions to `data/processed/time_domain_cubes/<session_id>.h5`.
+Each file: `/cube` dataset, shape `(N_frames, 32, 4, 256)` = (frames, chirps, rx,
+adc_samples), dtype complex64, NO transpose. Time domain only.
+Key metadata attributes: `session_id`, `posture`, `possible_distance_cm` (NOT
+`distance_cm`; `locked_bin` NOT stored), `radar_start_epoch_seconds`,
+`stationary_intervals`, `radar_orientation`, `num_tx=1`, `num_rx=4`,
+`num_adc_samples=256`, `num_chirps_per_frame=32`, `frame_rate_hz=20.0`,
+`range_resolution_m=0.0436`, `git_commit`, `source_bin_files`, `num_frames`.
+File sizes: 364 MB (exp008) to 1113 MB (exp002); total ~7.9 GB.
+
+**5. Quality mask — `scripts/add_quality_mask.py` (ready to run)**
+
+Adds `/quality_mask` (bool, N_analysis=total_frames−600) and `/quality_metrics/`
+group to existing .h5 files. True = healthy. Indexes cube[600:] only; frames NOT
+deleted (preserves phase continuity for unwrapping).
+Config: `scripts/quality_mask_config.yaml`.
+Hard failure checks: ADC clipping (`|sample| ≥ 32767`) and dead frame (energy < 1%
+of session median). Extensible — soft failures (motion spike, RX imbalance) planned
+but not yet implemented.
+Log: `results/save_quality_mask.log`.
+Tests: `tests/test_quality_mask.py` — 19/19 pass.
+
+**Run command (not yet run on real data — user to execute):**
+```
+python -X utf8 scripts/add_quality_mask.py --all
+```
+
+**What failed (cross-session):**
+- Supine sessions fail because of Blocker 6 (harmonic chain in cardiac band) — unchanged.
+- Seated no-back sessions fail with ~20 bpm NEGATIVE bias. Most likely the 4th respiratory
+  harmonic (~4×0.3 Hz ≈ 72 bpm or 4th × actual f_r) landing in the cardiac band and
+  winning the peak pick. Requires heart_spectrum inspection to confirm.
+- exp003 is partially better (MAE 11.37) — possibly different f_r putting harmonics in a
+  different position. Inspect along with exp004/exp005.
+
+**What was NOT changed:**
+- `src/vitals.py`, `src/radar_io.py`, `src/compare.py` — no DSP logic modified.
+- `data/raw/` — never touched.
+- Results/config_used.yaml snapshots — frozen run records.
+
+**Evidence:**
+- Cross-session results: `results/exp_eca_all/20260621_095804/`
+- Bin reselection script: `scripts/reselect_bins.py`
+- Overlay plots: per-session `overlay.png` in each session's results subdirectory
+- HDF5 cubes: `data/processed/time_domain_cubes/` (10 files)
+- Quality mask tests: `tests/test_quality_mask.py` (19/19 pass)
+
+---
+
+### 2026-06-15 — exp005 adaptive k_max investigation; hypothesis REFUTED for supine captures
+
+**What was done:** Wrote and ran `scripts/test_adaptive_kmax.py` (diagnostic-only; no pipeline
+code modified) to test whether reducing k_max from 6 to the largest safe value (highest
+suppressed harmonic stays ≥5 bpm below cardiac floor) fixes the supine failure for cap3_retake.
+Ran the same script on cap5 (held-out preview only). No config files or src/ files were modified.
+
+**Adaptive k_max formula (implemented in diagnostic script only):**
+```
+k_max_adaptive = floor((CARDIAC_FLOOR_HZ - MARGIN_HZ) / f_r_hz)
+               = floor((0.833 - 0.083) / f_r_hz)
+               clamped to [1, 6]
+```
+Rationale: the highest suppressed harmonic (k_max × f_r) must stay at least 5 bpm below the
+cardiac band floor (50 bpm). For f_r = 14 bpm: k = floor(0.75/0.233) = floor(3.2) = 3.
+For f_r = 13 bpm: k = floor(0.75/0.217) = 3 as well.
+
+**cap3_retake (development, k_max adaptive vs fixed=3 vs canonical k_max=6):**
+
+| Mode | N_finite | N_NaN | MAE | RMSE | Bias | AHET pass |
+|---|---|---|---|---|---|---|
+| Canonical k_max=6 | 49 | 32 | 23.53 bpm | 26.25 | −19.61 | 36/49 |
+| Adaptive k_max | 40 | 41 | 23.13 bpm | 24.18 | −22.47 | 38/40 |
+| Fixed k_max=3 | 40 | 41 | 23.13 bpm | 24.18 | −22.47 | 38/40 |
+
+- Delta MAE vs canonical: −0.40 bpm (trivial). NaN count INCREASES from 32 to 41.
+- k_max distribution: k=2 (6 windows), k=3 (69 windows), k=4 (4), k=5 (2).
+- Adaptive = fixed k_max=3 (formula gives k=3 for 69/81 windows): formula confirmed correct.
+- AHET pass rate 95% on WRONG answers — algorithm is confident and wrong.
+
+**Root cause of adaptive k_max failure:**
+With k_max=3, harmonics k=4 (4×14=56 bpm), k=5 (70 bpm), k=6 (84 bpm) are left in the
+spectrum. In supine overhead geometry, respiratory harmonics are STRONGER than the cardiac
+signal across the entire cardiac band. The k=4 harmonic (~56 bpm) dominates. AHET then
+validates this false candidate: it finds the k=8 harmonic (~112 bpm) as the "second harmonic"
+(2×56=112 bpm, within AHET ±6 bpm search window). Result: 38/40 windows confidently return
+~56 bpm when true HR is 75–96 bpm.
+
+Key insight: the AHET second-harmonic check does NOT discriminate between respiratory harmonic
+chains (k=4 + k=8) and true cardiac. Respiratory harmonics form self-consistent N·f_r chains.
+
+**cap5 (held-out preview — NOT used for algorithm decisions):**
+
+| Mode | N_finite | N_NaN | MAE | Bias | AHET pass |
+|---|---|---|---|---|---|
+| Canonical k_max=6 | 54 | 27 | 19.50 bpm | −17.23 | — |
+| Adaptive k_max=3 | 53 | 28 | 23.67 bpm | −21.76 | 53/53 (100%) |
+
+- Delta MAE: +4.17 bpm — WORSE than canonical.
+- 6 windows with error < 5 bpm (Wi=11,21,22,67,68,79): these windows have 6×f_r ≈ true HR
+  (f_r≈12.75, HR≈77 bpm → 6×12.75=76.5 bpm). The algorithm is finding the k=6 respiratory
+  harmonic, not the cardiac signal — it happens to give a small error by coincidence.
+- Result confirms: adaptive k_max is not a viable fix for cap5 either.
+
+**What was NOT done (hard constraints honoured):**
+- Did not modify vitals.py, radar_io.py, compare.py, or any config.
+- Did not implement Blocker 5 (harmonic exclusion at candidate selection).
+- Did not run on cap4.
+- Did not use cap5 results to drive any algorithm decision.
+
+**What failed:** The adaptive k_max hypothesis. Predicted: ~10 bpm improvement on cap3_retake.
+Actual: 0.40 bpm improvement, NaN count increases. The hypothesis was too optimistic because
+it only considered the k=6 suppression problem (ECA erasing cardiac at k×f_r ≈ HR), not the
+second-order problem (leaving k=4 unsuppressed hands the cardiac band to a stronger respiratory
+harmonic that AHET cannot distinguish from a true cardiac candidate).
+
+**Diagnosis update:**
+Blocker 6 is more severe than originally stated. There is NO k_max value that satisfies
+both constraints simultaneously for cap3_retake (f_r=14, HR≈84 bpm):
+- k_max ≥ 6 suppresses the cardiac signal (6×14=84 bpm erased by ECA)
+- k_max ≤ 3 leaves k=4 (56 bpm) unsuppressed; k=4 is stronger than cardiac; AHET fooled
+- k_max = 4 or 5: k=5 (70 bpm) or k=6 (84 bpm) still create false candidates
+
+**Next step (reviewed, not yet approved for implementation):**
+1. Inspect heart_spectrum intermediates from exp004 canonical run (k_max=6) for cap3_retake
+   to determine whether any residual cardiac signal is visible after ECA, or if the band
+   is flat noise. This determines whether Blocker 5 (harmonic exclusion) can help.
+2. If residual cardiac is visible: design Blocker 5 (reject candidates at k×f_r for all k),
+   prototype in a new diagnostic script, validate on cap3_retake, preview on cap5.
+3. If flat noise: current ECA approach is SNR-limited for supine geometry;
+   need either geometry change or non-linear source separation.
+4. Do NOT modify vitals.py until spectrum inspection is reviewed.
+
+**Evidence:** `results/diagnostics/adaptive_kmax/cap3_retake_20s_adaptive_kmax.csv`,
+`cap3_retake_20s_fixed_kmax3.csv`, `cap5_20s_adaptive_kmax.csv`.
+
+---
+
+### 2026-06-15 — exp004 cap3_retake + cap4 + cap5 pipeline run; supine captures fail
+
+**What was done:** Ran exp004 pipeline on three new 2026-06-15 supine captures
+(cap3_retake, cap4, cap5). Added all three to `experiments/exp004_window_length/config.yaml`
+using a `bin_files` list (two split .bin paths each). Updated `run.py` to detect `bin_files`
+vs `bin_file`, compute total-byte frame counts for multi-file captures, and pass a list to
+`read_adc_bin`. Added `--captures` CLI argument so individual captures can be run without
+re-running cap1/cap2/cap3. Generated 12 diagnostic plots (A/B/C/D × 3 captures) via
+`scripts/diag_new_captures.py`, saved to `results/diagnostics/per_window_error/`.
+
+**File / frame verification (all three captures):**
+
+| File | Bytes | Frames (raw) |
+|---|---|---|
+| `cap3_retake_..._0.bin` | 1,073,741,760 | 8191.999512 (partial) |
+| `cap3_retake_..._1.bin` | 105,906,240 | 808.000488 (partial) |
+| Combined | 1,179,648,000 | 9000 exactly ✓ |
+| `cap4_..._0.bin` | 1,073,741,760 | 8191.999512 |
+| `cap4_..._1.bin` | 105,906,240 | 808.000488 |
+| Combined | 1,179,648,000 | 9000 exactly ✓ |
+| `cap5_..._0.bin` | 1,073,741,760 | 8191.999512 |
+| `cap5_..._1.bin` | 105,906,240 | 808.000488 |
+| Combined | 1,179,648,000 | 9000 exactly ✓ |
+
+All 6 CSV files (3 LogFile, 3 masimo) present. Each capture: bin 28 (1.221 m) locked,
+Masimo coverage 98.6%, PI 100%. Mechanically clean.
+
+**cap3_retake results (development):**
+- f_r = 14 bpm stable; 4×f_r = 56 bpm (below HR), **6×f_r = 84 bpm (inside HR 75–96 bpm)**
+- Baseline 20 s: MAE 23.45, RMSE 26.07, bias −19.68 bpm (N=49)
+- Condition 20 s: MAE 23.53, RMSE 26.25, bias −19.61 bpm (N=47 / 32 NaN)
+- Condition 25 s: MAE 23.99, bias −23.90 bpm (N=59 / 20 NaN)
+- Condition 30 s: MAE 24.14, bias −24.06 bpm (N=57 / 22 NaN)
+- Intersection (N=37): **20 s 24.78, 25 s 23.60, 30 s 23.08 bpm — monotonically improving but far above acceptable**
+- Results: `results/exp004_window_length/20260615_181343/cap3_retake/`
+
+**cap4 results (development):**
+- f_r = 17–19 bpm; **4×f_r = 68–76 bpm (overlaps HR 72–82 bpm)**; 5×f_r = 85–95 bpm
+- Baseline 20 s: MAE 17.08, RMSE 18.37, bias −16.15 bpm (N=48 / 33 NaN)
+- Condition 20 s: MAE 16.91, RMSE 18.20, bias −15.96 bpm (N=47 / 32 NaN)
+- Condition 25 s: MAE 18.78, bias −18.75 bpm (N=60 / 19 NaN)
+- Condition 30 s: MAE 19.20, bias −17.75 bpm (N=59 / 20 NaN)
+- Intersection (N=43): **20 s 17.37, 25 s 18.74, 30 s 18.55 bpm — partial improvement only**
+- Results: `results/exp004_window_length/20260615_181821/cap4/`
+
+**cap5 results (held-out — NOT used for algorithm decisions):**
+- f_r = 13 bpm stable; **6×f_r = 78 bpm (inside HR 69–94 bpm)**
+- Baseline 20 s: MAE 19.16, RMSE 22.22, bias −16.93 bpm (N=53 / 28 NaN)
+- Condition 20 s: MAE 19.50, RMSE 22.43, bias −17.23 bpm (N=52 / 27 NaN)
+- Condition 25 s: MAE 19.70, bias −18.28 bpm (N=53 / 26 NaN)
+- Condition 30 s: MAE 20.41, bias −19.34 bpm (N=62 / 17 NaN)
+- Intersection (N=41): **20 s 19.51, 25 s 18.01, 30 s 19.69 bpm — partial improvement only**
+- Results: `results/exp004_window_length/20260615_181912/cap5/`
+
+**Cross-capture summary — all exp004 captures:**
+
+| Capture | Posture | Role | BR | 4×f_r | 6×f_r | k×f_r ≈ HR? | 20 s MAE* | 25 s MAE* | 30 s MAE* | Monotonic? |
+|---|---|---|---|---|---|---|---|---|---|---|
+| cap1 | seated | dev | ~15–19 | ~60–76 | ~90–114 | No | 5.55 | 3.83 | 3.67 | YES |
+| cap2 | seated | dev | ~17 | ~68 | ~102 | marginal | 8.80 | 8.51 | 4.46 | YES |
+| cap3 | seated | dev | ~19–20 | ~76–80 | ~114–120 | YES (4×) | 13.50 | 14.14 | 16.19 | NO |
+| cap3_retake | supine | dev | 14 | 56 | 84 | YES (6×) | 24.78 | 23.60 | 23.08 | YES |
+| cap4 | supine | dev | 17–19 | 68–76 | 102–114 | YES (4×) | 17.37 | 18.74 | 18.55 | partial |
+| cap5 | supine | held-out | 13 | 52 | 78 | YES (6×) | 19.51 | 18.01 | 19.69 | partial |
+
+*Intersection values (same windows compared across all three conditions).
+cap1/cap2/cap3 from prior session. cap5 = held-out; values shown for completeness only.
+
+**Root cause — new finding (6×f_r ≈ HR):**
+- The pre-session plan only checked that 4×f_r < 55 bpm (bottom of cardiac band).
+  cap3_retake BR=14 satisfies this: 4×14=56 bpm. But 6×14=84 bpm lands squarely in
+  the HR range (75–96 bpm).
+- ECA first pass (no cardiac candidate) removes ALL k=1..k_max harmonics unconditionally.
+  With k_max=6 and f_r=14, the subspace suppression nulls out energy at 84 bpm, erasing
+  the cardiac signal before candidate selection begins.
+- Same mechanism for cap5: f_r=13, 6×13=78 bpm inside HR 69–94 bpm.
+- For cap4: f_r=17-19, 4×f_r=68-76 bpm overlaps HR 72-82 bpm — the k=4 hard floor
+  removes cardiac signal; additionally 5×f_r=85-95 bpm may land in HR range.
+- **Why supine is worse than seated:** in the seated frontal geometry the chest wall
+  oscillation (cardiac) is the dominant target at the locked range bin. In the supine
+  overhead geometry, the vertical body motion from breathing dominates; cardiac micro-
+  motion has lower SNR. When ECA also removes the spectral region containing the cardiac
+  peak, nothing remains above the noise floor.
+- This failure is UPSTREAM of Blocker 5: Blocker 5 guards at candidate selection;
+  ECA first-pass removes the energy before any candidate exists.
+
+**Why all supine captures fail regardless of BR target:**
+- BR < 9.2 bpm would be required to keep 6×f_r below 55 bpm. That is not a feasible
+  resting breathing rate.
+- Even if 6×f_r is clear, k=4 or k=5 may still land in the HR range at typical HR.
+- Conclusion: the current k_max=6 algorithm is fundamentally incompatible with
+  supine overhead capture geometry given typical resting HR (60–100 bpm) and BR (12–20 bpm).
+
+**New Blocker 6 (open):**
+ECA first-pass harmonic removal with k_max=6 suppresses cardiac signal when k×f_r
+(k > 4) falls inside the cardiac band in supine low-SNR geometry. Possible fixes:
+(a) Reduce k_max to 4 (hard floor only) — investigate first; cheapest change;
+(b) Redesign first-pass ECA to skip removal when the harmonic bin overlaps the
+    cardiac band (requires knowing the cardiac band before ECA runs);
+(c) Investigate whether supine SNR can be improved via multi-bin coherent combination
+    before phase extraction.
+Must be resolved before Blocker 5 (harmonic exclusion) can be tuned on the new captures.
+
+**What worked / failed:**
+- WORKED: mechanical pipeline (split-file decoding, frame counts, Masimo alignment,
+  AHET, evidence logging) — all three captures processed cleanly end-to-end.
+- FAILED: all three supine captures, MAE 17–25 bpm vs ≤6 bpm target. Failure is
+  algorithmic / ECA-structural, not data quality.
+
+**Next step:**
+1. Before implementing Blocker 5, investigate Blocker 6: run exp004 on cap3_retake
+   with k_max reduced to 4 and to 3 — does the cardiac signal reappear in the spectrum?
+   Use intermediate dumps (heart_band_spectrum, chosen_peak_hz) to confirm.
+2. If k_max=4 restores cardiac visibility on cap3_retake and cap4, tune Blocker 5 on
+   the development set and validate on held-out cap5.
+3. If cardiac SNR is too low regardless of k_max, investigate multi-bin combination
+   before committing to a supine-geometry fix.
+4. Do NOT use cap5 results (any condition) to guide algorithm decisions.
+
+---
+
+### 2026-06-15 — cap3_retake collected; split-file decoder extended
+
+**cap3_retake capture details:**
+- Date: 2026-06-15, recorded 16:04:27–16:11:59 local (UTC+3), duration 452 s per LogFile.
+- Posture: supine on floor mat, radar on tripod directly overhead.
+- Radar-to-chest distance: bin 28 at 1.221 m (confirmed from range profile — plausible for
+  supine overhead mount at ~1.2–1.3 m). Adjacent bins 27 (1.177 m) and 29 (1.264 m) visible.
+- BR: 14 bpm stable (confirmed on Masimo throughout); 4×f_r = 56 bpm, well below HR range.
+- HR: started elevated (~96 bpm, subject had just lain down), settled to ~75–80 bpm by
+  mid-recording. The 30 s trim (600 frames) removes the settling period.
+- Frame count: 9000 frames = 450 s at 20 Hz (LogFile duration 452 s — 2 s difference due
+  to LogFile rounding, file-size-inferred count is authoritative).
+- Files in `data/raw/`:
+  - `cap3_retake_20260615_160417_0.bin`: 1,073,741,760 bytes (8191.999512 raw frames)
+  - `cap3_retake_20260615_160417_1.bin`: 105,906,240 bytes (808.000488 raw frames)
+  - `cap3_retake_20260615_160417_LogFile.csv`
+  - `cap3_retake_20260615_160417_masimo.csv`
+
+**Split-file issue — mid-frame split at the 1 GB boundary:**
+mmWave Studio hit its 1,024 MB file size limit and split the recording. The split point does
+NOT fall on a frame boundary: `_0.bin` contains 8191 complete frames plus 131,008 bytes of a
+partial frame; `_1.bin` starts with the remaining 64 bytes of that frame, then 808 complete
+frames. Total raw bytes = 1,179,648,000 = 9000 × 131,072 exactly.
+Implication: concatenating decoded cubes per-file fails. Raw int16 bytes must be concatenated
+first, then the combined stream decoded.
+
+**`read_adc_bin` extended — `src/radar_io.py`:**
+- Signature changed from `read_adc_bin(bin_path, cfg, trim_frames=0)` to
+  `read_adc_bin(path, cfg, trim_frames=0)` where `path` accepts a single path or a
+  `List[Union[str, Path]]`.
+- `from typing import List, Union` added to imports.
+- New multi-file branch: validates all files exist before reading; computes `total_bytes`
+  from file sizes; validates `total_bytes % bytes_per_frame == 0` on the combined size (not
+  per-file — individual files may not be frame-aligned); concatenates raw int16 words into
+  a single array using `np.empty` + in-place copy (avoids peak-memory spike from list of
+  large arrays); then decodes with the shared 4-word LVDS path.
+- Single-file branch: unchanged. All existing callers pass a single path and are unaffected.
+- Sanity-check gate `[20–45]` guarded for small `num_adc_samples` (was `argmax` on an empty
+  slice; now skips gate sub-check with a NOTE print).
+
+**New tests — `tests/test_radar_io_split.py` (7 tests):**
+1. `test_single_file_passthrough` — regression guard: single-path behaviour unchanged.
+2. `test_two_file_split_shape` — frame-aligned 2-file split → correct total shape (8 frames).
+3. `test_two_file_split_content_order` — frames from `_0` precede frames from `_1`.
+4. `test_frame_count_consistency` — total frames == sum of `infer_num_frames` per file (frame-aligned case).
+5. `test_missing_file_raises_before_read` — `FileNotFoundError` before any data is read.
+6. `test_single_element_list_equals_single_path` — `[path]` produces same cube as `path`.
+7. `test_mid_frame_split_decodes_correctly` — split mid-frame (1.5 frames per file),
+   verifies all 3 frames decode correctly. This is the actual cap3_retake scenario.
+
+**Test count:** 106/106 unit tests pass; 8 integration tests skipped by default.
+Evidence: `pytest tests/ -q --tb=short` (2026-06-15).
+
+**Range profile — frame 600 (first frame after 30 s trim):**
+
+| Rank | Bin | Range (m) | Energy |
+|---|---|---|---|
+| 1 | 28 | 1.221 | 5.50e+08 |
+| 2 | 27 | 1.177 | 1.75e+08 |
+| 3 | 29 | 1.264 | 1.45e+08 |
+| 4 |  2 | 0.087 | 1.07e+08 |
+| 5 | 38 | 1.657 | 6.53e+07 |
+
+Locked bin for cap3_retake: **bin 28 at 1.221 m**. Peak is clear and dominant within the
+gate. Bins 27 and 29 are adjacent sidelobes. Bin 2 is near-DC leakage (expected).
+No anomalies. The supine overhead geometry produces a single clean target peak — good SNR.
+
+**What did NOT change:**
+- No experiment configs modified.
+- No ECA, AHET, or DSP logic changed.
+- `infer_num_frames` unchanged (not applicable to individual split files; total-byte
+  validation handles the cap3_retake case).
+
+**Next step:**
+1. Add cap3_retake to `exp004/config.yaml` as a new capture entry (locked_bin 28,
+   expected_frames 9000, files as a list of two paths).
+2. Collect cap4 (BR 16–18 bpm, development) and cap5 (BR 12–14 bpm, held-out).
+3. Run exp004 pipeline on cap3_retake and cap4.
+4. Implement Blocker 5 harmonic exclusion (candidate rejection when k×f_r ≈ HR candidate).
+5. Tune exclusion tolerance on development set (cap1 + cap3_retake + cap4).
+6. Validate on held-out cap5.
+
+---
+
+### 2026-06-15 — Per-window diagnostic, re-capture plan, Blocker 5 (planning session)
+
+**What was analysed (no code written, no pipeline run this session):**
+
+**Diagnostic findings — `scripts/diag_per_window_error.py`:**
+- 7 of 21 windows have |error| > 5 bpm: indices 1, 4, 6, 9, 12, 17 (all AHET-pass)
+  plus window 10 (AHET-fail, f_r outlier). All large negative errors.
+- Large errors (−9 to −15 bpm) are concentrated at true HR 71–74 bpm, not spread
+  uniformly across the HR range.
+- Worst-window harmonic-coincidence check:
+
+  | Window | Error | f_r | 4×f_r | Masimo PR | \|4×f_r−PR\| | Suspicious? |
+  |---|---|---|---|---|---|---|
+  | 17 | −14.7 bpm | 18.7 bpm | 74.9 bpm | 73.3 bpm | 1.5 bpm | YES |
+  | 6 | −12.5 bpm | 16.4 bpm | 65.5 bpm | 71.1 bpm | 5.6 bpm | borderline |
+  | 4 | −12.2 bpm | 18.0 bpm | 71.9 bpm | 67.7 bpm | 4.2 bpm | YES |
+
+- Root cause confirmed: bias is a harmonic contamination problem. ECA cannot
+  suppress 4×f_r when it coincides with the cardiac frequency — projection removes
+  both simultaneously. AHET passes these windows because second-harmonic structure
+  is present, but it belongs to the respiratory chain, not the cardiac signal.
+- 30 s windows do NOT fix harmonic-coincidence windows. Worst centers (400, 600,
+  800, 1100, 1200, 1700, 1900) remain bad or worsen at 30 s (Plot D).
+- Longer windows reduce MAE only on clean windows where spectral resolution helps.
+  They are not the solution to the harmonic-coincidence failure mode.
+- Four plots saved to `results/diagnostics/per_window_error/`:
+  A (scatter), B (error over time), C (error vs true HR), D (20 s vs 30 s per center).
+
+**Algorithm decision — Blocker 5 (harmonic exclusion at candidate selection):**
+- Before accepting any HR candidate, check whether any k×f_r for k ∈ {2, 3, 4}
+  falls within an exclusion tolerance of that candidate.
+- If yes: skip to next candidate (not reject outright — try remaining candidates first).
+- This is a targeted fix at the candidate-ranking step, not a change to ECA or AHET.
+- Exclusion tolerance needs tuning. Cannot tune on exp002/cap1 alone — the harmonic-
+  coincidence windows are the only failures and have no clean contrast class there.
+- Decision: tune on development set (cap1 + cap3_retake + cap4), validate on held-out cap5.
+
+**Re-capture plan — three supine captures decided, not yet executed:**
+
+| Capture | BR target | 4×f_r ceiling | Role |
+|---|---|---|---|
+| cap3_retake | 13–16 bpm | ≤ 64 bpm | Development (replaces failed cap3) |
+| cap4 | 16–18 bpm | ≤ 72 bpm | Development (second independent capture) |
+| cap5 | 12–14 bpm | ≤ 56 bpm | Held-out (no tuning allowed on this capture) |
+
+Protocol:
+- Subject supine on floor mat, radar on tripod directly overhead, ~1.3 m radar-to-chest.
+- Same mount position for all three captures.
+- Breathing controlled with a metronome set to half the target BR rate (count each inhale).
+- Recording duration: 450 s (7 min 30 s) per capture → ~39 windows after 30 s trim.
+- Stabilisation before each capture: 2 min metronome breathing, then confirm Masimo BR
+  stable in target range for 60 s before starting the radar recording.
+- Rest between captures: 5 min.
+- Pass criterion: Masimo BR stays in target range for ≥ 80% of the recording.
+
+**Blocker status:**
+- Blocker 1: resolved
+- Blocker 2: resolved
+- Blocker 3: deferred
+- Blocker 4: resolved
+- **Blocker 5: open** — harmonic exclusion at candidate selection (new)
+
+**Next step:**
+1. Execute three-capture supine session following the protocol above.
+2. Orientation pass in Claude Code: verify files, frame counts, Masimo BR distributions.
+3. Run exp004 pipeline on cap3_retake and cap4.
+4. Implement and tune Blocker 5 harmonic exclusion on development set.
+5. Validate on held-out cap5.
+
+---
+
+### 2026-06-15 — Blocker 4 resolved: parabolic interpolation on no-ECA fallback
+
+**What was implemented:**
+- `parabolic_interpolate_peak(spectrum, peak_idx, freq_resolution_hz) -> float` added
+  to `src/vitals.py` (after `refine_freq_hz`). Pure function: parabola through the peak
+  bin and its two neighbours, with three explicit fallbacks to raw bin centre:
+  boundary bin (peak_idx==0 or last), flat top (denominator==0), large delta (|delta|>1).
+- Wired into the no-ECA fallback path inside `estimate_rate_from_phase()` at the
+  cardiac band argmax site (previously `peak_hz = float(band_freqs[peak_idx])`).
+  New form: `peak_hz = band_freqs[0] + parabolic_interpolate_peak(band_spec, peak_idx, freq_res_hz)`.
+  The ECA+AHET path already used `refine_freq_hz()` for parabolic refinement on all
+  candidate frequencies; this change closes the gap on the no-ECA/f_r-outlier fallback.
+- 7 new unit tests in `tests/test_vitals_synthetic.py`: symmetric peak (delta==0),
+  off-centre peak (exact delta formula), left-edge fallback, right-edge fallback,
+  flat-top fallback, large-delta fallback, and end-to-end no-ECA bias guard.
+- Diagnostic script `scripts/diag_per_window_error.py` added (read-only, saves 4 plots
+  to `results/diagnostics/per_window_error/`). Confirmed 7 high-error windows in exp002;
+  windows 4 and 17 flagged as 4×f_r ≈ Masimo PR (respiratory harmonic coincidence).
+
+**Test count:** 99/99 unit tests pass; 8 integration tests skipped by default.
+Evidence: `pytest tests/ -v` (2026-06-15).
+
+**exp002 metrics after Blocker 4 fix:**
+
+| Subset | MAE | RMSE | Bias | N | vs canonical |
+|---|---|---|---|---|---|
+| All windows | 5.172 bpm | 6.897 bpm | −2.212 bpm | 21 | MAE −0.017, bias +0.016 |
+| AHET-verified | 5.326 bpm | 7.051 bpm | −2.217 bpm | 20 | unchanged |
+
+Evidence: `results/exp002_harmonic_rejection/20260615_110410/`.
+
+The bias moved from −2.228 to −2.212 bpm (improvement of +0.016 bpm) — very small,
+because the fix affects only window 10 (the one f_r-outlier window per capture where
+the no-ECA path fires). The AHET-verified subset is unchanged. This is the correct
+and expected behaviour; the ECA+AHET path already had refinement.
+
+No fallback events triggered during the exp002 run other than the previously-known
+window 10 f_r outlier (f_r = 8.8 bpm, below the 9 bpm physiological gate).
+
+**exp004 cap1 metrics after Blocker 4 fix (post-interpolation):**
+
+| Condition | MAE | RMSE | Bias | N | Pre-fix MAE |
+|---|---|---|---|---|---|
+| baseline 20s | 5.172 | 6.897 | −2.212 | 21/21 | 5.189 |
+| condition 20s | 5.535 | 7.225 | −2.520 | 19/19 | 5.55 |
+| condition 25s | 3.831 | 5.776 | −2.216 | 18/19 | 3.83 |
+| condition 30s | 3.668 | 5.582 | −2.418 | 17/19 | 3.67 |
+
+Monotonic MAE improvement with window length preserved. Changes from pre-fix are
+<0.02 bpm on all conditions — confirms the fix is correctly scoped to the fallback path.
+
+**cap2 and cap3 metrics are unchanged from 20260615_002408 to within 0.01 bpm.**
+
+**Blocker status:**
+- Blocker 1: resolved
+- Blocker 2: resolved
+- Blocker 3: deferred
+- **Blocker 4: resolved** — parabolic interpolation wired into no-ECA fallback path.
+
+**Next step:** re-capture cap3 with controlled breathing (13–16 bpm) before any
+paper-grade window-length claim (unchanged from prior session).
+
+---
+
+### 2026-06-15 — exp004 multi-capture complete
+
+**What was implemented:**
+- Multi-capture runner (`experiments/exp004_window_length/run.py`) processing cap1,
+  cap2, cap3 sequentially with explicit memory management. All three captures now write
+  to `results_root/<cap_id>/` (symmetric directory structure).
+- `analysis.py` with four pure functions: `pooled_window_length_summary`,
+  `chair_condition_summary`, `masimo_summary`, `collect_provenance`.
+- `tests/conftest.py` with `pytest_addoption` and `run_dir` fixture.
+- 8 integration tests in `tests/test_exp004_analysis.py` (skipped by default,
+  activated via `--run-dir <path>` or `EXP004_RUN_DIR`).
+- **Total test count: 92 unit tests pass; 8 integration tests skipped by default.**
+  With `--run-dir`: 100/100 pass.
+
+**Window-length findings — per capture (condition grids, all finite windows):**
+- cap1 (sit, 1.264 m, 2026-06-09):
+  20s MAE 5.55, 25s MAE 3.83, 30s MAE 3.67 bpm — **monotonic improvement**
+- cap2 (chair-back, 1.439 m, 2026-06-13):
+  20s MAE 8.80, 25s MAE 8.51, 30s MAE 4.46 bpm — **monotonic improvement**
+- cap3 (chair-no-back, 1.308 m, 2026-06-13):
+  20s MAE 13.50, 25s MAE 14.14, 30s MAE 16.19 bpm — **no improvement**
+  (physiological failure, not algorithmic — see cap3 diagnosis below)
+- Pooled micro-average (intersection, n=63):
+  20s MAE 9.02, 25s MAE 8.36, 30s MAE 7.46 bpm — monotonic improvement pooled,
+  but masked by cap3 reversal in the macro view.
+
+**Cap3 diagnosis:**
+- Subject respiratory rate ≈ 19–20 bpm places 4th harmonic at ≈ 80 bpm, directly
+  adjacent to true HR (78–84 bpm).
+- ECA cannot suppress the 4th respiratory harmonic without suppressing the cardiac
+  signal at the same frequency — projection removes both.
+- AHET correctly abstains (NaN rate 46% at 20 s, 24% at 25 s) when no clean second
+  harmonic survives — correct pipeline behaviour, not algorithm failure.
+- When AHET passes, accepted candidate is often a respiratory harmonic — large
+  negative bias (−12 to −14 bpm) across all window lengths.
+- Longer windows do not resolve the ambiguity (SNR problem, not frequency resolution).
+- Full diagnostic: `results/exp004_window_length/20260614_234744/cap3_diagnostic.md`.
+- **Remediation:** re-capture with subject breathing at 13–16 bpm so
+  4×f_r ≤ 64 bpm, well below HR ≈ 80 bpm.
+
+**Chair-condition comparison (descriptive only):**
+- cap2 MAE lower than cap3 at all window lengths, but the difference is dominated
+  by the cap3 harmonic-coincidence failure, not chair condition.
+- Confounded by distance (1.439 m vs 1.308 m), recording order, and respiratory rate.
+  No causal inference supported.
+
+**Evidence:**
+- Results: `results/exp004_window_length/20260615_002408/`
+- cap3 diagnostic: `results/exp004_window_length/20260614_234744/cap3_diagnostic.md`
+
+**Blocker status:**
+- Blocker 3: deferred (AHET correctly abstains on cap3 but cannot prevent passing a
+  respiratory harmonic as cardiac when 4×f_r ≈ HR)
+- Blocker 4: open (no-ECA fallback parabolic refinement)
+- **Next step:** re-capture cap3 with controlled breathing (13–16 bpm) before any
+  paper-grade window-length claim.
+
+---
+
+### 2026-06-14 — exp004 multi-capture extension plan v2 review
+
+**Verdict:** Close, but not implementation-ready. W&B is excluded by project design
+for this extension; review requirements below concern local provenance only.
+
+**Confirmed corrected:** exact grids (cap1 19/21; cap2/cap3 37/39), two-session
+metadata, descriptive non-causal chair comparison, micro plus macro summaries,
+sequential capture processing, explicit-run integration checks, and local provenance.
+
+**Required final corrections:**
+1. Fix all capture paths to the repository's flat `data/raw/` layout. The proposed
+   subdirectories do not exist, and cap3's logfile path incorrectly contains
+   `exp002_sit_chair_back`. Use the exact existing filenames.
+2. Restore required shared config fields: `seed`, UTC offset, and `compare.min_pi`.
+   Add `subject_id`, `session_id`, posture, and locked-bin source. Rename `range_m`
+   to `locked_bin_range_m` because it is spectral-bin range, not an independent
+   physical distance measurement.
+3. Set `radar.num_tx: 2`, matching the canonical configs and acquisition JSON
+   (`txChannelEn: 0x3`). Although the current decoder's byte geometry does not use
+   this field, recording incorrect hardware metadata is unacceptable.
+4. Derive bytes per frame from radar config rather than hardcoding 131072. A mismatch
+   with `expected_frames` should fail closed, not merely warn, unless the user passes
+   an explicit override.
+5. Define the compact `_run_capture()` return schema. `paired_metrics()` currently
+   contains aggregate metrics but not the per-center errors required for micro
+   pooling. Return, for each condition, the finite error vector on that capture's
+   all-three-length intersection, plus compact coverage/metric summaries. Do not
+   return cubes, spectra, window dictionaries, or full DataFrames.
+6. Define pooling precisely:
+   - micro metrics concatenate those intersection error vectors and report summed N;
+   - macro metrics are the arithmetic mean and range of the three per-capture
+     intersection metrics, labelled as mean per-capture MAE/RMSE/bias;
+   - define “longer is better” explicitly (for example monotonic
+     `MAE20 >= MAE25 >= MAE30`);
+   - retain the predeclared exp004 outcome: change in absolute bias versus matched
+     20 s with the MAE guardrail, reported per capture and descriptively pooled.
+7. Define Masimo summaries over unique 1 Hz samples in the usable radar interval,
+   not repeated overlapping window rows. State whether PR is PI-gated; report sample
+   count, missing-second coverage, and both raw and PI-gated PR summaries if useful.
+8. The chair-condition JSON must include the full denominators/rates promised in the
+   reporting section: total, finite, NaN radar/reference, AHET, f_r outlier, harmonic
+   suspect, plus Masimo summaries. Counts without denominators can be misleading.
+9. Complete local provenance: hash logfile inputs and relevant source modules in
+   addition to run/config/bin/Masimo. Because the current tree is dirty and contains
+   untracked experiment code, either require a clean committed tree for the real run
+   or save the full local diff and hashes/snapshots of untracked source files; a
+   dirty boolean alone cannot reproduce the result.
+10. Replace the existing “latest exp004 result” tests in `tests/test_exp004.py`;
+    merely adding explicit-run tests leaves the suite non-hermetic. Define how
+    `--run-dir` is supplied (pytest option or a separate verification script) and
+    skip integration checks by default. Add tests for path existence/unique IDs,
+    expected-frame mismatch, finite-intersection pooling, RMSE/bias as well as MAE,
+    exact trend semantics, and coverage denominators.
+
+**Recommended organization:** keep the runner orchestration in `run.py`, but place
+pure pooled/chair/provenance builders in an experiment-local `analysis.py` so unit
+tests can import them without coupling to the full runner.
+
+---
+
+### 2026-06-14 — exp004 multi-capture extension plan review
+
+**Verdict:** Not implementation-ready. Extending the fixed exp004 pipeline to all
+three captures is useful, but the proposed common-grid counts, capture metadata,
+chair-effect interpretation, pooled statistics, config paths, tests, and provenance
+need correction first. No implementation files changed during this review.
+
+**Required corrections:**
+1. Common-center counts must be equal across lengths. With 4800 total frames,
+   600-frame trim, 600-frame maximum window, first center 900, and 100-frame
+   spacing, cap2 and cap3 each have exactly **37** common centers for 20/25/30 s.
+   Their separate 20 s sliding baselines have 39 windows. The proposed
+   `~39/~39/~38` table contradicts common-center construction.
+2. Correct capture metadata: cap1 was recorded on 2026-06-09; cap2 and cap3 were
+   recorded sequentially on 2026-06-13. They are the same subject but not all the
+   same session. Treat the dataset as three captures from two sessions.
+3. Do not call cap2-vs-cap3 a chair-back “effect.” Chair condition is confounded
+   with distance (1.439 m vs 1.308 m), recording order/time, HR, and respiration.
+   The known no-back capture has elevated PR and respiratory-harmonic coincidence.
+   Rename this a descriptive chair-condition/capture comparison and make no causal
+   claim. Report Masimo PR/BR/PI distributions, finite-output coverage, NaN rate,
+   f_r-outlier rate, harmonic-suspect rate, and AHET coverage alongside conditional
+   MAE/RMSE/bias.
+4. Pooled window rows are highly overlapping and unequal in number (cap2/cap3
+   contribute roughly twice cap1), so simple concatenation is a length-weighted
+   descriptive micro-average, not independent evidence. Report both:
+   - micro-pooled metrics on each capture's all-condition finite intersection;
+   - macro averages of per-capture metrics with each capture weighted equally.
+   Keep per-capture results primary; do not calculate naive window-level p-values
+   or confidence intervals.
+5. Recommend one exp004 config with a `captures` list because algorithm parameters
+   are shared and one runner produces one study. Use the repository's actual flat
+   paths with `.csv` extensions. The paths shown in the plan point to nonexistent
+   subdirectories and omit CSV suffixes. Do not treat configured `total_frames` as
+   authoritative; infer it from file size and optionally compare against an
+   `expected_frames` field.
+6. Add capture metadata to config: session ID/date, chair condition, posture,
+   nominal/measured range, locked-bin provenance, and capture order. Validate unique
+   capture IDs and required files before processing.
+7. Process captures sequentially in a scoped `_run_capture()` helper and release
+   cube/profile arrays before loading the next 4800-frame capture. Do not retain all
+   large radar arrays in memory. Return only compact per-capture tables/summaries.
+8. Add pure summary builders for pooled and descriptive chair-condition outputs.
+   Unit-test them using synthetic tables. Tests must assert exact cap2/cap3 counts
+   (`37` common, `39` baseline), finite-intersection pooling, macro/micro weighting,
+   and coverage denominators.
+9. Do not add tests that discover the “most recent” real results directory.
+   Those tests are non-hermetic and fail in clean checkouts. Use temporary synthetic
+   artifacts for structure tests; keep real-run validation as an explicit integration
+   check requiring a supplied `--run-dir`.
+10. Add the provenance omitted from the plan and currently required by `CLAUDE.md`:
+    git commit and dirty state, config/script hashes, raw input hashes, seed,
+    Python/NumPy/SciPy versions, captured stdout, and W&B run ID(s).
+
+**Confirmed implementation direction:**
+- Existing `_process_windows`, `_run_and_save`, `src/windowing.py`,
+  `src/compare.py`, and `src/intermediates.py` can support the extension without DSP
+  changes.
+- Use cap1 as the already-observed exploratory result and cap2/cap3 as additional
+  descriptive condition checks. This remains a single-subject, two-session study.
+
+---
+
+### 2026-06-14 — exp004 implemented and run
+
+**Scaffold:**
+- `experiments/exp004_window_length/__init__.py` (empty) and `config.yaml` created.
+  Config keys: `exp004.window_lengths_s: [20, 25, 30]`, `center_spacing_s: 5`,
+  `first_center_s: 15`, `baseline_window_s: 20`, `baseline_hop_s: 5`.
+  Same data/radar/processing params as exp002 (read-only `exp001` capture, locked_bin 29).
+
+**run.py implementation:**
+- Full phase extracted once from trimmed cube via `phase_at_bin` + `remove_impulse_noise`.
+  All conditions slice this shared signal (no re-extraction per window). Guarantees
+  baseline exactly reproduces exp002 single-pass output.
+- `_process_windows` helper applies `estimate_rate_from_phase` (resp then HR with ECA+AHET)
+  per (abs_start, abs_end) window; epoch computed as `t0 + s / fps` where `s` is
+  trim-relative start.
+- `_run_and_save` writes `comparison.csv` + `intermediates.npz` per condition subdirectory.
+- Paired analysis: `conditions` dict keyed by center_frame (integer `(abs_start+abs_end)//2`).
+  Called `paired_metrics(conditions, "20s")` and `coverage_table`; JSON written as
+  `paired_summary.json`. NaN sentinel replaced with `null` via `_json_safe`.
+- AHET caveat printed before paired output (±0.1 Hz region contains 5/5/7 FFT bins at
+  20/25/30 s; pass-rate comparison is indicative only; not independently validated).
+
+**Run result — `results/exp004_window_length/20260614_192057/`:**
+- Baseline metrics (21 windows): MAE 5.1888, RMSE 6.9021, bias −2.2282 bpm ✓ canonical.
+- AHET-verified baseline (20 windows): MAE 5.3257, RMSE 7.0513, bias −2.2171 bpm ✓ canonical.
+- Common-center conditions: 20 s = 19 windows, 25 s = 19 windows, 30 s = 19 windows.
+- Paired intersection: n_centers = 17 (30 s has 2 NaN windows at centers 900 and 1000;
+  phase extraction truncated — physical short-window coverage at these centers needs
+  investigation before paper-grade use of 30 s condition).
+- All expected files present: `baseline_20s/`, `condition_{20,25,30}s/`,
+  each with `comparison.csv` + `intermediates.npz`; `paired_summary.json` at run root.
+
+**Tests — `tests/test_exp004.py` (12 tests):**
+- Tests 1–4: window grid properties from config (no pipeline execution).
+- Tests 5–7: `paired_metrics` correctness on synthetic data (NaN drops, 3-condition
+  pairwise keys, transition counts sum to intersection size).
+- Tests 8–12: artifact checks from most recent exp004 results directory.
+  Test 9 verifies baseline MAE/RMSE/bias to within 1e-4 bpm against canonical.
+- **75/75 tests pass.** Evidence: `pytest tests/ -v` (2026-06-14).
+
+**Blocker status:**
+- Blocker 1: resolved
+- Blocker 2: resolved
+- Blocker 3: deferred (documented in `notes/approach.md`)
+- Blocker 4: open (no-ECA fallback parabolic refinement)
+
+**Next:** Second capture session to assess generalisation across subjects/postures
+before any paper-grade claim. Investigate 30 s NaN windows at centers 900/1000.
+
+---
+
+### 2026-06-14 — exp004 foundation complete — windowing and paired metrics
+
+**Worked:**
+- `src/windowing.py` created with two functions:
+  - `common_center_windows`: generates 19-center common-time grid for 20/25/30 s
+    windows (starts [700…2500] / [650…2450] / [600…2400], verified by
+    `python src/windowing.py`).
+  - `sliding_windows`: reproduces exp002 21-window baseline (starts [600…2600],
+    hop 100 frames, verified by `python src/windowing.py`).
+  - 16 tests in `tests/test_windowing.py` — all pass.
+- `src/compare.py` extended with two functions:
+  - `paired_metrics`: computes per-condition coverage counts and finite-only
+    MAE/RMSE/bias, intersection across all-finite centers, and all pairwise
+    error-diff / AHET-transition stats. Error always recomputed from
+    `radar_hr - masimo_pr` (stored field not trusted).
+  - `coverage_table`: formats `paired_metrics` output as a plain-text table
+    for stdout (per-condition rows + Intersection section).
+  - During test writing (Prompt 2b), a gap was found: the duplicate-key
+    validation was specified in 2a but not implemented. Fixed by adding a
+    `len(list(cdict.keys())) != len(set(...))` check; tested via `_DupKeyMap`
+    subclass (Python dicts cannot expose duplicate keys directly).
+  - 15 tests in `tests/test_paired_metrics.py` — all pass.
+- **63/63 tests pass.** Evidence: `pytest tests/ -v` (2026-06-14).
+
+**Not yet done:**
+- exp004 runner (`experiments/exp004_window_length/run.py` + `config.yaml`)
+  not yet implemented. Next session starts at Prompt 3a.
+
+**Blocker status (unchanged):**
+- Blocker 1: resolved
+- Blocker 2: resolved
+- Blocker 3: deferred (AHET criterion documented as known limitation; full
+  evaluation after second capture)
+- Blocker 4: open (no-ECA fallback parabolic refinement)
+
+---
+
+### 2026-06-14 — Common-center constructor plan review
+
+**Verdict:** Correct numerical design, but revise before implementation to make the
+frame-coordinate contract and validation behavior explicit.
+
+**Confirmed:**
+- With raw-capture support `[600,3000)`, centers `900..2700` in 100-frame steps
+  produce 19 matched windows.
+- Absolute starts are `700..2500` for 400 frames, `650..2450` for 500 frames, and
+  `600..2400` for 600 frames. Corresponding trim-relative starts are `100..1900`,
+  `50..1850`, and `0..1800`.
+- The separate 400-frame/100-hop baseline over `[600,3000)` has 21 starts,
+  `600..2600`.
+
+**Required plan corrections:**
+1. Correct the duration statement: the LogFile reports 152 s, but the binary has
+   3000 frames at 20 Hz = 150 s. After 600-frame trim, usable radar support is
+   2400 frames = 120 s, not 122 s. File-size-inferred frames are authoritative.
+2. Define one coordinate convention. The proposed helper currently returns absolute
+   raw-capture frames, while `run_pipeline_locked()` reports frames relative to the
+   supplied cube and existing runners supply `profiles[trim_frames:]`. Either return
+   trim-relative bounds to match that API, or keep absolute bounds and require an
+   explicit conversion at the runner boundary. Never add trim twice.
+3. Remove `frame_rate_hz` from this frame-only helper unless it has a concrete use.
+   Seconds-to-frame conversion belongs in config/runner code with exact-integer
+   validation.
+4. Put the helper in `src/windowing.py` (or equivalently named focused module), not
+   the DSP module. The statement that this replaces inline generation in
+   `exp002/run.py` is inaccurate: regular generation currently occurs inside
+   `run_pipeline_locked()`, and this prompt explicitly makes no runner change.
+5. Do not silently shift an invalid requested first center. Validate that the
+   predeclared first center supports every length, then generate through the last
+   common valid center. Raise on an invalid first center or no valid grid.
+6. Validate integer/non-boolean inputs, `0 <= trim < total`, positive spacing,
+   positive unique lengths, and center parity. Since centers are integer frames,
+   either require even window lengths or explicitly define half-frame centers.
+7. Make the partial-window test concrete by asserting an exact expected tuple list.
+   Add tests for invalid spacing/bounds and odd lengths if even-only semantics are
+   chosen. Verification printing should be a separate command, not library output.
+
+**Implementation scope:** This resolves only the common-grid foundation. Paired
+metrics, exp004 runner integration, provenance, and artifact tests remain separate
+pre-exp004 blockers.
+
+---
 
 ### 2026-06-14 — Pre-exp004 readiness review
 

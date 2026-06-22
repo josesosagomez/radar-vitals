@@ -1,0 +1,29 @@
+# exp_eca_all — ECA+AHET harmonic rejection on all sessions from manifest.
+# Locked bin read from manifest.local.csv (confirmed from mean_range_profile images).
+# Single 20 s window / 5 s hop to match exp004 baseline condition.
+
+seed: 42
+
+manifest: data/manifest.local.csv
+
+radar:
+  num_rx: 4
+  num_tx: 1
+  num_chirps_per_frame: 32
+  num_adc_samples: 256
+  frame_rate_hz: 20.0
+  range_resolution_m: 0.0436
+
+processing:
+  trim_s: 30          # leading seconds dropped (from stationary_intervals start)
+  window_s: 20
+  hop_s: 5
+
+eca:
+  k_max: 6
+  ahet_deviation_hz: 0.1
+
+compare:
+  min_pi: 0.5
+
+results_dir: results/exp_eca_all

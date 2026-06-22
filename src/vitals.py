@@ -62,6 +62,38 @@ def refine_freq_hz(spectrum: np.ndarray, freqs: np.ndarray, peak_idx: int) -> fl
     return float(freqs[peak_idx]) + shift * bin_width
 
 
+def parabolic_interpolate_peak(
+    spectrum: np.ndarray,
+    peak_idx: int,
+    freq_resolution_hz: float,
+) -> float:
+    """Refine a spectral peak location using parabolic interpolation.
+
+    Parameters
+    ----------
+    spectrum : 1-D array of non-negative magnitudes (linear, not dB)
+    peak_idx : integer index of the peak bin (argmax in search band)
+    freq_resolution_hz : Hz per bin
+
+    Returns
+    -------
+    Interpolated peak frequency in Hz. Falls back to raw bin centre
+    on edge cases (boundary bin, flat top, |delta| > 1).
+    """
+    if peak_idx <= 0 or peak_idx >= len(spectrum) - 1:
+        return peak_idx * freq_resolution_hz
+    alpha = float(spectrum[peak_idx - 1])
+    beta  = float(spectrum[peak_idx])
+    gamma = float(spectrum[peak_idx + 1])
+    denom = alpha - 2.0 * beta + gamma
+    if denom == 0.0:
+        return peak_idx * freq_resolution_hz
+    delta = 0.5 * (alpha - gamma) / denom
+    if abs(delta) > 1.0:
+        return peak_idx * freq_resolution_hz
+    return (peak_idx + delta) * freq_resolution_hz
+
+
 def eca_project(
     theta: np.ndarray,
     f_r: float,
@@ -145,7 +177,10 @@ def estimate_rate_from_phase(
         band_freqs = freqs[mask]
         band_spec = spectrum[mask]
         peak_idx = int(np.argmax(band_spec))
-        peak_hz = float(band_freqs[peak_idx])
+        freq_res_hz = float(freqs[1] - freqs[0]) if len(freqs) > 1 else 1.0
+        peak_hz = float(band_freqs[0]) + parabolic_interpolate_peak(
+            band_spec, peak_idx, freq_res_hz
+        )
         n_fft = len(spectrum)
         return {
             "rate_bpm": peak_hz * 60.0,
