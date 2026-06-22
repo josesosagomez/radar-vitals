@@ -52,7 +52,7 @@ soft_failures:
   # dropouts are subtle; raise toward 20.0 if multipath causes legitimate
   # asymmetry at your geometry.
   rx_imbalance:
-    enabled: false
+    enabled: true
     rx_imbalance_ratio: 10.0
 
   # Subject-bin energy spike detector.
