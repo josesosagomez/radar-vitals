@@ -53,7 +53,7 @@ soft_failures:
   # asymmetry at your geometry.
   rx_imbalance:
     enabled: true
-    rx_imbalance_ratio: 10.0
+    rx_imbalance_ratio: 5.0
 
   # Subject-bin energy spike detector.
   # Flags frames where the range-FFT energy at the subject's locked range bin
