@@ -26,4 +26,9 @@ eca:
 compare:
   min_pi: 0.5
 
+quality_gating:
+  enabled: true
+  h5_dir: data/processed/time_domain_cubes
+  max_bad_fraction: 0.10   # gate window if >10% of frames are flagged (quality_mask)
+
 results_dir: results/exp_eca_all

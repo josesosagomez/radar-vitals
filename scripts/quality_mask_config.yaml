@@ -97,15 +97,15 @@ soft_failures:
   #   background estimate. 3 bins (±3) covers the main lobe of a rectangular
   #   range FFT at 0.0436 m/bin. Widen to 5 if you see sidelobes in the profile.
   subject_bin_snr:
-    enabled: false
+    enabled: true
     snr_threshold: 5.0
     guard_half_width: 3    # bins excluded each side of locked_bin for background
     chunk_frames: null     # null = all at once; integer = frames per FFT chunk
 
   motion_spike:
-    enabled: false
-    motion_spike_factor: 5.0
-    motion_window_frames: 50   # half-width of rolling median window (half_window)
+    enabled: true
+    motion_spike_factor: 10.0
+    motion_window_frames: 200  # half-width of rolling median window (half_window)
     locked_bin: null           # null = read from manifest; integer = explicit override
     chunk_frames: null         # null = all at once; integer = frames per FFT chunk
 
@@ -135,9 +135,9 @@ soft_failures:
   #   checks share the same local-baseline time scale. Use the same value as
   #   motion_window_frames unless you have a specific reason to differ.
   subject_bin_dropout:
-    enabled: false
+    enabled: true
     dropout_factor: 0.1          # flag when energy < 10% of local rolling median
-    dropout_window_frames: 50    # half-width of rolling median (full = 2*value + 1)
+    dropout_window_frames: 200   # half-width of rolling median (full = 2*value + 1); aligned to motion_window_frames
     locked_bin: null             # null = manifest; ignored when energy is reused
     chunk_frames: null           # ignored when energy is reused
 
@@ -165,8 +165,8 @@ soft_failures:
   #
   # chunk_frames: same memory-control mechanism as motion_spike / SNR checks.
   phase_jump:
-    enabled: false
+    enabled: true
     threshold_rad: 1.5       # flag when |Δphase| > threshold (radians per frame)
     locked_bin: null         # null = manifest; integer = explicit override
     chunk_frames: null
-    method: mean_phasor      # mean_phasor | delta_before_mean
+    method: delta_before_mean  # mean_phasor produces false positives when RX phase offsets partially cancel the mean phasor

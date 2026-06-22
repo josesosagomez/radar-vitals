@@ -16,6 +16,7 @@ import sys
 import time
 from pathlib import Path
 
+import h5py
 import numpy as np
 import pandas as pd
 import yaml
@@ -28,6 +29,70 @@ from src import compare, masimo, radar_io, vitals  # noqa: E402
 
 SEP  = "=" * 72
 LINE = "-" * 72
+
+
+# ---------------------------------------------------------------------------
+# Quality gating (Option A)
+# ---------------------------------------------------------------------------
+
+def _load_quality_mask(h5_path: Path, pipeline_trim_frames: int) -> np.ndarray:
+    """Load quality_mask from HDF5 and verify trim alignment.
+
+    quality_mask[i] is True when frame (trim_frames + i) is healthy.
+    The pipeline's window start_frame / end_frame are 0-indexed within the
+    analysis window — the same index space — so quality_mask[s:e] is the
+    correct slice for a window [s, e).
+
+    Raises FileNotFoundError if the HDF5 or quality_mask dataset is missing.
+    Raises ValueError if the stored trim_frames does not match the pipeline's.
+    """
+    if not h5_path.exists():
+        raise FileNotFoundError(
+            f"HDF5 not found: {h5_path}. Run scripts/add_quality_mask.py --all first."
+        )
+    with h5py.File(h5_path, "r") as f:
+        if "quality_mask" not in f:
+            raise FileNotFoundError(
+                f"No /quality_mask dataset in {h5_path.name}. "
+                "Run scripts/add_quality_mask.py --all first."
+            )
+        stored_trim = int(f["quality_mask"].attrs["trim_frames"])
+        if stored_trim != pipeline_trim_frames:
+            raise ValueError(
+                f"trim_frames mismatch for {h5_path.name}: "
+                f"HDF5 has {stored_trim}, pipeline expects {pipeline_trim_frames}. "
+                "Re-run scripts/add_quality_mask.py after changing trim_frames."
+            )
+        return f["quality_mask"][:].astype(bool)
+
+
+def _apply_quality_gating(
+    window_results: list[dict],
+    quality_mask: np.ndarray,
+    max_bad_fraction: float,
+) -> int:
+    """Gate windows in-place: set hr_bpm=NaN when bad frame fraction exceeds threshold.
+
+    Adds three keys to every window dict:
+      quality_gated  : bool  — True if this window was gated out
+      n_bad_frames   : int   — flagged frames inside the window
+      bad_fraction   : float — n_bad_frames / window_size
+
+    Returns the count of gated windows.
+    """
+    n_gated = 0
+    for out in window_results:
+        s, e    = out["start_frame"], out["end_frame"]
+        n_bad   = int((~quality_mask[s:e]).sum())
+        bad_frac = n_bad / (e - s)
+        gated   = bad_frac > max_bad_fraction
+        if gated:
+            out["hr_bpm"] = float("nan")
+            n_gated += 1
+        out["quality_gated"] = gated
+        out["n_bad_frames"]  = n_bad
+        out["bad_fraction"]  = bad_frac
+    return n_gated
 
 
 # ---------------------------------------------------------------------------
@@ -57,7 +122,8 @@ def _total_frames(bin_paths: list[Path], cfg: radar_io.ChirpConfig) -> int:
 # Per-session pipeline
 # ---------------------------------------------------------------------------
 
-def _run_session(row: pd.Series, cfg: dict, data_raw: Path, run_dir: Path) -> dict:
+def _run_session(row: pd.Series, cfg: dict, data_raw: Path, run_dir: Path,
+                 h5_dir: Path) -> dict:
     session_id  = str(row["session_id"])
     locked_bin  = int(row["locked_bin"])
     t0_base     = int(row["radar_start_epoch_seconds"])
@@ -139,14 +205,31 @@ def _run_session(row: pd.Series, cfg: dict, data_raw: Path, run_dir: Path) -> di
         out["start_epoch"] = t0 + out["start_frame"] / frame_rate_hz
         out["end_epoch"]   = t0 + out["end_frame"]   / frame_rate_hz
 
+    # Quality gating (Option A)
+    qg_cfg   = cfg.get("quality_gating", {})
+    qg_on    = bool(qg_cfg.get("enabled", False))
+    n_gated  = 0
+    if qg_on:
+        max_bad  = float(qg_cfg["max_bad_fraction"])
+        h5_path  = h5_dir / f"{session_id}.h5"
+        qmask    = _load_quality_mask(h5_path, trim_frames)
+        n_gated  = _apply_quality_gating(window_results, qmask, max_bad)
+        print(
+            f"  Quality gating: {n_gated} / {len(window_results)} windows gated "
+            f"({100.0 * n_gated / max(len(window_results), 1):.1f}%)  "
+            f"|  max_bad_fraction={max_bad}"
+        )
+
     # Build radar DataFrame
     radar_df = pd.DataFrame([{
-        "start_epoch": o["start_epoch"],
-        "end_epoch":   o["end_epoch"],
-        "hr_bpm":      o["hr_bpm"],
-        "window_index": o["window_index"],
-        "rr_bpm":      o.get("rr_bpm"),
+        "start_epoch":   o["start_epoch"],
+        "end_epoch":     o["end_epoch"],
+        "hr_bpm":        o["hr_bpm"],
+        "window_index":  o["window_index"],
+        "rr_bpm":        o.get("rr_bpm"),
         "ahet_verified": o.get("ahet_verified", False),
+        "quality_gated": o.get("quality_gated", False),
+        "bad_fraction":  o.get("bad_fraction", 0.0),
     } for o in window_results])
 
     # Load Masimo and compare
@@ -175,7 +258,8 @@ def _run_session(row: pd.Series, cfg: dict, data_raw: Path, run_dir: Path) -> di
         mae = rmse = bias = float("nan")
         n_ahet = 0
 
-    print(f"  Windows: {n_total} total, {n_finite} finite, {n_nan} NaN")
+    print(f"  Windows: {n_total} total, {n_finite} finite, {n_nan} NaN  "
+          f"(of which {n_gated} quality-gated)")
     if not math.isnan(mae):
         print(f"  MAE={mae:.2f}  RMSE={rmse:.2f}  bias={bias:+.2f} bpm")
     else:
@@ -189,6 +273,7 @@ def _run_session(row: pd.Series, cfg: dict, data_raw: Path, run_dir: Path) -> di
         "n_total":     n_total,
         "n_finite":    n_finite,
         "n_nan":       n_nan,
+        "n_gated":     n_gated,
         "mae":         mae,
         "rmse":        rmse,
         "bias":        bias,
@@ -208,6 +293,8 @@ def main(config_path: Path) -> None:
     manifest_path = REPO_ROOT / cfg["manifest"]
     manifest      = pd.read_csv(manifest_path)
     data_raw      = REPO_ROOT / "data" / "raw"
+    qg_cfg        = cfg.get("quality_gating", {})
+    h5_dir        = REPO_ROOT / qg_cfg.get("h5_dir", "data/processed/time_domain_cubes")
 
     timestamp = time.strftime("%Y%m%d_%H%M%S")
     run_dir   = REPO_ROOT / cfg["results_dir"] / timestamp
@@ -226,7 +313,7 @@ def main(config_path: Path) -> None:
         print(f"  SESSION: {sid}  |  {row['posture']}  |  {row['distance_cm']} cm")
         print(LINE)
         try:
-            result = _run_session(row, cfg, data_raw, run_dir)
+            result = _run_session(row, cfg, data_raw, run_dir, h5_dir)
             session_results.append(result)
         except Exception as exc:
             print(f"  ERROR: {exc}")
@@ -247,17 +334,18 @@ def main(config_path: Path) -> None:
     print("  CROSS-SESSION SUMMARY — ECA+AHET (k_max=6, window=20 s)")
     print(SEP)
     print(f"  {'Session':<10}  {'Posture':<20}  {'Dist':>5}  {'Bin':>4}  "
-          f"{'N':>4}  {'NaN':>4}  {'MAE':>7}  {'RMSE':>7}  {'Bias':>7}")
+          f"{'N':>4}  {'NaN':>4}  {'Gated':>5}  {'MAE':>7}  {'RMSE':>7}  {'Bias':>7}")
     print(f"  {'-'*10}  {'-'*20}  {'-'*5}  {'-'*4}  "
-          f"{'-'*4}  {'-'*4}  {'-'*7}  {'-'*7}  {'-'*7}")
+          f"{'-'*4}  {'-'*4}  {'-'*5}  {'-'*7}  {'-'*7}  {'-'*7}")
 
     maes = []
     for r in session_results:
-        mae_s  = f"{r['mae']:7.2f}" if not math.isnan(r['mae']) else "    NaN"
-        rmse_s = f"{r['rmse']:7.2f}" if not math.isnan(r['rmse']) else "    NaN"
-        bias_s = f"{r['bias']:+7.2f}" if not math.isnan(r['bias']) else "    NaN"
+        mae_s   = f"{r['mae']:7.2f}"  if not math.isnan(r['mae'])  else "    NaN"
+        rmse_s  = f"{r['rmse']:7.2f}" if not math.isnan(r['rmse']) else "    NaN"
+        bias_s  = f"{r['bias']:+7.2f}" if not math.isnan(r['bias']) else "    NaN"
+        gated_s = f"{r.get('n_gated', 0):>5}"
         print(f"  {r['session_id']:<10}  {r['posture']:<20}  {r['distance_cm']:>5}  "
-              f"{r['locked_bin']:>4}  {r['n_finite']:>4}  {r['n_nan']:>4}  "
+              f"{r['locked_bin']:>4}  {r['n_finite']:>4}  {r['n_nan']:>4}  {gated_s}  "
               f"{mae_s}  {rmse_s}  {bias_s}")
         if not math.isnan(r["mae"]):
             maes.append(r["mae"])
