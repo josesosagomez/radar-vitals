@@ -25,6 +25,13 @@ HEART_BAND_HZ = (0.8, 2.0)
 RESP_BAND_HZ = (0.1, 0.5)
 AHET_MAX_CANDIDATES = 3
 INTERMEDIATE_SCHEMA_VERSION = 1
+# Minimum frequency above the cardiac band's lower edge accepted as a cardiac
+# candidate.  The Butterworth rolloff at 0.8 Hz provides insufficient
+# suppression of 2×f_r (0–0.2 Hz below the cutoff), leaving a spurious
+# left-edge peak in the post-ECA cardiac band spectrum.  Candidates below
+# band_lo + MIN_CARDIAC_BAND_MARGIN_HZ are treated as filter-edge artifacts.
+# Assumption: HR > 57 bpm for seated/standing adults in this study.
+MIN_CARDIAC_BAND_MARGIN_HZ: float = 0.15   # 0.8 + 0.15 = 0.95 Hz = 57 bpm
 
 
 @dataclass
@@ -258,13 +265,23 @@ def estimate_rate_from_phase(
     def _spec(sig: np.ndarray):
         return np.abs(np.fft.rfft(sig * hann)), np.fft.rfftfreq(n, d=1.0 / fs)
 
-    # First-pass ECA: no cardiac candidate guard yet
-    x_eca1 = eca_project(x_bp, f_r_hz, fs, k_max=k_max, cardiac_candidate_hz=None)
-    spec1, freqs = _spec(x_eca1)
-
+    # Frequency axis and cardiac mask are signal-independent (depend only on n, fs).
+    spec_bp, freqs = _spec(x_bp)
     cardiac_mask = (freqs >= band[0]) & (freqs <= band[1])
     if not cardiac_mask.any():
         raise ValueError("No FFT bins in cardiac band.")
+
+    # Fix A — provisional cardiac guard.
+    # When k×f_r coincides with the cardiac frequency, first-pass ECA with no
+    # guard removes the cardiac signal from spec1, so candidate selection never
+    # finds the true cardiac peak.  Guard the dominant bandpassed peak above the
+    # minimum margin so the cardiac signal survives into spec1.
+    cardiac_zone = cardiac_mask & (freqs >= band[0] + MIN_CARDIAC_BAND_MARGIN_HZ)
+    prov_cand_hz = (float(freqs[cardiac_zone][np.argmax(spec_bp[cardiac_zone])])
+                    if cardiac_zone.any() else None)
+
+    x_eca1 = eca_project(x_bp, f_r_hz, fs, k_max=k_max, cardiac_candidate_hz=prov_cand_hz)
+    spec1, _ = _spec(x_eca1)
 
     band_mask_idx = np.where(cardiac_mask)[0]
     band_spec1 = spec1[band_mask_idx]
@@ -284,6 +301,15 @@ def estimate_rate_from_phase(
     sorted_by_mag = peaks_local[sort_order]
     sorted_prominences = peak_prominences[sort_order]
     candidates_global = band_mask_idx[sorted_by_mag]
+
+    # Fix B — minimum margin filter.
+    # Reject candidates within MIN_CARDIAC_BAND_MARGIN_HZ of the band's lower
+    # edge; these are filter-edge leakage artifacts, not cardiac peaks.  If all
+    # candidates are filtered, the for-loop below does not execute and the
+    # all-candidates-failed path returns NaN (no fabricated estimate).
+    valid = freqs[candidates_global] >= band[0] + MIN_CARDIAC_BAND_MARGIN_HZ
+    candidates_global = candidates_global[valid]
+    sorted_prominences = sorted_prominences[valid]
 
     candidate_attempted = np.zeros(AHET_MAX_CANDIDATES, dtype=bool)
     candidate_peak_bin_index = np.full(AHET_MAX_CANDIDATES, -1, dtype=int)
