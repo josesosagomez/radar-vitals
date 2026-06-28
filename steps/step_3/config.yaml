@@ -1,0 +1,41 @@
+# steps/step_3/config.yaml
+# Select chest range bin from time-domain HDF5 cubes.
+# All paths are relative to the repository root (run from there).
+#
+# range_resolution_m is read from the HDF5 attrs — not stored here —
+# so this config stays valid even if future captures use a different chirp profile.
+
+paths:
+  manifest:  data/manifest.local.csv
+  cubes_dir: data/processed/time_domain_cubes
+
+# Physical search window for the chest bin.
+# Set these to the widest plausible subject-distance range for the experiment.
+# Narrower windows speed up Phase 2 CFAR but risk excluding edge cases.
+search:
+  min_m: 0.80   # closest plausible subject position (m)
+  max_m: 2.50   # furthest plausible subject position (m)
+  top_n: 5      # top-N per method fed into the consensus ranking
+
+# Respiratory band used for Method 3 (phase-band SNR).
+# 0.10–0.50 Hz covers 6–30 breaths/min; keeps cardiac harmonics out.
+resp_band:
+  lo_hz: 0.10
+  hi_hz: 0.50
+
+# Maximum range displayed in plots. Does NOT affect bin selection.
+plot:
+  max_range_m: 5.0
+
+# Warn if |selected_range_m - tape_distance_m| exceeds this (metres).
+# 0.20 m ~ 4.6 range bins at 0.0436 m/bin — deliberate tolerance for
+# tape uncertainty, standing posture sway, and bin-centre quantisation.
+tape_threshold_m: 0.20
+
+# Minimum confidence to write locked_bin back to the manifest.
+# Choices: high | medium | low
+# Use --allow-low-confidence-write on the CLI to override to "low" for one run.
+write_policy:
+  write_min_confidence: medium
+
+seed: 42

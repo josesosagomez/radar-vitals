@@ -20,6 +20,7 @@ notes*/
 .claude*/
 .codex*/
 .pytest_cache*/
+.pytest_tmp*/
 
 # W&B local cache
 wandb/

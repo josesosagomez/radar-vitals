@@ -1,0 +1,46 @@
+paths:
+  manifest: data/manifest.local.csv
+  cubes_dir: data/processed/time_domain_cubes
+  raw_dir: data/raw
+  processed_dir: data/processed/breathing_rate
+  results_dir: results
+
+input_policy:
+  require_step3_confidence: medium   # string enum: low | medium | high
+  reject_step3_review_required: true
+  require_quality_mask: true
+  max_bad_fraction: 0.10             # gate windows with > 10% bad frames
+  skip_excluded_sessions: true
+  skip_missing_h5: true              # skip (not error) in --all mode
+
+windowing:
+  # 30 s is intentional for respiration: RR is lower-frequency and stronger
+  # than HR, so this does not inherit exp004's 30 s HR NaN issue (which was
+  # caused by cardiac-band phase extraction, not breathing signal strength).
+  window_s: 30
+  hop_s: 5
+  use_stationary_intervals: true     # trim start/end from manifest stationary_intervals
+
+phase:
+  method: delta_before_mean          # also supports: mean_phasor (diagnostic)
+  detrend: linear                    # linear or constant
+
+respiration:
+  band_hz: [0.10, 0.50]             # candidate search band (6-30 bpm)
+  max_harmonics: 3                   # HA collects evidence at f, 2f, 3f
+  harmonic_max_hz: null              # null = use Nyquist; set to e.g. 2.0 to cap
+  stft_subwindow_s: 10              # each subwindow duration for STFT stability check
+  stft_overlap: 0.5                  # subwindow overlap fraction
+  fft_ha_agree_bpm_high: 2.0        # FFT/HA agreement threshold for high confidence
+  fft_ha_agree_bpm_medium: 4.0      # FFT/HA agreement threshold for medium confidence
+  stft_std_high_bpm: 2.0            # STFT std threshold for high confidence
+  stft_std_medium_bpm: 4.0          # STFT std threshold for medium confidence
+  fft_fallback_snr_db: 6.0          # min FFT SNR (dB) to use FFT-only fallback when HA fails
+  edge_lock_margin_bpm: 2.0         # estimates within this margin of band edge are flagged and invalidated
+  emit_low_confidence: false         # if true, emit radar_rr_bpm even for low confidence
+  high_edge_lock_fraction_threshold: 0.5  # diagnostic flag: majority of windows edge-locked suggests wrong bin
+
+step6_contract:
+  write_for_heart_rate: true         # always write data/processed/breathing_rate/<id>.csv
+
+seed: 42

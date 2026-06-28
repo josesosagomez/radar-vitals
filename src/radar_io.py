@@ -1,11 +1,18 @@
 """IWR1642 + DCA1000 raw ADC reader.
 
-Byte format: 4-word-packet, per TI rawDataReader.m (dp_reshape2LaneLVDS, lines 607-609)
-and SWRA581 §3.3.  For 2-lane LVDS (laneEn=0x3) each 4-word (8-byte) packet contains:
+Two I/Q conventions exist depending on how the IWR1642 was configured:
 
-    [I_n, I_{n+1}, Q_n, Q_{n+1}]
+SampleSwap=0  (mmWave Studio default, iqSwapSel=0):
+    4-word packet = [I_n, I_{n+1}, Q_n, Q_{n+1}]
+    Lane 1 (words 0-1) carries I; lane 2 (words 2-3) carries Q.
+    Use ChirpConfig(iq_swap=False)  ← default, all exp001-exp010 Studio captures.
 
-Lane 1 (words 0-1) carries I; lane 2 (words 2-3) carries Q.
+SampleSwap=1  (SDK adcbufCfg SampleSwap=1, required for LVDS output in demo firmware):
+    4-word packet = [Q_n, Q_{n+1}, I_n, I_{n+1}]
+    Lane 1 (words 0-1) carries Q; lane 2 (words 2-3) carries I.
+    Use ChirpConfig(iq_swap=True)  ← all Python (scripts/capture.py) captures.
+    Effect if decoded wrong: positive and negative range frequencies are swapped
+    (true target at bin k appears at bin N-k in the FFT output).
 
 Channel interleaving: with chInterleave=1 (non-interleaved), all NSample complex
 samples for RX0 come before RX1, RX2, RX3 within each chirp.  The flat sample stream
@@ -35,6 +42,7 @@ class ChirpConfig:
     num_frames: int            # total frames captured
     frame_rate_hz: float       # = slow-time / phase sample rate (target ~20 Hz)
     range_resolution_m: float  # c / (2 * sweep_bandwidth); compute from your profile
+    iq_swap: bool = False      # True for SDK SampleSwap=1 (Python captures); see module docstring
     # NOTE: enforce Low Power ADC mode + IF bandwidth <= 5 MHz in the profile (TI xWR1642).
 
 
@@ -122,10 +130,8 @@ def read_adc_bin(
       frame boundary — raw bytes are concatenated before decoding so mid-frame
       splits are handled correctly.
 
-    trim_frames: leading frames to skip in the range-profile sanity check (the
-      walk-in/settle period).  Range-FFT energy is checked on frames
-      [trim_frames : trim_frames+100] (clamped to file length).
-      Must satisfy 0 <= trim_frames < num_frames.
+    trim_frames: accepted for backward compatibility but no longer used.
+      Range-bin selection is handled by Step 3 (select_chest_bin.py).
 
     Output: (num_frames, num_chirps_per_frame, num_rx, num_adc_samples), complex64.
     """
@@ -201,83 +207,23 @@ def read_adc_bin(
 
         raw = np.memmap(bin_path, dtype="<i2", mode="r")
 
-    # Validate trim_frames before using it as a slice index.
-    if not (0 <= trim_frames < num_frames):
-        raise ValueError(
-            f"trim_frames={trim_frames} is out of range [0, {num_frames}). "
-            f"Check trim_start_s and frame_rate_hz in config."
-        )
-
     # 2-lane LVDS 4-word-packet de-interleaving (shared for single and multi-file).
-    # Each 4-word packet: [I_n, I_{n+1}, Q_n, Q_{n+1}].
-    # Lane 1 (words 0-1) = I samples; lane 2 (words 2-3) = Q samples.
-    # Ref: rawDataReader.m lines 607-609 (dp_reshape2LaneLVDS).
+    # Word layout depends on adcbufCfg SampleSwap — see module docstring.
     words = raw.reshape(-1, 4)
     complex_data = np.empty(raw.size // 2, dtype=np.complex64)
-    complex_data[0::2] = words[:, 0].astype(np.float32) + 1j * words[:, 2].astype(np.float32)
-    complex_data[1::2] = words[:, 1].astype(np.float32) + 1j * words[:, 3].astype(np.float32)
+    if cfg.iq_swap:
+        # SampleSwap=1: packet = [Q_n, Q_{n+1}, I_n, I_{n+1}]
+        complex_data[0::2] = words[:, 2].astype(np.float32) + 1j * words[:, 0].astype(np.float32)
+        complex_data[1::2] = words[:, 3].astype(np.float32) + 1j * words[:, 1].astype(np.float32)
+    else:
+        # SampleSwap=0 (Studio default): packet = [I_n, I_{n+1}, Q_n, Q_{n+1}]
+        # Ref: rawDataReader.m lines 607-609 (dp_reshape2LaneLVDS).
+        complex_data[0::2] = words[:, 0].astype(np.float32) + 1j * words[:, 2].astype(np.float32)
+        complex_data[1::2] = words[:, 1].astype(np.float32) + 1j * words[:, 3].astype(np.float32)
 
     cube = complex_data.reshape(
         num_frames, cfg.num_chirps_per_frame, cfg.num_rx, cfg.num_adc_samples
     )
-
-    # --- range-profile sanity check (informational only — does not fail the parse) ---
-    # Raw ADC samples are beat-frequency time values; range bins exist only after FFT.
-    # Skip trim_frames (walk-in period); clamp end so the slice is always nonempty.
-    print(f"cube.shape = {cube.shape}")
-    check_start = trim_frames
-    check_end   = min(trim_frames + 100, num_frames)   # clamp to file length
-    print(f"Sanity check frames: [{check_start}, {check_end})")
-    rp_check = np.fft.fft(cube[check_start:check_end], axis=-1)
-    energy_full = np.mean(np.abs(rp_check) ** 2, axis=(0, 1, 2))  # (num_adc_samples,)
-    n_pos = cfg.num_adc_samples // 2
-    energy = energy_full[:n_pos]   # positive-frequency half (alias-free)
-
-    # Top-5 energy bins (excluding DC bin 0)
-    top5_idx = np.argsort(energy[1:])[::-1][:5] + 1
-    print("Top-5 range bins by energy (excl DC):")
-    for b in top5_idx:
-        print(f"  bin {int(b):3d}  {b * cfg.range_resolution_m:.3f} m  "
-              f"energy={energy[b]:.3e}")
-
-    print(f"energy at range bins 25-35: "
-          f"{np.array2string(energy[25:36], precision=2, suppress_small=True)}")
-
-    # Report the overall peak and the in-gate peak; warn if they diverge or if
-    # the gate peak implies range_resolution_m is significantly miscalibrated.
-    # A stronger peak outside [gate_lo, gate_hi] is normal (static leakage, far
-    # walls) and does not indicate a parsing problem.
-    gate_lo, gate_hi = 20, 45
-    if len(energy) > 1:
-        overall_peak_bin   = int(np.argmax(energy[1:])) + 1
-        overall_peak_range = overall_peak_bin * cfg.range_resolution_m
-        print(f"Peak energy bin (excl DC): {overall_peak_bin} = {overall_peak_range:.3f} m")
-
-        gate_slice = energy[gate_lo: gate_hi + 1]
-        if gate_slice.size > 0:
-            gate_peak_bin   = int(np.argmax(gate_slice)) + gate_lo
-            gate_peak_range = gate_peak_bin * cfg.range_resolution_m
-            print(f"Peak in gate [{gate_lo}-{gate_hi}]:   {gate_peak_bin} = {gate_peak_range:.3f} m")
-
-            if overall_peak_bin < gate_lo or overall_peak_bin > gate_hi:
-                print(
-                    f"NOTE: strongest bin ({overall_peak_bin}, {overall_peak_range:.3f} m) is "
-                    f"outside gate [{gate_lo}-{gate_hi}] — likely static leakage or an off-gate "
-                    f"reflector.  Not a decoding error; check range_resolution_m "
-                    f"({cfg.range_resolution_m} m/bin) if the subject peak is not visible."
-                )
-
-            if abs(gate_peak_range - 1.4) > 0.2:
-                print(
-                    f"WARNING: gate peak at {gate_peak_range:.3f} m differs from nominal 1.4 m "
-                    f"by {abs(gate_peak_range - 1.4):.3f} m (> 0.2 m threshold). "
-                    f"Recalculate range_resolution_m from actual chirp slope and sample rate."
-                )
-        else:
-            print(
-                f"NOTE: num_adc_samples={cfg.num_adc_samples} too small for gate "
-                f"[{gate_lo}-{gate_hi}] sanity check — skipped."
-            )
 
     return cube
 

@@ -1,0 +1,131 @@
+# steps/step_4/config.yaml
+# Quality mask configuration for radar time-domain cubes.
+# Used by steps/step_4/add_quality_mask.py.
+# All paths are relative to the repository root (run from there).
+
+# --- Paths ------------------------------------------------------------------
+paths:
+  manifest:  data/manifest.local.csv
+  cubes_dir: data/processed/time_domain_cubes
+
+# --- Analysis parameters ----------------------------------------------------
+analysis:
+  # Frames to drop from the start of every session before health-checking.
+  # 600 frames = 30 s at 20 Hz = subject accommodation period.
+  # Do not change this without re-running all sessions.
+  trim_frames: 0
+
+  # Frames per FFT chunk for all soft-failure checks. null = all at once.
+  # For the largest sessions (~8400 frames) the full-cube FFT uses ~4.4 GB.
+  # Set to 500 to keep peak memory under ~300 MB per chunk.
+  chunk_frames: 500
+
+# --- Input policy -----------------------------------------------------------
+# Controls which sessions are processed and which are skipped/errored.
+input_policy:
+  # Require locked_bin, locked_range_m, chest_bin_confidence, and
+  # chest_bin_review_required to be present in the manifest.
+  # Set false only if running before Step 3 (soft-failure checks will skip).
+  require_step3_fields: true
+
+  # Minimum Step 3 confidence to process. Sessions below this are skipped
+  # (--all) or error (--session). Levels: high > medium > low.
+  min_chest_bin_confidence: medium
+
+  # Allow sessions with chest_bin_review_required=True in --all runs.
+  # Override per run with --allow-review-required flag.
+  allow_review_required: false
+
+  # Skip excluded sessions (exclusion_reason != "") in --all runs.
+  # Explicit --session calls warn but continue.
+  process_excluded_sessions: false
+
+  # In --all mode, skip sessions without an HDF5 cube (instead of failing).
+  skip_missing_h5_in_all: true
+
+# --- Output policy ----------------------------------------------------------
+output_policy:
+  # Overwrite existing /quality_mask and /quality_metrics datasets.
+  # Override per run with --overwrite flag.
+  overwrite_existing: false
+
+# --- Hard failures ----------------------------------------------------------
+# Hardware-determined limits. No tuning needed — a frame at these thresholds
+# is scientifically unusable regardless of signal statistics.
+hard_failures:
+
+  # ADC clipping threshold (absolute ADC units, int16 range = ±32767).
+  # A sample at this limit means the ADC saturated: the range FFT for that
+  # frame is distorted. Almost always 32767. Lower only if you observe
+  # systematic near-saturation before the hard rail (check max_abs_adc).
+  clip_threshold: 32767
+
+  # Dead-frame energy floor (fraction of session median frame energy).
+  # A frame below this fraction is a dropped or glitch frame (DCA1000 packet
+  # loss, hardware reset). 0.01 (1% of median) is a safe default.
+  dead_frame_fraction: 0.01
+
+# --- Soft failures ----------------------------------------------------------
+# Flags frames that are suspicious but not hardware-dead.
+# Each check has `enabled` to include/exclude it from the quality_mask.
+# Metrics are always computed and saved to quality_metrics/ for inspection.
+# locked_bin is always read from the manifest (Step 3 output) — no per-check
+# override. chunk_frames is shared from analysis.chunk_frames above.
+soft_failures:
+
+  # RX channel imbalance.
+  # Flags frames where max(energy_per_rx) / min(energy_per_rx) exceeds the
+  # threshold. A dead or heavily-attenuated RX channel corrupts the phase.
+  # HOW TO CHOOSE: healthy sessions are within ~3-4x. Start at 10.0; lower
+  # to 5.0 if intermittent dropouts are subtle; raise if multipath causes
+  # legitimate asymmetry.
+  rx_imbalance:
+    enabled: true
+    rx_imbalance_ratio: 5.0
+
+  # Subject-bin energy spike detector.
+  # Flags frames where range-FFT energy at the locked range bin spikes above
+  # the local rolling median. Catches gross movement (cough, posture shift).
+  # HOW TO CHOOSE motion_spike_factor: start at 5.0. Lower to 3.0 if subtle
+  # shifts are missed; raise to 10.0 if breathing variation is mis-flagged.
+  # HOW TO CHOOSE motion_window_frames: 50 (±2.5 s) is a safe default.
+  motion_spike:
+    enabled: true
+    motion_spike_factor: 10.0
+    motion_window_frames: 200   # half-width of rolling median (frames)
+
+  # Subject-bin SNR.
+  # Flags frames where the locked bin energy is too weak relative to the
+  # background clutter floor. Low-SNR phase is unreliable.
+  # HOW TO CHOOSE snr_threshold: start at 3.0. Lower to 2.0 if too many
+  # good frames are flagged. guard_half_width excludes bins near locked_bin
+  # to prevent subject-signal leakage from inflating the background estimate.
+  subject_bin_snr:
+    enabled: true
+    snr_threshold: 5.0
+    guard_half_width: 3         # bins excluded each side of locked_bin
+
+  # Subject-bin energy dropout detector.
+  # Flags frames where the locked bin energy drops far below its local rolling
+  # median. Catches the subject shifting out of the locked bin.
+  # Energy is reused from motion_spike when that block is present (no extra FFT).
+  # HOW TO CHOOSE dropout_factor: start at 0.1 (flag < 10% of rolling median).
+  # Lower to 0.05 for only severe nulls; raise to 0.2 for subtle shifts.
+  subject_bin_dropout:
+    enabled: true
+    dropout_factor: 0.1         # flag when energy < fraction * local rolling median
+    dropout_window_frames: 200  # half-width of rolling median (aligned to motion_window_frames)
+
+  # Phase jump detector.
+  # Flags frames where the wrapped frame-to-frame phasor rotation at the locked
+  # bin exceeds threshold_rad. Catches phase discontinuities (startle, glitch)
+  # that energy checks miss.
+  # HOW TO CHOOSE threshold_rad: at 77 GHz (λ ≈ 3.9 mm) normal seated
+  # breathing produces peak per-frame steps of 0.3-0.9 rad at 20 Hz.
+  # Start at 1.5 rad; inspect quality_metrics/phase_diff before lowering.
+  phase_jump:
+    enabled: true
+    threshold_rad: 1.5          # flag when |Δphase| > threshold (radians per frame)
+    method: delta_before_mean   # mean_phasor has false positives when RX offsets cancel
+
+seed: 42

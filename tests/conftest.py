@@ -7,6 +7,11 @@ supply --run-dir <path> or set EXP004_RUN_DIR to activate them.
 import os
 from pathlib import Path
 
+# Set non-interactive backend before any test module (or the modules they import)
+# can import matplotlib.pyplot.  Prevents GUI/font crashes in headless environments.
+import matplotlib
+matplotlib.use("Agg")
+
 import pytest
 
 

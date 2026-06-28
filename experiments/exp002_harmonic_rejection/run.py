@@ -10,6 +10,7 @@ Run from the repo root:
 """
 from __future__ import annotations
 
+import argparse
 import sys
 import json
 import time
@@ -25,9 +26,65 @@ sys.path.insert(0, str(REPO_ROOT))
 from src import compare, intermediates, masimo, radar_io, vitals  # noqa: E402
 
 
+def _resolve_session_overrides(session_id: str) -> dict:
+    """Look up session_id in the manifest and return data-path + param overrides."""
+    manifest_path = REPO_ROOT / "data" / "manifest.local.csv"
+    manifest = pd.read_csv(manifest_path)
+    rows = manifest[manifest["session_id"] == session_id]
+    if rows.empty:
+        available = manifest["session_id"].tolist()
+        raise SystemExit(
+            f"Session '{session_id}' not in manifest.\nAvailable: {available}"
+        )
+    row = rows.iloc[0]
+    data_raw = REPO_ROOT / "data" / "raw"
+
+    # Bin path(s) — handle single file or split (_0 / _1)
+    split0 = data_raw / f"{session_id}_0.bin"
+    single = data_raw / f"{session_id}.bin"
+    if split0.exists():
+        split1 = data_raw / f"{session_id}_1.bin"
+        bin_paths = [split0, split1] if split1.exists() else [split0]
+    elif single.exists():
+        bin_paths = [single]
+    else:
+        raise FileNotFoundError(
+            f"No .bin found for session '{session_id}' in {data_raw}"
+        )
+
+    # trim_start_s: first number from stationary_intervals (e.g. "30-285" → 30)
+    intervals = str(row.get("stationary_intervals") or "")
+    try:
+        trim_start_s = int(intervals.split("-")[0])
+    except (ValueError, IndexError):
+        trim_start_s = None  # caller falls back to config value
+
+    # locked_bin: may be blank or NaN in the manifest
+    try:
+        locked_bin = int(row["locked_bin"])
+    except (ValueError, TypeError, KeyError):
+        locked_bin = None  # caller falls back to config value
+
+    iq_swap = str(row.get("iq_swap", "False")).strip().lower() == "true"
+
+    return {
+        "bin_paths":    bin_paths,
+        "logfile_csv":  data_raw / f"{session_id}_LogFile.csv",
+        "masimo_csv":   data_raw / f"{session_id}_masimo.csv",
+        "trim_start_s": trim_start_s,
+        "locked_bin":   locked_bin,
+        "iq_swap":      iq_swap,
+    }
+
+
 def main(config_path: Path) -> None:
     cfg = yaml.safe_load(config_path.read_text())
     np.random.seed(cfg["seed"])
+
+    ap = argparse.ArgumentParser(description="exp002 ECA+AHET harmonic rejection")
+    ap.add_argument("--session", metavar="ID",
+                    help="Session ID from manifest (overrides data: block in config.yaml)")
+    args = ap.parse_args()
 
     run_dir = (
         REPO_ROOT / "results" / "exp002_harmonic_rejection" / time.strftime("%Y%m%d_%H%M%S")
@@ -38,8 +95,28 @@ def main(config_path: Path) -> None:
     d = cfg["data"]
     v = cfg["vitals"]
 
+    # ── resolve data paths (manifest override or config default) ─────────────
+    if args.session:
+        ov = _resolve_session_overrides(args.session)
+        bin_paths    = ov["bin_paths"]
+        logfile_path = ov["logfile_csv"]
+        masimo_path  = ov["masimo_csv"]
+        iq_swap      = ov["iq_swap"]
+        if ov["trim_start_s"] is not None:
+            d["trim_start_s"] = ov["trim_start_s"]
+        if ov["locked_bin"] is not None:
+            v["locked_bin"] = ov["locked_bin"]
+        print(f"Session: {args.session}  (manifest override)  iq_swap={iq_swap}")
+    else:
+        bin_paths    = [REPO_ROOT / d["radar_bin"]]
+        logfile_path = REPO_ROOT / d["logfile_csv"]
+        masimo_path  = REPO_ROOT / d["masimo_csv"]
+        iq_swap      = False  # all exp001-exp010 are Studio captures (SampleSwap=0)
+
+    bin_arg = bin_paths[0] if len(bin_paths) == 1 else bin_paths
+
     # --- Parse LogFile for UTC capture timestamps ---
-    log_info = radar_io.parse_logfile(REPO_ROOT / d["logfile_csv"], d["utc_offset_hours"])
+    log_info = radar_io.parse_logfile(logfile_path, d["utc_offset_hours"])
     start_epoch_utc = log_info["start_epoch_utc"]
     end_epoch_utc   = log_info["end_epoch_utc"]
     duration_s      = log_info["duration_s"]
@@ -48,8 +125,10 @@ def main(config_path: Path) -> None:
         num_adc_samples=c["num_adc_samples"], num_rx=c["num_rx"], num_tx=c["num_tx"],
         num_chirps_per_frame=c["num_chirps_per_frame"], num_frames=c["num_frames"],
         frame_rate_hz=c["frame_rate_hz"], range_resolution_m=c["range_resolution_m"],
+        iq_swap=iq_swap,
     )
-    radar_io.infer_num_frames(REPO_ROOT / d["radar_bin"], chirp_cfg)
+    if len(bin_paths) == 1:
+        radar_io.infer_num_frames(bin_paths[0], chirp_cfg)
 
     trim_start_s = d["trim_start_s"]
     trim_frames  = int(trim_start_s * c["frame_rate_hz"])
@@ -60,7 +139,7 @@ def main(config_path: Path) -> None:
     print(f"Analysis: {t0} -> {end_epoch_utc} ({duration_s - trim_start_s:.0f} s)")
 
     # 1) Radar cube -> range profile
-    cube     = radar_io.read_adc_bin(REPO_ROOT / d["radar_bin"], chirp_cfg,
+    cube     = radar_io.read_adc_bin(bin_arg, chirp_cfg,
                                      trim_frames=trim_frames)
     profiles = radar_io.range_profile(cube)
     raxis    = radar_io.range_axis_m(c["num_adc_samples"], c["range_resolution_m"])
@@ -135,7 +214,7 @@ def main(config_path: Path) -> None:
     radar_df = pd.DataFrame(rows)
 
     # 5) Compare to Masimo
-    mas = masimo.load_masimo(REPO_ROOT / d["masimo_csv"])
+    mas = masimo.load_masimo(masimo_path)
     radar_df["masimo_br"] = [
         masimo.reference_br(mas, row["start_epoch"], row["end_epoch"])
         for _, row in radar_df.iterrows()

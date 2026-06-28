@@ -107,14 +107,16 @@ def eca_project(
     fs: float,
     k_max: int = 6,
     cardiac_candidate_hz: float | None = None,
+    skip_ks: frozenset = frozenset(),
 ) -> np.ndarray:
     """Remove respiratory harmonics from phase signal using QR projection.
 
     Adaptive K_b: include harmonic k if:
       - k * f_r < 2.0 Hz (stays below cardiac band ceiling), AND
+      - k not in skip_ks (forbidden-zone override — caller computed which k to skip), AND
       - cardiac_candidate_hz is None OR abs(k * f_r - cardiac_candidate_hz) > 0.15 Hz
         (do not suppress a harmonic too close to the cardiac candidate)
-    Hard floor: always include k = 1..4 regardless of proximity to cardiac candidate.
+    Hard floor: always include k = 1..4 unless k is in skip_ks.
     Uses QR decomposition — not explicit matrix inverse — for numerical stability.
     (OpenAI cross-review finding #1 — arXiv:2503.07062)
     """
@@ -125,6 +127,8 @@ def eca_project(
         freq = k * f_r
         if freq >= 2.0:
             break
+        if k in skip_ks:                        # forbidden-zone override (skip_forbidden_harmonics_v1)
+            continue
         if k <= 4:                              # hard floor — covers known 60 bpm failure
             cols += [np.sin(2 * np.pi * freq * t), np.cos(2 * np.pi * freq * t)]
         elif (cardiac_candidate_hz is None
@@ -137,6 +141,36 @@ def eca_project(
     return theta - Q @ (Q.T @ theta)
 
 
+def _check_low_candidate_competitor(
+    cand_global: int,
+    cand_hz: float,
+    spec1: np.ndarray,
+    freqs: np.ndarray,
+    low_candidate_hz: float,
+    high_candidate_preference_hz: float,
+    high_competitor_min_mag_ratio: float,
+    band: tuple,
+) -> bool:
+    """Return True if a high-frequency competitor outweighs a low-frequency candidate.
+
+    Fires when cand_hz < low_candidate_hz AND there is any bin in spec1 at
+    freq in [high_candidate_preference_hz, band[1]] whose magnitude is >=
+    high_competitor_min_mag_ratio * spec1[cand_global].  The upper bound is
+    band[1] so second-harmonic energy (spec1 extends to 2×band[1]) is never
+    mistaken for a competing cardiac fundamental.
+    """
+    if cand_hz >= low_candidate_hz:
+        return False
+    hi_mask = (freqs >= high_candidate_preference_hz) & (freqs <= band[1])
+    if not hi_mask.any():
+        return False
+    cand_mag = float(spec1[cand_global])
+    if cand_mag == 0.0:
+        return False
+    max_hi_mag = float(spec1[hi_mask].max())
+    return max_hi_mag >= high_competitor_min_mag_ratio * cand_mag
+
+
 def estimate_rate_from_phase(
     phase: np.ndarray,
     fs: float,
@@ -144,22 +178,40 @@ def estimate_rate_from_phase(
     f_r_hz: float | None = None,
     k_max: int = 6,
     ahet_deviation_hz: float = 0.1,
+    eca_mode: str = "legacy",
+    ahet_gate_mode: str = "legacy",
+    eca_forbidden_guard_hz: float = 0.0,
+    candidate_min_second_harmonic_ratio_db: float = 1.0,
+    candidate_min_prominence: float = 3.0,
+    low_candidate_hz: float = 1.20,
+    high_candidate_preference_hz: float = 1.25,
+    high_competitor_min_mag_ratio: float = 0.80,
+    candidate_min_peak_to_floor_db: float = 0.0,
+    low_candidate_min_peak_to_floor_db: float = 0.0,
 ) -> dict:
     """Estimate a rate (bpm) from a slow-time phase signal via band-limited FFT peak.
 
     When f_r_hz is None: original bandpass + argmax path (backward compat).
     When f_r_hz is provided: ECA respiration cancellation + AHET second-harmonic
-    consistency check (arXiv:2503.07062, OpenAI cross-review findings #1–#4).
+    consistency check (arXiv:2503.07062, OpenAI cross-review findings #1-#4).
 
-    Physiological outlier gate: if f_r_hz is provided but outside [0.15, 0.60] Hz
-    (9–36 bpm), falls back to no-ECA path with f_r_outlier=True in the returned dict.
-    This prevents an implausible respiration estimate from corrupting ECA subspace.
+    eca_mode:
+      "legacy"                      -- existing behavior (hard floor k=1..4 always projected)
+      "skip_forbidden_harmonics_v1" -- skip any k where k*f_r falls in
+                                       [band_lo - guard, band_hi + guard]
 
-    Returns a dict with rate AND the spectrum/peak so the choice is inspectable.
-    All paths return: ahet_verified, harmonic_suspect, f_r_hz_used, eca_applied,
-      phase_eca, f_r_outlier, fixed-width AHET attempt arrays, and spectrum-stage
-      metadata. Spectrum stage 0 is the no-ECA path, stage 1 is first-pass ECA
-      after all AHET candidates fail, and stage 2 is the accepted second-pass ECA.
+    ahet_gate_mode:
+      "legacy"    -- return early on first passing candidate (existing behavior)
+      "strict_v1" -- evaluate all candidates; sequential rejection codes 1-4;
+                     select first surviving candidate by magnitude order
+
+    Physiological outlier gate: if f_r_hz is provided but outside [0.15, 0.60] Hz,
+    falls back to no-ECA path with f_r_outlier=True.
+
+    New return fields (all modes):
+      candidate_rejection_code -- int array (AHET_MAX_CANDIDATES,), -1=gate_not_run
+      all_candidates_rejected  -- bool, True only in strict_v1 when all rejected
+      eca_skipped_harmonics    -- bool array (k_max,), True for each skipped k
     """
     # Physiological gate: an implausible f_r collapses ECA to garbage; skip it.
     _GATE_LO_HZ = 0.15   # 9 bpm  — below this is not real respiration
@@ -168,6 +220,9 @@ def estimate_rate_from_phase(
 
     x = np.asarray(phase, dtype=float)
     x = x - x.mean()
+
+    _empty_rej_codes = np.full(AHET_MAX_CANDIDATES, -1, dtype=int)
+    _empty_eca_skip  = np.zeros(k_max, dtype=bool)
 
     # ------------------------------------------------------------------ #
     # No-ECA path: f_r_hz is None OR physiological outlier gate fired     #
@@ -194,6 +249,7 @@ def estimate_rate_from_phase(
             "peak_hz": peak_hz,
             "freqs_hz": freqs,
             "spectrum": spectrum,
+            "spectrum_pre_eca": spectrum,
             "spectrum_first_pass": np.full(n_fft, np.nan, dtype=float),
             "spectrum_stage": 0,
             "band": band,
@@ -209,47 +265,26 @@ def estimate_rate_from_phase(
             "accepted_candidate_refined_hz": float("nan"),
             "accepted_second_harmonic_refined_hz": float("nan"),
             "candidate_attempted": np.zeros(AHET_MAX_CANDIDATES, dtype=bool),
-            "candidate_peak_bin_index": np.full(
-                AHET_MAX_CANDIDATES, -1, dtype=int
-            ),
-            "candidate_initial_hz": np.full(
-                AHET_MAX_CANDIDATES, np.nan, dtype=float
-            ),
-            "candidate_refined_hz": np.full(
-                AHET_MAX_CANDIDATES, np.nan, dtype=float
-            ),
-            "candidate_peak_magnitude": np.full(
-                AHET_MAX_CANDIDATES, np.nan, dtype=float
-            ),
-            "candidate_prominence": np.full(
-                AHET_MAX_CANDIDATES, np.nan, dtype=float
-            ),
-            "candidate_argmax_fallback": np.zeros(
-                AHET_MAX_CANDIDATES, dtype=bool
-            ),
-            "second_peak_bin_hz": np.full(
-                AHET_MAX_CANDIDATES, np.nan, dtype=float
-            ),
-            "second_peak_refined_hz": np.full(
-                AHET_MAX_CANDIDATES, np.nan, dtype=float
-            ),
-            "second_peak_magnitude": np.full(
-                AHET_MAX_CANDIDATES, np.nan, dtype=float
-            ),
-            "comparison_floor": np.full(
-                AHET_MAX_CANDIDATES, np.nan, dtype=float
-            ),
-            "peak_to_floor_ratio": np.full(
-                AHET_MAX_CANDIDATES, np.nan, dtype=float
-            ),
-            "peak_to_floor_ratio_db": np.full(
-                AHET_MAX_CANDIDATES, np.nan, dtype=float
-            ),
+            "candidate_peak_bin_index": np.full(AHET_MAX_CANDIDATES, -1, dtype=int),
+            "candidate_initial_hz": np.full(AHET_MAX_CANDIDATES, np.nan, dtype=float),
+            "candidate_refined_hz": np.full(AHET_MAX_CANDIDATES, np.nan, dtype=float),
+            "candidate_peak_magnitude": np.full(AHET_MAX_CANDIDATES, np.nan, dtype=float),
+            "candidate_prominence": np.full(AHET_MAX_CANDIDATES, np.nan, dtype=float),
+            "candidate_argmax_fallback": np.zeros(AHET_MAX_CANDIDATES, dtype=bool),
+            "second_peak_bin_hz": np.full(AHET_MAX_CANDIDATES, np.nan, dtype=float),
+            "second_peak_refined_hz": np.full(AHET_MAX_CANDIDATES, np.nan, dtype=float),
+            "second_peak_magnitude": np.full(AHET_MAX_CANDIDATES, np.nan, dtype=float),
+            "comparison_floor": np.full(AHET_MAX_CANDIDATES, np.nan, dtype=float),
+            "peak_to_floor_ratio": np.full(AHET_MAX_CANDIDATES, np.nan, dtype=float),
+            "peak_to_floor_ratio_db": np.full(AHET_MAX_CANDIDATES, np.nan, dtype=float),
             "region_available": np.zeros(AHET_MAX_CANDIDATES, dtype=bool),
             "candidate_passed": np.zeros(AHET_MAX_CANDIDATES, dtype=bool),
             "ahet_attempt_spectrum": np.full(
                 (AHET_MAX_CANDIDATES, n_fft), np.nan, dtype=float
             ),
+            "candidate_rejection_code": _empty_rej_codes.copy(),
+            "all_candidates_rejected": False,
+            "eca_skipped_harmonics": _empty_eca_skip.copy(),
         }
 
     # ------------------------------------------------------------------ #
@@ -267,9 +302,23 @@ def estimate_rate_from_phase(
 
     # Frequency axis and cardiac mask are signal-independent (depend only on n, fs).
     spec_bp, freqs = _spec(x_bp)
+    spectrum_pre_eca = spec_bp          # true pre-ECA snapshot; evidence-only
     cardiac_mask = (freqs >= band[0]) & (freqs <= band[1])
     if not cardiac_mask.any():
         raise ValueError("No FFT bins in cardiac band.")
+
+    # Compute forbidden-zone skip set (skip_forbidden_harmonics_v1 mode only)
+    eca_skipped_harmonics = np.zeros(k_max, dtype=bool)
+    if eca_mode == "skip_forbidden_harmonics_v1":
+        fz_lo = band[0] - eca_forbidden_guard_hz
+        fz_hi = band[1] + eca_forbidden_guard_hz
+        skip_ks_set: frozenset = frozenset(
+            k for k in range(1, k_max + 1) if fz_lo <= k * f_r_hz <= fz_hi
+        )
+        for k in skip_ks_set:
+            eca_skipped_harmonics[k - 1] = True
+    else:
+        skip_ks_set = frozenset()
 
     # Fix A — provisional cardiac guard.
     # When k×f_r coincides with the cardiac frequency, first-pass ECA with no
@@ -280,7 +329,8 @@ def estimate_rate_from_phase(
     prov_cand_hz = (float(freqs[cardiac_zone][np.argmax(spec_bp[cardiac_zone])])
                     if cardiac_zone.any() else None)
 
-    x_eca1 = eca_project(x_bp, f_r_hz, fs, k_max=k_max, cardiac_candidate_hz=prov_cand_hz)
+    x_eca1 = eca_project(x_bp, f_r_hz, fs, k_max=k_max,
+                          cardiac_candidate_hz=prov_cand_hz, skip_ks=skip_ks_set)
     spec1, _ = _spec(x_eca1)
 
     band_mask_idx = np.where(cardiac_mask)[0]
@@ -311,31 +361,86 @@ def estimate_rate_from_phase(
     candidates_global = candidates_global[valid]
     sorted_prominences = sorted_prominences[valid]
 
-    candidate_attempted = np.zeros(AHET_MAX_CANDIDATES, dtype=bool)
-    candidate_peak_bin_index = np.full(AHET_MAX_CANDIDATES, -1, dtype=int)
-    candidate_initial_hz = np.full(AHET_MAX_CANDIDATES, np.nan, dtype=float)
-    candidate_refined_hz = np.full(AHET_MAX_CANDIDATES, np.nan, dtype=float)
-    candidate_peak_magnitude = np.full(AHET_MAX_CANDIDATES, np.nan, dtype=float)
-    candidate_prominence = np.full(AHET_MAX_CANDIDATES, np.nan, dtype=float)
+    candidate_attempted       = np.zeros(AHET_MAX_CANDIDATES, dtype=bool)
+    candidate_peak_bin_index  = np.full(AHET_MAX_CANDIDATES, -1, dtype=int)
+    candidate_initial_hz      = np.full(AHET_MAX_CANDIDATES, np.nan, dtype=float)
+    candidate_refined_hz      = np.full(AHET_MAX_CANDIDATES, np.nan, dtype=float)
+    candidate_peak_magnitude  = np.full(AHET_MAX_CANDIDATES, np.nan, dtype=float)
+    candidate_prominence      = np.full(AHET_MAX_CANDIDATES, np.nan, dtype=float)
     candidate_argmax_fallback = np.zeros(AHET_MAX_CANDIDATES, dtype=bool)
-    second_peak_bin_hz = np.full(AHET_MAX_CANDIDATES, np.nan, dtype=float)
-    second_peak_refined_hz = np.full(AHET_MAX_CANDIDATES, np.nan, dtype=float)
-    second_peak_magnitude = np.full(AHET_MAX_CANDIDATES, np.nan, dtype=float)
-    comparison_floor = np.full(AHET_MAX_CANDIDATES, np.nan, dtype=float)
-    peak_to_floor_ratio = np.full(AHET_MAX_CANDIDATES, np.nan, dtype=float)
-    peak_to_floor_ratio_db = np.full(AHET_MAX_CANDIDATES, np.nan, dtype=float)
-    region_available = np.zeros(AHET_MAX_CANDIDATES, dtype=bool)
-    candidate_passed = np.zeros(AHET_MAX_CANDIDATES, dtype=bool)
-    ahet_attempt_spectrum = np.full(
+    second_peak_bin_hz        = np.full(AHET_MAX_CANDIDATES, np.nan, dtype=float)
+    second_peak_refined_hz    = np.full(AHET_MAX_CANDIDATES, np.nan, dtype=float)
+    second_peak_magnitude     = np.full(AHET_MAX_CANDIDATES, np.nan, dtype=float)
+    comparison_floor          = np.full(AHET_MAX_CANDIDATES, np.nan, dtype=float)
+    peak_to_floor_ratio       = np.full(AHET_MAX_CANDIDATES, np.nan, dtype=float)
+    peak_to_floor_ratio_db    = np.full(AHET_MAX_CANDIDATES, np.nan, dtype=float)
+    region_available          = np.zeros(AHET_MAX_CANDIDATES, dtype=bool)
+    candidate_passed          = np.zeros(AHET_MAX_CANDIDATES, dtype=bool)
+    candidate_rejection_code  = np.full(AHET_MAX_CANDIDATES, -1, dtype=int)
+    ahet_attempt_spectrum     = np.full(
         (AHET_MAX_CANDIDATES, len(freqs)), np.nan, dtype=float
     )
+
+    # Cache second-pass ECA results for the accept step in strict_v1
+    _cand_eca: dict = {}  # rank -> (spec2, x_eca2, f_h_ref, f_h2_ref)
+
+    def _common_fields() -> dict:
+        """Shared fields included in every ECA+AHET return."""
+        return {
+            "freqs_hz": freqs,
+            "band": band,
+            "f_r_hz_used": f_r_hz,
+            "f_r_outlier": False,
+            "eca_applied": True,
+            "candidate_attempted": candidate_attempted,
+            "candidate_peak_bin_index": candidate_peak_bin_index,
+            "candidate_initial_hz": candidate_initial_hz,
+            "candidate_refined_hz": candidate_refined_hz,
+            "candidate_peak_magnitude": candidate_peak_magnitude,
+            "candidate_prominence": candidate_prominence,
+            "candidate_argmax_fallback": candidate_argmax_fallback,
+            "second_peak_bin_hz": second_peak_bin_hz,
+            "second_peak_refined_hz": second_peak_refined_hz,
+            "second_peak_magnitude": second_peak_magnitude,
+            "comparison_floor": comparison_floor,
+            "peak_to_floor_ratio": peak_to_floor_ratio,
+            "peak_to_floor_ratio_db": peak_to_floor_ratio_db,
+            "region_available": region_available,
+            "candidate_passed": candidate_passed,
+            "ahet_attempt_spectrum": ahet_attempt_spectrum,
+            "candidate_rejection_code": candidate_rejection_code,
+            "eca_skipped_harmonics": eca_skipped_harmonics,
+            "spectrum_pre_eca": spectrum_pre_eca,
+        }
+
+    def _build_accepted(rank: int) -> dict:
+        spec2, x_eca2, f_h_ref, f_h2_ref = _cand_eca[rank]
+        f_final = 0.5 * f_h_ref + 0.5 * (f_h2_ref / 2.0)
+        return {
+            "rate_bpm": f_final * 60.0,
+            "peak_hz": f_final,
+            "spectrum": spec2,
+            "spectrum_first_pass": spec1,
+            "spectrum_stage": 2,
+            "filtered": x_eca2,
+            "ahet_verified": True,
+            "harmonic_suspect": False,
+            "phase_eca": x_eca2,
+            "ahet_second_harmonic_hz": f_h2_ref,
+            "accepted_candidate_rank": rank,
+            "accepted_candidate_initial_hz": float(candidate_initial_hz[rank]),
+            "accepted_candidate_refined_hz": f_h_ref,
+            "accepted_second_harmonic_refined_hz": f_h2_ref,
+            "all_candidates_rejected": False,
+            **_common_fields(),
+        }
 
     # Try each candidate with AHET consistency check
     for candidate_rank, (cand_global, prominence) in enumerate(
         zip(candidates_global, sorted_prominences)
     ):
         cand_global = int(cand_global)
-        cand_hz = refine_freq_hz(spec1, freqs, int(cand_global))
+        cand_hz = refine_freq_hz(spec1, freqs, cand_global)
         candidate_attempted[candidate_rank] = True
         candidate_peak_bin_index[candidate_rank] = cand_global
         candidate_initial_hz[candidate_rank] = cand_hz
@@ -345,12 +450,11 @@ def estimate_rate_from_phase(
 
         # Second-pass ECA: guard against suppressing a harmonic near the cardiac candidate
         # (OpenAI cross-review finding #4)
-        x_eca2 = eca_project(x_bp, f_r_hz, fs, k_max=k_max, cardiac_candidate_hz=cand_hz)
+        x_eca2 = eca_project(x_bp, f_r_hz, fs, k_max=k_max,
+                              cardiac_candidate_hz=cand_hz, skip_ks=skip_ks_set)
         spec2, _ = _spec(x_eca2)
         ahet_attempt_spectrum[candidate_rank] = spec2
-        candidate_refined_hz[candidate_rank] = refine_freq_hz(
-            spec2, freqs, cand_global
-        )
+        candidate_refined_hz[candidate_rank] = refine_freq_hz(spec2, freqs, cand_global)
 
         # AHET: local 2nd harmonic search [2×cand_hz ± ahet_deviation_hz]
         # Local window, not global to 4.0 Hz (OpenAI cross-review finding #3)
@@ -358,6 +462,8 @@ def estimate_rate_from_phase(
         hi2 = 2.0 * cand_hz + ahet_deviation_hz
         mask2 = (freqs >= lo2) & (freqs <= hi2)
         if not mask2.any():
+            if ahet_gate_mode == "strict_v1":
+                candidate_rejection_code[candidate_rank] = 1  # no_second_harmonic_region
             continue
         region_available[candidate_rank] = True
 
@@ -366,9 +472,8 @@ def estimate_rate_from_phase(
         peak2_global = int(np.where(mask2)[0][peak2_local])
         peak2_magnitude = float(region2[peak2_local])
         second_peak_bin_hz[candidate_rank] = float(freqs[peak2_global])
-        second_peak_refined_hz[candidate_rank] = refine_freq_hz(
-            spec2, freqs, peak2_global
-        )
+        f_h2_ref = refine_freq_hz(spec2, freqs, peak2_global)
+        second_peak_refined_hz[candidate_rank] = f_h2_ref
         second_peak_magnitude[candidate_rank] = peak2_magnitude
 
         # Noise floor from the cardiac band of the second-pass ECA spectrum
@@ -387,58 +492,100 @@ def estimate_rate_from_phase(
             ratio_db = 20.0 * np.log10(ratio)
         peak_to_floor_ratio_db[candidate_rank] = ratio_db
 
-        passed = peak2_magnitude > noise2
-        candidate_passed[candidate_rank] = passed
-        if passed:
-            # Refine both fundamental and 2nd harmonic, then blend
-            # (OpenAI cross-review finding: use 2nd harmonic as refinement, not just gate)
-            f_h_ref = candidate_refined_hz[candidate_rank]
-            f_h2_ref = second_peak_refined_hz[candidate_rank]
-            f_final = 0.5 * f_h_ref + 0.5 * (f_h2_ref / 2.0)
-            return {
-                "rate_bpm": f_final * 60.0,
-                "peak_hz": f_final,
-                "freqs_hz": freqs,
-                "spectrum": spec2,
-                "spectrum_first_pass": spec1,
-                "spectrum_stage": 2,
-                "band": band,
-                "filtered": x_eca2,
-                "ahet_verified": True,
-                "harmonic_suspect": False,
-                "f_r_hz_used": f_r_hz,
-                "f_r_outlier": False,
-                "eca_applied": True,
-                "phase_eca": x_eca2,
-                "ahet_second_harmonic_hz": f_h2_ref,
-                "accepted_candidate_rank": candidate_rank,
-                "accepted_candidate_initial_hz": cand_hz,
-                "accepted_candidate_refined_hz": f_h_ref,
-                "accepted_second_harmonic_refined_hz": f_h2_ref,
-                "candidate_attempted": candidate_attempted,
-                "candidate_peak_bin_index": candidate_peak_bin_index,
-                "candidate_initial_hz": candidate_initial_hz,
-                "candidate_refined_hz": candidate_refined_hz,
-                "candidate_peak_magnitude": candidate_peak_magnitude,
-                "candidate_prominence": candidate_prominence,
-                "candidate_argmax_fallback": candidate_argmax_fallback,
-                "second_peak_bin_hz": second_peak_bin_hz,
-                "second_peak_refined_hz": second_peak_refined_hz,
-                "second_peak_magnitude": second_peak_magnitude,
-                "comparison_floor": comparison_floor,
-                "peak_to_floor_ratio": peak_to_floor_ratio,
-                "peak_to_floor_ratio_db": peak_to_floor_ratio_db,
-                "region_available": region_available,
-                "candidate_passed": candidate_passed,
-                "ahet_attempt_spectrum": ahet_attempt_spectrum,
-            }
+        f_h_ref = candidate_refined_hz[candidate_rank]
+        _cand_eca[candidate_rank] = (spec2, x_eca2, f_h_ref, f_h2_ref)
 
-    # All candidates failed AHET — do NOT fabricate a value (CLAUDE.md §4)
+        if ahet_gate_mode == "strict_v1":
+            # Sequential rejection checks (codes 2-4, 6-7)
+            if ratio_db < candidate_min_second_harmonic_ratio_db:
+                candidate_rejection_code[candidate_rank] = 2  # ratio_db_low
+                continue
+            prom = float(prominence)
+            if np.isnan(prom) or prom < candidate_min_prominence:
+                candidate_rejection_code[candidate_rank] = 3  # prominence_low (NaN = argmax fallback)
+                continue
+            if _check_low_candidate_competitor(
+                cand_global, cand_hz, spec1, freqs,
+                low_candidate_hz, high_candidate_preference_hz,
+                high_competitor_min_mag_ratio, band,
+            ):
+                candidate_rejection_code[candidate_rank] = 4  # low_candidate_competitor
+                continue
+            # Step 6.2 floor gates — applied after the harmonic-existence check so
+            # code 6 means "harmonic found but absolute SNR still too weak"
+            if ratio_db < candidate_min_peak_to_floor_db:
+                candidate_rejection_code[candidate_rank] = 6  # peak_to_floor_db_low
+                continue
+            if cand_hz < low_candidate_hz and ratio_db < low_candidate_min_peak_to_floor_db:
+                candidate_rejection_code[candidate_rank] = 7  # low_candidate_floor_db_low
+                continue
+            candidate_rejection_code[candidate_rank] = 0  # passed
+            candidate_passed[candidate_rank] = True
+            # Do not return early — evaluate all candidates first
+        else:
+            # Legacy mode: return early on first passing candidate
+            passed = peak2_magnitude > noise2
+            candidate_passed[candidate_rank] = passed
+            if passed:
+                # Refine both fundamental and 2nd harmonic, then blend
+                # (OpenAI cross-review finding: use 2nd harmonic as refinement, not just gate)
+                f_final = 0.5 * f_h_ref + 0.5 * (f_h2_ref / 2.0)
+                return {
+                    "rate_bpm": f_final * 60.0,
+                    "peak_hz": f_final,
+                    "spectrum": spec2,
+                    "spectrum_first_pass": spec1,
+                    "spectrum_stage": 2,
+                    "filtered": x_eca2,
+                    "ahet_verified": True,
+                    "harmonic_suspect": False,
+                    "phase_eca": x_eca2,
+                    "ahet_second_harmonic_hz": f_h2_ref,
+                    "accepted_candidate_rank": candidate_rank,
+                    "accepted_candidate_initial_hz": cand_hz,
+                    "accepted_candidate_refined_hz": f_h_ref,
+                    "accepted_second_harmonic_refined_hz": f_h2_ref,
+                    "all_candidates_rejected": False,
+                    **_common_fields(),
+                }
+
+    # ------------------------------------------------------------------ #
+    # Post-loop: strict_v1 select first passing candidate OR all-failed   #
+    # ------------------------------------------------------------------ #
+    if ahet_gate_mode == "strict_v1":
+        # Slots that were never entered get code 5 (not_attempted), not -1.
+        # -1 is reserved for legacy / gate-not-run.
+        not_attempted = ~candidate_attempted
+        candidate_rejection_code[not_attempted] = 5
+        passed_ranks = [r for r in range(AHET_MAX_CANDIDATES) if candidate_passed[r]]
+        if passed_ranks:
+            return _build_accepted(passed_ranks[0])
+        # All candidates rejected by strict_v1 gate — separate state from harmonic_suspect
+        return {
+            "rate_bpm": float("nan"),
+            "peak_hz": float("nan"),
+            "spectrum": spec1,
+            "spectrum_first_pass": spec1,
+            "spectrum_stage": 1,
+            "filtered": x_eca1,
+            "ahet_verified": False,
+            "harmonic_suspect": False,
+            "phase_eca": x_eca1,
+            "accepted_candidate_rank": -1,
+            "accepted_candidate_initial_hz": float("nan"),
+            "accepted_candidate_refined_hz": float("nan"),
+            "accepted_second_harmonic_refined_hz": float("nan"),
+            "all_candidates_rejected": True,
+            **_common_fields(),
+        }
+
+    # Legacy: all candidates failed AHET — do NOT fabricate a value (CLAUDE.md §4)
     return {
         "rate_bpm": float("nan"),
         "peak_hz": float("nan"),
         "freqs_hz": freqs,
         "spectrum": spec1,
+        "spectrum_pre_eca": spectrum_pre_eca,
         "spectrum_first_pass": spec1,
         "spectrum_stage": 1,
         "band": band,
@@ -469,6 +616,9 @@ def estimate_rate_from_phase(
         "region_available": region_available,
         "candidate_passed": candidate_passed,
         "ahet_attempt_spectrum": ahet_attempt_spectrum,
+        "candidate_rejection_code": candidate_rejection_code,
+        "all_candidates_rejected": False,
+        "eca_skipped_harmonics": eca_skipped_harmonics,
     }
 
 

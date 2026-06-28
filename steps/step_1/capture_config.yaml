@@ -1,0 +1,42 @@
+# steps/step_1/capture_config.yaml
+# All hardware-specific values for DCA1000 + IWR1642 raw ADC capture.
+# Reference: notes/dca1000_protocol.md, notes/vital_signs.lua
+
+# ── DCA1000 network ──────────────────────────────────────────────────────────
+dca1000_ip: "192.168.33.180"
+host_ip:    "192.168.33.30"
+cmd_port:   4096
+data_port:  4098
+
+# ── IWR1642 UART ─────────────────────────────────────────────────────────────
+# CLI port = LOWER-numbered of the two XDS110 COM ports (Application/User UART)
+# mmWave Studio uses COM7 @ 921600 baud — that is the auxiliary debug port, NOT this one.
+uart:
+  port: "COM7"    # verify in Windows Device Manager before each session
+  baud: 115200
+
+# ── Capture session ───────────────────────────────────────────────────────────
+capture:
+  duration_s: 285       # 285 s → 5700 frames @ 20 Hz → ~12 independent 20 s windows
+  output_dir: "data/raw"
+
+# ── Radar profile ─────────────────────────────────────────────────────────────
+# All values must match notes/vital_signs.lua exactly. Do not edit without updating
+# the experiment config and re-verifying range resolution (0.0436 m/bin).
+profile:
+  start_freq_ghz:      77.0
+  idle_time_us:        7.0
+  adc_start_time_us:   5.0
+  ramp_end_time_us:    57.0
+  freq_slope_mhz_us:   70.006
+  num_adc_samples:     256
+  dig_out_sample_rate: 5209   # ksps
+  rx_gain_db:          30
+  rx_channel_en:       15     # 0xF = all 4 RX
+  tx_channel_en:       1      # TX0 only (chirpCfg txEnable=1)
+  num_rx:              4
+
+# ── Frame config ──────────────────────────────────────────────────────────────
+frame:
+  num_loops: 32       # chirps per frame
+  period_ms: 50.0     # 20 Hz frame rate

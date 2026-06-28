@@ -1,0 +1,24 @@
+# steps/step_2/config.yaml
+# Configuration for save_time_domain_cubes.py
+# All paths are relative to the repository root (run from there).
+
+paths:
+  manifest:   data/manifest.local.csv
+  raw_dir:    data/raw
+  output_dir: data/processed/time_domain_cubes
+
+# Chirp parameters — must match the capture profile in steps/step_1/capture_config.yaml
+# and notes/vital_signs.lua exactly. Changing num_adc_samples or num_chirps_per_frame
+# invalidates any previously saved HDF5 files.
+radar:
+  num_rx:               4
+  num_tx:               1
+  num_chirps_per_frame: 32
+  num_adc_samples:      256
+  frame_rate_hz:        20.0
+  range_resolution_m:   0.0436
+
+hdf5:
+  chunk_frames:      100   # frames per HDF5 chunk (tunes sequential-read performance)
+  compression:       gzip
+  compression_level: 4
