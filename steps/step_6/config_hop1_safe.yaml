@@ -1,0 +1,78 @@
+paths:
+  manifest: data/manifest.local.csv
+  cubes_dir: data/processed/time_domain_cubes
+  raw_dir: data/raw
+  breathing_rate_dir: data/processed/breathing_rate_hop1
+  processed_dir: data/processed/heart_rate_hop1_safe
+  results_dir: results_hop1_safe
+
+input_policy:
+  require_step3_confidence: medium   # string enum: low | medium | high
+  reject_step3_review_required: true
+  require_quality_mask: true
+  require_step5_contract: true
+  require_step5_edge_lock_columns: true   # edge_locked / edge_lock_side must be present
+  max_bad_fraction: 0.10                  # gate windows with > 10% bad frames
+  skip_excluded_sessions: true
+  skip_missing_h5: true
+  skip_missing_step5: true               # skip (not error) in --all mode
+
+windowing:
+  # Hop-1: 20 s HR window, 1 s hop — same as config_hop1.yaml.
+  window_s: 20
+  hop_s: 1
+  use_stationary_intervals: true         # trim start/end from manifest stationary_intervals
+
+phase:
+  method: delta_before_mean              # also supports: mean_phasor (diagnostic)
+  impulse_clip_rad: 1.5                  # threshold for remove_impulse_noise (rad/frame)
+
+heart:
+  heart_band_hz: [0.8, 2.0]             # cardiac search band (48-120 bpm)
+  k_max: 6                               # maximum respiratory harmonic order for ECA
+  ahet_deviation_hz: 0.1                 # +/- Hz window for AHET second-harmonic search
+  resp_harmonic_guard_hz: 0.05          # coincidence rejection threshold in Hz
+  reject_resp_harmonic_coincidence: true # reject windows where selected peak is coincident
+
+  # Step 6.1 - ECA forbidden-zone suppression and strict AHET gate
+  eca_mode: skip_forbidden_harmonics_v1  # skip k where k*f_r lands inside cardiac band
+  eca_forbidden_guard_hz: 0.0            # extend forbidden zone by +/- guard on each side
+  ahet_gate_mode: strict_v1             # evaluate all 3 candidates; sequential rejection
+  candidate_min_second_harmonic_ratio_db: 1.0   # 2nd harmonic must be > noise + 1 dB
+  candidate_min_prominence: 3.0          # peak must stand out from band floor (linear)
+  low_candidate_hz: 1.20                 # candidates below this (72 bpm) are "low"
+  high_candidate_preference_hz: 1.25    # competitor threshold (75 bpm)
+  high_competitor_min_mag_ratio: 0.80   # reject low cand if high competitor >= 80% of its mag
+
+  # Step 6.2 - absolute SNR floor gates (most permissive tied-best sweep setting)
+  candidate_min_peak_to_floor_db: 2.0       # all candidates: harmonic SNR must exceed this
+  low_candidate_min_peak_to_floor_db: 4.0   # low candidates (< 72 bpm): stricter floor
+
+  # Step 6.3 - temporal tracker: safe configuration found by hop-1 sweep
+  # Sweep: diagnose_step6_candidate_tracks.py --grid-preset hop1 --results-root results_hop1
+  # Best safe combo (0 bad, 0 severe across 5 sessions, 1080 combos):
+  #   min_fund_db=2.0, max_jump=3.0, max_gap=15, harm=score_penalty,
+  #   harmonic_weight=6.0, gap_cost=-3.2
+  #   → good=308, acceptable=24, bad=0, severe=0, MAE=1.49 bpm
+  temporal_tracker:
+    enabled: true
+    min_fundamental_ratio_db: 2.0
+    max_jump_bpm_per_hop: 3.0           # tighter than config_hop1.yaml (was 6.0)
+    max_gap_windows: 15                 # 15 one-second gaps
+    resp_harmonic_mode: score_penalty
+    gap_cost: -3.2                      # stronger gap penalty than config_hop1.yaml (was -1.6)
+    peak_to_floor_weight: 0.25
+    prominence_weight: 0.05
+    rank_weight: 1.5
+    harmonic_weight: 6.0
+    harmonic_min_distance_bpm: 0.5
+
+respiration_matching:
+  max_resp_match_distance_s: 15.0        # max center-to-center distance for Step 5 match
+
+comparison:
+  min_pi: 0.5                            # Masimo Perfusion Index quality gate
+  min_masimo_coverage_fraction: 0.8      # min fraction of expected 1 Hz samples present
+  min_masimo_good_pi_fraction: 0.8       # min fraction of samples passing PI gate
+
+seed: 42

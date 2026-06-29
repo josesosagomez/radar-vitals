@@ -77,6 +77,33 @@ TRACK_GRID: dict[str, list] = {
 }
 # 5 × 4 × 3 × 2 = 120 combinations
 
+# Hop-1 sweep: tighter jump, longer gaps, harmonic-weight and gap-cost as free params.
+# harmonic_weight and gap_cost trigger per-combo score recomputation inside run_grid.
+HOP1_TRACK_GRID: dict[str, list] = {
+    "min_fundamental_ratio_db": [2.0, 4.0, 6.0, 8.0],
+    "max_jump_bpm_per_hop":     [0.8, 1.2, 2.0, 3.0, 6.0],
+    "resp_harmonic_mode":       ["exclude", "score_penalty"],
+    "harmonic_weight":          [6.0, 12.0, 18.0],
+    "max_gap_windows":          [5, 10, 15],
+    "gap_cost":                 [-0.8, -1.6, -3.2],
+}
+# 4 × 5 × 2 × 3 × 3 × 3 = 1080 combinations
+
+TRACK_GRID_PRESETS: dict[str, dict[str, list]] = {
+    "default": TRACK_GRID,
+    "hop1":    HOP1_TRACK_GRID,
+}
+
+# Combo keys that the diagnostic knows about, in display order.
+_KNOWN_COMBO_KEYS = [
+    "min_fundamental_ratio_db", "max_jump_bpm_per_hop",
+    "max_gap_windows", "resp_harmonic_mode",
+    "harmonic_weight", "gap_cost",
+]
+
+# Default harmonic_weight used by build_candidate_pool (matches node_score default).
+_DEFAULT_HARMONIC_WEIGHT = 6.0
+
 
 # ---------------------------------------------------------------------------
 # Evaluation helpers
@@ -134,6 +161,9 @@ def run_grid(
         max_jump     = combo["max_jump_bpm_per_hop"]
         max_gap      = combo["max_gap_windows"]
         harm_mode    = combo["resp_harmonic_mode"]
+        harm_w       = float(combo.get("harmonic_weight", _DEFAULT_HARMONIC_WEIGHT))
+        gap_cost_val = float(combo.get("gap_cost", GAP_COST))
+        need_rescore = harm_w != _DEFAULT_HARMONIC_WEIGHT
 
         agg_good = agg_accept = agg_bad = agg_severe = agg_gap = agg_eval = 0
         agg_abs:    list[float] = []
@@ -143,8 +173,33 @@ def run_grid(
             df = data["df"]
             n  = data["n_windows"]
 
-            filtered = [_filter_eligible(cands, min_fund_db, harm_mode) for cands in pool]
-            path     = viterbi_track(filtered, max_jump, max_gap, harm_mode)
+            # Recompute node scores per combo when harmonic_weight differs from default.
+            # This avoids mutating the shared pool; creates new candidate dicts per combo.
+            if need_rescore:
+                active_pool = []
+                for cands in pool:
+                    new_cands = []
+                    for c in cands:
+                        nc = dict(c)
+                        nc["node_score_exclude"] = node_score(
+                            c["fundamental_ratio_db"], c["peak_to_floor_ratio_db"],
+                            c["candidate_prominence"], c["candidate_rank"],
+                            c["dist_to_nearest_resp_harmonic_bpm"], "exclude",
+                            harmonic_weight=harm_w,
+                        )
+                        nc["node_score_penalty"] = node_score(
+                            c["fundamental_ratio_db"], c["peak_to_floor_ratio_db"],
+                            c["candidate_prominence"], c["candidate_rank"],
+                            c["dist_to_nearest_resp_harmonic_bpm"], "score_penalty",
+                            harmonic_weight=harm_w,
+                        )
+                        new_cands.append(nc)
+                    active_pool.append(new_cands)
+            else:
+                active_pool = pool
+
+            filtered = [_filter_eligible(cands, min_fund_db, harm_mode) for cands in active_pool]
+            path     = viterbi_track(filtered, max_jump, max_gap, harm_mode, gap_cost_val)
 
             for wi in range(n):
                 df_row   = df.iloc[wi].to_dict()
@@ -187,21 +242,19 @@ def run_grid(
                     agg_gap += 1
 
                 decision_rows.append({
-                    "session_id":               sid,
-                    "window_index":             wi,
-                    "min_fundamental_ratio_db": min_fund_db,
-                    "max_jump_bpm_per_hop":     max_jump,
-                    "max_gap_windows":          max_gap,
-                    "resp_harmonic_mode":       harm_mode,
-                    "decision_bpm":             decided_bpm,
-                    "decision_type":            dtype,
-                    "selected_rank":            decided_rank,
-                    "node_score":               decided_ns,
-                    "n_eligible_candidates":    n_eligible,
-                    "masimo_pr_bpm":            masimo_bpm,
-                    "masimo_low_quality":       masimo_low,
-                    "abs_error_bpm":            abs_err,
-                    "window_class":             window_class,
+                    "session_id":            sid,
+                    "window_index":          wi,
+                    # spread all combo keys so the row always reflects the full combo
+                    **{k: combo[k] for k in thresh_keys},
+                    "decision_bpm":          decided_bpm,
+                    "decision_type":         dtype,
+                    "selected_rank":         decided_rank,
+                    "node_score":            decided_ns,
+                    "n_eligible_candidates": n_eligible,
+                    "masimo_pr_bpm":         masimo_bpm,
+                    "masimo_low_quality":    masimo_low,
+                    "abs_error_bpm":         abs_err,
+                    "window_class":          window_class,
                 })
 
         mae  = float(np.mean(agg_abs))                              if agg_abs else float("nan")
@@ -253,10 +306,8 @@ def build_summary_by_session(decisions_df: pd.DataFrame) -> pd.DataFrame:
     if decisions_df.empty:
         return pd.DataFrame()
 
-    combo_keys = [
-        "min_fundamental_ratio_db", "max_jump_bpm_per_hop",
-        "max_gap_windows", "resp_harmonic_mode",
-    ]
+    # Build combo_keys dynamically from which _KNOWN_COMBO_KEYS are present in the df.
+    combo_keys = [k for k in _KNOWN_COMBO_KEYS if k in decisions_df.columns]
     group_keys = ["session_id"] + combo_keys
     rows: list[dict] = []
     for key_vals, grp in decisions_df.groupby(group_keys, sort=False):
@@ -369,13 +420,20 @@ def build_report(
         return "\n".join(lines) + "\n"
 
     best = summary_df.iloc[0]
+    combo_param_keys = [k for k in _KNOWN_COMBO_KEYS if k in summary_df.columns]
+    best_combo_lines: list[str] = []
+    for k in combo_param_keys:
+        v = best[k]
+        if k == "max_gap_windows":
+            best_combo_lines.append(f"- `{k} = {int(v)}`")
+        elif isinstance(v, float):
+            best_combo_lines.append(f"- `{k} = {v}`")
+        else:
+            best_combo_lines.append(f"- `{k} = {v}`")
     lines += [
         "## Best combo (safety-first: severe → bad → −good → MAE)",
         "",
-        f"- `min_fundamental_ratio_db = {best['min_fundamental_ratio_db']}`",
-        f"- `max_jump_bpm_per_hop = {best['max_jump_bpm_per_hop']}`",
-        f"- `max_gap_windows = {int(best['max_gap_windows'])}`",
-        f"- `resp_harmonic_mode = {best['resp_harmonic_mode']}`",
+        *best_combo_lines,
         "",
         "| Metric | Baseline | Best combo |",
         "|--------|----------|------------|",
@@ -427,12 +485,11 @@ def build_report(
         and not baseline_by_session_df.empty
     ):
         best = summary_df.iloc[0]
-        mask = (
-            (summary_by_session_df["min_fundamental_ratio_db"] == best["min_fundamental_ratio_db"])
-            & (summary_by_session_df["max_jump_bpm_per_hop"] == best["max_jump_bpm_per_hop"])
-            & (summary_by_session_df["max_gap_windows"] == best["max_gap_windows"])
-            & (summary_by_session_df["resp_harmonic_mode"] == best["resp_harmonic_mode"])
-        )
+        # Build mask dynamically over all combo params present in the session-level df.
+        _ck = [k for k in _KNOWN_COMBO_KEYS if k in summary_by_session_df.columns]
+        mask = pd.Series([True] * len(summary_by_session_df), index=summary_by_session_df.index)
+        for _k in _ck:
+            mask = mask & (summary_by_session_df[_k] == best[_k])
         sess_best = summary_by_session_df[mask].set_index("session_id")
         bl_df     = baseline_by_session_df.set_index("session_id")
         lines += [
@@ -502,6 +559,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--heart-band-hz",      nargs=2, type=float,
                     default=list(HEART_BAND_HZ), metavar=("LO", "HI"))
     ap.add_argument("--resp-harmonic-guard-hz", type=float, default=GUARD_HZ)
+    ap.add_argument("--grid-preset",        default="default",
+                    choices=list(TRACK_GRID_PRESETS.keys()),
+                    help="Which parameter grid to sweep (default=5-hop, hop1=1-hop).")
     args = ap.parse_args(argv)
 
     out_dir      = REPO_ROOT / args.out / "step6_candidate_tracks"
@@ -551,10 +611,14 @@ def main(argv: list[str] | None = None) -> int:
         log.error("No sessions loaded — aborting.")
         return 1
 
-    n_combos = len(list(itertools.product(*TRACK_GRID.values())))
-    log.info("Running %d combos across %d sessions...", n_combos, len(sessions_data))
+    track_grid = TRACK_GRID_PRESETS[args.grid_preset]
+    n_combos = len(list(itertools.product(*track_grid.values())))
+    log.info(
+        "Grid preset: %s | %d combos across %d sessions...",
+        args.grid_preset, n_combos, len(sessions_data),
+    )
 
-    cand_df, decisions_df, summary_df = run_grid(sessions_data)
+    cand_df, decisions_df, summary_df = run_grid(sessions_data, track_grid=track_grid)
 
     if not cand_df.empty:
         cand_df.to_csv(out_dir / "track_candidates.csv", index=False)
@@ -576,11 +640,17 @@ def main(argv: list[str] | None = None) -> int:
 
     if not summary_df.empty:
         best = summary_df.iloc[0]
+        extra = ""
+        if "harmonic_weight" in best.index:
+            extra += f" harm_w={best['harmonic_weight']}"
+        if "gap_cost" in best.index:
+            extra += f" gap_cost={best['gap_cost']}"
         log.info(
-            "Best combo: min_fund_db=%.1f max_jump=%.1f max_gap=%d harm=%s "
+            "Best combo: min_fund_db=%.1f max_jump=%.1f max_gap=%d harm=%s%s "
             "→ good=%d bad=%d severe=%d MAE=%s",
             best["min_fundamental_ratio_db"], best["max_jump_bpm_per_hop"],
             int(best["max_gap_windows"]), best["resp_harmonic_mode"],
+            extra,
             int(best["n_good_valid"]), int(best["n_bad_valid"]),
             int(best["n_severe_bad_valid"]),
             f"{best['mae_bpm']:.2f}" if math.isfinite(best["mae_bpm"]) else "—",

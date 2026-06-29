@@ -21,7 +21,9 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from scripts.diagnose_step6_candidate_tracks import (
     GAP_COST,
+    HOP1_TRACK_GRID,
     TRACK_GRID,
+    TRACK_GRID_PRESETS,
     _blocked_reason,
     _baseline_summary_by_session,
     _filter_eligible,
@@ -727,3 +729,174 @@ class TestReportBehavior:
         assert "may be justified" in report, (
             "combo with n_bad_valid=0 and n_severe_bad_valid=0 that improves yield must suggest promote"
         )
+
+
+# ---------------------------------------------------------------------------
+# Tests: HOP1_TRACK_GRID shape and presets registry
+# ---------------------------------------------------------------------------
+
+class TestHop1TrackGrid:
+    def test_known_keys_present(self):
+        expected = {
+            "min_fundamental_ratio_db", "max_jump_bpm_per_hop",
+            "resp_harmonic_mode", "harmonic_weight", "max_gap_windows", "gap_cost",
+        }
+        assert set(HOP1_TRACK_GRID.keys()) == expected
+
+    def test_combo_count(self):
+        import itertools
+        actual   = len(list(itertools.product(*HOP1_TRACK_GRID.values())))
+        expected = 4 * 5 * 2 * 3 * 3 * 3  # 1080
+        assert actual == expected, f"Expected 1080 combos, got {actual}"
+
+    def test_gap_cost_values(self):
+        assert sorted(HOP1_TRACK_GRID["gap_cost"]) == sorted([-0.8, -1.6, -3.2])
+
+    def test_harmonic_weight_values(self):
+        assert sorted(HOP1_TRACK_GRID["harmonic_weight"]) == sorted([6.0, 12.0, 18.0])
+
+    def test_presets_contains_both_grids(self):
+        assert "default" in TRACK_GRID_PRESETS
+        assert "hop1"    in TRACK_GRID_PRESETS
+        assert TRACK_GRID_PRESETS["default"] is TRACK_GRID
+        assert TRACK_GRID_PRESETS["hop1"]    is HOP1_TRACK_GRID
+
+
+# ---------------------------------------------------------------------------
+# Tests: run_grid with harmonic_weight and gap_cost combo params
+# ---------------------------------------------------------------------------
+
+class TestRunGridHop1:
+    def _sessions(self, n_windows: int = 3) -> dict:
+        data = _make_session_data(n_windows)
+        return {"synth": (data, build_candidate_pool(data))}
+
+    def _mini_grid(self, **overrides) -> dict:
+        base = {
+            "min_fundamental_ratio_db": [4.0],
+            "max_jump_bpm_per_hop":     [6.0],
+            "resp_harmonic_mode":       ["score_penalty"],
+            "harmonic_weight":          [6.0, 18.0],
+            "max_gap_windows":          [5],
+            "gap_cost":                 [-1.6],
+        }
+        base.update(overrides)
+        return base
+
+    def test_decisions_has_harmonic_weight_column(self):
+        _, decisions, _ = run_grid(self._sessions(), track_grid=self._mini_grid())
+        assert "harmonic_weight" in decisions.columns
+
+    def test_decisions_has_gap_cost_column(self):
+        _, decisions, _ = run_grid(self._sessions(), track_grid=self._mini_grid())
+        assert "gap_cost" in decisions.columns
+
+    def test_decisions_row_count_includes_extra_dimensions(self):
+        n_windows = 4
+        grid = self._mini_grid(harmonic_weight=[6.0, 12.0, 18.0], gap_cost=[-0.8, -3.2])
+        _, decisions, _ = run_grid(self._sessions(n_windows), track_grid=grid)
+        n_combos = 1 * 1 * 1 * 3 * 1 * 2  # 3 hw × 2 gc
+        assert len(decisions) == n_combos * n_windows
+
+    def test_harmonic_weight_rescoring_changes_node_score(self):
+        """node_score in decisions_df must differ between hw=6 and hw=18 for a
+        candidate with a measurable harmonic-distance penalty.
+
+        _make_basic_npz produces a zero-floor spectrum, so fundamental_ratio_db
+        comes out NaN (can't divide by 0). We patch it explicitly so candidates
+        survive the _filter_eligible fund_db gate.
+        """
+        freqs = _freqs()
+        data  = _make_session_data(1, freqs)
+        pool  = build_candidate_pool(data)
+        # Patch all candidates: set a finite fund_db and dist=5.0.
+        # Expected penalty delta between hw=6 and hw=18: (18-6)/5 = 2.4 score units.
+        for cands in pool:
+            for c in cands:
+                c["fundamental_ratio_db"]            = 10.0
+                c["dist_to_nearest_resp_harmonic_bpm"] = 5.0
+                c["within_resp_harmonic_guard"]      = False
+                c["node_score_penalty"] = node_score(
+                    10.0, c["peak_to_floor_ratio_db"],
+                    c["candidate_prominence"], c["candidate_rank"],
+                    5.0, "score_penalty", harmonic_weight=6.0,
+                )
+                c["node_score_exclude"] = node_score(
+                    10.0, c["peak_to_floor_ratio_db"],
+                    c["candidate_prominence"], c["candidate_rank"],
+                    5.0, "exclude", harmonic_weight=6.0,
+                )
+        grid = {
+            "min_fundamental_ratio_db": [0.0],
+            "max_jump_bpm_per_hop":     [12.0],
+            "resp_harmonic_mode":       ["score_penalty"],
+            "harmonic_weight":          [6.0, 18.0],
+            "max_gap_windows":          [0],
+            "gap_cost":                 [-1.6],
+        }
+        _, decisions, _ = run_grid({"synth": (data, pool)}, track_grid=grid)
+        selected = decisions[decisions["decision_type"] == "candidate"]
+        scores_hw6  = selected[selected["harmonic_weight"] == 6.0]["node_score"].dropna()
+        scores_hw18 = selected[selected["harmonic_weight"] == 18.0]["node_score"].dropna()
+        assert len(scores_hw6) > 0 and len(scores_hw18) > 0, (
+            "Patched candidates (fund_db=10, gap_cost=-1.6) should be selected for both hw values"
+        )
+        expected_delta = (18.0 - 6.0) / 5.0  # = 2.4
+        actual_delta   = float(scores_hw6.iloc[0] - scores_hw18.iloc[0])
+        assert abs(actual_delta - expected_delta) < 0.01, (
+            f"Expected score delta {expected_delta} bpm, got {actual_delta}"
+        )
+
+    def test_gap_cost_column_reflects_combo(self):
+        grid = {
+            "min_fundamental_ratio_db": [0.0],
+            "max_jump_bpm_per_hop":     [6.0],
+            "resp_harmonic_mode":       ["exclude"],
+            "harmonic_weight":          [6.0],
+            "max_gap_windows":          [5],
+            "gap_cost":                 [-0.8, -3.2],
+        }
+        _, decisions, _ = run_grid(self._sessions(), track_grid=grid)
+        assert set(decisions["gap_cost"].unique()) == {-0.8, -3.2}
+
+    def test_build_summary_by_session_dynamic_keys(self):
+        _, decisions, _ = run_grid(self._sessions(), track_grid=self._mini_grid())
+        by_sess = build_summary_by_session(decisions)
+        assert "harmonic_weight" in by_sess.columns
+        assert "gap_cost"        in by_sess.columns
+
+    def test_cli_hop1_preset(self, tmp_path):
+        """--grid-preset hop1 produces 1080 × n_windows rows in decisions CSV."""
+        import itertools
+        n_windows = 2
+        _write_step6_files(tmp_path, "s1", n_windows=n_windows)
+        ret = main([
+            "--sessions", "s1",
+            "--results-root", str(tmp_path / "results"),
+            "--out", str(tmp_path / "out"),
+            "--no-plots",
+            "--grid-preset", "hop1",
+        ])
+        assert ret == 0
+        decisions = pd.read_csv(
+            tmp_path / "out" / "step6_candidate_tracks" / "track_window_decisions.csv"
+        )
+        n_combos = len(list(itertools.product(*HOP1_TRACK_GRID.values())))
+        assert len(decisions) == n_combos * n_windows
+
+    def test_report_includes_harmonic_weight_in_best_combo(self, tmp_path):
+        """Diagnostic report must list harmonic_weight when grid has it."""
+        import itertools
+        _write_step6_files(tmp_path, "s1", n_windows=2)
+        main([
+            "--sessions", "s1",
+            "--results-root", str(tmp_path / "results"),
+            "--out", str(tmp_path / "out"),
+            "--no-plots",
+            "--grid-preset", "hop1",
+        ])
+        report = (
+            tmp_path / "out" / "step6_candidate_tracks" / "diagnostic_report.md"
+        ).read_text(encoding="utf-8")
+        assert "harmonic_weight" in report
+        assert "gap_cost" in report

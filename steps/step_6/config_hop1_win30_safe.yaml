@@ -1,0 +1,81 @@
+paths:
+  manifest: data/manifest.local.csv
+  cubes_dir: data/processed/time_domain_cubes
+  raw_dir: data/raw
+  breathing_rate_dir: data/processed/breathing_rate_hop1   # Step 5 hop1 uses 30 s windows
+  processed_dir: data/processed/heart_rate_hop1_win30_safe
+  results_dir: results_hop1_win30_safe
+
+input_policy:
+  require_step3_confidence: medium
+  reject_step3_review_required: true
+  require_quality_mask: true
+  require_step5_contract: true
+  require_step5_edge_lock_columns: true
+  max_bad_fraction: 0.10
+  skip_excluded_sessions: true
+  skip_missing_h5: true
+  skip_missing_step5: true
+
+windowing:
+  window_s: 30
+  hop_s: 1
+  use_stationary_intervals: true
+
+phase:
+  method: delta_before_mean
+  impulse_clip_rad: 1.5
+
+heart:
+  heart_band_hz: [0.8, 2.0]
+  k_max: 6
+  ahet_deviation_hz: 0.1
+  resp_harmonic_guard_hz: 0.05
+  reject_resp_harmonic_coincidence: true
+
+  eca_mode: skip_forbidden_harmonics_v1
+  eca_forbidden_guard_hz: 0.0
+  ahet_gate_mode: strict_v1
+  candidate_min_second_harmonic_ratio_db: 1.0
+  candidate_min_prominence: 3.0
+  low_candidate_hz: 1.20
+  high_candidate_preference_hz: 1.25
+  high_competitor_min_mag_ratio: 0.80
+
+  candidate_min_peak_to_floor_db: 2.0
+  low_candidate_min_peak_to_floor_db: 4.0
+
+  # Step 6.3 - temporal tracker: safe configuration found by hop-1 win30 grid sweep.
+  # Sweep: diagnose_step6_candidate_tracks.py --grid-preset hop1 --results-root results_hop1_win30
+  # Best safe combo (0 bad, 0 severe across 5 sessions, 1080 combos):
+  #   min_fund_db=4.0, max_jump=6.0, max_gap=15, harm=score_penalty,
+  #   harmonic_weight=6.0, gap_cost=-3.2
+  #   → good=393, bad=0, severe=0, MAE=1.23 bpm
+  # vs config_hop1_safe.yaml (20 s): good=308, acceptable=24, bad=0, MAE=1.49
+  # Key difference from config_hop1_safe.yaml:
+  #   min_fundamental_ratio_db 4.0 vs 2.0 — filters the spurious ~78 bpm peak that
+  #   caused tracker lock-on failure in test2 with 30 s FFT resolution.
+  #   max_jump_bpm_per_hop 6.0 vs 3.0 — allows escape from wrong lock-on;
+  #   safe only because min_fund_db=4.0 already gates resp-harmonic false accepts.
+  temporal_tracker:
+    enabled: true
+    min_fundamental_ratio_db: 4.0
+    max_jump_bpm_per_hop: 6.0
+    max_gap_windows: 15
+    resp_harmonic_mode: score_penalty
+    gap_cost: -3.2
+    peak_to_floor_weight: 0.25
+    prominence_weight: 0.05
+    rank_weight: 1.5
+    harmonic_weight: 6.0
+    harmonic_min_distance_bpm: 0.5
+
+respiration_matching:
+  max_resp_match_distance_s: 15.0
+
+comparison:
+  min_pi: 0.5
+  min_masimo_coverage_fraction: 0.8
+  min_masimo_good_pi_fraction: 0.8
+
+seed: 42
