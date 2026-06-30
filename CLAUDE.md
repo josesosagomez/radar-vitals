@@ -8,16 +8,16 @@
 ## 1. Context
 
 - **Research question:** Can we estimate a person's heart rate in real time from a
-  76-81 GHz FMCW radar while they sit or stand 1.3-1.6 m in front of the sensor (radar
+  76-81 GHz FMCW radar while they sit or stand 1.0-1.4 m in front of the sensor (radar
   facing the chest), accurately enough to track a clinical pulse-oximeter reference?
 - **Target output:** Journal paper + thesis chapter on contactless mmWave vital-signs.
 - **Hardware:** TI IWR1642BOOST (+ DCA1000EVM for raw ADC capture). Radar at chest
-  height, subject seated or standing at 1.3-1.6 m.
+  height, subject seated or standing at 1.0-1.4 m.
 - **Ground truth:** Masimo MightySat fingertip pulse oximeter. Exported as a 1 Hz CSV
   (see `src/masimo.py` for the exact format). The `Beats / min` column = pulse rate (PR)
   is the reference for heart rate. `Perfusion Index` is the reference-quality gate.
 - **"Done" (working system):** radar heart-rate reads on screen in real time and visibly
-  tracks the Masimo across seated and standing at 1.3-1.6 m.
+  tracks the Masimo across seated and standing at 1.0-1.4 m.
 - **"Done" (paper-grade):** quantified agreement vs Masimo PR over recorded sessions —
   MAE and RMSE in bpm, plus a Bland-Altman analysis — across subjects/postures.
 - **Baselines:** TI's on-chip vital-signs lab output; published mmWave vital-signs

@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import numpy as np
-from scipy.signal import butter, filtfilt, find_peaks
+from scipy.signal import find_peaks
 
 # Physiological bands (Hz). Heart 0.8-2.0 Hz = 48-120 bpm; respiration 0.1-0.5 Hz = 6-30 bpm.
 HEART_BAND_HZ = (0.8, 2.0)
@@ -44,10 +44,19 @@ class VitalsParams:
 
 
 def bandpass_filter(x: np.ndarray, fs: float, lo: float, hi: float, order: int = 4) -> np.ndarray:
-    """Zero-phase Butterworth bandpass."""
-    nyq = 0.5 * fs
-    b, a = butter(order, [lo / nyq, hi / nyq], btype="band")
-    return filtfilt(b, a, x)
+    """Zero-phase FFT-domain bandpass.
+
+    The live-demo environment has shown hard Windows failures inside the
+    LAPACK solve used by scipy.signal filtfilt initial-condition helpers.
+    Frequency-domain masking keeps the filter deterministic and avoids that
+    non-catchable runtime path.
+    """
+    del order  # Kept for backward-compatible call sites.
+    x_arr = np.asarray(x, dtype=float)
+    freqs = np.fft.rfftfreq(x_arr.size, d=1.0 / fs)
+    spec = np.fft.rfft(x_arr - np.mean(x_arr))
+    mask = (freqs >= lo) & (freqs <= hi)
+    return np.fft.irfft(spec * mask, n=x_arr.size)
 
 
 def refine_freq_hz(spectrum: np.ndarray, freqs: np.ndarray, peak_idx: int) -> float:
@@ -117,7 +126,8 @@ def eca_project(
       - cardiac_candidate_hz is None OR abs(k * f_r - cardiac_candidate_hz) > 0.15 Hz
         (do not suppress a harmonic too close to the cardiac candidate)
     Hard floor: always include k = 1..4 unless k is in skip_ks.
-    Uses QR decomposition — not explicit matrix inverse — for numerical stability.
+    Uses modified Gram-Schmidt — no explicit inverse or LAPACK dependency — for
+    numerical stability in the live-demo environment.
     (OpenAI cross-review finding #1 — arXiv:2503.07062)
     """
     N = len(theta)
@@ -136,9 +146,20 @@ def eca_project(
             cols += [np.sin(2 * np.pi * freq * t), np.cos(2 * np.pi * freq * t)]
     if not cols:
         return theta.copy()
-    X = np.column_stack(cols)
-    Q, _ = np.linalg.qr(X, mode="reduced")     # stable — no explicit inverse
-    return theta - Q @ (Q.T @ theta)
+    basis: list[np.ndarray] = []
+    for col in cols:
+        v = np.asarray(col, dtype=float).copy()
+        for q in basis:
+            v -= q * float(np.sum(q * v))
+        norm = float(np.sqrt(np.sum(v * v)))
+        if norm > 1e-12:
+            basis.append(v / norm)
+    if not basis:
+        return theta.copy()
+    clean = np.asarray(theta, dtype=float).copy()
+    for q in basis:
+        clean -= q * float(np.sum(q * theta))
+    return clean
 
 
 def _check_low_candidate_competitor(
