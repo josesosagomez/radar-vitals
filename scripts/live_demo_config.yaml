@@ -22,10 +22,19 @@ protocol:
 bin_selection:
   enabled: true
   candidate_bins: null            # null = derive from protocol.subject_distance_m + profile.range_resolution_m
+  relock_enabled: true
+  relock_pinned_sources_enabled: false  # manual/manifest bins stay pinned unless explicitly opted in
+  relock_radius_bins: 2
+  relock_min_confidence: medium
+  relock_arm_s: 5.0               # consecutive real-valid seconds before relock arms (converted to hops)
 
 display:
   matplotlib_backend: QtAgg      # pyside6 is pinned in environment.yml
   backend_fallbacks: [TkAgg]
+  holdover_enabled: true
+  holdover_n: 3
+  holdover_s: 3.0                # display-only hold window (converted to hops)
+  holdover_source_max_hops: 5    # readings older than this many hops cannot enter the held average
 
 capture:
   continuous_num_frames: 0       # TI frameCfg: 0 = continuous until stopped

@@ -595,19 +595,24 @@ def _resolve_locked_bin(
     return None, None, False
 
 
-def _run_warmup_selection(
+def _run_bin_selection_scan(
     cube: np.ndarray,
     candidate_bins: list[int],
     cfg: dict,
     fs: float,
     dsp_fn=_run_dsp,
+    context_label: str = "warmup",
+    artifact_hint: str = "warmup_bin_selection.json",
 ) -> tuple[int, dict | None, dict]:
     """Scan candidate bins, score by radar evidence, return the best bin.
 
+    Shared by initial warmup selection and mid-run relock recovery scans;
+    `context_label`/`artifact_hint` keep console warnings and artifact
+    references distinct between the two contexts.
+
     Returns (selected_bin, winning_dsp_dict_or_none, evidence_for_json).
     winning_dsp_dict is None when every candidate's DSP call raised (all-fail
-    case); the caller should skip first-row emission and let the next hop call
-    _run_dsp normally on the fallback bin.
+    case); the caller must not emit a row from synthetic DSP data.
     """
     res = float(cfg["profile"]["range_resolution_m"])
     dist_range = cfg["protocol"]["subject_distance_m"]
@@ -629,7 +634,10 @@ def _run_warmup_selection(
                 "failed": False, "error": None,
             })
         except Exception as exc:
-            print(f"  WARNING: warmup DSP failed for bin {b}: {exc}", file=sys.stderr)
+            print(
+                f"  WARNING: {context_label} DSP failed for bin {b}: {exc}",
+                file=sys.stderr,
+            )
             results.append({
                 "bin": b, "dsp": None,
                 "energy": energies[b], "energy_rank": energy_rank[b],
@@ -646,8 +654,9 @@ def _run_warmup_selection(
         selection_confidence = "low"
         selection_reason = "all_dsp_failed_energy_fallback"
         print(
-            f"  WARNING: warmup DSP failed for every candidate. "
-            f"Falling back to highest-energy bin {selected_bin}; no HR for first window.",
+            f"  WARNING: {context_label} DSP failed for every candidate. "
+            f"Falling back to highest-energy bin {selected_bin}; no emitted "
+            f"estimate from this scan.",
             file=sys.stderr,
         )
     else:
@@ -699,8 +708,8 @@ def _run_warmup_selection(
 
     if selection_confidence == "low":
         print(
-            f"  WARNING: warmup selection confidence is low for bin {selected_bin} "
-            f"(~{selected_bin * res:.2f} m). Check warmup_bin_selection.json.",
+            f"  WARNING: {context_label} selection confidence is low for bin "
+            f"{selected_bin} (~{selected_bin * res:.2f} m). Check {artifact_hint}.",
             file=sys.stderr,
         )
 
@@ -709,7 +718,7 @@ def _run_warmup_selection(
         "selected_range_m": round(selected_bin * res, 4),
         "selected_confidence": selection_confidence,
         "selection_reason": selection_reason,
-        "t_warmup_scan_ms": round(t_scan_ms, 1),
+        "t_scan_ms": round(t_scan_ms, 1),
         "candidates": [],
     }
     for r in results:
@@ -752,6 +761,181 @@ def _run_warmup_selection(
         evidence["candidates"].append(cand)
 
     return selected_bin, winning_dsp, evidence
+
+
+def _run_warmup_selection(
+    cube: np.ndarray,
+    candidate_bins: list[int],
+    cfg: dict,
+    fs: float,
+    dsp_fn=_run_dsp,
+) -> tuple[int, dict | None, dict]:
+    """Initial warmup selection — backward-compatible wrapper for the shared scan."""
+    selected_bin, winning_dsp, evidence = _run_bin_selection_scan(
+        cube, candidate_bins, cfg, fs, dsp_fn=dsp_fn,
+        context_label="warmup", artifact_hint="warmup_bin_selection.json",
+    )
+    evidence["t_warmup_scan_ms"] = evidence.pop("t_scan_ms")
+    return selected_bin, winning_dsp, evidence
+
+
+# ── Display holdover + relock state (notes/relocking_bin_plan.md) ────────────
+
+class _DisplayHoldoverState:
+    """Display-only holdover for the HR/BR UI readouts.
+
+    Saved CSV/NPZ estimates are never affected. On an invalid hop the UI may
+    briefly show the average of recent real-valid readings ("held"); once the
+    holdover window expires the readout goes blank until a new real-valid
+    value appears. All expiry logic is DSP-hop-count based, never wall-clock.
+    """
+
+    _METRICS = ("hr", "br")
+
+    def __init__(
+        self,
+        holdover_n: int,
+        holdover_hops: int,
+        source_max_hops: int,
+        enabled: bool = True,
+    ):
+        self._n = int(holdover_n)
+        self._holdover_hops = int(holdover_hops)
+        self._source_max_hops = int(source_max_hops)
+        self._enabled = bool(enabled)
+        self._readings: dict[str, collections.deque] = {}
+        self._last_valid_hop: dict[str, int | None] = {}
+        self.reset_all()
+
+    def reset_metric(self, metric: str) -> None:
+        self._readings[metric] = collections.deque(maxlen=self._n)
+        self._last_valid_hop[metric] = None
+
+    def reset_all(self) -> None:
+        for metric in self._METRICS:
+            self.reset_metric(metric)
+
+    def update(
+        self, metric: str, value: float, valid: bool, hop_idx: int
+    ) -> tuple[float, str]:
+        """Return (display_value, display_state) for this hop.
+
+        display_state is "real" (current valid reading), "held" (display-only
+        average of recent valid readings), or "blank" (show nothing).
+        """
+        if valid and np.isfinite(value):
+            self._readings[metric].append((int(hop_idx), float(value)))
+            self._last_valid_hop[metric] = int(hop_idx)
+            return float(value), "real"
+
+        last_valid = self._last_valid_hop[metric]
+        if (
+            not self._enabled
+            or last_valid is None
+            or hop_idx - last_valid > self._holdover_hops
+        ):
+            return float("nan"), "blank"
+
+        eligible = [
+            v for h, v in self._readings[metric]
+            if hop_idx - h <= self._source_max_hops
+        ]
+        if not eligible:
+            return float("nan"), "blank"
+        return float(np.mean(eligible)), "held"
+
+
+class _RelockController:
+    """Arm/disarm state machine deciding when a nearby-bin relock scan runs.
+
+    A metric arms after `arm_hops` consecutive real-valid hops. Any
+    real-invalid hop resets that consecutive-valid counter, but does NOT clear
+    an already-set armed flag — the armed flag survives the holdover window so
+    the blank/expired hop can trigger one scan. Holdover expiry is supplied by
+    _DisplayHoldoverState via the blank_expired arguments; this class must not
+    keep a second independent holdover counter.
+
+    The caller runs the scan when update() returns should_scan=True, then
+    calls disarm_all() after every scan attempt (reset() instead, after an
+    accepted bin switch).
+    """
+
+    _METRICS = ("hr", "br")
+
+    def __init__(self, arm_hops: int):
+        self._arm_hops = int(arm_hops)
+        self._consec_valid: dict[str, int] = {}
+        self._armed: dict[str, bool] = {}
+        self.reset()
+
+    def disarm_all(self) -> None:
+        for metric in self._METRICS:
+            self._consec_valid[metric] = 0
+            self._armed[metric] = False
+
+    def reset(self) -> None:
+        self.disarm_all()
+
+    def update(
+        self,
+        hr_valid: bool,
+        br_valid: bool,
+        hr_blank_expired: bool,
+        br_blank_expired: bool,
+        hop_idx: int,
+    ) -> tuple[bool, list[str]]:
+        del hop_idx  # cadence is implicit: exactly one update() per DSP hop
+        triggers: list[str] = []
+        per_metric = (
+            ("hr", hr_valid, hr_blank_expired),
+            ("br", br_valid, br_blank_expired),
+        )
+        for metric, valid, blank_expired in per_metric:
+            if valid:
+                self._consec_valid[metric] += 1
+                if self._consec_valid[metric] >= self._arm_hops:
+                    self._armed[metric] = True
+            else:
+                self._consec_valid[metric] = 0
+                if self._armed[metric] and blank_expired:
+                    triggers.append(metric)
+        return bool(triggers), triggers
+
+
+def _derive_relock_candidate_bins(locked_bin: int, cfg: dict, radius: int) -> list[int]:
+    """Nearby-bin recovery candidates: locked_bin ± radius, clipped.
+
+    ADC bounds always apply. The protocol distance range applies only when
+    bin_selection.candidate_bins is not explicitly configured. The current
+    locked bin is always included even if it sits outside the protocol range
+    (possible for manual overrides with relocking force-enabled).
+    """
+    n_adc = int(cfg["profile"]["num_adc_samples"])
+    lo = max(0, int(locked_bin) - int(radius))
+    hi = min(n_adc - 1, int(locked_bin) + int(radius))
+    bins = list(range(lo, hi + 1))
+    if cfg.get("bin_selection", {}).get("candidate_bins") is None:
+        dist_range = cfg["protocol"]["subject_distance_m"]
+        res = float(cfg["profile"]["range_resolution_m"])
+        proto_lo = int(np.ceil(float(dist_range[0]) / res))
+        proto_hi = int(np.floor(float(dist_range[1]) / res))
+        bins = [b for b in bins if proto_lo <= b <= proto_hi]
+    if int(locked_bin) not in bins and 0 <= int(locked_bin) <= n_adc - 1:
+        bins.append(int(locked_bin))
+        bins.sort()
+    return bins
+
+
+def _relock_allowed(locked_bin_source: str | None, cfg: dict) -> bool:
+    """Pinned sources (manual/manifest) do not auto-relock unless opted in."""
+    bsel = cfg.get("bin_selection", {})
+    if not bool(bsel.get("relock_enabled", False)):
+        return False
+    if locked_bin_source in ("manual", "manifest") and not bool(
+        bsel.get("relock_pinned_sources_enabled", False)
+    ):
+        return False
+    return True
 
 
 # ── Display ───────────────────────────────────────────────────────────────────
@@ -818,6 +1002,9 @@ class _LiveDisplay:
         cur_br: float,
         locked_bin: int | None,
         locked_range_m: float | None,
+        hr_state: str = "real",
+        br_state: str = "real",
+        status_text: str | None = None,
     ) -> None:
         t = np.array(times, dtype=float)
         mask = t >= elapsed - self._hist_s
@@ -838,17 +1025,22 @@ class _LiveDisplay:
         self._ax_hr.set_xlim(x_lo, elapsed + 3)
         self._ax_br.set_xlim(x_lo, elapsed + 3)
 
-        hr_str = f"{cur_hr:.0f} bpm" if np.isfinite(cur_hr) else "—"
-        br_str = f"{cur_br:.0f} bpm" if np.isfinite(cur_br) else "—"
+        hr_str = f"{cur_hr:.0f} bpm" if np.isfinite(cur_hr) else "--"
+        if hr_state == "held" and np.isfinite(cur_hr):
+            hr_str += " (held)"
+        br_str = f"{cur_br:.0f} bpm" if np.isfinite(cur_br) else "--"
+        if br_state == "held" and np.isfinite(cur_br):
+            br_str += " (held)"
         elapsed_fmt = time.strftime("%H:%M:%S", time.gmtime(int(elapsed)))
         bin_str = ""
         if locked_bin is not None and locked_range_m is not None:
             bin_str = f"  |  bin: {locked_bin} (~{locked_range_m:.2f} m)"
+        status_str = f"  |  {status_text}" if status_text else ""
 
         self._fig.suptitle(
             f"HR: {hr_str}  |  BR: {br_str}  |  "
             f"HR conf: {hr_conf}  |  BR conf: {br_conf}  |  "
-            f"elapsed: {elapsed_fmt}{bin_str}",
+            f"elapsed: {elapsed_fmt}{bin_str}{status_str}",
             color="#eee", fontsize=16.5,
         )
         self._fig.canvas.draw_idle()
@@ -871,6 +1063,9 @@ class _HeadlessDisplay:
         cur_br: float,
         locked_bin: int | None,
         locked_range_m: float | None,
+        hr_state: str = "real",
+        br_state: str = "real",
+        status_text: str | None = None,
     ) -> None:
         return
 
@@ -988,6 +1183,24 @@ def main() -> None:
     duration_s: float | None = args.duration_s
     smoother_n = int(cfg["heart"].get("online_smoother_n", 5))
 
+    # Display holdover + relock timing: hop-count based, never wall-clock
+    # (notes/relocking_bin_plan.md — live/replay/--replay-fast must behave the same).
+    dcfg = cfg.get("display", {})
+    holdover_hops = max(1, int(np.ceil(float(dcfg.get("holdover_s", 3.0)) / hop_s)))
+    display_holdover = _DisplayHoldoverState(
+        holdover_n=int(dcfg.get("holdover_n", 3)),
+        holdover_hops=holdover_hops,
+        source_max_hops=int(dcfg.get("holdover_source_max_hops", 5)),
+        enabled=bool(dcfg.get("holdover_enabled", True)),
+    )
+    bsel_cfg = cfg.get("bin_selection", {})
+    relock_arm_hops = max(
+        1, int(np.ceil(float(bsel_cfg.get("relock_arm_s", 5.0)) / hop_s))
+    )
+    relock_radius = int(bsel_cfg.get("relock_radius_bins", 2))
+    relock_min_confidence = str(bsel_cfg.get("relock_min_confidence", "medium"))
+    relock_ctrl = _RelockController(arm_hops=relock_arm_hops)
+
     chirp_cfg = ChirpConfig(
         num_adc_samples=int(pcfg["num_adc_samples"]),
         num_rx=int(pcfg["num_rx"]),
@@ -1004,6 +1217,8 @@ def main() -> None:
     run_dir = _create_run_dir(results_dir, mode, session_id)
     print(f"Run directory: {run_dir}")
     warmup_selection_path = run_dir / "warmup_bin_selection.json"
+    relock_events_path = run_dir / "relock_events.json"
+    relock_events: list[dict] = []
 
     # ── Initial run_metadata.json ─────────────────────────────────────────────
     git = _git_info()
@@ -1021,6 +1236,10 @@ def main() -> None:
         "warmup_selection_confidence": None,
         "warmup_selection_path": None,
         "t_warmup_scan_ms": None,
+        "relock_enabled": _relock_allowed(locked_bin_source, cfg),
+        "n_relock_scans": 0,
+        "n_relock_switches": 0,
+        "relock_events_path": None,
         "range_resolution_m": float(pcfg["range_resolution_m"]),
         "iq_swap": iq_swap,
         "posture": posture,
@@ -1128,6 +1347,7 @@ def main() -> None:
         "locked_bin": locked_bin,
         "locked_bin_source": locked_bin_source,
         "warmup_pending": warmup_pending,
+        "dsp_hop_idx": 0,
     }
 
     elapsed_s_hist: list = []
@@ -1218,22 +1438,126 @@ def main() -> None:
             print(f"DSP error (window skipped): {exc}", file=sys.stderr)
             return
 
-        hr_valid = dsp["hr_valid"]
-        hr_raw = dsp["hr_raw"]
-        if np.isfinite(hr_raw):
-            hr_history.append(hr_raw)
+        hop_idx = _state["dsp_hop_idx"]
+        _state["dsp_hop_idx"] += 1
 
-        hr_smooth = (
-            float(np.median(list(hr_history))) if hr_history else np.nan
+        def _derive_hop_values(d: dict) -> tuple[bool, float, float, float]:
+            hr_valid_ = bool(d["hr_valid"])
+            hr_raw_ = d["hr_raw"]
+            if np.isfinite(hr_raw_):
+                hr_history.append(hr_raw_)
+                hr_smooth_ = float(np.median(list(hr_history)))
+            else:
+                # Real smoothed HR is NaN on invalid hops; only the display-side
+                # holdover may bridge short gaps (never CSV/NPZ).
+                hr_smooth_ = np.nan
+            return hr_valid_, hr_raw_, hr_smooth_, d["br_bpm"]
+
+        hr_valid, hr_raw, hr_smooth, br_bpm = _derive_hop_values(dsp)
+        hr_disp, hr_disp_state = display_holdover.update(
+            "hr", hr_smooth, hr_valid, hop_idx
         )
-        br_bpm = dsp["br_bpm"]
+        br_disp, br_disp_state = display_holdover.update(
+            "br", br_bpm, bool(dsp["br_valid"]), hop_idx
+        )
+
+        status_text = None
+        if _relock_allowed(_state["locked_bin_source"], cfg):
+            should_scan, trigger_metrics = relock_ctrl.update(
+                hr_valid,
+                bool(dsp["br_valid"]),
+                hr_disp_state == "blank",
+                br_disp_state == "blank",
+                hop_idx,
+            )
+            if should_scan:
+                old_bin = int(_state["locked_bin"])
+                cand_bins = _derive_relock_candidate_bins(old_bin, cfg, relock_radius)
+                print(
+                    f"Relock scan (trigger: {'+'.join(trigger_metrics)}) over "
+                    f"bins {min(cand_bins)}-{max(cand_bins)} ..."
+                )
+                sel_bin, win_dsp, evidence = _run_bin_selection_scan(
+                    np.stack(list(ring_buffer)), cand_bins, cfg, fs,
+                    context_label="relock", artifact_hint="relock_events.json",
+                )
+                t_relock_scan_ms = evidence.pop("t_scan_ms")
+                conf_rank = {"high": 0, "medium": 1, "low": 2}
+                conf_ok = (
+                    conf_rank.get(evidence["selected_confidence"], 3)
+                    <= conf_rank.get(relock_min_confidence, 1)
+                )
+                switched = (
+                    int(sel_bin) != old_bin and conf_ok and win_dsp is not None
+                )
+                if switched:
+                    reason = (
+                        f"switched: confidence "
+                        f"{evidence['selected_confidence']} >= {relock_min_confidence}"
+                    )
+                elif int(sel_bin) == old_bin:
+                    reason = "no_switch: current bin still scores best"
+                elif win_dsp is None:
+                    reason = "no_switch: all candidate DSP failed"
+                else:
+                    reason = (
+                        f"no_switch: confidence {evidence['selected_confidence']} "
+                        f"below {relock_min_confidence}"
+                    )
+                relock_events.append({
+                    "elapsed_s": round(elapsed, 2),
+                    "dsp_hop_idx": hop_idx,
+                    "old_locked_bin": old_bin,
+                    "candidate_bins": cand_bins,
+                    "selected_bin": int(sel_bin),
+                    "selected_confidence": evidence["selected_confidence"],
+                    "switched": switched,
+                    "reason": reason,
+                    "trigger_metrics": trigger_metrics,
+                    "t_relock_scan_ms": t_relock_scan_ms,
+                    "evidence": evidence,
+                })
+                with relock_events_path.open("w", encoding="utf-8") as fh:
+                    json.dump(relock_events, fh, indent=2, default=_json_serialise)
+                run_meta["n_relock_scans"] += 1
+                run_meta["relock_events_path"] = str(relock_events_path)
+                if switched:
+                    run_meta["n_relock_switches"] += 1
+                    run_meta["locked_bin"] = int(sel_bin)
+                    _state["locked_bin"] = int(sel_bin)
+                    # New physical bin: old-bin smoothing/holdover history is
+                    # meaningless — clear everything before emitting this row.
+                    hr_history.clear()
+                    display_holdover.reset_all()
+                    relock_ctrl.reset()
+                    dsp = win_dsp
+                    hr_valid, hr_raw, hr_smooth, br_bpm = _derive_hop_values(dsp)
+                    hr_disp, hr_disp_state = display_holdover.update(
+                        "hr", hr_smooth, hr_valid, hop_idx
+                    )
+                    br_disp, br_disp_state = display_holdover.update(
+                        "br", br_bpm, bool(dsp["br_valid"]), hop_idx
+                    )
+                    status_text = f"relocked bin {old_bin} -> {int(sel_bin)}"
+                    print(
+                        f"Relock: switched bin {old_bin} -> {int(sel_bin)} "
+                        f"(~{evidence['selected_range_m']:.2f} m, "
+                        f"confidence: {evidence['selected_confidence']})."
+                    )
+                else:
+                    relock_ctrl.disarm_all()
+                    status_text = f"relock scan: kept bin {old_bin}"
+                    print(f"Relock: kept bin {old_bin} ({reason}).")
+                _write_metadata(meta_path, run_meta)
+
         hr_conf = "high" if (hr_valid and np.isfinite(hr_smooth)) else "low"
         br_conf = dsp["br_confidence"]
 
         elapsed_s_hist.append(elapsed)
         hr_raw_hist.append(hr_raw)
-        hr_smooth_hist.append(hr_smooth)
-        br_hist.append(br_bpm)
+        # UI histories carry display values (held bridging); CSV/NPZ stay real.
+        hr_smooth_hist.append(hr_disp)
+        br_hist.append(br_disp)
 
         # CSV
         hr_result = dsp["hr_result"]
@@ -1321,12 +1645,15 @@ def main() -> None:
 
         display.update(
             elapsed_s_hist, hr_smooth_hist, hr_raw_hist, br_hist,
-            hr_conf, br_conf, elapsed, hr_smooth, br_bpm,
+            hr_conf, br_conf, elapsed, hr_disp, br_disp,
             _state["locked_bin"],
             (
                 None if _state["locked_bin"] is None
                 else int(_state["locked_bin"]) * float(pcfg["range_resolution_m"])
             ),
+            hr_state=hr_disp_state,
+            br_state=br_disp_state,
+            status_text=status_text,
         )
 
     # ── FuncAnimation update ──────────────────────────────────────────────────
