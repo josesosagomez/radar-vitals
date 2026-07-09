@@ -31,7 +31,7 @@ capture:
   continuous_num_frames: 0       # TI frameCfg: 0 = continuous until stopped
   record_raw_stream: true
   raw_stream_format: adc_bytes_no_packet_headers
-  intermediates_checkpoint_windows: 60
+  intermediates_checkpoint_windows: 20   # 20 hops x 3 s = NPZ flushed every 60 s
   max_live_duration_s: null      # null = run until Ctrl-C
   replay_shard_limit: 20
 
