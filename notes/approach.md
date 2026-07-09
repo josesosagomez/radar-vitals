@@ -7,8 +7,9 @@
 ---
 
 ## 1. Problem
-Estimate heart rate from a 76-81 GHz FMCW radar (IWR1642), subject seated/standing at
-1.3-1.6 m, radar facing the chest. Reference: Masimo MightySat pulse rate.
+Estimate heart rate from a 76-81 GHz FMCW radar (IWR1642), subject seated (hands on
+legs, back straight, facing the radar) at 0.8-1.4 m, radar facing the chest.
+Reference: Masimo MightySat pulse rate.
 
 ---
 
@@ -18,7 +19,8 @@ the chest into a range bin; the displacement shows up as a slow-time phase chang
 bin. Heart rate is recovered from the phase signal's spectral content in the cardiac band.
 - Range resolution dR = c / (2 * B_sweep). Confirmed: 0.0436 m/bin at our chirp config.
 - Slow-time sample rate = frame rate. Confirmed: ~20 Hz frames (3000 frames / ~150 s).
-- Chest at 1.3-1.6 m falls in bins 25-34 (gate [1.1-1.5 m]). Locked bin: 29 (1.264 m).
+- Chest at 0.8-1.4 m falls in bins ~19-32 (warmup search gate [0.8, 1.4 m]). The bin is
+  auto-selected at warmup per session, not pinned.
 
 ---
 
@@ -368,7 +370,8 @@ below resting HR ≈ 72 bpm. Verify by checking the radar-estimated f_r from the
 
 ## 8. Evaluation plan
 - Metric: HR error vs Masimo PR — MAE (bpm), RMSE (bpm), Bland-Altman limits.
-- Conditions: sit vs stand; 1.3 vs 1.6 m; multiple subjects.
+- Conditions: seated (hands on legs, back straight, facing radar), chest 0.8-1.4 m;
+  multiple subjects. Posture fixed; distance varies within the warmup search range.
 - Quality gate: exclude/flag Masimo segments with low Perfusion Index.
 
 ---

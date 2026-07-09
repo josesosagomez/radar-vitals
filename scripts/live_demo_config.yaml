@@ -17,7 +17,7 @@ session:
   start_delay_s: 10
 
 protocol:
-  subject_distance_m: [1.0, 1.4] # demo subject chest distance; bins ~23-32 at 0.0436 m/bin
+  subject_distance_m: [0.8, 1.4] # seated chest distance; warmup searches bins ~19-32 at 0.0436 m/bin
 
 bin_selection:
   enabled: true
