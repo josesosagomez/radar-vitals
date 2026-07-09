@@ -762,23 +762,55 @@ class _LiveDisplay:
     def __init__(self, history_s: float):
         self._hist_s = history_s
         self._fig = None
+        self._ax_status = None
         self._ax_hr = None
+        self._ax_hr_val = None
         self._ax_br = None
+        self._ax_br_val = None
         self._line_hr_s = None
         self._line_hr_r = None
         self._line_br = None
+        self._txt_status = None
+        self._txt_hr_big = None
+        self._txt_hr_label = None
+        self._txt_br_big = None
+        self._txt_br_label = None
+
+    def _style_axis(self, ax) -> None:
+        ax.set_facecolor("#1a1a1a")
+        ax.tick_params(colors="#ccc")
+        for sp in ax.spines.values():
+            sp.set_edgecolor("#444")
 
     def setup(self):
         from matplotlib import pyplot as plt
 
-        fig, (ax_hr, ax_br) = plt.subplots(2, 1, figsize=(11, 6), sharex=True)
+        fig = plt.figure(figsize=(12, 6.5))
         fig.patch.set_facecolor("#111")
-        for ax in (ax_hr, ax_br):
-            ax.set_facecolor("#1a1a1a")
-            ax.tick_params(colors="#ccc")
-            for sp in ax.spines.values():
-                sp.set_edgecolor("#444")
+        gs = fig.add_gridspec(
+            nrows=3, ncols=2,
+            height_ratios=[0.28, 1, 1], width_ratios=[4, 1],
+            left=0.07, right=0.98, top=0.96, bottom=0.09,
+            hspace=0.45, wspace=0.06,
+        )
 
+        ax_status = fig.add_subplot(gs[0, :])
+        ax_hr = fig.add_subplot(gs[1, 0])
+        ax_hr_val = fig.add_subplot(gs[1, 1])
+        ax_br = fig.add_subplot(gs[2, 0], sharex=ax_hr)
+        ax_br_val = fig.add_subplot(gs[2, 1])
+        for ax in (ax_status, ax_hr, ax_hr_val, ax_br, ax_br_val):
+            self._style_axis(ax)
+
+        # Status bar: HR/BR confidence, locked bin/distance, elapsed clock.
+        ax_status.set_xticks([])
+        ax_status.set_yticks([])
+        txt_status = ax_status.text(
+            0.015, 0.5, "", transform=ax_status.transAxes,
+            ha="left", va="center", color="#eee", fontsize=13,
+        )
+
+        # HR graph (left) + HR value readout (right).
         (self._line_hr_s,) = ax_hr.plot(
             [], [], color="#00cc66", lw=2, label="HR smooth (AHET-verified)"
         )
@@ -789,19 +821,46 @@ class _LiveDisplay:
         ax_hr.set_ylabel("Heart rate (bpm)", color="#ccc")
         ax_hr.legend(loc="upper right", fontsize=8, facecolor="#333", labelcolor="#ccc")
 
+        ax_hr_val.set_xticks([])
+        ax_hr_val.set_yticks([])
+        txt_hr_big = ax_hr_val.text(
+            0.5, 0.60, "--", transform=ax_hr_val.transAxes,
+            ha="center", va="center", color="#ccc", fontsize=50, fontweight="bold",
+        )
+        txt_hr_label = ax_hr_val.text(
+            0.5, 0.22, "bpm", transform=ax_hr_val.transAxes,
+            ha="center", va="center", color="#999", fontsize=10,
+        )
+
+        # BR graph (left) + BR value readout (right).
         (self._line_br,) = ax_br.plot([], [], color="#4499ff", lw=2)
         ax_br.set_ylim(6, 30)
         ax_br.set_ylabel("Breathing rate (bpm)", color="#ccc")
         ax_br.set_xlabel("Elapsed (s)", color="#ccc")
 
-        fig.subplots_adjust(left=0.08, right=0.98, bottom=0.10, top=0.88, hspace=0.18)
-        self._fig, self._ax_hr, self._ax_br = fig, ax_hr, ax_br
+        ax_br_val.set_xticks([])
+        ax_br_val.set_yticks([])
+        txt_br_big = ax_br_val.text(
+            0.5, 0.60, "--", transform=ax_br_val.transAxes,
+            ha="center", va="center", color="#ccc", fontsize=50, fontweight="bold",
+        )
+        txt_br_label = ax_br_val.text(
+            0.5, 0.22, "bpm", transform=ax_br_val.transAxes,
+            ha="center", va="center", color="#999", fontsize=10,
+        )
+
+        self._fig = fig
+        self._ax_status = ax_status
+        self._ax_hr, self._ax_hr_val = ax_hr, ax_hr_val
+        self._ax_br, self._ax_br_val = ax_br, ax_br_val
+        self._txt_status = txt_status
+        self._txt_hr_big, self._txt_hr_label = txt_hr_big, txt_hr_label
+        self._txt_br_big, self._txt_br_label = txt_br_big, txt_br_label
         return fig
 
     def warmup(self, n_buf: int, n_needed: int, elapsed: float) -> None:
-        self._fig.suptitle(
-            f"Warming up: {n_buf}/{n_needed} frames  ({elapsed:.0f} s)",
-            color="#ccc", fontsize=12,
+        self._txt_status.set_text(
+            f"Warming up: {n_buf}/{n_needed} frames  ({elapsed:.0f} s)"
         )
         self._fig.canvas.draw_idle()
 
@@ -838,18 +897,22 @@ class _LiveDisplay:
         self._ax_hr.set_xlim(x_lo, elapsed + 3)
         self._ax_br.set_xlim(x_lo, elapsed + 3)
 
-        hr_str = f"{cur_hr:.0f} bpm" if np.isfinite(cur_hr) else "—"
-        br_str = f"{cur_br:.0f} bpm" if np.isfinite(cur_br) else "—"
-        elapsed_fmt = time.strftime("%H:%M:%S", time.gmtime(int(elapsed)))
-        bin_str = ""
-        if locked_bin is not None and locked_range_m is not None:
-            bin_str = f"  |  bin: {locked_bin} (~{locked_range_m:.2f} m)"
+        hr_num = f"{cur_hr:.0f}" if np.isfinite(cur_hr) else "--"
+        self._txt_hr_big.set_text(hr_num)
+        self._txt_hr_big.set_color(self._CONF_COLOR.get(hr_conf, "#ccc"))
 
-        self._fig.suptitle(
-            f"HR: {hr_str}  |  BR: {br_str}  |  "
-            f"HR conf: {hr_conf}  |  BR conf: {br_conf}  |  "
-            f"elapsed: {elapsed_fmt}{bin_str}",
-            color="#eee", fontsize=16.5,
+        br_num = f"{cur_br:.0f}" if np.isfinite(cur_br) else "--"
+        self._txt_br_big.set_text(br_num)
+        self._txt_br_big.set_color(self._CONF_COLOR.get(br_conf, "#ccc"))
+
+        elapsed_fmt = time.strftime("%H:%M:%S", time.gmtime(int(elapsed)))
+        bin_str = "bin: --"
+        if locked_bin is not None and locked_range_m is not None:
+            bin_str = f"bin: {locked_bin} (~{locked_range_m:.2f} m)"
+
+        self._txt_status.set_text(
+            f"HR conf: {hr_conf}   |   BR conf: {br_conf}   |   "
+            f"{bin_str}   |   elapsed: {elapsed_fmt}"
         )
         self._fig.canvas.draw_idle()
 
