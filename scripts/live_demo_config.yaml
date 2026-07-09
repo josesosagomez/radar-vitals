@@ -14,7 +14,6 @@ session:
   window_s: 30.0
   hop_s: 3.0
   display_history_s: 120
-  start_delay_s: 10
 
 protocol:
   subject_distance_m: [0.8, 1.4] # seated chest distance; warmup searches bins ~19-32 at 0.0436 m/bin
