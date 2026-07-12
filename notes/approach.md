@@ -122,12 +122,42 @@ bias**. See Part B for the measured magnitude on the retired data.
 so the danger zone is **f_r ≈ 15-20 bpm** (4×f_r = 60-80 bpm). Breathing at a steady
 **13-16 bpm** puts 4×f_r at 52-64 bpm, below a typical resting HR.
 
-> **OPEN CONFLICT (2026-07-09):** the agreed paced-breathing arm (notes/protocol.md) uses
-> **12 / 15 / 18 bpm**. At **18 bpm, 4×f_r = 72 bpm**, which is inside the resting-HR band
-> — i.e. deliberately inside this failure zone. 15 bpm (4×f_r = 60) is borderline for a
-> low-HR subject. This must be resolved before the paced sessions: either drop/replace the
-> 18 bpm arm, or keep it *explicitly* as a limitation-characterisation arm and report it
-> separately (never pooled into the headline agreement metrics).
+**How wide is the danger zone, really?** The collision is governed by frequency
+resolution, not by a fixed bpm rule. At a 30 s window (~2 bpm/cell) the genuinely
+destructive zone is roughly **|HR − 4·f_r| ≲ 2-5 bpm**. The "> 10 bpm" guard above is a
+deliberately conservative safety margin, not the physical width.
+
+**Is it unfixable?** It is unfixable *for this method* — a single-range-bin spectral
+estimator cannot separate two components at the same frequency (an identifiability
+problem, not a tuning problem). It is **not** a limit of the physics. Two escape routes
+exist and are **not implemented**:
+- **Work from the 2nd cardiac harmonic** (§5.3, §5.4). If 4·f_r = f_h then the collision
+  repeats at 8·f_r = 2·f_h, but respiratory harmonic amplitude decays steeply with order,
+  so the 8th is far weaker than the 4th — the 2nd cardiac harmonic survives where the
+  fundamental does not.
+- **Multi-range-bin / Doppler coherent combination** — different bins weight respiration
+  and heartbeat differently, changing the ratio.
+
+> **DECISION (2026-07-09):** keep the paced arm at **12 / 15 / 18 bpm** as agreed. At
+> 18 bpm, 4×f_r = 72 bpm sits inside the resting-HR band, i.e. **deliberately inside this
+> failure zone**; 15 bpm (4×f_r = 60) is borderline for a low-resting-HR subject. This is
+> accepted as an **empirical question to settle on the new data** — the cap3 evidence
+> (Part B.3) came from an earlier pipeline configuration, before the adaptive K_b guard,
+> the peak-to-floor gates and warmup bin selection.
+>
+> Two conditions on this decision:
+> 1. **Note that pacing makes this failure mode worse, by construction.** Natural
+>    breathing lets f_r wander, so 4·f_r drifts across the HR and the coincidence is only
+>    intermittent. Paced breathing *pins* f_r, so for a subject whose HR sits near 4·f_r
+>    the collision is **sustained for the entire recording**. The 18 bpm arm is therefore
+>    the worst case, not an average one.
+> 2. **Report the 18 bpm arm separately.** Its windows must never be pooled into the
+>    headline agreement metrics (that would import a known failure mode into the top-line
+>    MAE). Reported on its own it is a legitimate contribution: a characterisation of
+>    where the method breaks.
+>
+> Revisit once the new data is in: if the failure reproduces, report it as a documented
+> limitation; if it does not, record why (which of the new guards saved it).
 
 **Detection heuristic:** before committing to a recording, check Masimo PR and the
 radar-estimated f_r. If |HR − 4 × f_r| < 10 bpm, the capture is at high risk.
@@ -404,8 +434,10 @@ do.** Full numbers in HISTORY.md (2026-07-09 entry); output folders deleted.
 
 # PART C — OPEN QUESTIONS FOR THE NEW DATASET
 
-1. **Resolve the paced-breathing conflict (§4.2).** 18 bpm places 4×f_r at 72 bpm, inside
-   the resting-HR band and inside the documented failure zone. Decide before session 2.
+1. **Does the §4.2 coincidence failure still reproduce?** The paced arm deliberately
+   includes 18 bpm (4×f_r = 72 bpm, inside the resting-HR band) to measure this on the
+   new pipeline. Record each subject's resting HR so the per-session |HR − 4·f_r| margin
+   is known. Report the 18 bpm arm separately; never pool it into the headline metrics.
 2. **Coverage/yield.** The retired data showed a valid-HR fraction swinging from ~0% to
    ~85% per session, dominated by AHET gate rejections. Establishing a *reliable* yield is
    the precondition for any credible agreement claim — accuracy measured only on surviving
