@@ -59,7 +59,7 @@ from scipy      import ndimage as _ndimage
 REPO_ROOT    = Path(__file__).resolve().parents[1]
 CUBES_DIR    = REPO_ROOT / "data" / "processed" / "time_domain_cubes"
 MANIFEST     = REPO_ROOT / "data" / "manifest.local.csv"
-CONFIG_PATH  = Path(__file__).resolve().parent / "quality_mask_config.yaml"
+CONFIG_PATH  = REPO_ROOT / "steps" / "step_4" / "config.yaml"
 FIGURES_DIR  = REPO_ROOT / "figures"
 
 CHUNK_FRAMES  = 200
@@ -138,7 +138,7 @@ def _flag_dropout(ratio: np.ndarray, med: np.ndarray, factor: float) -> np.ndarr
 
 def main() -> None:
     cfg         = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8"))
-    trim_frames = int(cfg["trim_frames"])
+    trim_frames = int(cfg["analysis"]["trim_frames"])
     do_cfg      = cfg.get("soft_failures", {}).get("subject_bin_dropout", {})
     cfg_factor  = float(do_cfg.get("dropout_factor", 0.1))
     cfg_hw      = int(do_cfg.get("dropout_window_frames", 50))

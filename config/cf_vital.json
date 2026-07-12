@@ -1,0 +1,40 @@
+{
+    "DCA1000Config": {
+        "dataLoggingMode": "raw",
+        "dataTransferMode": "LVDSCapture",
+        "dataCaptureMode": "ethernetStream",
+        "packetSequenceEnable": 1,
+        "packetDelay_us": 25,
+
+        "ethernetConfig": {
+            "DCA1000IPAddress": "192.168.33.180",
+            "DCA1000ConfigPort": 4096,
+            "DCA1000DataPort": 4098
+        },
+
+        "ethernetConfigUpdate": {
+            "systemIPAddress": "192.168.33.30",
+            "DCA1000IPAddress": "192.168.33.180",
+            "DCA1000MACAddress": "12-34-56-78-90-12",
+            "DCA1000ConfigPort": 4096,
+            "DCA1000DataPort": 4098
+        },
+
+        "fileConfig": {
+            "fileBasePath": "C:\\Users\\josemsosag\\Desktop\\Infectious Disease Project\\radar-vitals\\data\\raw",
+            "filePrefix": "adc_data",
+            "maxFileSize_MB": 1024,
+            "sequenceNumberEnable": 0
+        },
+
+        "captureConfig": {
+            "framesToCapture": 100,
+            "durationToCapture_ms": 0,
+            "bytesToCapture": 0
+        },
+
+        "lvdsMode": 1,
+        "adcOutputFmt": 1,
+        "numLaneEnable": 2
+    }
+}

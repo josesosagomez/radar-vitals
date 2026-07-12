@@ -24,7 +24,7 @@ import yaml
 REPO_ROOT    = Path(__file__).resolve().parents[1]
 CUBES_DIR    = REPO_ROOT / "data" / "processed" / "time_domain_cubes"
 MANIFEST     = REPO_ROOT / "data" / "manifest.local.csv"
-CONFIG_PATH  = Path(__file__).resolve().parent / "quality_mask_config.yaml"
+CONFIG_PATH  = REPO_ROOT / "steps" / "step_4" / "config.yaml"
 FIGURES_DIR  = REPO_ROOT / "figures"
 
 CHUNK_FRAMES = 200
@@ -83,7 +83,7 @@ def _compute_rx_ratio(h5_path: Path, trim_frames: int) -> np.ndarray:
 
 def main() -> None:
     cfg         = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8"))
-    trim_frames = int(cfg["trim_frames"])
+    trim_frames = int(cfg["analysis"]["trim_frames"])
     rx_cfg      = cfg.get("soft_failures", {}).get("rx_imbalance", {})
     threshold   = float(rx_cfg.get("rx_imbalance_ratio", 10.0))
     enabled     = bool(rx_cfg.get("enabled", False))

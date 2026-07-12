@@ -31,7 +31,7 @@ from scipy import ndimage
 REPO_ROOT   = Path(__file__).resolve().parents[1]
 CUBES_DIR   = REPO_ROOT / "data" / "processed" / "time_domain_cubes"
 MANIFEST    = REPO_ROOT / "data" / "manifest.local.csv"
-CONFIG_PATH = Path(__file__).resolve().parent / "quality_mask_config.yaml"
+CONFIG_PATH = REPO_ROOT / "steps" / "step_4" / "config.yaml"
 OUT_DIR     = REPO_ROOT / "results" / "diagnostics"
 
 try:

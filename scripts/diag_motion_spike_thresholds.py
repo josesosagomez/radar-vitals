@@ -45,7 +45,7 @@ from scipy      import ndimage as _ndimage
 REPO_ROOT    = Path(__file__).resolve().parents[1]
 CUBES_DIR    = REPO_ROOT / "data" / "processed" / "time_domain_cubes"
 MANIFEST     = REPO_ROOT / "data" / "manifest.local.csv"
-CONFIG_PATH  = Path(__file__).resolve().parent / "quality_mask_config.yaml"
+CONFIG_PATH  = REPO_ROOT / "steps" / "step_4" / "config.yaml"
 FIGURES_DIR  = REPO_ROOT / "figures"
 
 CHUNK_FRAMES  = 200
@@ -112,7 +112,7 @@ def _rolling_median(energy: np.ndarray, half_window: int) -> np.ndarray:
 
 def main() -> None:
     cfg         = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8"))
-    trim_frames = int(cfg["trim_frames"])
+    trim_frames = int(cfg["analysis"]["trim_frames"])
     ms_cfg      = cfg.get("soft_failures", {}).get("motion_spike", {})
     factor      = float(ms_cfg.get("motion_spike_factor", 5.0))
     half_window = int(ms_cfg.get("motion_window_frames", 50))

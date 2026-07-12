@@ -53,7 +53,7 @@ from scipy.fft import fft as _fft
 REPO_ROOT    = Path(__file__).resolve().parents[1]
 CUBES_DIR    = REPO_ROOT / "data" / "processed" / "time_domain_cubes"
 MANIFEST     = REPO_ROOT / "data" / "manifest.local.csv"
-CONFIG_PATH  = Path(__file__).resolve().parent / "quality_mask_config.yaml"
+CONFIG_PATH  = REPO_ROOT / "steps" / "step_4" / "config.yaml"
 FIGURES_DIR  = REPO_ROOT / "figures"
 
 CHUNK_FRAMES        = 200
@@ -175,7 +175,7 @@ def _phase_delta_delta_before_mean(
 
 def main() -> None:
     cfg         = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8"))
-    trim_frames = int(cfg["trim_frames"])
+    trim_frames = int(cfg["analysis"]["trim_frames"])
     pj_cfg      = cfg.get("soft_failures", {}).get("phase_jump", {})
     cfg_thr     = float(pj_cfg.get("threshold_rad", 1.5))
     cfg_method  = pj_cfg.get("method", "mean_phasor")

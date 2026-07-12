@@ -41,7 +41,7 @@ from scipy.fft import fft as _fft
 REPO_ROOT    = Path(__file__).resolve().parents[1]
 CUBES_DIR    = REPO_ROOT / "data" / "processed" / "time_domain_cubes"
 MANIFEST     = REPO_ROOT / "data" / "manifest.local.csv"
-CONFIG_PATH  = Path(__file__).resolve().parent / "quality_mask_config.yaml"
+CONFIG_PATH  = REPO_ROOT / "steps" / "step_4" / "config.yaml"
 FIGURES_DIR  = REPO_ROOT / "figures"
 
 # Hardware constants — same for all sessions
@@ -49,9 +49,9 @@ NUM_ADC_SAMPLES     = 256
 RANGE_RESOLUTION_M  = 0.0436   # metres per bin
 
 # Gate margin around the manifest distance_cm value
-GATE_MARGIN_M       = 0.20     # ± 20 cm (same as reselect_bins.py)
+GATE_MARGIN_M       = 0.20     # ± 20 cm
 
-# SNR background guard band (same as quality_mask_config.yaml)
+# SNR background guard band (same as steps/step_4/config.yaml)
 GUARD_HALF_WIDTH    = 3
 
 CHUNK_FRAMES        = 200
@@ -123,7 +123,7 @@ def _gated_peak(energy: np.ndarray, raxis: np.ndarray, dist_m: float) -> int:
 
 def main() -> None:
     cfg         = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8"))
-    trim_frames = int(cfg["trim_frames"])
+    trim_frames = int(cfg["analysis"]["trim_frames"])
     raxis       = _range_axis()
 
     manifest    = pd.read_csv(MANIFEST)

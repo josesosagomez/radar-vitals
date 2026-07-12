@@ -35,7 +35,7 @@ from scipy.fft import fft as _fft
 REPO_ROOT    = Path(__file__).resolve().parents[1]
 CUBES_DIR    = REPO_ROOT / "data" / "processed" / "time_domain_cubes"
 MANIFEST     = REPO_ROOT / "data" / "manifest.local.csv"
-CONFIG_PATH  = Path(__file__).resolve().parent / "quality_mask_config.yaml"
+CONFIG_PATH  = REPO_ROOT / "steps" / "step_4" / "config.yaml"
 FIGURES_DIR  = REPO_ROOT / "figures"
 
 CHUNK_FRAMES = 200
@@ -128,7 +128,7 @@ def _compute_snr(
 
 def main() -> None:
     cfg         = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8"))
-    trim_frames = int(cfg["trim_frames"])
+    trim_frames = int(cfg["analysis"]["trim_frames"])
     snr_cfg     = cfg.get("soft_failures", {}).get("subject_bin_snr", {})
     threshold   = float(snr_cfg.get("snr_threshold", 5.0))
     guard_hw    = int(snr_cfg.get("guard_half_width", 3))

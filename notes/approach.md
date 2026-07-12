@@ -289,10 +289,22 @@ Input: unwrapped phase vector θ[n] for one window (N = 600 at 30 s × 20 Hz).
 4. **Verify:** the FFT of θ_ECA should show the respiration peak and harmonics gone. Log
    the cancelled power at each harmonic as a diagnostic.
 
-**K_b selection (adaptive):** include harmonic k only if k·f_r < 2.0 Hz AND k·f_r is not
-within 0.15 Hz of the cardiac candidate — this guards against suppressing a true HR that
-sits near a harmonic (the §4.2 failure). Note this guard *detects* the coincidence; it
-cannot recover the signal when the two genuinely coincide.
+**K_b selection (adaptive).** Two modes exist in `eca_project`; the live one is
+`skip_forbidden_harmonics_v1` (set in both `scripts/live_demo_config.yaml` and
+`steps/step_6/config.yaml`):
+
+- `legacy` — include harmonic k if k·f_r < 2.0 Hz, **but with a hard floor that always
+  projects out k = 1..4** regardless of where they land. The 0.15 Hz "don't suppress near
+  the cardiac candidate" guard applies **only to k ≥ 5**, so it does *not* protect against
+  the common 4·f_r collision. This is the B.5 root cause. Retained only for comparison.
+- `skip_forbidden_harmonics_v1` **(live)** — additionally skip any k whose k·f_r falls
+  inside the cardiac band (± `eca_forbidden_guard_hz`), including k ≤ 4.
+
+Skipping a colliding harmonic prevents ECA from erasing the cardiac peak, but it leaves
+respiratory energy inside the cardiac band competing with the true HR. The coincidence is
+therefore still an identifiability problem (§4.2) — the mode changes the failure from
+silent cancellation to detectable contamination; it does not recover the signal when the
+two genuinely coincide. See B.5.
 
 ### 7.2 Phase 2 — Cardiac peak search + AHET consistency
 
@@ -428,6 +440,30 @@ established that the 30 s window needs a stricter fundamental floor (min_fund_db
 2.0) to suppress spurious peaks at the finer 2 bpm/bin resolution; with that floor, a
 looser max_jump (6.0) is safe. **This coupling is why the current configs look as they
 do.** Full numbers in HISTORY.md (2026-07-09 entry); output folders deleted.
+
+### B.5 ECA unconditional-harmonic-removal root cause (found, then fixed)
+The mechanism behind the §4.2 coincidence failure, diagnosed on the exp004 captures. The
+numbers are not reproducible (data deleted) but **the mechanism is a property of the code,
+not of the dataset**, so it is recorded here.
+
+*Root cause:* `eca_project()` removed harmonics k = 1..k_max from the phase spectrum with a
+**hard floor that always projected out k = 1..4**, irrespective of where those harmonics
+landed. When k·f_r fell inside the cardiac band, ECA therefore erased the cardiac signal
+along with the respiratory harmonic. This is why a longer window never helped: the signal
+was being cancelled, not under-resolved. Observed at f_r = 17-19 bpm (4·f_r = 68-76 bpm,
+squarely in the resting-HR band). Failure was much worse when cardiac SNR was low, because
+a strong cardiac return can survive as a residual whereas a weak one cannot.
+
+*Fix (live):* `eca_mode: skip_forbidden_harmonics_v1` — skip any k whose k·f_r falls inside
+the cardiac band (± `eca_forbidden_guard_hz`). Set in **both** `scripts/live_demo_config.yaml`
+and `steps/step_6/config.yaml`; implemented via `skip_ks` in `src/vitals.py:eca_project`.
+
+*Residual caveat — this is a trade, not a cure.* Skipping the harmonic stops ECA erasing
+the cardiac peak, but it leaves respiratory energy sitting **inside** the cardiac band,
+where it competes with the true HR. Which one wins depends on cardiac SNR at that
+frequency. So the coincidence remains an identifiability problem (§4.2) and the 18 bpm
+paced arm remains a genuine probe of it — the fix changes the failure from *silent
+cancellation* to *contamination*, which is at least detectable.
 
 ---
 ---
