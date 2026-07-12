@@ -1,10 +1,18 @@
 # Approach — mmWave Heart-Rate Estimation
 
-> Fill this in BEFORE writing pipeline code (research-first). Use the arXiv MCP to find
-> references; have ChatGPT review the plan for what a reviewer would attack.
+> **How to read this file.** It is split into three parts:
+> - **Part A — Method (current).** Physics, literature, the chosen algorithm, and the
+>   pitfalls that still govern the design. This is live: keep it current.
+> - **Part B — Historical results (PRE-RESTART, NOT REPRODUCIBLE).** Empirical numbers
+>   from the datasets deleted on 2026-07-09. Quarantined, never cited as results.
+> - **Part C — Open questions for the new dataset.**
+>
 > Keep it honest: mark `[CITATION NEEDED]` rather than guessing.
 
 ---
+---
+
+# PART A — METHOD (CURRENT)
 
 ## 1. Problem
 Estimate heart rate from a 76-81 GHz FMCW radar (IWR1642), subject seated (hands on
@@ -18,40 +26,54 @@ Heartbeat and respiration cause sub-millimetre chest displacement. FMCW radar re
 the chest into a range bin; the displacement shows up as a slow-time phase change at that
 bin. Heart rate is recovered from the phase signal's spectral content in the cardiac band.
 - Range resolution dR = c / (2 * B_sweep). Confirmed: 0.0436 m/bin at our chirp config.
-- Slow-time sample rate = frame rate. Confirmed: ~20 Hz frames (3000 frames / ~150 s).
+- Slow-time sample rate = frame rate. Confirmed: ~20 Hz frames.
 - Chest at 0.8-1.4 m falls in bins ~19-32 (warmup search gate [0.8, 1.4 m]). The bin is
   auto-selected at warmup per session, not pinned.
 
 ---
 
-## 3. Candidate pipeline — baseline (exp001, implemented and verified)
+## 3. Pipeline (as currently implemented)
 
 Standard phase-based chain. Each stage verified in isolation:
 
-1. Parse raw ADC (IWR1642 2-lane LVDS, Complex1x, 4-word packets).
+1. Parse raw ADC (IWR1642 2-lane LVDS, Complex1x, 4-word packets). SDK captures use
+   `iq_swap=True` (SampleSwap=1); mmWave Studio captures use `iq_swap=False`.
 2. Range FFT (fast time) → complex range profile per frame.
 3. Static clutter removal (subtract slow-time mean per bin).
-4. Range-bin locking: select bin once from full post-trim cube (max phase variance in
-   gate), hold fixed for all windows. Eliminates bin-hopping artefacts.
-5. Phase extraction (arctan I/Q) + phase unwrapping on the full continuous slow-time.
+4. **Range-bin selection:** at warmup, scan the candidate bins spanned by the
+   0.8-1.4 m gate, score each on HR validity / BR confidence / respiration validity /
+   range-energy rank, and **lock the winner for the rest of the session**. No manual or
+   manifest pin in the current protocol. Evidence dumped to `warmup_bin_selection.json`.
+5. Phase extraction (arctan I/Q) + phase unwrapping on the continuous slow-time.
 6. Phase differencing / impulse-noise removal.
-7. Bandpass filter → cardiac band (0.8-2.0 Hz = 48-120 bpm).
-8. Sliding 20 s FFT window (step 10 s) → argmax peak in cardiac band → bpm.
+7. Respiration estimate → ECA harmonic cancellation → cardiac band (0.8-2.0 Hz =
+   48-120 bpm) → AHET second-harmonic verification (see §7).
+8. **Windowing:** 30 s window. The live demo hops every 3 s (display cadence); the
+   offline pipeline is what produces paper metrics.
 
-**exp001 result (locked bin 29):** MAE 6.21 bpm, RMSE 8.80 bpm, bias −4.51 bpm,
-21 windows. Evidence: `results/exp001_offline_baseline/20260610_223845/`.
+**Live vs offline (CLAUDE.md §4).** The live demo's readouts use an online median
+smoother over recent AHET-verified estimates and are a **sanity check, not a result**.
+Paper metrics are computed offline by re-processing the run's saved raw `adc_stream.bin`.
+
+**Window length sets HR resolution.** Δf = 1/T, so a 30 s window gives ~0.033 Hz ≈
+**2 bpm** quantisation; 20 s gives ~3 bpm. Do not shorten the window to reduce warmup
+latency — it coarsens accuracy and degrades the warmup bin lock.
+
+**Statistical independence.** Consecutive 3 s-hop estimates share 27/30 s of data and are
+**not independent**. Agreement statistics (MAE/RMSE/Bland-Altman) must be computed on
+**non-overlapping 30 s windows**, or explicitly correct for the autocorrelation.
 
 ---
 
 ## 4. Known pitfalls
 
-- **Wrong range-bin pick** — now fixed by bin locking.
-- **Respiration harmonics in cardiac band** — OUR CURRENT BLOCKER. Detailed below.
+- **Wrong range-bin pick** — mitigated by warmup bin selection + scoring.
+- **Respiration harmonics in the cardiac band** — the central problem. §4.1, §4.2.
 - Spurious/noise peaks when SNR is low.
 - Large body motion corrupting a window.
-- Posture change shifting the chest bin mid-capture.
+- Posture change shifting the chest bin mid-capture (protocol: subject stays still).
 
-### The harmonic interference problem (root cause of exp001 failure)
+### 4.1 The harmonic interference problem
 
 The chest-wall displacement signal is the *sum* of respiration and heartbeat harmonics:
 
@@ -61,25 +83,60 @@ The chest-wall displacement signal is the *sum* of respiration and heartbeat har
 Because respiration (f_r ~0.1-0.5 Hz, amplitude 1-12 mm) is much larger than heartbeat
 (f_h ~0.8-2.0 Hz, amplitude 0.2-0.5 mm), its harmonics appear throughout the spectrum.
 
-In our capture: f_r ≈ 15 bpm = 0.25 Hz. The harmonics fall at:
+Worked example at f_r = 15 bpm = 0.25 Hz:
   - 2nd: 30 bpm = 0.50 Hz  (below cardiac band, benign)
   - 3rd: 45 bpm = 0.75 Hz  (below cardiac band, benign)
-  - 4th: 60 bpm = 1.00 Hz  ← INSIDE cardiac band, competed with true HR ~71 bpm
+  - 4th: 60 bpm = 1.00 Hz  ← INSIDE cardiac band
   - 5th: 75 bpm = 1.25 Hz  ← also in band
 
 Additionally, *intermodulation* products (f_h ± k·f_r, k·f_r ± l·f_h) fill the cardiac
-band. With our 20 s window the frequency resolution is 3 bpm — peaks separated by <3 bpm
-merge into one, and the stronger respiration harmonic wins the argmax.
+band. Peaks separated by less than the frequency resolution merge into one, and the
+stronger respiration harmonic wins the argmax.
 
-**Failed attempt:** fixed 0.08 Hz proximity threshold to exclude peaks near respiratory
-harmonics. Over-triggered when true cardiac peak was near a harmonic. MAE 9.55 bpm.
-Root cause: a fixed frequency tolerance is the wrong abstraction for this problem.
+**Failed approach (recorded, do not repeat):** a fixed 0.08 Hz proximity threshold to
+exclude peaks near respiratory harmonics. It over-triggered whenever the true cardiac
+peak sat near a harmonic. A fixed frequency tolerance is the wrong abstraction; the
+principled version is the AHET second-harmonic consistency check (§7.2).
+
+### 4.2 CRITICAL — respiratory-harmonic coincidence (drives the capture protocol)
+
+**Coincidence condition:** when the 4th respiratory harmonic falls near the true cardiac
+fundamental, i.e. **4 × f_r ≈ HR**. Example: f_r = 20 bpm = 0.33 Hz → 4th harmonic at
+80 bpm, while true HR ≈ 80 bpm.
+
+**Why ECA cannot suppress it:** ECA builds a harmonic subspace from the estimated f_r and
+projects the phase signal onto its complement. If the 4th harmonic sits at the same
+frequency as the cardiac fundamental, the projection removes **both** — the cancellation
+is correct for respiration but destructive for the cardiac component. This is a physics
+limitation of single-range-bin phase extraction, not an algorithm bug. It cannot be fixed
+by a longer window (it is an SNR/identifiability problem, not a resolution problem).
+
+**Observed behaviour under coincidence:** AHET correctly abstains (NaN) when no
+second-harmonic evidence survives; when it does pass, the accepted candidate may be the
+respiratory harmonic itself (a respiratory harmonic has genuine second-harmonic
+structure, so AHET cannot distinguish it). Result: **high NaN rate plus large negative
+bias**. See Part B for the measured magnitude on the retired data.
+
+**Protocol remediation (this is why the capture protocol constrains breathing):** ensure
+**|HR − k × f_r| > 10 bpm for k = 1..5** at capture time. Typical resting HR is 60-80 bpm,
+so the danger zone is **f_r ≈ 15-20 bpm** (4×f_r = 60-80 bpm). Breathing at a steady
+**13-16 bpm** puts 4×f_r at 52-64 bpm, below a typical resting HR.
+
+> **OPEN CONFLICT (2026-07-09):** the agreed paced-breathing arm (notes/protocol.md) uses
+> **12 / 15 / 18 bpm**. At **18 bpm, 4×f_r = 72 bpm**, which is inside the resting-HR band
+> — i.e. deliberately inside this failure zone. 15 bpm (4×f_r = 60) is borderline for a
+> low-HR subject. This must be resolved before the paced sessions: either drop/replace the
+> 18 bpm arm, or keep it *explicitly* as a limitation-characterisation arm and report it
+> separately (never pooled into the headline agreement metrics).
+
+**Detection heuristic:** before committing to a recording, check Masimo PR and the
+radar-estimated f_r. If |HR − 4 × f_r| < 10 bpm, the capture is at high risk.
 
 ---
 
-## 5. Literature — exp002 survey (2024-2025, arXiv MCP, 2026-06-11)
+## 5. Literature survey (arXiv, 2024-2025)
 
-### 5.1 Adaptive ECA + AHET (primary reference for exp002)
+### 5.1 Adaptive ECA + AHET (our primary reference — the method we implement)
 Tang et al., "Adaptive Extensive Cancellation Algorithm and Harmonic Enhanced Heart Rate
 Estimation based on MMWave Radar," arXiv:2503.07062, Zhejiang/ASU/Wuhan, 2025.
 
@@ -87,26 +144,24 @@ Estimation based on MMWave Radar," arXiv:2503.07062, Zhejiang/ASU/Wuhan, 2025.
 
 **Step 1 — Adaptive ECA (Extensive Cancellation Algorithm):**
 - Use ANLS (Adaptive Non-Linear Least Squares) to estimate f_r and reconstruct the
-  respiration signal plus its first K_b harmonics (typically K_b = 3; for our case with
-  f_r = 0.25 Hz, K_b = 4 to cover the 4th harmonic at 1.0 Hz = 60 bpm).
+  respiration signal plus its first K_b harmonics (typically K_b = 3; for f_r = 0.25 Hz
+  we use K_b = 4 to cover the 4th harmonic at 1.0 Hz = 60 bpm).
 - Build subspace matrix X from the harmonic Vandermonde structure.
 - Project phase signal θ onto the complement: θ_ECA = P·θ where P = I - X(X^T X)^{-1} X^T.
-- Result: respiration and its harmonics are removed from the phase signal in the time domain.
+- Result: respiration and its harmonics are removed from the phase signal in time domain.
 
 **Step 2 — Adaptive Harmonic Enhanced Trace (AHET):**
-- Search for the largest FFT peak f_h1 in cardiac band [0.7, 2.0] Hz.
+- Search for the largest FFT peak f_h1 in the cardiac band [0.7, 2.0] Hz.
 - Validate: look for the 2nd HR harmonic f_h* in [2·f_h1 - V_e, 4.0] Hz (V_e = 0.1 Hz).
 - Credibility: |2·f_h1 - f_h*| ≤ V_e → accepted. Else: try 2nd-largest peak f_h2, re-check.
 - Fallback: if both fail, use history (mean of first 5 stable estimates ± V_a = 0.1 Hz).
 
-**Results (77 GHz, 100 Hz frame, 20 s CPI):**
+**Reported results (77 GHz, 100 Hz frame, 20 s CPI):**
 - Raw: RMSE 14.41 bpm → after ECA: 6.37 bpm → after AHET: 1.20 bpm.
-- ANLS reconstruction: 5 s sliding window, 1 s step, for segmental f_r estimation.
 
-**Key note for us:** Paper explicitly states the 4th harmonic of f_r (62.4 bpm with
-f_r = 15.6 bpm) and intermodulation term f_1 = f_h - f_r (61 bpm with f_h = 76.6 bpm)
-merge within the 3 bpm frequency resolution and produce a competing peak. This is exactly
-our failure mode.
+**Key note for us:** the paper explicitly states that the 4th harmonic of f_r and the
+intermodulation term f_h − f_r merge within the frequency resolution and produce a
+competing peak — exactly the failure mode in §4.2.
 
 ### 5.2 Harmonic MUSIC (HMUSIC)
 Hsieh et al., "Harmonic MUSIC Method for mmWave Radar-based Vital Sign Estimation,"
@@ -118,16 +173,15 @@ the noise subspace of the slow-time covariance matrix.
 - Models phase as L harmonics of respiration + L harmonics of heartbeat simultaneously.
 - Avoids explicit harmonic cancellation; resolves both sources jointly.
 - 88th percentile HR error < 5 bpm (4 subjects, 12.8 s window, 60 GHz, cluttered room).
-- Requires knowing L and number of sources; heavier computation.
+- Requires knowing L and the number of sources; heavier computation.
 
 ### 5.3 Second-derivative + VME (working at higher harmonics)
 Iwata et al., "Accurate Radar-Based Heartbeat Measurement Using Higher Harmonic
 Components," arXiv:2407.07380, Kyoto/Nagoya, 2024.
 
 **Strategy:** shift the problem up in frequency where respiratory interference is weaker.
-- Compute |d²s/dt²|: absolute value of 2nd derivative of the complex radar signal s(t).
-  This acts as a spectral high-pass that emphasises cardiac harmonics (2nd, 3rd) while
-  suppressing respiratory components.
+- Compute |d²s/dt²| of the complex radar signal: acts as a spectral high-pass that
+  emphasises cardiac harmonics while suppressing respiratory components.
 - The 2nd cardiac harmonic (2·f_h ≈ 2-3.4 Hz) lies above the worst respiratory harmonics.
 - Apply VME (Variational Mode Extraction) to extract the 2nd harmonic mode; divide by 2.
 - Advantage: bypasses phase unwrapping. Disadvantage: needs long windows (60 s).
@@ -137,246 +191,159 @@ Components," arXiv:2407.07380, Kyoto/Nagoya, 2024.
 Shimomura et al., "A Nonlinear Spectral Approach for Radar-Based Heartbeat Estimation
 via Autocorrelation of Higher Harmonics," arXiv:2507.20664, Kyoto, 2025.
 
-**Strategy:** compute localised spectral autocorrelations summed across harmonic orders.
+**Strategy:** localised spectral autocorrelations summed across harmonic orders.
 - Gaussian-smooth d(t), then compute 2nd derivative d''(t).
-- Define NLHS(f) = Σ_n c(n·f, f) where c(f0, Δf) is a localised autocorrelation of the
-  Fourier transform around frequency f0 with lag Δf.
-- When Δf = f_h, the autocorrelations at n·f_h all peak simultaneously → sharp NLHS peak.
-  Respiratory harmonics do not produce the same structure.
-- Reduces RMSE by 20%, CC by 0.20 vs best conventional baseline (60 s windows, 60 GHz).
-- Naturally exploits higher harmonics (N = 6-15) without needing to isolate them.
+- NLHS(f) = Σ_n c(n·f, f), where c(f0, Δf) is a localised autocorrelation of the Fourier
+  transform around f0 with lag Δf. When Δf = f_h, autocorrelations at n·f_h peak
+  simultaneously → sharp NLHS peak. Respiratory harmonics lack this structure.
+- Reduces RMSE by 20%, CC by 0.20 vs the best conventional baseline (60 s, 60 GHz).
 
 ### 5.5 NRBO-VMD (mode decomposition)
 Gu et al., "Improved VMD Based Remote Heartbeat Estimation Utilizing 60GHz mmWave Radar,"
 arXiv:2502.11042, UESTC, 2025.
 
-**Strategy:** auto-tune VMD parameters (K, α) using Newton-Raphson-based optimizer
-(NRBO) minimising sample entropy, then select IMFs in 0.5-2 Hz and reconstruct CMS.
+**Strategy:** auto-tune VMD parameters (K, α) with a Newton-Raphson-based optimizer
+minimising sample entropy, then select IMFs in 0.5-2 Hz and reconstruct.
 - RMSE 5.208 bpm, 94% accuracy (18 subjects, 60 s windows).
-- Measured from back at 20 cm — different geometry to our chest-facing 1.3 m setup.
-- Less directly applicable; included for completeness.
+- Measured from the back at 20 cm — different geometry to our chest-facing 0.8-1.4 m
+  setup. Less directly applicable; included for completeness.
 
 ### 5.6 Pi-ViMo (template matching)
 Zhang et al., "Pi-ViMo: Physiology-inspired Robust Vital Sign Monitoring using mmWave
 Radars," arXiv:2303.13816, McMaster/Huawei, 2023.
 
 **Strategy:** time-domain template matching with physiological models (RC-circuit
-respiration + Van der Pol heartbeat oscillator). Jointly fits templates to chest-wall
-displacement, bypassing frequency-domain harmonic confusion entirely.
+respiration + Van der Pol heartbeat oscillator), bypassing frequency-domain harmonic
+confusion entirely.
 - HR error 11.9% stationary, 13.6% with micro-RBMs.
-- Computation: 4.3 s per 15 s window on i7 → not real-time. Heavy optimisation.
-- 15 s windows (shorter than our 20 s).
-- Interesting as a theoretical ceiling; not our chosen approach for exp002.
+- ~4.3 s of computation per 15 s window on an i7 → not real-time.
+- Interesting as a theoretical ceiling; not our chosen approach.
 
 ---
 
-## 6. Decision — exp002 approach
+## 6. Method decision — ECA + AHET
 
-**Chosen: ECA + harmonic consistency check (§5.1 simplified)**
+**Chosen: ECA + harmonic consistency check (§5.1).**
 
 Rationale:
 - Directly addresses our documented failure mode (4th harmonic / intermodulation).
-- Works on 20 s windows with 20 Hz frame rate (no long-window requirement).
+- Works at our window length and 20 Hz frame rate (no 60 s-window requirement).
 - Implementable in scipy/numpy without new dependencies.
-- ANLS-based f_r estimation is robust (respiration is the dominant spectral component).
 - ECA is a linear projection — invertible, no information destroyed, diagnosable.
 - The AHET consistency check (2×f_h verification) is the principled version of the
-  "harmonic proximity" idea that failed with a fixed threshold.
+  "harmonic proximity" idea that failed with a fixed threshold (§4.1).
 
-**Approach not chosen and why:**
-- HMUSIC: requires MIMO/multi-antenna correlation matrix; single-bin phase signals have
-  lower rank than assumed. More complex to implement correctly.
-- |d²s/dt²| + VME: designed for 60 s windows and IBI/HRV estimation. Our 20 s sliding
-  window would lose too much resolution. Good future direction for HRV work.
-- NLHS: also uses 60 s windows; designed for IBI not HR rate. Same concern.
-- Pi-ViMo: computationally impractical for real-time; 4.3 s per window.
+**Not chosen, and why:**
+- **HMUSIC:** assumes a multi-antenna/MIMO correlation matrix; single-bin phase signals
+  have lower rank than assumed. Harder to implement correctly.
+- **|d²s/dt²| + VME** and **NLHS:** designed for 60 s windows and IBI/HRV, not per-window
+  HR rate. Good future direction for HRV work.
+- **Pi-ViMo:** computationally impractical for real time.
 
 ---
 
-## 7. exp002 algorithm plan (to be cross-reviewed before implementation)
+## 7. Algorithm specification (ECA + AHET)
 
 ### 7.1 Phase 1 — ECA (respiration subspace cancellation)
 
-Input: unwrapped phase vector θ[n] of length N (one 20 s window, N = 400 at 20 Hz).
+Input: unwrapped phase vector θ[n] for one window (N = 600 at 30 s × 20 Hz).
 
-1. **Estimate f_r:** run FFT on θ[n], find argmax in [0.1, 0.5 Hz] (respiration band).
-   Use a shorter 5 s sub-window for ANLS-style estimation as per §5.1 (5 s @ 20 Hz =
-   100 samples — enough for 3 cycles of 15 bpm respiration).
+1. **Estimate f_r:** FFT of θ[n], argmax in [0.1, 0.5 Hz] (respiration band). Refine
+   beyond the raw FFT bin with parabolic interpolation.
+2. **Build harmonic Vandermonde subspace X** (N × 2K_b):
+     X[:,k] = sin(2π·(k+1)·f_r·t_n) and cos(2π·(k+1)·f_r·t_n), k = 0..K_b-1.
+   Both sin and cos so each harmonic's phase offset is free.
+3. **Project:** θ_ECA = θ − X·(X^T X)^{-1}·X^T·θ, computed via a **QR / modified
+   Gram-Schmidt projection, not an explicit matrix inverse** (numerical stability; the
+   current implementation is linalg-free — see the note below).
+4. **Verify:** the FFT of θ_ECA should show the respiration peak and harmonics gone. Log
+   the cancelled power at each harmonic as a diagnostic.
 
-2. **Build harmonic Vandermonde subspace X** (N × K_b):
-     X[:,k] = sin(2π·(k+1)·f_r·t_n)  and  cos(2π·(k+1)·f_r·t_n)
-   for k = 0..K_b-1. Use K_b = 4 (covers up to 4th harmonic = 60 bpm for our f_r).
-   Include both sin and cos columns so the phase offset of each harmonic is free.
-
-3. **Project:** θ_ECA = θ - X·(X^T X)^{-1}·X^T·θ
-   This orthogonally projects θ away from the respiration subspace.
-
-4. **Verify:** FFT of θ_ECA should show the respiration peak and its harmonics gone.
-   Log the cancelled power at each harmonic as a diagnostic.
+**K_b selection (adaptive):** include harmonic k only if k·f_r < 2.0 Hz AND k·f_r is not
+within 0.15 Hz of the cardiac candidate — this guards against suppressing a true HR that
+sits near a harmonic (the §4.2 failure). Note this guard *detects* the coincidence; it
+cannot recover the signal when the two genuinely coincide.
 
 ### 7.2 Phase 2 — Cardiac peak search + AHET consistency
 
 Input: θ_ECA.
 
-5. **Spectral estimate:** windowed FFT of θ_ECA (same Hann window as baseline).
+5. **Spectral estimate:** windowed FFT of θ_ECA (Hann).
+6. **Candidate peak:** argmax in the cardiac band [0.8, 2.0 Hz] → f_h1.
+7. **2nd-harmonic consistency check (AHET):**
+   - Search for a peak f_h* **locally** in [2·f_h1 ± V_e], V_e = 0.1 Hz (local, *not* a
+     global search out to 4.0 Hz).
+   - If |2·f_h1 − f_h*| ≤ V_e → credible, return f_h1.
+   - Else: try the 2nd-largest cardiac-band peak f_h2 and re-check.
+   - If both fail: flag low-confidence, return NaN (excluded from MAE/RMSE).
+     **Do NOT substitute a default value** — that was the original failure mode.
+8. **Output:** HR = f_h × 60 bpm, plus a per-window confidence flag.
 
-6. **Candidate peak:** argmax in cardiac band [0.8, 2.0 Hz] → f_h1.
+### 7.3 Mandatory diagnostic outputs (CLAUDE.md §5 rule 4)
 
-7. **2nd harmonic consistency check (AHET):**
-   - Search for peak f_h_star in [2·f_h1 - V_e, 4.0] Hz, V_e = 0.1 Hz.
-   - If |2·f_h1 - f_h_star| ≤ V_e → credible, return f_h1.
-   - Else: try 2nd-largest peak f_h2 in cardiac band, re-run step 7.
-   - If both fail: flag as low-confidence. Return NaN (exclude from MAE/RMSE).
-     Do NOT substitute 60 bpm as a default — that was the failure mode.
+Per window, dump: estimated f_r; power cancelled at each harmonic; the full θ_ECA
+spectrum; f_h1, f_h*, credibility flag; final HR. This is what makes a wrong reading
+diagnosable rather than merely observable. Implemented as `live_intermediates.npz` +
+`live_estimates.csv`, inspected by `scripts/diagnose_live_run.py`.
 
-8. **Output:** HR = f_h (Hz) × 60 (bpm), plus a confidence flag per window.
+### 7.4 Where the parameters live
 
-### 7.3 Diagnostic outputs (mandatory per CLAUDE.md §5 rule 4)
+Live/replay: `scripts/live_demo_config.yaml`. Offline: `steps/step_6/config*.yaml`.
+Key parameters: harmonics to cancel (K_b), AHET deviation tolerance V_e, history
+stability V_a, respiration band for f_r, and the candidate gates
+(`candidate_min_peak_to_floor_db`, `candidate_min_prominence`, …).
 
-Per window, dump:
-- f_r estimated
-- Power cancelled at each harmonic (k=1..4)
-- θ_ECA spectrum (the full array, not just peak)
-- f_h1 (raw candidate), f_h_star (2nd harmonic location), credibility flag
-- Final HR estimate
+### 7.5 AHET criterion — known limitations (honest caveats, still open)
 
-This lets us diagnose any window where radar ≠ Masimo without just observing the error.
+These were established on the retired data but are **properties of the criterion**, not of
+that dataset, and remain open until re-validated:
 
-### 7.4 Config additions (experiments/exp002_harmonic_rejection/config.yaml)
+- **The pass threshold is soft.** The pass rule is
+  `second_peak_magnitude / comparison_floor > 1.0`, where the floor is the median
+  cardiac-band magnitude. Observed ratios clustered just above 1.0, so the criterion is
+  weakly discriminative. Any threshold change must be validated on independent data.
+- **A passing ratio does not guarantee HR accuracy.** The ratio confirms second-harmonic
+  *structure* exists; it does not confirm the fundamental is cardiac rather than a
+  respiratory harmonic (which also has genuine second-harmonic structure — §4.2).
+- **Longer windows mechanically inflate pass rates.** The ±0.1 Hz search region around
+  2×f_h spans ~5/5/7 FFT bins at 20/25/30 s windows. Under an idealised null, the chance
+  the max of m bins exceeds the band median is 1 − 0.5^m ≈ 0.97-0.99. So **AHET pass rates
+  must not be compared across window lengths** without this caveat.
+- **No validated rejection population yet.** Any pass/fail-rate claim needs a dataset
+  containing genuine rejections.
 
-New parameters vs exp001:
-  eca_harmonics: 4          # K_b — harmonics of f_r to cancel
-  eca_deviation_hz: 0.1     # V_e — credibility tolerance for 2nd harmonic check
-  eca_history_hz: 0.1       # V_a — stability threshold for HR track history
-  respiration_band_hz: [0.1, 0.5]  # for f_r estimation
+**Planned validation (deferred to the new dataset):** Monte-Carlo with four synthetic
+conditions per window length (genuine_harmonic, missing_harmonic, noise_only,
+resp_competitor), a development/held-out seed split, adequacy rule = Wilson 95% CI upper
+bound on false-pass rate < 0.10, and predeclared alternative criteria (`local_prominence`,
+`peak_local_median`) compared by ROC. Use production rFFT sizes (not zero-padded).
+**Any criterion selected on synthetic data must be confirmed on an independent real
+capture before it is used to interpret results.**
 
-### 7.5 Evaluation
+### 7.6 Implementation note — linalg-free DSP path (needs cross-model review)
 
-Metric unchanged from exp001: MAE, RMSE, Bland-Altman vs Masimo PR.
-Report additionally: % of windows flagged as low-confidence (NaN).
-Compare: ECA+AHET vs exp001 baseline on the same capture file.
-
-### 7.6 Cross-review status
-
-APPROVED — OpenAI cross-review completed. Four implementation improvements mandated:
-1. Use QR projection, not explicit matrix inverse
-2. Refine f_r beyond raw FFT bin using parabolic interpolation
-3. AHET second-harmonic search must be LOCAL [2*f_h ± 0.1 Hz], not global to 4.0 Hz
-4. K_b adaptive: include harmonic k only if k*f_r < 2.0 Hz AND not within 0.15 Hz
-   of the cardiac candidate (guards against suppressing true HR near a harmonic)
-   Hard floor: always include k=1..4 for this capture (4th harmonic = known failure)
-Full review recorded in SESSION.md.
-
-#### AHET second-harmonic criterion — known limitations (as of 2026-06-14)
-
-**Pass rule:** `second_peak_magnitude > comparison_floor`, where `comparison_floor` is
-the median cardiac-band magnitude on the candidate-specific second-pass ECA spectrum.
-The ratio is `second_peak_magnitude / comparison_floor`; a ratio > 1.0 is a pass.
-
-**Ratio distribution observed in exp002 (`20260614_161352`):**
-- min 1.035, median 1.233, max 2.385 (0.30, 1.82, 7.55 dB).
-- 16/20 AHET-verified windows fall in the [1.0, 1.5] range — the threshold is very soft.
-- A hypothetical threshold of 1.5 would retain only 4/20 estimates; any threshold
-  tuning requires independent capture data and cannot be derived from exp002 alone.
-
-**HR accuracy is not guaranteed by a passing ratio:**
-- 5 of the 20 verified windows have absolute HR error ≥ 10 bpm, with ratios spanning
-  1.060–1.233. The ratio confirms second-harmonic structure is present but does not
-  confirm the fundamental is the cardiac peak rather than a respiratory harmonic.
-
-**Window-length-dependent search-region bin count:**
-- The ±0.1 Hz search region around 2×f_h contains approximately 5, 5, and 7 FFT bins
-  at window lengths of 20, 25, and 30 s respectively (at a representative 1.2 Hz
-  candidate with production rFFT sizes 400/500/600, not zero-padded).
-- Under an idealised null (equal independent noise), the probability that the maximum
-  of m bins exceeds the cardiac-band median is 1 − 0.5^m ≈ 0.969 / 0.969 / 0.992.
-- This means longer windows mechanically inflate AHET pass rates independent of true
-  second-harmonic evidence. exp004 pass-rate comparisons across window lengths must
-  carry the explicit caveat: "AHET pass rates are indicative only; criterion not
-  independently validated; window-length-dependent search-region bin counts
-  (~5/5/7 at 20/25/30 s) may inflate pass rates at longer windows."
-
-**No rejection population in exp002:**
-- exp002 produced 20 AHET passes, 0 AHET-rejection failures, and 1 respiratory
-  fallback (no AHET attempted). There is no failed-window population from which to
-  estimate rejection performance; the criterion cannot be validated or tuned on
-  this capture alone.
-
-**Planned evaluation (deferred until second capture):**
-- Monte Carlo framework with four synthetic conditions per window length (20/25/30 s):
-  genuine_harmonic (cardiac fundamental + second harmonic present),
-  missing_harmonic (fundamental only, no second harmonic),
-  noise_only (no cardiac signal),
-  resp_competitor (respiratory harmonic inside cardiac band, separated from true HR).
-- Development/held-out seed split: criterion and threshold selected on development
-  seeds, evaluated once on held-out seeds.
-- Adequacy rule: Wilson 95% CI upper bound on false-pass rate < 0.10.
-- Predeclared alternative criteria to compare against the current floor ratio:
-  `local_prominence` (second-harmonic peak prominence relative to local background)
-  and `peak_local_median` (second-harmonic peak divided by local-neighbourhood median,
-  with defined guard bins and edge handling).
-- ROC curves for criteria with continuous scores; operating-point plots for binary criteria.
-- Production rFFT sizes (400/500/600, not zero-padded) must be used throughout to
-  match the real search-bin counts.
-
-**Required condition for any criterion change:**
-Any new threshold or alternative criterion selected on synthetic/development data must
-be confirmed on an independent real capture before it is used to interpret exp004
-pass-rate differences.
-
-#### Known failure mode: respiratory-harmonic coincidence with cardiac band
-
-**Coincidence condition:** when the 4th respiratory harmonic (4 × f_r) falls near the
-true cardiac fundamental (HR), i.e. 4 × f_r ≈ HR. Example: f_r ≈ 20 bpm = 0.33 Hz →
-4th harmonic at 80 bpm = 1.33 Hz, while true HR ≈ 80–84 bpm = 1.33–1.40 Hz.
-
-**Why ECA cannot suppress it:** ECA builds a harmonic Vandermonde subspace from
-estimated f_r and projects the phase signal onto its complement. The 4th harmonic is
-at the same frequency as the cardiac fundamental. The projection removes both the
-respiratory harmonic and the cardiac signal simultaneously — the cancellation is
-correct for respiration but destructive for the cardiac component.
-
-**Pipeline behaviour under this failure mode:**
-- AHET correctly abstains (NaN) when all candidate peak-to-floor ratios are < 1.0 —
-  no second-harmonic evidence survives above the cardiac-band floor. This is correct
-  pipeline behaviour, not a false rejection.
-- When AHET passes, the accepted candidate may be the respiratory harmonic itself
-  (3×f_r ≈ 60 bpm or 4×f_r ≈ 80 bpm). The second-harmonic peak-to-floor ratio is
-  genuinely above 1.0 for a respiratory harmonic; AHET cannot distinguish it from a
-  cardiac second harmonic at the same frequency.
-- Result: large negative bias (estimated HR < true HR) on the finite windows; high
-  NaN rate on the rest.
-
-**Evidence:** cap3 (`exp002_sit_chair_no_back_radar.bin`), 2026-06-13.
-- f_r 19–20 bpm (mean 19.2 bpm) throughout the recording.
-- True HR 78–84 bpm (Masimo PR mean ≈ 82 bpm).
-- 4 × 20 bpm = 80 bpm ≈ HR → coincidence throughout.
-- NaN rate: 17/37 = 46% at 20 s windows; 9/37 = 24% at 25 s.
-- Bias on finite windows: −12 to −14 bpm across all window lengths.
-- Longer windows do not resolve the ambiguity (SNR problem, not frequency resolution).
-- Full diagnostic: `results/exp004_window_length/20260614_234744/cap3_diagnostic.md`.
-
-**Detection heuristic:** monitor Masimo BR and radar-estimated f_r before the
-recording window. If |HR − 4 × f_r| < 10 bpm, the capture is at high risk of this
-failure mode. Typical resting HR ≈ 60–80 bpm; the failure zone is f_r ≈ 15–20 bpm.
-
-**Remediation:** ensure |HR − k × f_r| > 10 bpm for k = 1, 2, 3, 4, 5 at capture
-time. In practice, instruct the subject to breathe at a steady 13–16 bpm (slow, deep
-breathing) before the recording starts. At f_r = 15 bpm, 4 × f_r = 60 bpm — well
-below resting HR ≈ 72 bpm. Verify by checking the radar-estimated f_r from the first
-30 s of the pre-trim phase signal before committing to the full recording.
+`src/vitals.py`'s `bandpass_filter` is zero-phase FFT-domain masking (was
+`scipy.signal.filtfilt`) and the ECA projection is modified Gram-Schmidt (was
+`np.linalg.qr`). These were rewritten to fix a crash, and they sit on the shared Step-6
+path. A same-model reproducibility spot check passed, but the **CLAUDE.md §6 independent
+cross-model DSP review has not been done** — required before this path is paper-grade.
 
 ---
 
 ## 8. Evaluation plan
-- Metric: HR error vs Masimo PR — MAE (bpm), RMSE (bpm), Bland-Altman limits.
+- Metric: HR error vs Masimo PR — MAE (bpm), RMSE (bpm), Bland-Altman limits of agreement.
+- Computed on **non-overlapping 30 s windows** (§3), reporting **coverage (% of windows
+  with a reported HR) alongside accuracy** — never accuracy on surviving windows alone.
 - Conditions: seated (hands on legs, back straight, facing radar), chest 0.8-1.4 m;
-  multiple subjects. Posture fixed; distance varies within the warmup search range.
-- Quality gate: exclude/flag Masimo segments with low Perfusion Index.
+  10 subjects × 2 sessions (natural + paced). Posture fixed; distance varies within the
+  warmup search range.
+- Quality gate: exclude/flag Masimo segments with low Perfusion Index. Never tune the
+  radar algorithm to chase a low-PI reference segment.
+- Baselines: TI on-chip vital-signs output; a published phase-based pipeline.
 
 ---
 
-## 9. References gathered
+## 9. References
 
 - [x] Tang et al. 2025, ECA+AHET: arXiv:2503.07062
 - [x] Hsieh et al. 2024, HMUSIC: arXiv:2408.01951
@@ -386,37 +353,65 @@ below resting HR ≈ 72 bpm. Verify by checking the radar-estimated f_r from the
 - [x] Zhang et al. 2023, Pi-ViMo: arXiv:2303.13816
 - [ ] TI application note: vital signs with mmWave sensors `[CITATION NEEDED]`
 - [ ] TI raw ADC data capture / DCA1000 data-format app note `[CITATION NEEDED]`
-- [ ] Beltrão et al. 2023, ANLS framework (cited in [2503.07062]): IEEE TMT&T vol.71 no.4
+- [ ] Beltrão et al. 2023, ANLS framework (cited in 2503.07062): IEEE TMTT vol.71 no.4
 
 ---
-
-## 10. Chosen plan for exp002
-
-Implement ECA + AHET as described in §7 above.
-Cross-review the algorithm plan with OpenAI (per CLAUDE.md §6) before writing code.
-Evaluate on the same `data/raw/` capture as exp001 to isolate algorithm improvement.
-
 ---
 
-## exp002 Final Assessment
+# PART B — HISTORICAL RESULTS (PRE-RESTART — NOT REPRODUCIBLE, NOT CITABLE)
 
-Best result: MAE 5.29 bpm, RMSE 7.03 bpm, bias -2.27 bpm (20/21 windows, 1 NaN)
-  Config: 30 s trim, bin 29 pinned, ECA+AHET, no EMA
-  Run: results/exp002_harmonic_rejection/20260611_170029/
+> **All numbers below were computed on raw data that was deleted on 2026-07-09** (see
+> HISTORY.md, "Hard reset of all datasets"). The inputs, the `results/` run folders and
+> the `experiments/` configs they reference **no longer exist**, so per CLAUDE.md
+> reproducibility rule 1 ("if it can't be regenerated, it does not go in the paper")
+> **none of these may be reported as results or used as a baseline.** They are retained
+> only as the narrative of how the method was arrived at, and as the *qualitative*
+> evidence for the §4.2 failure mode.
 
-Conservative result: MAE 6.98 bpm, RMSE 8.80 bpm, bias -5.15 bpm (19/21 windows, 2 NaN)
-  Config: 30 s trim, bin 29 pinned, ECA+AHET + EMA outlier gate
-  Notes: EMA adds lag; window 10 gated correctly but underlying signal is a genuine
-  respiratory-dominance event (~60 bpm harmonic with second-harmonic AHET support).
-  This event is a physics limitation of single-range-bin phase extraction, not an
-  algorithm failure.
+### B.1 exp001 — baseline (argmax, no harmonic rejection)
+Fixed bin 29; 20 s window / 10 s step; plain argmax in the cardiac band.
+MAE 6.21 bpm, RMSE 8.80 bpm, bias −4.51 bpm over 21 windows.
+*Superseded:* the bin is now auto-locked at warmup, the window is 30 s, and argmax alone
+is not the method. Evidence folder deleted.
 
-Known failure mode documented:
-  Windows 9-12 (09:01:10-09:01:35): radar returns ~60 bpm, Masimo shows ~71 bpm.
-  Cause: respiratory motion temporarily dominates phase signal; 4th harmonic at
-  ~60 bpm passes AHET verification because genuine second harmonic (~120 bpm) is
-  present. Cannot be resolved by spectral methods without multi-bin or Doppler
-  separation. Candidate mitigation: multi-range-bin coherent combination (exp004).
+### B.2 exp002 — ECA + AHET
+Best: MAE 5.29 bpm, RMSE 7.03 bpm, bias −2.27 bpm (20/21 windows, 1 NaN), fixed bin 29.
+With an EMA outlier gate: MAE 6.98 bpm, RMSE 8.80 bpm, bias −5.15 bpm (2 NaN) — the EMA
+added lag and was not retained.
+Stopping note at the time: further tuning on that single capture was fitting to one
+20-second event; a second capture was required to assess generalisation.
+*Superseded:* different bin strategy, window, and tracker. Evidence folder deleted.
 
-Stopping criteria met: further tuning on this capture is fitting to a single
-20-second event. Second capture required to assess generalisation.
+### B.3 cap3 / exp004 — evidence for the §4.2 coincidence failure
+The qualitative finding here **still stands and drives the capture protocol**, even though
+the numbers are not reproducible:
+- f_r held at 19-20 bpm; true HR (Masimo) 78-84 bpm → 4 × 20 = 80 bpm ≈ HR → coincidence
+  throughout the recording.
+- NaN rate 17/37 = 46% at 20 s windows; 9/37 = 24% at 25 s.
+- Bias on the finite windows: −12 to −14 bpm at every window length.
+- Longer windows did **not** resolve it, confirming it is an SNR/identifiability problem
+  rather than a frequency-resolution one.
+
+### B.4 Offline hop/window sweep (retired)
+A hop-1 grid sweep over the retired sessions selected a 30 s window over 20 s, and
+established that the 30 s window needs a stricter fundamental floor (min_fund_db 4.0 vs
+2.0) to suppress spurious peaks at the finer 2 bpm/bin resolution; with that floor, a
+looser max_jump (6.0) is safe. **This coupling is why the current configs look as they
+do.** Full numbers in HISTORY.md (2026-07-09 entry); output folders deleted.
+
+---
+---
+
+# PART C — OPEN QUESTIONS FOR THE NEW DATASET
+
+1. **Resolve the paced-breathing conflict (§4.2).** 18 bpm places 4×f_r at 72 bpm, inside
+   the resting-HR band and inside the documented failure zone. Decide before session 2.
+2. **Coverage/yield.** The retired data showed a valid-HR fraction swinging from ~0% to
+   ~85% per session, dominated by AHET gate rejections. Establishing a *reliable* yield is
+   the precondition for any credible agreement claim — accuracy measured only on surviving
+   windows is selection bias (§8).
+3. **Validate the AHET criterion (§7.5)** on data containing a genuine rejection
+   population.
+4. **Independent cross-model DSP review** of the linalg-free `src/vitals.py` path (§7.6).
+5. **Baselines:** produce head-to-head numbers vs TI on-chip output and a published
+   phase-based pipeline.
