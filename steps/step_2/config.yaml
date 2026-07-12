@@ -8,7 +8,7 @@ paths:
   output_dir: data/processed/time_domain_cubes
 
 # Chirp parameters — must match the capture profile in steps/step_1/capture_config.yaml
-# and notes/vital_signs.lua exactly. Changing num_adc_samples or num_chirps_per_frame
+# and config/vital_signs.lua exactly. Changing num_adc_samples or num_chirps_per_frame
 # invalidates any previously saved HDF5 files.
 radar:
   num_rx:               4

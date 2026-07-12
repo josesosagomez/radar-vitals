@@ -5,7 +5,7 @@ Talks to the DCA1000 directly over UDP (no mmWave Studio / CLI binary required).
 Sends the full SDK 3.x CLI sequence to the IWR1642 over the Application/User UART.
 
 Protocol reference : notes/dca1000_protocol.md
-mmWave Studio ref  : notes/vital_signs.lua
+mmWave Studio ref  : config/vital_signs.lua
 Config             : steps/step_1/capture_config.yaml
 
 Usage:

@@ -1,6 +1,6 @@
 # steps/step_1/capture_config.yaml
 # All hardware-specific values for DCA1000 + IWR1642 raw ADC capture.
-# Reference: notes/dca1000_protocol.md, notes/vital_signs.lua
+# Reference: notes/dca1000_protocol.md, config/vital_signs.lua
 
 # ── DCA1000 network ──────────────────────────────────────────────────────────
 dca1000_ip: "192.168.33.180"
@@ -21,7 +21,7 @@ capture:
   output_dir: "data/raw"
 
 # ── Radar profile ─────────────────────────────────────────────────────────────
-# All values must match notes/vital_signs.lua exactly. Do not edit without updating
+# All values must match config/vital_signs.lua exactly. Do not edit without updating
 # the experiment config and re-verifying range resolution (0.0436 m/bin).
 profile:
   start_freq_ghz:      77.0
