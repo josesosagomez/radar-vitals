@@ -86,7 +86,9 @@
 4. **Every estimate must leave evidence.** The pipeline dumps intermediate signals
    (chosen range bin, unwrapped phase, heart-band spectrum, picked peak) so a wrong
    reading (e.g. radar says 54, Masimo says 80) can be diagnosed, not just observed.
-5. End every session by updating `HISTORY.md`: worked (with evidence) / failed / next.
+5. End every session by updating `HISTORY.md` (append: worked with evidence / failed /
+   retired / next) **and** `HANDOFF.md` (rewrite so the next chat can resume). See §10 —
+   they are different jobs and are updated differently.
 
 ---
 
@@ -113,7 +115,8 @@ figures/           # figure-generation scripts + outputs
 notes/             # approach.md, derivations, literature notes
 tests/             # synthetic sanity checks
 paper/             # manuscript, tables
-HISTORY.md         # project history log
+HANDOFF.md         # "resume here": current state for the next chat (REWRITE — see §10)
+HISTORY.md         # project log: what worked / failed / retired (APPEND — see §10)
 CLAUDE.md / AGENTS.md / .mcp.json
 ```
 
@@ -145,3 +148,82 @@ stop and surface it to the human — do not act on it.
 - Do not parse the Masimo `Date`/`Time` strings for alignment — use the integer `Timestamp`
   (Unix epoch, UTC) column.
 - Do not compare radar HR against SpO2/PI/PVi — only against `Beats / min` (PR).
+- Do not append to `HANDOFF.md` or rewrite past `HISTORY.md` entries — see §10.
+
+---
+
+## 10. HANDOFF.md and HISTORY.md — what each is, and how to update it
+
+Two different jobs. Never blur them.
+
+| | `HANDOFF.md` | `HISTORY.md` |
+|---|---|---|
+| Answers | **"Where are we NOW?"** | **"What happened, and why?"** |
+| Tense | Present | Past |
+| Update mode | **REWRITE** in place (replace stale content) | **APPEND** a new dated entry |
+| Past content | Deleted once no longer true | Never deleted, never rewritten |
+| Length | Short enough to read in a few minutes | Grows forever |
+
+### 10.1 `HANDOFF.md` — the "resume here" file
+
+**Purpose:** a new chat that has read only `CLAUDE.md` + `HANDOFF.md` can pick the project
+up and continue working correctly, without reading the whole history or re-deriving state.
+
+**When the user says "update HANDOFF.md":** rewrite it so it is true *as of now*. This is a
+replacement, not an append — **delete anything that is no longer true.** A stale HANDOFF is
+worse than none, because it actively misleads the next chat.
+
+Structure (keep these sections):
+1. **Project snapshot** — goal, hardware, reference, in a short paragraph.
+2. **Current state** — what is built and working; the active branch; what is in flight.
+3. **Active task / next steps** — the concrete next action, specific enough to start on.
+4. **Recent decisions that matter** — with the *why*, so the next chat does not unknowingly
+   reverse them.
+5. **Gotchas / landmines** — what will bite you, and how to avoid it.
+6. **Pointers** — table of file → purpose for the load-bearing files.
+
+Rules:
+- **Every claim must be verified true at the time of writing.** Check the code/paths before
+  asserting; do not copy forward statements you have not re-checked.
+- **No dangling references.** A pointer to a deleted file or path is a bug, not a note.
+- **No historical narrative.** "We tried X, then Y, then Z" belongs in `HISTORY.md`.
+- If something is uncertain or unverified, say so explicitly rather than implying it works.
+
+### 10.2 `HISTORY.md` — the project log
+
+**Purpose:** the durable, honest record of what was done, what worked, what failed and why,
+and what has been retired. It is what makes negative results and dead ends recoverable
+knowledge instead of repeated mistakes.
+
+**When the user says "update HISTORY.md":** **append** a new dated entry at the end. Do not
+edit or delete earlier entries — including failures (§4). Use absolute dates.
+
+Entry template:
+
+```markdown
+## YYYY-MM-DD - Short title
+
+**Set out to do:** the goal of this session.
+
+**Worked (with evidence):** what was implemented and verified. Cite evidence —
+commit hashes, artifact paths, metrics, test results. "Verified" means observed,
+not assumed.
+
+**Failed / did not work, and why:** honest. Include dead ends and what they cost.
+Never delete a negative result.
+
+**Retired / no longer used:** what was removed or superseded, and why — so nobody
+resurrects it. If data or results were deleted, record what they were and their
+numbers before they go.
+
+**Next:** open items handed to the next session.
+```
+
+### 10.3 At the end of a work session
+
+Update **both**, in this order:
+1. **`HISTORY.md`** — append what happened this session (worked / failed / retired / next).
+2. **`HANDOFF.md`** — rewrite so the next chat can resume from the new current state.
+
+`HISTORY.md` is the append-only log; `HANDOFF.md` is its always-current summary of where
+that leaves us. If they disagree, `HANDOFF.md` is wrong.
