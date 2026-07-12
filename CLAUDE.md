@@ -68,6 +68,11 @@
   don't chase it.
 - Distinguish "implemented and verified" from "should work in theory."
 - If a result looks too good, treat it as a bug (range-bin leakage, wrong window) until proven.
+- **The live demo's readouts are a sanity check, not a result.** No HR/BR value shown by
+  `scripts/live_demo.py` (or its `live_estimates.csv`) is paper-grade: the live path uses an
+  online median smoother, not the validated offline estimator. Paper metrics (MAE/RMSE/
+  Bland-Altman) are computed offline by re-processing the run's saved raw `adc_stream.bin`.
+  A live run's raw mirror only becomes a canonical input via a deliberate promotion step.
 
 ---
 

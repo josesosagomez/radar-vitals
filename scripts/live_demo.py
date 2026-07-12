@@ -27,7 +27,10 @@ CLI usage
     python scripts/live_demo.py --locked-bin 25 --no-configure
 
 Artifacts are written to results/live_demo/<timestamp>_<mode>_<session_id>/.
-See notes/live_demo_plan.md for architecture details.
+
+The readouts here are a live sanity check, not paper-grade results (CLAUDE.md S4):
+the live path uses an online median smoother, not the validated offline estimator.
+Paper metrics come from re-processing the run's saved raw adc_stream.bin offline.
 """
 from __future__ import annotations
 
