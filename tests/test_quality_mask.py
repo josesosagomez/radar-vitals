@@ -28,7 +28,7 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
-from scripts.add_quality_mask import (  # noqa: E402
+from steps.step_4.add_quality_mask import (  # noqa: E402
     _flag_clipping,
     _flag_dead,
     _flag_rx_imbalance,
@@ -43,11 +43,61 @@ from scripts.add_quality_mask import (  # noqa: E402
     _phase_diff_stats,
     _soft_failure_overlap_counts,
     _compute_quality_mask,
-    _process_session,
 )
 
-CONFIG_PATH = REPO_ROOT / "scripts" / "quality_mask_config.yaml"
+CONFIG_PATH = REPO_ROOT / "steps" / "step_4" / "config.yaml"
 _CFG = yaml.safe_load(CONFIG_PATH.read_text())
+
+# ─────────────────────────────────────────────────────────────────────────────────────────
+# ADAPTER — steps/step_4/add_quality_mask was REFACTORED after these tests were written.
+#
+#   OLD:  _process_session(session_id, cfg, commit, locked_bin=None)   + CUBES_DIR module global
+#   NEW:  _process_session(session_id, row, cfg, commit, cubes_dir, chunk_frames, step3_meta,
+#                          *, no_write=False, overwrite=False)
+#
+# `row` is UNUSED inside the function (main() extracts step3_meta from the manifest first), and
+# locked_bin now arrives via step3_meta rather than as a kwarg.
+#
+# These tests could not even be COLLECTED after the move (they imported `scripts.add_quality_mask`),
+# so nobody noticed they had gone stale — Step 4 has had no working coverage since. This adapter
+# maps the old call shape onto the REAL function, so every call site keeps exercising the real
+# module instead of being rewritten wholesale (and possibly wrongly).
+# ─────────────────────────────────────────────────────────────────────────────────────────
+import steps.step_4.add_quality_mask as qm_mod  # noqa: E402
+from steps.step_4.add_quality_mask import _process_session as _process_session_impl  # noqa: E402
+
+# The module no longer defines CUBES_DIR (cubes_dir is a parameter now). Tests monkeypatch this
+# shim, and the adapter forwards it as the real argument.
+qm_mod.CUBES_DIR = None
+
+
+def _process_session(session_id, cfg, commit, locked_bin=None, *,
+                     overwrite=False, no_write=False,
+                     confidence="high", review_required=False):
+    """Old-signature shim over the refactored _process_session()."""
+    import pandas as pd
+    cubes_dir = qm_mod.CUBES_DIR
+    assert cubes_dir is not None, "test must set qm_mod.CUBES_DIR before calling"
+    chunk_frames = cfg.get("analysis", {}).get("chunk_frames")
+    step3_meta = {
+        "locked_bin":      locked_bin,
+        "locked_range_m":  "",
+        "confidence":      confidence,
+        "run_id":          "test",
+        "review_required": review_required,
+    }
+    return _process_session_impl(
+        session_id,
+        pd.Series(dtype=object),      # `row` — unused by _process_session
+        cfg,
+        commit,
+        Path(cubes_dir),
+        chunk_frames,
+        step3_meta,
+        no_write=no_write,
+        overwrite=overwrite,
+    )
+
 
 # Cube geometry matching real sessions
 N_CHIRPS  = 32
@@ -309,12 +359,12 @@ def _make_h5(path: Path, n_total_frames: int, fill: complex = 100 + 100j) -> Non
 class TestH5RoundTrip:
     def test_quality_mask_written_and_readable(self, tmp_path):
         h5 = tmp_path / "exp_test.h5"
-        trim = int(_CFG["trim_frames"])
+        trim = int(_CFG["analysis"]["trim_frames"])
         total = trim + 100
         _make_h5(h5, total)
 
         # Monkey-patch CUBES_DIR so _process_session finds our temp file
-        import scripts.add_quality_mask as qm_mod
+        import steps.step_4.add_quality_mask as qm_mod
         orig = qm_mod.CUBES_DIR
         qm_mod.CUBES_DIR = tmp_path
         try:
@@ -333,7 +383,7 @@ class TestH5RoundTrip:
 
     def test_clipped_frame_in_h5(self, tmp_path):
         h5 = tmp_path / "exp_clip.h5"
-        trim = int(_CFG["trim_frames"])
+        trim = int(_CFG["analysis"]["trim_frames"])
         total = trim + 50
         _make_h5(h5, total)
 
@@ -341,7 +391,7 @@ class TestH5RoundTrip:
         with h5py.File(h5, "a") as f:
             f["cube"][trim + 10, 0, 0, 0] = 32767 + 0j
 
-        import scripts.add_quality_mask as qm_mod
+        import steps.step_4.add_quality_mask as qm_mod
         orig = qm_mod.CUBES_DIR
         qm_mod.CUBES_DIR = tmp_path
         try:
@@ -357,7 +407,7 @@ class TestH5RoundTrip:
     def test_rx_imbalance_metrics_written_to_h5(self, tmp_path):
         """rx_energy_ratio and rx_imbalance_flagged are saved when config block present."""
         h5 = tmp_path / "exp_rx.h5"
-        trim = int(_CFG["trim_frames"])
+        trim = int(_CFG["analysis"]["trim_frames"])
         total = trim + 30
         _make_h5(h5, total)
 
@@ -371,7 +421,7 @@ class TestH5RoundTrip:
             "rx_imbalance_ratio": 10.0,
         }
 
-        import scripts.add_quality_mask as qm_mod
+        import steps.step_4.add_quality_mask as qm_mod
         orig = qm_mod.CUBES_DIR
         qm_mod.CUBES_DIR = tmp_path
         try:
@@ -393,15 +443,19 @@ class TestH5RoundTrip:
     def test_existing_mask_overwritten(self, tmp_path):
         """Re-running _process_session replaces a stale quality_mask."""
         h5 = tmp_path / "exp_ow.h5"
-        trim = int(_CFG["trim_frames"])
+        trim = int(_CFG["analysis"]["trim_frames"])
         _make_h5(h5, trim + 20)
 
-        import scripts.add_quality_mask as qm_mod
+        import steps.step_4.add_quality_mask as qm_mod
         orig = qm_mod.CUBES_DIR
         qm_mod.CUBES_DIR = tmp_path
         try:
             _process_session("exp_ow", _CFG, commit="first_run")
-            _process_session("exp_ow", _CFG, commit="second_run")
+            # NEW deliberate behaviour: re-running without overwrite must REFUSE rather than
+            # silently clobbering an existing mask. The old silent-overwrite contract is gone.
+            with pytest.raises(FileExistsError, match="already has"):
+                _process_session("exp_ow", _CFG, commit="second_run")
+            _process_session("exp_ow", _CFG, commit="second_run", overwrite=True)
         finally:
             qm_mod.CUBES_DIR = orig
 
@@ -690,21 +744,33 @@ class TestComputeQualityMaskMotionSpike:
         assert results["motion_spike_skipped"] is True
         assert results["quality_mask"].all()   # mask unaffected
 
-    def test_config_locked_bin_overrides_manifest(self):
-        # Set a different locked_bin in config vs manifest; config should win
+    def test_manifest_locked_bin_wins_over_stale_config_override(self):
+        # CONTRACT CHANGE (steps/step_4/config.yaml): "locked_bin is always read from the
+        # manifest (Step 3 output) - no per-check override." The per-check config override was
+        # DELIBERATELY REMOVED. This test used to assert the override won; it now asserts the
+        # MANIFEST value wins and a stale config key is IGNORED.
         cfg = self._cfg_with_ms(enabled=True, locked_bin_override=self.LOCKED_BIN)
         cube = self._spike_cube(frame=8)
-        # Pass a wrong manifest bin — if config wins, spike is still detected
         results = _compute_quality_mask(cube, cfg, locked_bin=self.LOCKED_BIN + 5)
         assert not results["motion_spike_skipped"]
-        assert results["motion_spike_locked_bin"] == self.LOCKED_BIN
-        assert not results["quality_mask"][8]
+        assert results["motion_spike_locked_bin"] == self.LOCKED_BIN + 5, (
+            "the MANIFEST locked_bin must win; the config override no longer exists"
+        )
 
-    def test_config_invalid_locked_bin_raises(self):
-        cfg = self._cfg_with_ms(enabled=True, locked_bin_override=self.N_SAMPLES + 99)
+    def test_invalid_manifest_locked_bin_skips_check_with_reason(self):
+        # CONTRACT CHANGE: an out-of-range locked_bin used to raise ValueError. The module
+        # now SKIPS the check and records the reason, so one bad manifest row cannot kill
+        # the whole run. The failure is recorded, not silent - assert exactly that.
+        cfg = self._cfg_with_ms(enabled=True)
         cube = self._clean_cube()
-        with pytest.raises(ValueError, match="out of FFT range"):
-            _compute_quality_mask(cube, cfg, locked_bin=None)
+        res = _compute_quality_mask(cube, cfg, locked_bin=self.N_SAMPLES + 99)
+        assert res["motion_spike_skipped"] is True
+        assert "out of FFT range" in res["motion_spike_skip_reason"]
+        # A skipped check emits NO flags array at all — that IS the contract. (Asserting the
+        # whole quality_mask is clean would be wrong: it aggregates every enabled check.)
+        assert "motion_spike_flagged" not in res, (
+            "a skipped check must not produce a flags array"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -730,7 +796,7 @@ class TestH5RoundTripMotionSpike:
         return cfg
 
     def _write_h5(self, path: Path, n_analysis: int, spike_frame: int | None = None):
-        trim  = int(_CFG["trim_frames"])
+        trim  = int(_CFG["analysis"]["trim_frames"])
         total = trim + n_analysis
         tone  = np.exp(
             1j * 2 * np.pi * self.LOCKED_BIN
@@ -752,7 +818,7 @@ class TestH5RoundTripMotionSpike:
         self._write_h5(h5, n_analysis=self.N_FRAMES, spike_frame=10)
         cfg = self._make_ms_cfg(enabled=False)
 
-        import scripts.add_quality_mask as qm_mod
+        import steps.step_4.add_quality_mask as qm_mod
         orig = qm_mod.CUBES_DIR
         qm_mod.CUBES_DIR = tmp_path
         try:
@@ -778,7 +844,7 @@ class TestH5RoundTripMotionSpike:
         self._write_h5(h5, n_analysis=self.N_FRAMES)
         cfg = self._make_ms_cfg(enabled=False)
 
-        import scripts.add_quality_mask as qm_mod
+        import steps.step_4.add_quality_mask as qm_mod
         orig = qm_mod.CUBES_DIR
         qm_mod.CUBES_DIR = tmp_path
         try:
@@ -801,7 +867,7 @@ class TestH5RoundTripMotionSpike:
         self._write_h5(h5, n_analysis=self.N_FRAMES)
         cfg = self._make_ms_cfg(enabled=False)
 
-        import scripts.add_quality_mask as qm_mod
+        import steps.step_4.add_quality_mask as qm_mod
         orig = qm_mod.CUBES_DIR
         qm_mod.CUBES_DIR = tmp_path
         try:
@@ -828,7 +894,7 @@ class TestH5RoundTripMotionSpike:
         cfg.get("soft_failures", {}).pop("subject_bin_dropout", None)
         cfg.get("soft_failures", {}).pop("subject_bin_snr", None)
 
-        import scripts.add_quality_mask as qm_mod
+        import steps.step_4.add_quality_mask as qm_mod
         orig = qm_mod.CUBES_DIR
         qm_mod.CUBES_DIR = tmp_path
         try:
@@ -1070,14 +1136,16 @@ class TestComputeQualityMaskSnr:
         assert "subject_bin_snr" not in res
         assert "snr_flagged"     not in res
 
-    def test_snr_config_override_takes_precedence(self):
-        """locked_bin in config overrides the manifest value passed in."""
+    def test_snr_uses_manifest_locked_bin_ignoring_stale_config_key(self):
+        # CONTRACT CHANGE (steps/step_4/config.yaml): "locked_bin is always read from the
+        # manifest (Step 3 output) - no per-check override." The per-check config override was
+        # DELIBERATELY REMOVED. This test used to assert the override won; it now asserts the
+        # MANIFEST value wins and a stale config key is IGNORED.
         cube = _snr_cube_high(50, LOCKED_BIN_SNR)
         cfg  = _make_snr_cfg(enabled=False, threshold=3.0)
-        # Override to a different bin
-        cfg["soft_failures"]["subject_bin_snr"]["locked_bin"] = 10
+        cfg["soft_failures"]["subject_bin_snr"]["locked_bin"] = 10   # stale key -> ignored
         res = _compute_quality_mask(cube, cfg, locked_bin=LOCKED_BIN_SNR)
-        assert res["snr_locked_bin"] == 10
+        assert res["snr_locked_bin"] == LOCKED_BIN_SNR
 
     def test_snr_block_absent_no_snr_keys(self):
         """When subject_bin_snr block is absent, no SNR keys are added to results."""
@@ -1098,7 +1166,7 @@ class TestComputeQualityMaskSnr:
 class TestH5RoundTripSubjectBinSnr:
     N_FRAMES   = 200
     LOCKED_BIN = 28
-    N_TRIM     = 600
+    N_TRIM     = int(_CFG["analysis"]["trim_frames"])  # never hardcode a config value
 
     def _write_h5(self, path: Path, n_analysis: int) -> None:
         """Write a minimal HDF5 cube that satisfies _process_session expectations."""
@@ -1138,7 +1206,7 @@ class TestH5RoundTripSubjectBinSnr:
         self._write_h5(h5, n_analysis=self.N_FRAMES)
         cfg = self._make_snr_cfg(enabled=True)
 
-        import scripts.add_quality_mask as qm_mod
+        import steps.step_4.add_quality_mask as qm_mod
         orig = qm_mod.CUBES_DIR
         qm_mod.CUBES_DIR = tmp_path
         try:
@@ -1159,7 +1227,7 @@ class TestH5RoundTripSubjectBinSnr:
         self._write_h5(h5, n_analysis=self.N_FRAMES)
         cfg = self._make_snr_cfg(enabled=True)
 
-        import scripts.add_quality_mask as qm_mod
+        import steps.step_4.add_quality_mask as qm_mod
         orig = qm_mod.CUBES_DIR
         qm_mod.CUBES_DIR = tmp_path
         try:
@@ -1182,7 +1250,7 @@ class TestH5RoundTripSubjectBinSnr:
         self._write_h5(h5, n_analysis=self.N_FRAMES)
         cfg = self._make_snr_cfg(enabled=False)
 
-        import scripts.add_quality_mask as qm_mod
+        import steps.step_4.add_quality_mask as qm_mod
         orig = qm_mod.CUBES_DIR
         qm_mod.CUBES_DIR = tmp_path
         try:
@@ -1205,7 +1273,7 @@ class TestH5RoundTripSubjectBinSnr:
         cfg.get("soft_failures", {}).pop("subject_bin_snr", None)
         cfg.get("soft_failures", {}).pop("motion_spike", None)
 
-        import scripts.add_quality_mask as qm_mod
+        import steps.step_4.add_quality_mask as qm_mod
         orig = qm_mod.CUBES_DIR
         qm_mod.CUBES_DIR = tmp_path
         try:
@@ -1467,24 +1535,25 @@ class TestComputeQualityMaskDropout:
         assert res["dropout_skipped"] is True
         assert "subject_bin_dropout_flagged" not in res
 
-    def test_dropout_reused_energy_does_not_need_locked_bin(self):
-        """Energy reused from motion_spike: dropout skips its own locked_bin resolution."""
+    def test_dropout_reuses_motion_spike_energy(self):
+        # Dropout reuses motion_spike energy instead of recomputing the FFT. Both now resolve
+        # locked_bin from the MANIFEST (no per-check override), so it is supplied once.
         cube = _snr_cube_high(60, DROPOUT_LOCKED_BIN)
         cfg  = _make_dropout_cfg(enabled=False, include_motion_spike=True)
-        # Pass no locked_bin — motion_spike in cfg has its own override
-        cfg["soft_failures"]["motion_spike"]["locked_bin"] = DROPOUT_LOCKED_BIN
-        res  = _compute_quality_mask(cube, cfg, locked_bin=None)
+        res  = _compute_quality_mask(cube, cfg, locked_bin=DROPOUT_LOCKED_BIN)
         assert res["dropout_energy_source"] == "reused_subject_bin_energy"
         assert not res["dropout_skipped"]
 
-    def test_dropout_config_locked_bin_overrides_manifest(self):
-        """Config locked_bin on dropout block takes precedence over manifest value."""
+    def test_dropout_uses_manifest_locked_bin_ignoring_stale_config_key(self):
+        # CONTRACT CHANGE (steps/step_4/config.yaml): "locked_bin is always read from the
+        # manifest (Step 3 output) - no per-check override." The per-check config override was
+        # DELIBERATELY REMOVED. This test used to assert the override won; it now asserts the
+        # MANIFEST value wins and a stale config key is IGNORED.
         cube = _snr_cube_high(60, DROPOUT_LOCKED_BIN)
         cfg  = _make_dropout_cfg(enabled=False, include_motion_spike=False,
-                                 locked_bin=10)
+                                 locked_bin=10)               # stale key -> ignored
         res  = _compute_quality_mask(cube, cfg, locked_bin=DROPOUT_LOCKED_BIN)
-        # Energy should be computed at bin=10 (config), not bin=DROPOUT_LOCKED_BIN
-        assert res["dropout_locked_bin"] == 10
+        assert res["dropout_locked_bin"] == DROPOUT_LOCKED_BIN
 
     def test_dropout_block_absent_no_dropout_keys(self):
         """Block absent → no dropout keys added to results."""
@@ -1540,7 +1609,7 @@ class TestComputeQualityMaskDropout:
 class TestH5RoundTripSubjectBinDropout:
     N_FRAMES   = 200
     LOCKED_BIN = 28
-    N_TRIM     = 600
+    N_TRIM     = int(_CFG["analysis"]["trim_frames"])  # never hardcode a config value
 
     def _write_h5(self, path: Path, n_analysis: int) -> None:
         n_total = self.N_TRIM + n_analysis
@@ -1584,7 +1653,7 @@ class TestH5RoundTripSubjectBinDropout:
         self._write_h5(h5, n_analysis=self.N_FRAMES)
         cfg = self._make_cfg_with_dropout(enabled=True)
 
-        import scripts.add_quality_mask as qm_mod
+        import steps.step_4.add_quality_mask as qm_mod
         orig = qm_mod.CUBES_DIR
         qm_mod.CUBES_DIR = tmp_path
         try:
@@ -1605,7 +1674,7 @@ class TestH5RoundTripSubjectBinDropout:
         self._write_h5(h5, n_analysis=self.N_FRAMES)
         cfg = self._make_cfg_with_dropout(include_motion_spike=True)
 
-        import scripts.add_quality_mask as qm_mod
+        import steps.step_4.add_quality_mask as qm_mod
         orig = qm_mod.CUBES_DIR
         qm_mod.CUBES_DIR = tmp_path
         try:
@@ -1626,7 +1695,7 @@ class TestH5RoundTripSubjectBinDropout:
         self._write_h5(h5, n_analysis=self.N_FRAMES)
         cfg = self._make_cfg_with_dropout(include_motion_spike=False)
 
-        import scripts.add_quality_mask as qm_mod
+        import steps.step_4.add_quality_mask as qm_mod
         orig = qm_mod.CUBES_DIR
         qm_mod.CUBES_DIR = tmp_path
         try:
@@ -1645,7 +1714,7 @@ class TestH5RoundTripSubjectBinDropout:
         self._write_h5(h5, n_analysis=self.N_FRAMES)
         cfg = self._make_cfg_with_dropout(enabled=True)
 
-        import scripts.add_quality_mask as qm_mod
+        import steps.step_4.add_quality_mask as qm_mod
         orig = qm_mod.CUBES_DIR
         qm_mod.CUBES_DIR = tmp_path
         try:
@@ -1670,7 +1739,7 @@ class TestH5RoundTripSubjectBinDropout:
         self._write_h5(h5, n_analysis=self.N_FRAMES)
         cfg = self._make_cfg_with_dropout(enabled=True, include_motion_spike=False)
 
-        import scripts.add_quality_mask as qm_mod
+        import steps.step_4.add_quality_mask as qm_mod
         orig = qm_mod.CUBES_DIR
         qm_mod.CUBES_DIR = tmp_path
         try:
@@ -1693,7 +1762,7 @@ class TestH5RoundTripSubjectBinDropout:
         cfg.get("soft_failures", {}).pop("subject_bin_snr", None)
         cfg.get("soft_failures", {}).pop("motion_spike", None)
 
-        import scripts.add_quality_mask as qm_mod
+        import steps.step_4.add_quality_mask as qm_mod
         orig = qm_mod.CUBES_DIR
         qm_mod.CUBES_DIR = tmp_path
         try:
@@ -1983,17 +2052,24 @@ class TestComputeQualityMaskPhaseJump:
         assert "phase_diff"         not in res
         assert "phase_jump_flagged" not in res
 
-    def test_config_locked_bin_overrides_manifest(self):
+    def test_pj_uses_manifest_locked_bin_ignoring_stale_config_key(self):
+        # CONTRACT CHANGE (steps/step_4/config.yaml): "locked_bin is always read from the
+        # manifest (Step 3 output) - no per-check override." The per-check config override was
+        # DELIBERATELY REMOVED. This test used to assert the override won; it now asserts the
+        # MANIFEST value wins and a stale config key is IGNORED.
         cube = _snr_cube_high(50, PJ_LOCKED_BIN)
-        cfg  = _make_pj_cfg(enabled=False, threshold=0.5, locked_bin=10)
+        cfg  = _make_pj_cfg(enabled=False, threshold=0.5, locked_bin=10)  # stale -> ignored
         res  = _compute_quality_mask(cube, cfg, locked_bin=PJ_LOCKED_BIN)
-        assert res["phase_jump_locked_bin"] == 10
+        assert res["phase_jump_locked_bin"] == PJ_LOCKED_BIN
 
-    def test_invalid_config_locked_bin_raises(self):
+    def test_pj_invalid_manifest_locked_bin_skips_check_with_reason(self):
+        # CONTRACT CHANGE: out-of-range locked_bin now SKIPS the check and records the
+        # reason instead of raising. See the motion-spike equivalent.
         cube = _snr_cube_high(50, PJ_LOCKED_BIN)
-        cfg  = _make_pj_cfg(enabled=False, threshold=0.5, locked_bin=N_SAMPLES + 10)
-        with pytest.raises(ValueError, match="phase_jump.locked_bin"):
-            _compute_quality_mask(cube, cfg, locked_bin=PJ_LOCKED_BIN)
+        cfg  = _make_pj_cfg(enabled=False, threshold=0.5)
+        res  = _compute_quality_mask(cube, cfg, locked_bin=N_SAMPLES + 10)
+        assert res["phase_jump_skipped"] is True
+        assert "out of FFT range" in res["phase_jump_skip_reason"]
 
     def test_phase_jump_and_dropout_separate_frames_both_rejected(self):
         """Dropout at frame 40 and phase jump at frame 50 are independent events.
@@ -2054,7 +2130,7 @@ class TestComputeQualityMaskPhaseJump:
 class TestH5RoundTripPhaseJump:
     N_FRAMES   = 200
     LOCKED_BIN = 28
-    N_TRIM     = 600
+    N_TRIM     = int(_CFG["analysis"]["trim_frames"])  # never hardcode a config value
 
     def _write_h5(self, path: Path, n_analysis: int) -> None:
         n_total = self.N_TRIM + n_analysis
@@ -2094,7 +2170,7 @@ class TestH5RoundTripPhaseJump:
         self._write_h5(h5, n_analysis=self.N_FRAMES)
         cfg = self._make_pj_cfg(enabled=True)
 
-        import scripts.add_quality_mask as qm_mod
+        import steps.step_4.add_quality_mask as qm_mod
         orig = qm_mod.CUBES_DIR
         qm_mod.CUBES_DIR = tmp_path
         try:
@@ -2124,7 +2200,7 @@ class TestH5RoundTripPhaseJump:
         self._write_h5(h5, n_analysis=self.N_FRAMES)
         cfg = self._make_pj_cfg(enabled=True)
 
-        import scripts.add_quality_mask as qm_mod
+        import steps.step_4.add_quality_mask as qm_mod
         orig = qm_mod.CUBES_DIR
         qm_mod.CUBES_DIR = tmp_path
         try:
@@ -2146,7 +2222,7 @@ class TestH5RoundTripPhaseJump:
         self._write_h5(h5, n_analysis=self.N_FRAMES)
         cfg = self._make_pj_cfg(enabled=True)
 
-        import scripts.add_quality_mask as qm_mod
+        import steps.step_4.add_quality_mask as qm_mod
         orig = qm_mod.CUBES_DIR
         qm_mod.CUBES_DIR = tmp_path
         try:
@@ -2170,7 +2246,7 @@ class TestH5RoundTripPhaseJump:
         cfg.get("soft_failures", {}).pop("subject_bin_snr", None)
         cfg.get("soft_failures", {}).pop("subject_bin_dropout", None)
 
-        import scripts.add_quality_mask as qm_mod
+        import steps.step_4.add_quality_mask as qm_mod
         orig = qm_mod.CUBES_DIR
         qm_mod.CUBES_DIR = tmp_path
         try:

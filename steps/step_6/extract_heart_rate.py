@@ -537,20 +537,79 @@ def _make_nan_intermediates(window_frames: int, n_fft: int, k_max: int = 6) -> d
         "candidate_rejection_code": np.full(AHET_MAX_CANDIDATES, -1, dtype=np.int32),
         "all_candidates_rejected":  np.array(False, dtype=bool),
         "eca_skipped_harmonics":    np.zeros(k_max, dtype=bool),
+        "k_max_eff":                 np.int32(0),
+        "n_eca_projected":           np.int32(0),
+        "n_eca_cols_selected":       np.int32(0),
+        "n_eca_cols_retained":       np.int32(0),
+        "n_eca_cols_dropped":        np.int32(0),
+        "eca_retained_ks":           np.zeros(k_max, dtype=bool),
+        "eca_cols_retained":         np.zeros((k_max, 2), dtype=bool),
+        "candidate_eca_skipped":     np.zeros((AHET_MAX_CANDIDATES, k_max), dtype=bool),
+        "candidate_eca_retained_ks": np.zeros((AHET_MAX_CANDIDATES, k_max), dtype=bool),
+        "candidate_n_eca_cols_retained": np.zeros(AHET_MAX_CANDIDATES, dtype=np.int32),
     }
 
 
-def _eca_skip(arr, k_max: int) -> np.ndarray:
-    """Extract eca_skipped_harmonics from hr_result safely, shape (k_max,)."""
+# ── Artifact-shape contracts (cross-review P2, 2026-07-14) ───────────────────────────────
+# These used to truncate/pad silently. A cap mismatch would then yield artifacts that look
+# plausible but are incomplete — the precise failure Stage 0 exists to prevent. They now FAIL
+# LOUDLY. A missing key (older estimator / NaN window) is still allowed and yields zeros.
+
+def _eca_vec(arr, k_max: int, name: str = "eca_vector") -> np.ndarray:
+    """1-D per-harmonic bool vector; must be exactly (k_max,) if present."""
     if arr is None:
         return np.zeros(k_max, dtype=bool)
     a = np.asarray(arr, dtype=bool)
-    if len(a) == k_max:
-        return a
-    out = np.zeros(k_max, dtype=bool)
-    n = min(len(a), k_max)
-    out[:n] = a[:n]
-    return out
+    if a.shape != (k_max,):
+        raise ValueError(
+            f"{name}: estimator returned shape {a.shape}, expected ({k_max},). "
+            f"Refusing to truncate — that would produce plausible but incomplete evidence. "
+            f"Check heart.k_max_cap vs heart.k_max."
+        )
+    return a
+
+
+def _eca_cols(arr, k_max: int) -> np.ndarray:
+    """Per-harmonic [sin, cos] column-survival matrix; must be exactly (k_max, 2)."""
+    if arr is None:
+        return np.zeros((k_max, 2), dtype=bool)
+    a = np.asarray(arr, dtype=bool)
+    if a.shape != (k_max, 2):
+        raise ValueError(
+            f"eca_cols_retained: estimator returned shape {a.shape}, expected ({k_max}, 2)."
+        )
+    return a
+
+
+def _cand_eca_2d(arr, k_max: int, name: str = "candidate_eca") -> np.ndarray:
+    """Candidate-wise ECA matrix; must be exactly (AHET_MAX_CANDIDATES, k_max)."""
+    if arr is None:
+        return np.zeros((AHET_MAX_CANDIDATES, k_max), dtype=bool)
+    a = np.asarray(arr, dtype=bool)
+    if a.shape != (AHET_MAX_CANDIDATES, k_max):
+        raise ValueError(
+            f"{name}: estimator returned shape {a.shape}, "
+            f"expected ({AHET_MAX_CANDIDATES}, {k_max})."
+        )
+    return a
+
+
+def _cand_counts(arr) -> np.ndarray:
+    """Per-candidate retained-column counts; must be exactly (AHET_MAX_CANDIDATES,)."""
+    if arr is None:
+        return np.zeros(AHET_MAX_CANDIDATES, dtype=np.int32)
+    a = np.asarray(arr, dtype=np.int32)
+    if a.shape != (AHET_MAX_CANDIDATES,):
+        raise ValueError(
+            f"candidate_n_eca_cols_retained: got {a.shape}, "
+            f"expected ({AHET_MAX_CANDIDATES},)."
+        )
+    return a
+
+
+def _eca_skip(arr, k_max: int) -> np.ndarray:
+    """Extract eca_skipped_harmonics from hr_result; must be exactly (k_max,) if present."""
+    return _eca_vec(arr, k_max, "eca_skipped_harmonics")
 
 
 def _intermediates_from_result(
@@ -636,6 +695,26 @@ def _intermediates_from_result(
         "eca_skipped_harmonics": _eca_skip(
             hr_result.get("eca_skipped_harmonics"), k_max
         ),
+        # Cross-review 2026-07-14: the OFFLINE path is what scores the modes, so it must record
+        # how many harmonics were CONSIDERED vs PROJECTED (12.1), which columns actually survived
+        # Gram-Schmidt (20.6), and which projection each candidate was judged under (12.4).
+        "k_max_eff":       np.int32(hr_result.get("k_max_eff", 0)),
+        "n_eca_projected": np.int32(hr_result.get("n_eca_projected", 0)),
+        "n_eca_cols_selected": np.int32(hr_result.get("n_eca_cols_selected", 0)),
+        "n_eca_cols_retained": np.int32(hr_result.get("n_eca_cols_retained", 0)),
+        "n_eca_cols_dropped":  np.int32(hr_result.get("n_eca_cols_dropped", 0)),
+        "eca_retained_ks":   _eca_vec(hr_result.get("eca_retained_ks"), k_max,
+                                      "eca_retained_ks"),
+        "eca_cols_retained": _eca_cols(hr_result.get("eca_cols_retained"), k_max),
+        "candidate_eca_skipped": _cand_eca_2d(
+            hr_result.get("candidate_eca_skipped"), k_max, "candidate_eca_skipped"
+        ),
+        "candidate_eca_retained_ks": _cand_eca_2d(
+            hr_result.get("candidate_eca_retained_ks"), k_max, "candidate_eca_retained_ks"
+        ),
+        "candidate_n_eca_cols_retained": _cand_counts(
+            hr_result.get("candidate_n_eca_cols_retained")
+        ),
     }
 
 
@@ -690,6 +769,17 @@ def _write_npz(
     stacked["eca_skipped_harmonics"] = np.stack(
         [d["eca_skipped_harmonics"] for d in intermediates_list], axis=0
     )
+    # Cross-review 2026-07-14 (P1): the ECA basis + candidate-wise evidence MUST reach disk.
+    # These were added to the per-window dict but never stacked here, so they never landed in
+    # the NPZ — and the offline experiment is the path that scores the modes.
+    for k in (
+        "k_max_eff", "n_eca_projected",
+        "n_eca_cols_selected", "n_eca_cols_retained", "n_eca_cols_dropped",
+        "eca_retained_ks", "eca_cols_retained",
+        "candidate_eca_skipped", "candidate_eca_retained_ks",
+        "candidate_n_eca_cols_retained",
+    ):
+        stacked[k] = np.stack([d[k] for d in intermediates_list], axis=0)
     # Step 6.3 — tracker arrays
     if tracker_arrays:
         stacked.update(tracker_arrays)
@@ -857,6 +947,12 @@ def _process_session(
     eca_mode      = str(heart_cfg.get("eca_mode", "legacy"))
     ahet_gate_mode = str(heart_cfg.get("ahet_gate_mode", "legacy"))
     eca_forbidden_guard_hz = float(heart_cfg.get("eca_forbidden_guard_hz", 0.0))
+    eca_cardiac_guard_hz   = float(heart_cfg.get("eca_cardiac_guard_hz", 0.10))
+    k_max_cap              = int(heart_cfg.get("k_max_cap", 10))
+    # Reporting length for eca_skipped_harmonics. k_max_eff varies per window under
+    # guard_cardiac_candidate_v1, so the artifact must be sized by the CAP, not by k_max —
+    # otherwise the NPZ stack truncates and silently hides k > k_max (plan S8.1b).
+    skip_len               = max(k_max_cap, k_max)
     cand_min_ratio_db       = float(heart_cfg.get("candidate_min_second_harmonic_ratio_db", 1.0))
     cand_min_prominence     = float(heart_cfg.get("candidate_min_prominence", 3.0))
     low_cand_hz             = float(heart_cfg.get("low_candidate_hz", 1.20))
@@ -1065,9 +1161,13 @@ def _process_session(
                 "ahet_gate_mode":             ahet_gate_mode,
                 "n_eca_skipped_harmonics":    0,
                 "eca_skipped_harmonic_ks":    "",
+                "k_max_eff":                  0,
+                "n_eca_projected":            0,
+                "n_eca_cols_retained":        0,
+                "n_eca_cols_dropped":         0,
             })
             rows.append(nan_row)
-            intermediates.append(_make_nan_intermediates(window_frames, n_fft, k_max))
+            intermediates.append(_make_nan_intermediates(window_frames, n_fft, skip_len))
             continue
 
         # -- Run estimator --
@@ -1085,6 +1185,8 @@ def _process_session(
             f_r_hz=resp_peak_hz, k_max=k_max, ahet_deviation_hz=ahet_dev_hz,
             eca_mode=eca_mode, ahet_gate_mode=ahet_gate_mode,
             eca_forbidden_guard_hz=eca_forbidden_guard_hz,
+            eca_cardiac_guard_hz=eca_cardiac_guard_hz,
+            k_max_cap=k_max_cap,
             candidate_min_second_harmonic_ratio_db=cand_min_ratio_db,
             candidate_min_prominence=cand_min_prominence,
             low_candidate_hz=low_cand_hz,
@@ -1143,7 +1245,7 @@ def _process_session(
             summary_code = int(rej_codes[accepted_rank])
         else:
             summary_code = int(rej_codes[0]) if len(rej_codes) > 0 else -1
-        eca_skip   = hr_result.get("eca_skipped_harmonics", np.zeros(k_max, dtype=bool))
+        eca_skip   = hr_result.get("eca_skipped_harmonics", np.zeros(skip_len, dtype=bool))
         n_skip     = int(np.sum(eca_skip))
         skip_ks_str = ",".join(
             str(i + 1) for i in range(len(eca_skip)) if eca_skip[i]
@@ -1165,10 +1267,17 @@ def _process_session(
             "ahet_gate_mode":             ahet_gate_mode,
             "n_eca_skipped_harmonics":    n_skip,
             "eca_skipped_harmonic_ks":    skip_ks_str,
+            # 12.1 — how many harmonics were CONSIDERED vs actually PROJECTED, and how many
+            # sine/cosine columns survived Gram-Schmidt (20.6). Without these the offline
+            # experiment can report full coverage while the projection used fewer columns.
+            "k_max_eff":                  int(hr_result.get("k_max_eff", 0)),
+            "n_eca_projected":            int(hr_result.get("n_eca_projected", 0)),
+            "n_eca_cols_retained":        int(hr_result.get("n_eca_cols_retained", 0)),
+            "n_eca_cols_dropped":         int(hr_result.get("n_eca_cols_dropped", 0)),
         })
         rows.append(built_row)
         intermediates.append(_intermediates_from_result(
-            win_phase_unwrapped, win_phase_clean, hr_result, baseline_result, n_fft, k_max
+            win_phase_unwrapped, win_phase_clean, hr_result, baseline_result, n_fft, skip_len
         ))
 
     # -- Add default tracker/source columns to all rows (before tracker runs) --

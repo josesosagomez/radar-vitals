@@ -454,6 +454,14 @@ was being cancelled, not under-resolved. Observed at f_r = 17-19 bpm (4·f_r = 6
 squarely in the resting-HR band). Failure was much worse when cardiac SNR was low, because
 a strong cardiac return can survive as a residual whereas a weak one cannot.
 
+*Rejected alternative — adaptive k_max.* The first proposed fix was to lower k_max until the
+highest suppressed harmonic fell below the cardiac floor:
+`k_max = floor((0.833 Hz − 0.083 Hz margin) / f_r)`, clamped to [1, 6]. It was **not adopted**:
+it is a blunt instrument — it drops *every* harmonic above the cut, including ones that are
+harmless and worth cancelling, and for f_r ≈ 17-19 bpm it must fall to k_max ≤ 3 to spare
+4·f_r, which leaves substantial respiratory energy uncancelled. Superseded by the targeted
+skip below, which removes only the specific colliding k.
+
 *Fix (live):* `eca_mode: skip_forbidden_harmonics_v1` — skip any k whose k·f_r falls inside
 the cardiac band (± `eca_forbidden_guard_hz`). Set in **both** `scripts/live_demo_config.yaml`
 and `steps/step_6/config.yaml`; implemented via `skip_ks` in `src/vitals.py:eca_project`.

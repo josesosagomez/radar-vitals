@@ -84,8 +84,16 @@ heart:
   band_hz: [0.8, 2.0]
   k_max: 6
   ahet_deviation_hz: 0.1
+  # NOT YET PROMOTED. guard_cardiac_candidate_v1 is implemented and unit-tested, but is
+  # only promoted here once experiments/exp_eca_modes verifies it (plan S8.8). The mode
+  # below is known-broken (cancels nothing in the cardiac band) — see
+  # notes/plan_eca_forbidden_zone.md.
   eca_mode: skip_forbidden_harmonics_v1
   eca_forbidden_guard_hz: 0.0
+  eca_cardiac_guard_hz: 0.10   # guard_cardiac_candidate_v1: spare harmonics within this
+                               # distance of the cardiac candidate; cancel all others
+  k_max_cap: 10                # upper bound on the per-window derived k_max
+                               # (k_max_eff = min(k_max_cap, floor(band_hi / f_r)))
   ahet_gate_mode: strict_v1
   candidate_min_second_harmonic_ratio_db: 1.0
   candidate_min_prominence: 3.0

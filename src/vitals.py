@@ -32,6 +32,10 @@ INTERMEDIATE_SCHEMA_VERSION = 1
 # band_lo + MIN_CARDIAC_BAND_MARGIN_HZ are treated as filter-edge artifacts.
 # Assumption: HR > 57 bpm for seated/standing adults in this study.
 MIN_CARDIAC_BAND_MARGIN_HZ: float = 0.15   # 0.8 + 0.15 = 0.95 Hz = 57 bpm
+# Tolerance for the INCLUSIVE band-ceiling test in ECA harmonic selection. The cardiac
+# spectrum mask uses `freqs <= band_hi`, so ECA must too, or the two disagree exactly at
+# the edge (e.g. f_r=0.2 Hz: 10 x 0.2 = 2.0 Hz). Guards float round-off only.
+_CEIL_EPS: float = 1e-9
 
 
 @dataclass
@@ -110,6 +114,92 @@ def parabolic_interpolate_peak(
     return (peak_idx + delta) * freq_resolution_hz
 
 
+def derive_k_max_eff(f_r: float, band_hi: float, k_max_cap: int) -> int:
+    """Highest harmonic order whose k*f_r still lies at or below the band ceiling.
+
+    Bounded by k_max_cap: an unbounded derivation is unsafe because the physiological
+    f_r gate floor (0.15 Hz) would admit floor(2.0/0.15) = 13 harmonics, so a bad f_r
+    estimate could silently expand the ECA subspace (plan S5.7).
+
+    The ceiling is INCLUSIVE, matching the cardiac spectrum mask (freqs <= band_hi).
+    """
+    if f_r <= 0:
+        return 0
+    k_ceiling = int(np.floor(band_hi / f_r + _CEIL_EPS))
+    return max(0, min(int(k_max_cap), k_ceiling))
+
+
+def cardiac_skip_ks(
+    f_r: float,
+    cardiac_candidate_hz: float | None,
+    k_max: int,
+    cardiac_guard_hz: float,
+) -> frozenset:
+    """Harmonics to SPARE: those landing within cardiac_guard_hz of the cardiac candidate.
+
+    This is the whole protection rule for `guard_cardiac_candidate_v1` (plan S5.1). Only a
+    harmonic that lands *on* the cardiac peak must be spared; every other in-band harmonic
+    should be cancelled.
+    """
+    if cardiac_candidate_hz is None:
+        return frozenset()
+    return frozenset(
+        k for k in range(1, k_max + 1)
+        if abs(k * f_r - cardiac_candidate_hz) <= cardiac_guard_hz
+    )
+
+
+def eca_harmonic_ks(
+    f_r: float,
+    k_max: int,
+    band_hi: float = 2.0,
+    cardiac_candidate_hz: float | None = None,
+    skip_ks: frozenset = frozenset(),
+    cardiac_guard_hz: float = 0.15,
+    hard_floor_k: int = 4,
+) -> list[int]:
+    """Which harmonic orders ECA actually projects out. Single source of truth.
+
+    Used by both eca_project() (to build the subspace) and estimate_rate_from_phase()
+    (to report `eca_skipped_harmonics` / `n_eca_projected`), so the artifact can never
+    disagree with what the algorithm did.
+
+    A harmonic k is projected out when all of:
+      - k * f_r <= band_hi        (inclusive ceiling — matches the cardiac spectrum mask)
+      - k not in skip_ks          (caller-computed protection set)
+      - k <= hard_floor_k         (unconditional, `legacy` only)
+        OR |k*f_r - cardiac_candidate_hz| > cardiac_guard_hz
+
+    Set hard_floor_k=0 to disable the unconditional floor, making skip_ks / the guard the
+    only protection mechanism (`guard_cardiac_candidate_v1`).
+    """
+    ks: list[int] = []
+    for k in range(1, k_max + 1):
+        freq = k * f_r
+        if freq > band_hi + _CEIL_EPS:      # inclusive ceiling
+            break
+        if k in skip_ks:
+            continue
+        if k <= hard_floor_k:               # legacy hard floor (known 60 bpm failure)
+            ks.append(k)
+        elif (cardiac_candidate_hz is None
+              or abs(freq - cardiac_candidate_hz) > cardiac_guard_hz):
+            ks.append(k)
+    return ks
+
+
+def _empty_eca_diagnostics(diag_len: int) -> dict:
+    """Zeroed diagnostics with the pinned shapes (used on every early-return path)."""
+    return {
+        "selected_ks":     np.zeros(diag_len, dtype=bool),
+        "retained_ks":     np.zeros(diag_len, dtype=bool),
+        "cols_retained":   np.zeros((diag_len, 2), dtype=bool),
+        "n_cols_selected": 0,
+        "n_cols_retained": 0,
+        "n_cols_dropped":  0,
+    }
+
+
 def eca_project(
     theta: np.ndarray,
     f_r: float,
@@ -117,49 +207,95 @@ def eca_project(
     k_max: int = 6,
     cardiac_candidate_hz: float | None = None,
     skip_ks: frozenset = frozenset(),
-) -> np.ndarray:
+    band_hi: float = 2.0,
+    cardiac_guard_hz: float = 0.15,
+    hard_floor_k: int = 4,
+    return_diagnostics: bool = False,
+    diag_len: int | None = None,
+):
     """Remove respiratory harmonics from phase signal using QR projection.
 
-    Adaptive K_b: include harmonic k if:
-      - k * f_r < 2.0 Hz (stays below cardiac band ceiling), AND
-      - k not in skip_ks (forbidden-zone override — caller computed which k to skip), AND
-      - cardiac_candidate_hz is None OR abs(k * f_r - cardiac_candidate_hz) > 0.15 Hz
-        (do not suppress a harmonic too close to the cardiac candidate)
-    Hard floor: always include k = 1..4 unless k is in skip_ks.
+    Which harmonics are projected is decided by eca_harmonic_ks() — see there.
+    `cardiac_guard_hz`, `band_hi` and `hard_floor_k` are explicit parameters (previously
+    hardcoded 0.15 / 2.0 / 4) so that one rule governs protection and the reported
+    skip set cannot drift from the projected set (plan S5.4).
+
     Uses modified Gram-Schmidt — no explicit inverse or LAPACK dependency — for
     numerical stability in the live-demo environment.
     (OpenAI cross-review finding #1 — arXiv:2503.07062)
+
+    Basis diagnostics (cross-review 2026-07-14, comment 20.6)
+    --------------------------------------------------------
+    `eca_harmonic_ks()` reports which harmonic ORDERS were *selected*. It cannot report which
+    sine/cosine COLUMNS actually survived the modified-Gram-Schmidt norm guard below — a
+    near-degenerate column is silently dropped, so a run could claim full coverage while the
+    projection used fewer columns.
+
+    `return_diagnostics=True` returns `(clean, diag)` instead of `clean`, where diag has PINNED
+    shapes (never varying with k_max_eff, so artifacts cannot truncate — plan S8.1b):
+
+        selected_ks     bool (diag_len,)     orders eca_harmonic_ks() chose
+        retained_ks     bool (diag_len,)     orders with >= 1 surviving column
+        cols_retained   bool (diag_len, 2)   per-order [sin, cos] survival
+        n_cols_selected int
+        n_cols_retained int
+        n_cols_dropped  int
+
+    `diag_len` defaults to `k_max`; callers pass their reporting cap so the shape is stable.
+
+    **The returned signal is bit-identical whether or not diagnostics are requested** — this is
+    enforced by a regression test (test_diagnostics_do_not_change_the_projected_signal).
     """
+    dl = int(diag_len) if diag_len is not None else int(k_max)
+    # Cross-review P2 (2026-07-14): diag_len < k_max would silently truncate the diagnostic
+    # vectors, producing evidence that looks complete but omits the highest harmonics — the
+    # exact class of failure these diagnostics exist to detect. Fail loudly instead.
+    if dl < int(k_max):
+        raise ValueError(
+            f"eca_project: diag_len={dl} < k_max={k_max} would truncate the diagnostics "
+            f"for harmonics {dl + 1}..{k_max}. Pass diag_len >= k_max (normally the "
+            f"reporting cap, max(k_max, k_max_cap))."
+        )
     N = len(theta)
     t = np.arange(N) / fs
-    cols: list[np.ndarray] = []
-    for k in range(1, k_max + 1):
+    ks = eca_harmonic_ks(
+        f_r, k_max, band_hi=band_hi, cardiac_candidate_hz=cardiac_candidate_hz,
+        skip_ks=skip_ks, cardiac_guard_hz=cardiac_guard_hz, hard_floor_k=hard_floor_k,
+    )
+    diag = _empty_eca_diagnostics(dl)
+    for k in ks:
+        if 1 <= k <= dl:
+            diag["selected_ks"][k - 1] = True
+    diag["n_cols_selected"] = 2 * len(ks)
+
+    cols: list[tuple[int, int, np.ndarray]] = []   # (k, 0=sin|1=cos, column)
+    for k in ks:
         freq = k * f_r
-        if freq >= 2.0:
-            break
-        if k in skip_ks:                        # forbidden-zone override (skip_forbidden_harmonics_v1)
-            continue
-        if k <= 4:                              # hard floor — covers known 60 bpm failure
-            cols += [np.sin(2 * np.pi * freq * t), np.cos(2 * np.pi * freq * t)]
-        elif (cardiac_candidate_hz is None
-              or abs(freq - cardiac_candidate_hz) > 0.15):
-            cols += [np.sin(2 * np.pi * freq * t), np.cos(2 * np.pi * freq * t)]
+        cols.append((k, 0, np.sin(2 * np.pi * freq * t)))
+        cols.append((k, 1, np.cos(2 * np.pi * freq * t)))
     if not cols:
-        return theta.copy()
+        return (theta.copy(), diag) if return_diagnostics else theta.copy()
+
     basis: list[np.ndarray] = []
-    for col in cols:
+    for k, which, col in cols:
         v = np.asarray(col, dtype=float).copy()
         for q in basis:
             v -= q * float(np.sum(q * v))
         norm = float(np.sqrt(np.sum(v * v)))
         if norm > 1e-12:
             basis.append(v / norm)
+            if 1 <= k <= dl:
+                diag["cols_retained"][k - 1, which] = True
+                diag["retained_ks"][k - 1] = True
+    diag["n_cols_retained"] = len(basis)
+    diag["n_cols_dropped"] = diag["n_cols_selected"] - len(basis)
+
     if not basis:
-        return theta.copy()
+        return (theta.copy(), diag) if return_diagnostics else theta.copy()
     clean = np.asarray(theta, dtype=float).copy()
     for q in basis:
         clean -= q * float(np.sum(q * theta))
-    return clean
+    return (clean, diag) if return_diagnostics else clean
 
 
 def _check_low_candidate_competitor(
@@ -202,6 +338,8 @@ def estimate_rate_from_phase(
     eca_mode: str = "legacy",
     ahet_gate_mode: str = "legacy",
     eca_forbidden_guard_hz: float = 0.0,
+    eca_cardiac_guard_hz: float = 0.10,
+    k_max_cap: int = 10,
     candidate_min_second_harmonic_ratio_db: float = 1.0,
     candidate_min_prominence: float = 3.0,
     low_candidate_hz: float = 1.20,
@@ -217,9 +355,28 @@ def estimate_rate_from_phase(
     consistency check (arXiv:2503.07062, OpenAI cross-review findings #1-#4).
 
     eca_mode:
-      "legacy"                      -- existing behavior (hard floor k=1..4 always projected)
+      "legacy"                      -- existing behavior (hard floor k=1..4 always projected).
+                                       BROKEN: erases the cardiac peak when 4*f_r ~= HR.
       "skip_forbidden_harmonics_v1" -- skip any k where k*f_r falls in
-                                       [band_lo - guard, band_hi + guard]
+                                       [band_lo - guard, band_hi + guard].
+                                       BROKEN: at ordinary f_r that is EVERY in-band
+                                       harmonic, so ECA cancels nothing in the cardiac
+                                       band (measured: 0.00 dB removed).
+      "guard_cardiac_candidate_v1"  -- IMPLEMENTED, NOT PROMOTED. No config selects this mode.
+                                       It FAILS its own acceptance test: when a respiratory
+                                       harmonic outranks the heart pre-ECA (34% of hops on the
+                                       paced-16 capture) the guard spares the DECOY, which AHET
+                                       then confidently reports. See notes/plan_eca_forbidden_zone.md
+                                       PART II. Kept only as a comparison arm.
+                                       Spare only harmonics landing within
+                                       eca_cardiac_guard_hz of the cardiac candidate;
+                                       cancel every other harmonic up to the band ceiling.
+                                       k_max is derived per window as
+                                       min(k_max_cap, floor(band_hi / f_r)) because a fixed
+                                       k_max=6 does not span the cardiac band at breathing
+                                       rates <= 16 bpm (the 7th harmonic lands in-band and
+                                       was being picked as the heartbeat).
+                                       See notes/plan_eca_forbidden_zone.md.
 
     ahet_gate_mode:
       "legacy"    -- return early on first passing candidate (existing behavior)
@@ -232,7 +389,13 @@ def estimate_rate_from_phase(
     New return fields (all modes):
       candidate_rejection_code -- int array (AHET_MAX_CANDIDATES,), -1=gate_not_run
       all_candidates_rejected  -- bool, True only in strict_v1 when all rejected
-      eca_skipped_harmonics    -- bool array (k_max,), True for each skipped k
+      eca_skipped_harmonics    -- bool array, FIXED length (k_max_cap,), True for each k
+                                  that was SPARED (in-band but deliberately not projected).
+                                  Fixed length even though k_max_eff varies per window, so
+                                  that stacking into an NPZ cannot break or silently
+                                  truncate k > k_max (plan S8.1b).
+      k_max_eff                -- int, harmonics considered this window
+      n_eca_projected          -- int, harmonics actually projected out this window
     """
     # Physiological gate: an implausible f_r collapses ECA to garbage; skip it.
     _GATE_LO_HZ = 0.15   # 9 bpm  — below this is not real respiration
@@ -243,7 +406,10 @@ def estimate_rate_from_phase(
     x = x - x.mean()
 
     _empty_rej_codes = np.full(AHET_MAX_CANDIDATES, -1, dtype=int)
-    _empty_eca_skip  = np.zeros(k_max, dtype=bool)
+    # Fixed reporting length (plan S8.1b): k_max_eff varies per window, but the artifact
+    # shape must not, or NPZ stacking breaks / silently hides k > k_max.
+    _skip_len = max(int(k_max_cap), int(k_max))
+    _empty_eca_skip  = np.zeros(_skip_len, dtype=bool)
 
     # ------------------------------------------------------------------ #
     # No-ECA path: f_r_hz is None OR physiological outlier gate fired     #
@@ -306,6 +472,16 @@ def estimate_rate_from_phase(
             "candidate_rejection_code": _empty_rej_codes.copy(),
             "all_candidates_rejected": False,
             "eca_skipped_harmonics": _empty_eca_skip.copy(),
+            "k_max_eff": 0,
+            "n_eca_projected": 0,
+            "eca_retained_ks": np.zeros(_skip_len, dtype=bool),
+            "eca_cols_retained": np.zeros((_skip_len, 2), dtype=bool),
+            "n_eca_cols_selected": 0,
+            "n_eca_cols_retained": 0,
+            "n_eca_cols_dropped": 0,
+            "candidate_eca_skipped": np.zeros((AHET_MAX_CANDIDATES, _skip_len), dtype=bool),
+            "candidate_eca_retained_ks": np.zeros((AHET_MAX_CANDIDATES, _skip_len), dtype=bool),
+            "candidate_n_eca_cols_retained": np.zeros(AHET_MAX_CANDIDATES, dtype=int),
         }
 
     # ------------------------------------------------------------------ #
@@ -328,31 +504,91 @@ def estimate_rate_from_phase(
     if not cardiac_mask.any():
         raise ValueError("No FFT bins in cardiac band.")
 
-    # Compute forbidden-zone skip set (skip_forbidden_harmonics_v1 mode only)
-    eca_skipped_harmonics = np.zeros(k_max, dtype=bool)
-    if eca_mode == "skip_forbidden_harmonics_v1":
-        fz_lo = band[0] - eca_forbidden_guard_hz
-        fz_hi = band[1] + eca_forbidden_guard_hz
-        skip_ks_set: frozenset = frozenset(
-            k for k in range(1, k_max + 1) if fz_lo <= k * f_r_hz <= fz_hi
-        )
-        for k in skip_ks_set:
-            eca_skipped_harmonics[k - 1] = True
-    else:
-        skip_ks_set = frozenset()
-
     # Fix A — provisional cardiac guard.
     # When k×f_r coincides with the cardiac frequency, first-pass ECA with no
     # guard removes the cardiac signal from spec1, so candidate selection never
     # finds the true cardiac peak.  Guard the dominant bandpassed peak above the
     # minimum margin so the cardiac signal survives into spec1.
+    #
+    # ORDERING (plan S5.2): this MUST come before the skip set is computed —
+    # guard_cardiac_candidate_v1 derives its skip set from prov_cand_hz.
     cardiac_zone = cardiac_mask & (freqs >= band[0] + MIN_CARDIAC_BAND_MARGIN_HZ)
     prov_cand_hz = (float(freqs[cardiac_zone][np.argmax(spec_bp[cardiac_zone])])
                     if cardiac_zone.any() else None)
 
-    x_eca1 = eca_project(x_bp, f_r_hz, fs, k_max=k_max,
-                          cardiac_candidate_hz=prov_cand_hz, skip_ks=skip_ks_set)
+    # ── ECA harmonic-selection parameters, per mode ─────────────────────────────
+    eca_skipped_harmonics = np.zeros(_skip_len, dtype=bool)
+    if eca_mode == "guard_cardiac_candidate_v1":
+        # Derive k_max per window: a fixed k_max=6 does not span the cardiac band at
+        # f_r <= 0.267 Hz (16 bpm), leaving the 7th harmonic in-band and uncancellable.
+        k_max_eff   = derive_k_max_eff(f_r_hz, band[1], k_max_cap)
+        guard_hz    = eca_cardiac_guard_hz
+        hard_floor  = 0                       # the guard is the ONLY protection
+    elif eca_mode == "skip_forbidden_harmonics_v1":
+        k_max_eff   = int(k_max)
+        guard_hz    = 0.15                    # legacy k>=5 guard, retained for this arm
+        hard_floor  = 4
+    else:                                     # "legacy"
+        k_max_eff   = int(k_max)
+        guard_hz    = 0.15
+        hard_floor  = 4
+
+    def _skip_set_for(cand_hz: float | None) -> frozenset:
+        """Skip set for one ECA pass, centred on the candidate that pass is testing.
+
+        Per-pass (plan S5.3): the second pass must guard around the candidate it is
+        actually evaluating, not around the provisional peak.
+        """
+        if eca_mode == "guard_cardiac_candidate_v1":
+            return cardiac_skip_ks(f_r_hz, cand_hz, k_max_eff, eca_cardiac_guard_hz)
+        if eca_mode == "skip_forbidden_harmonics_v1":
+            fz_lo = band[0] - eca_forbidden_guard_hz
+            fz_hi = band[1] + eca_forbidden_guard_hz
+            return frozenset(
+                k for k in range(1, k_max_eff + 1) if fz_lo <= k * f_r_hz <= fz_hi
+            )
+        return frozenset()
+
+    def _eca(sig: np.ndarray, cand_hz: float | None) -> tuple[np.ndarray, frozenset, dict]:
+        sk = _skip_set_for(cand_hz)
+        out, diag = eca_project(
+            sig, f_r_hz, fs, k_max=k_max_eff, cardiac_candidate_hz=cand_hz,
+            skip_ks=sk, band_hi=band[1], cardiac_guard_hz=guard_hz,
+            hard_floor_k=hard_floor, return_diagnostics=True, diag_len=_skip_len,
+        )
+        return out, sk, diag
+
+    def _skip_vec(sk: frozenset) -> np.ndarray:
+        """Fixed-length bool vector of SPARED orders (in-band but deliberately not projected)."""
+        v = np.zeros(_skip_len, dtype=bool)
+        for k in sk:
+            if 1 <= k <= _skip_len:
+                v[k - 1] = True
+        return v
+
+    # ── First pass: guard around the PROVISIONAL candidate ──────────────────────
+    x_eca1, skip_ks_set, eca_diag1 = _eca(x_bp, prov_cand_hz)
     spec1, _ = _spec(x_eca1)
+
+    # Candidate-wise ECA metadata (cross-review 2026-07-14, comment 12.4). The whole v1 failure
+    # was rank-0 vs rank-1 being judged on DIFFERENT spectra, so a reviewer must be able to
+    # reconstruct which projection each candidate was evaluated under.
+    candidate_eca_skipped = np.zeros((AHET_MAX_CANDIDATES, _skip_len), dtype=bool)
+    candidate_eca_retained_ks = np.zeros((AHET_MAX_CANDIDATES, _skip_len), dtype=bool)
+    candidate_n_cols_retained = np.zeros(AHET_MAX_CANDIDATES, dtype=int)
+
+    # Report what ECA actually did, from the same selector it used (no drift possible).
+    projected_ks = eca_harmonic_ks(
+        f_r_hz, k_max_eff, band_hi=band[1], cardiac_candidate_hz=prov_cand_hz,
+        skip_ks=skip_ks_set, cardiac_guard_hz=guard_hz, hard_floor_k=hard_floor,
+    )
+    n_eca_projected = len(projected_ks)
+    # "Skipped" = in-band (within k_max_eff) but deliberately NOT projected.
+    for k in range(1, k_max_eff + 1):
+        if k * f_r_hz > band[1] + _CEIL_EPS:
+            break
+        if k not in projected_ks and k <= _skip_len:
+            eca_skipped_harmonics[k - 1] = True
 
     band_mask_idx = np.where(cardiac_mask)[0]
     band_spec1 = spec1[band_mask_idx]
@@ -431,6 +667,18 @@ def estimate_rate_from_phase(
             "ahet_attempt_spectrum": ahet_attempt_spectrum,
             "candidate_rejection_code": candidate_rejection_code,
             "eca_skipped_harmonics": eca_skipped_harmonics,
+            "k_max_eff": int(k_max_eff),
+            "n_eca_projected": int(n_eca_projected),
+            # Basis diagnostics — what ECA ACTUALLY projected, not what it selected (20.6)
+            "eca_retained_ks": eca_diag1["retained_ks"],
+            "eca_cols_retained": eca_diag1["cols_retained"],
+            "n_eca_cols_selected": int(eca_diag1["n_cols_selected"]),
+            "n_eca_cols_retained": int(eca_diag1["n_cols_retained"]),
+            "n_eca_cols_dropped": int(eca_diag1["n_cols_dropped"]),
+            # Candidate-wise ECA metadata (12.4)
+            "candidate_eca_skipped": candidate_eca_skipped,
+            "candidate_eca_retained_ks": candidate_eca_retained_ks,
+            "candidate_n_eca_cols_retained": candidate_n_cols_retained,
             "spectrum_pre_eca": spectrum_pre_eca,
         }
 
@@ -470,9 +718,14 @@ def estimate_rate_from_phase(
         candidate_argmax_fallback[candidate_rank] = used_argmax_fallback
 
         # Second-pass ECA: guard against suppressing a harmonic near the cardiac candidate
-        # (OpenAI cross-review finding #4)
-        x_eca2 = eca_project(x_bp, f_r_hz, fs, k_max=k_max,
-                              cardiac_candidate_hz=cand_hz, skip_ks=skip_ks_set)
+        # (OpenAI cross-review finding #4).
+        # The skip set is RECOMPUTED for the candidate actually being tested (plan S5.3):
+        # reusing the first-pass set would judge a rank-2 candidate with a guard parked on
+        # the provisional peak.
+        x_eca2, sk2, diag2 = _eca(x_bp, cand_hz)
+        candidate_eca_skipped[candidate_rank] = _skip_vec(sk2)
+        candidate_eca_retained_ks[candidate_rank] = diag2["retained_ks"]
+        candidate_n_cols_retained[candidate_rank] = diag2["n_cols_retained"]
         spec2, _ = _spec(x_eca2)
         ahet_attempt_spectrum[candidate_rank] = spec2
         candidate_refined_hz[candidate_rank] = refine_freq_hz(spec2, freqs, cand_global)

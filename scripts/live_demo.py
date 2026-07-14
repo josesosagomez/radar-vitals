@@ -490,6 +490,8 @@ def _run_dsp(ring_buffer: collections.deque, locked_bin: int, fs: float, cfg: di
         eca_mode=hcfg["eca_mode"],
         ahet_gate_mode=hcfg["ahet_gate_mode"],
         eca_forbidden_guard_hz=float(hcfg["eca_forbidden_guard_hz"]),
+        eca_cardiac_guard_hz=float(hcfg.get("eca_cardiac_guard_hz", 0.10)),
+        k_max_cap=int(hcfg.get("k_max_cap", 10)),
         candidate_min_second_harmonic_ratio_db=float(
             hcfg["candidate_min_second_harmonic_ratio_db"]
         ),
@@ -515,8 +517,11 @@ def _run_dsp(ring_buffer: collections.deque, locked_bin: int, fs: float, cfg: di
     hr_raw = float(hr_result["rate_bpm"]) if hr_valid else np.nan
 
     rej_codes = hr_result.get("candidate_rejection_code", np.array([-1, -1, -1]))
-    eca_skip = hr_result.get(
-        "eca_skipped_harmonics", np.zeros(int(hcfg["k_max"]), dtype=bool)
+    # Fixed reporting length — k_max_eff varies per window but the artifact shape must not,
+    # or the NPZ stack breaks / silently hides k > k_max (plan S8.1b).
+    _skip_len = max(int(hcfg.get("k_max_cap", 10)), int(hcfg["k_max"]))
+    eca_skip = np.asarray(
+        hr_result.get("eca_skipped_harmonics", np.zeros(_skip_len, dtype=bool)), dtype=bool
     )
 
     accepted_rank = int(hr_result.get("accepted_candidate_rank", -1))
@@ -541,6 +546,16 @@ def _run_dsp(ring_buffer: collections.deque, locked_bin: int, fs: float, cfg: di
         "spectrum_stage": int(hr_result.get("spectrum_stage", 0)),
         "rej_reason": rej_reason,
         "n_eca_skipped": int(np.sum(eca_skip)),
+        # WHICH harmonics were spared, not just how many — the plan's predictions (S6.5)
+        # depend on the identity of k, and the count alone cannot express it.
+        "eca_skipped_harmonics": eca_skip,
+        "k_max_eff": int(hr_result.get("k_max_eff", 0)),
+        "n_eca_projected": int(hr_result.get("n_eca_projected", 0)),
+        # Basis diagnostics: how many sin/cos columns SURVIVED Gram-Schmidt, not merely how
+        # many harmonic orders were selected (cross-review 20.6). Without this a run can report
+        # full harmonic coverage while the projection actually used fewer columns.
+        "n_eca_cols_retained": int(hr_result.get("n_eca_cols_retained", 0)),
+        "n_eca_cols_dropped": int(hr_result.get("n_eca_cols_dropped", 0)),
         # Intermediates for NPZ
         "phase_raw": phase_raw,
         "phase_clean": phase_clean,
@@ -1379,6 +1394,11 @@ def main() -> None:
                 "peak_to_floor_ratio_db", np.array([])
             ),
             "n_eca_skipped": dsp["n_eca_skipped"],
+            "eca_skipped_harmonics": dsp["eca_skipped_harmonics"],
+            "k_max_eff": dsp["k_max_eff"],
+            "n_eca_projected": dsp["n_eca_projected"],
+            "n_eca_cols_retained": dsp["n_eca_cols_retained"],
+            "n_eca_cols_dropped": dsp["n_eca_cols_dropped"],
         }
         intermediates.append(inter)
 

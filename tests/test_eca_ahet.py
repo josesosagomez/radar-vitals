@@ -281,3 +281,261 @@ def test_argmax_fallback_flag_when_find_peaks_returns_nothing(monkeypatch):
     assert bool(out["candidate_argmax_fallback"][0])
     assert not out["candidate_argmax_fallback"][1:].any()
     assert np.isnan(out["candidate_prominence"][0])
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# guard_cardiac_candidate_v1 — the ECA forbidden-zone fix.
+# Plan: notes/plan_eca_forbidden_zone.md §8.3, §8.4.
+#
+# The bug: skip_forbidden_harmonics_v1 skipped EVERY harmonic landing inside the
+# cardiac band — at ordinary breathing rates that is all of them — so ECA cancelled
+# nothing in the band it exists to clean (measured on real data: 0.00 dB removed).
+# ─────────────────────────────────────────────────────────────────────────────
+
+FS_G = 20.0
+N_G = 600                      # 30 s window, matching the live/paper config
+BAND_G = (0.8, 2.0)
+
+# Gate settings copied from scripts/live_demo_config.yaml so these tests exercise the
+# real AHET gates, not wide-open defaults.
+GATES_G = dict(
+    candidate_min_second_harmonic_ratio_db=1.0,
+    candidate_min_prominence=3.0,
+    candidate_min_peak_to_floor_db=2.0,
+    low_candidate_min_peak_to_floor_db=4.0,
+)
+
+
+def _phase_g(f_r, f_h, resp_amp=1.0, heart_amp=0.30, k_list=(1, 2, 3, 4, 5, 6, 7),
+             seed=0, n=N_G, fs=FS_G):
+    """Respiratory comb + cardiac fundamental AND its 2nd harmonic.
+
+    The cardiac 2nd harmonic is what AHET verifies against — a pure cardiac sine is
+    unverifiable by construction and would be an unfair signal (see _make_harmonic_signal).
+    """
+    rng = np.random.default_rng(seed)
+    t = np.arange(n) / fs
+    x = np.zeros(n)
+    for k in k_list:
+        x += (resp_amp / k) * np.sin(2 * np.pi * k * f_r * t + 0.3 * k)
+    x += heart_amp * np.sin(2 * np.pi * f_h * t + 0.7)
+    x += 0.5 * heart_amp * np.sin(2 * np.pi * 2 * f_h * t + 0.2)   # cardiac 2nd harmonic
+    x += 0.01 * rng.standard_normal(n)
+    return x
+
+
+def _inband_power(spec, freqs, band=BAND_G):
+    m = (freqs >= band[0]) & (freqs <= band[1])
+    return float(np.sum(spec[m] ** 2))
+
+
+def _run_g(phase, f_r, mode, guard=0.10, k_max=6, k_max_cap=10):
+    return vitals.estimate_rate_from_phase(
+        phase, FS_G, BAND_G, f_r_hz=f_r, k_max=k_max, eca_mode=mode,
+        ahet_gate_mode="strict_v1", eca_cardiac_guard_hz=guard, k_max_cap=k_max_cap,
+        **GATES_G,
+    )
+
+
+def test_regression_old_mode_cancels_nothing_in_band():
+    """The bug, pinned: skip_forbidden_harmonics_v1 removes ~0 dB inside the cardiac band."""
+    f_r, f_h = 0.30, 65 / 60
+    out = _run_g(_phase_g(f_r, f_h), f_r, "skip_forbidden_harmonics_v1")
+    pre = _inband_power(out["spectrum_pre_eca"], out["freqs_hz"])
+    post = _inband_power(out["spectrum_first_pass"], out["freqs_hz"])
+    removed_db = 10 * np.log10(post / pre)
+    assert abs(removed_db) < 0.01, f"expected ~0 dB removed, got {removed_db:+.2f} dB"
+
+
+def test_new_mode_cancels_noncolliding_harmonics_in_band():
+    """§8.3 — the regression the bug caused: in-band harmonics must actually be removed."""
+    f_r, f_h = 0.30, 65 / 60          # |4·f_r − f_h| = 0.117 Hz — no collision
+    out = _run_g(_phase_g(f_r, f_h), f_r, "guard_cardiac_candidate_v1")
+    pre = _inband_power(out["spectrum_pre_eca"], out["freqs_hz"])
+    post = _inband_power(out["spectrum_first_pass"], out["freqs_hz"])
+    removed_db = 10 * np.log10(post / pre)
+    assert removed_db < -3.0, f"expected material in-band suppression, got {removed_db:+.2f} dB"
+    assert out["n_eca_projected"] >= 3, "non-colliding in-band harmonics must be projected out"
+
+
+def test_new_mode_spares_the_colliding_harmonic_and_keeps_the_heart():
+    """§8.3 — a harmonic landing ON the cardiac tone must be spared, not cancelled."""
+    f_r = 0.271
+    f_h = 4 * f_r                      # exact collision at 1.084 Hz (65 bpm)
+    out = _run_g(_phase_g(f_r, f_h), f_r, "guard_cardiac_candidate_v1")
+    skipped = np.flatnonzero(out["eca_skipped_harmonics"]) + 1
+    assert 4 in skipped, f"k=4 collides with the heart and must be spared; skipped={skipped}"
+    freqs = out["freqs_hz"]
+    b = int(np.argmin(np.abs(freqs - f_h)))
+    assert out["spectrum_first_pass"][b] > 0.5 * out["spectrum_pre_eca"][b], (
+        "cardiac tone was erased by ECA despite the guard"
+    )
+
+
+def test_k_max_eff_spans_the_band_at_low_breathing_rates():
+    """§5.7 — the 7th harmonic is in-band at 16 bpm and must not be beyond reach."""
+    f_r = 16 / 60.0                    # 7·f_r = 1.867 Hz, inside [0.8, 2.0]
+    out = _run_g(_phase_g(f_r, 72 / 60), f_r, "guard_cardiac_candidate_v1")
+    assert out["k_max_eff"] >= 7, f"k_max_eff={out['k_max_eff']} cannot reach the in-band 7th"
+
+
+def test_k_max_eff_is_bounded_by_the_cap():
+    """§5.7 — a bad/low f_r must not silently expand the ECA subspace."""
+    out = _run_g(_phase_g(0.16, 70 / 60), 0.16, "guard_cardiac_candidate_v1", k_max_cap=10)
+    assert out["k_max_eff"] == 10      # floor(2.0/0.16) = 12, capped to 10
+
+
+def test_skipped_harmonics_artifact_has_fixed_length():
+    """§8.1b — shape must not vary with k_max_eff, or NPZ stacking breaks/truncates."""
+    outs = [
+        _run_g(_phase_g(f_r, 70 / 60), f_r, "guard_cardiac_candidate_v1", k_max_cap=10)
+        for f_r in (0.20, 0.267, 0.30, 0.40)
+    ]
+    assert {len(o["eca_skipped_harmonics"]) for o in outs} == {10}
+    assert len({o["k_max_eff"] for o in outs}) > 1, "k_max_eff should vary across these f_r"
+
+
+def test_derive_k_max_eff_ceiling_is_inclusive():
+    """Second review, finding 1 — ECA's ceiling must match the spectrum mask (<= band_hi)."""
+    assert vitals.derive_k_max_eff(0.2, 2.0, 20) == 10      # 10 x 0.2 == 2.0 exactly
+    assert vitals.derive_k_max_eff(0.3, 2.0, 20) == 6       # 7 x 0.3 = 2.1 > 2.0
+    assert vitals.derive_k_max_eff(16 / 60, 2.0, 20) == 7
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "KNOWN DESIGN HOLE in guard_cardiac_candidate_v1 — plan S7.1 materialised. "
+        "prov_cand_hz is the argmax of the CONTAMINATED pre-ECA spectrum, so when a "
+        "respiratory harmonic outranks the heart (34% of hops on the paced-16 capture), the "
+        "guard SPARES the decoy. The decoy survives ECA at full strength, becomes rank-0, and "
+        "strict_v1 returns the first passing candidate — the true heart sits at rank 1 with "
+        "p2f=33 dB and is never reached. `legacy` gets this right precisely because it "
+        "unconditionally cancels k<=4. This mode is NOT promoted in any config. "
+        "The extended-ceiling repair (v2) was REJECTED: it needs the 2k*f_r line cancelled, "
+        "but a f_r error of 1/10 of an FFT bin destroys that, and on real captures the high-k "
+        "harmonics are not coherent lines at all. See notes/plan_eca_forbidden_zone.md PART IV."
+    ),
+)
+def test_does_not_confidently_report_a_respiratory_harmonic_as_hr():
+    """§8.4 — the plan's BIGGEST risk (§7.1), attacked directly.
+
+    The dominant pre-ECA in-band peak is a respiratory harmonic (the provisional candidate
+    is therefore WRONG, and the first-pass guard protects the decoy). The true cardiac peak
+    is weaker but present, with a 2nd harmonic.
+
+    Required: strict AHET must not confidently return the decoy. Returning the true HR is
+    the good outcome; returning NaN is acceptable. Reporting the harmonic is a hard failure.
+
+    CURRENTLY FAILS — this is the acceptance test the plan set for itself, and the plan
+    does not pass it. Marked xfail(strict) so it flips to XPASS the moment it is fixed.
+    """
+    f_r = 0.30                          # 4·f_r = 1.20 Hz = 72 bpm — the decoy
+    f_h = 1.60                          # 96 bpm — true heart, far from every k·f_r
+    phase = _phase_g(f_r, f_h, resp_amp=1.0, heart_amp=0.08,   # heart much weaker than decoy
+                     k_list=(1, 2, 3, 4, 5, 6), seed=3)
+    out = _run_g(phase, f_r, "guard_cardiac_candidate_v1")
+
+    # Cross-review 2026-07-14 (comment 3): asserting only "not the decoy" lets this XPASS for
+    # the WRONG reason — a change that confidently reports some other wrong HR (85, 110 bpm)
+    # would have satisfied it. When AHET verifies, the answer must be the TRUE HR. NaN is the
+    # only other acceptable outcome.
+    true_bpm = f_h * 60.0               # 96 bpm
+    if bool(out["ahet_verified"]):
+        assert abs(out["rate_bpm"] - true_bpm) <= 3.0, (
+            f"verified a wrong HR: reported {out['rate_bpm']:.1f} bpm, true {true_bpm:.1f} bpm "
+            f"(decoy = {4 * f_r * 60.0:.1f} bpm)"
+        )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Stage 0 — review debt (cross-model review 2026-07-14, PART IV §23).
+# These tests are independent of which ECA design eventually wins.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_diagnostics_do_not_change_the_projected_signal():
+    """Comment 8: enabling diagnostics must leave the projected signal NUMERICALLY unchanged.
+
+    A diagnostic that perturbs the thing it measures is worse than no diagnostic.
+    """
+    f_r = 0.30
+    x = _phase_g(f_r, 65 / 60)
+    plain = vitals.eca_project(x, f_r, FS_G, k_max=6, band_hi=BAND_G[1])
+    with_diag, diag = vitals.eca_project(
+        x, f_r, FS_G, k_max=6, band_hi=BAND_G[1],
+        return_diagnostics=True, diag_len=10,
+    )
+    assert np.array_equal(plain, with_diag), "diagnostics altered the projected signal"
+    # ...and the pinned shapes hold regardless of k_max
+    assert diag["selected_ks"].shape == (10,)
+    assert diag["retained_ks"].shape == (10,)
+    assert diag["cols_retained"].shape == (10, 2)
+
+
+def test_basis_diagnostics_count_actual_columns_not_selected_orders():
+    """Comment 20.6: n_eca_projected counts SELECTED orders; it cannot see columns that the
+    Gram-Schmidt norm guard silently dropped. The diagnostics must report the real basis."""
+    f_r = 0.30
+    _, diag = vitals.eca_project(
+        _phase_g(f_r, 65 / 60), f_r, FS_G, k_max=6, band_hi=BAND_G[1],
+        return_diagnostics=True, diag_len=10,
+    )
+    n_sel_orders = int(diag["selected_ks"].sum())
+    assert diag["n_cols_selected"] == 2 * n_sel_orders          # sin + cos per order
+    assert diag["n_cols_retained"] == int(diag["cols_retained"].sum())
+    assert (diag["n_cols_retained"] + diag["n_cols_dropped"]) == diag["n_cols_selected"]
+    # every retained order must have at least one retained column, and vice versa
+    assert np.array_equal(diag["retained_ks"], diag["cols_retained"].any(axis=1))
+
+
+def test_candidate_wise_eca_metadata_is_recorded():
+    """Comment 12.4: the v1 failure was rank-0 vs rank-1 being judged on DIFFERENT spectra.
+    A reviewer must be able to reconstruct which projection each candidate was evaluated under."""
+    f_r = 0.30
+    out = _run_g(_phase_g(f_r, 65 / 60), f_r, "guard_cardiac_candidate_v1", k_max_cap=10)
+    assert out["candidate_eca_skipped"].shape == (vitals.AHET_MAX_CANDIDATES, 10)
+    assert out["candidate_eca_retained_ks"].shape == (vitals.AHET_MAX_CANDIDATES, 10)
+    assert out["candidate_n_eca_cols_retained"].shape == (vitals.AHET_MAX_CANDIDATES,)
+    attempted = out["candidate_attempted"]
+    if attempted.any():
+        # any attempted candidate must have had a real basis projected for it
+        assert (out["candidate_n_eca_cols_retained"][attempted] > 0).all()
+
+
+@pytest.mark.parametrize("br_bpm, expected_k", [(12, 20), (16, 15), (20, 12)])
+def test_derive_k_max_eff_exact_ceiling_unrounded(br_bpm, expected_k):
+    """Comment 20.2: use UNROUNDED f_r. 12/16/20 bpm all hit a 4.0 Hz ceiling EXACTLY.
+
+    My v2 table said 16 bpm -> 14 only because I rounded f_r to 0.267 first;
+    floor(4.0 / (16/60)) = 15. This is exactly the boundary error _CEIL_EPS exists to prevent.
+    """
+    f_r = br_bpm / 60.0                      # unrounded
+    assert vitals.derive_k_max_eff(f_r, 4.0, 30) == expected_k
+    assert abs(expected_k * f_r - 4.0) < 1e-9, "this case is supposed to hit the ceiling exactly"
+
+
+def test_ahet_cannot_reject_a_respiratory_harmonic_on_2nd_harmonic_evidence_alone():
+    """Committed, seeded replacement for the scratchpad probe (comment 20.1).
+
+    THE STRUCTURAL FINDING: a decoy at k*f_r has its "2nd harmonic" at 2k*f_r — which is
+    ITSELF a respiratory harmonic. So AHET's second-harmonic gate cannot, on its own,
+    distinguish a respiratory harmonic from a heartbeat while 2k*f_r remains in the spectrum.
+
+    Real breathing is not sinusoidal, so the comb extends past 2 Hz — model k=1..14.
+    """
+    f_r, f_h = 0.30, 1.60                    # decoy = 4*f_r = 1.20 Hz; heart = 96 bpm
+    x = _phase_g(f_r, f_h, heart_amp=0.08, k_list=tuple(range(1, 15)), seed=3)
+    x_bp = vitals.bandpass_filter(x - x.mean(), FS_G, BAND_G[0], 4.0)
+    spec = np.abs(np.fft.rfft(x_bp * np.hanning(len(x_bp))))
+    freqs = np.fft.rfftfreq(len(x_bp), 1 / FS_G)
+
+    decoy_2nd = 2 * (4 * f_r)                # 2.40 Hz — where AHET looks for the decoy's 2nd
+    resp_8th = 8 * f_r                       # 2.40 Hz — an actual respiratory harmonic
+    assert abs(decoy_2nd - resp_8th) < 1e-9, "by construction these are the same frequency"
+
+    mag_fake = spec[int(np.argmin(np.abs(freqs - decoy_2nd)))]
+    mag_true = spec[int(np.argmin(np.abs(freqs - 2 * f_h)))]
+    assert mag_fake > mag_true, (
+        "AHET's 'evidence' for the DECOY should be stronger than for the true heart: "
+        f"fake={mag_fake:.2f} at {decoy_2nd:.2f} Hz, true={mag_true:.2f} at {2*f_h:.2f} Hz"
+    )

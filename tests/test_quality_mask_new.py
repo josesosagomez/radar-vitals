@@ -22,18 +22,68 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
-from scripts.add_quality_mask import (  # noqa: E402
+from steps.step_4.add_quality_mask import (  # noqa: E402
     _phase_diff_stats,
     _soft_failure_overlap_counts,
     _subject_bin_phase_delta,
     _subject_bin_complex,
     _flag_phase_jump_from_delta,
     _compute_quality_mask,
-    _process_session,
 )
 
-CONFIG_PATH = REPO_ROOT / "scripts" / "quality_mask_config.yaml"
+CONFIG_PATH = REPO_ROOT / "steps" / "step_4" / "config.yaml"
 _CFG = yaml.safe_load(CONFIG_PATH.read_text())
+
+# ─────────────────────────────────────────────────────────────────────────────────────────
+# ADAPTER — steps/step_4/add_quality_mask was REFACTORED after these tests were written.
+#
+#   OLD:  _process_session(session_id, cfg, commit, locked_bin=None)   + CUBES_DIR module global
+#   NEW:  _process_session(session_id, row, cfg, commit, cubes_dir, chunk_frames, step3_meta,
+#                          *, no_write=False, overwrite=False)
+#
+# `row` is UNUSED inside the function (main() extracts step3_meta from the manifest first), and
+# locked_bin now arrives via step3_meta rather than as a kwarg.
+#
+# These tests could not even be COLLECTED after the move (they imported `scripts.add_quality_mask`),
+# so nobody noticed they had gone stale — Step 4 has had no working coverage since. This adapter
+# maps the old call shape onto the REAL function, so every call site keeps exercising the real
+# module instead of being rewritten wholesale (and possibly wrongly).
+# ─────────────────────────────────────────────────────────────────────────────────────────
+import steps.step_4.add_quality_mask as qm_mod  # noqa: E402
+from steps.step_4.add_quality_mask import _process_session as _process_session_impl  # noqa: E402
+
+# The module no longer defines CUBES_DIR (cubes_dir is a parameter now). Tests monkeypatch this
+# shim, and the adapter forwards it as the real argument.
+qm_mod.CUBES_DIR = None
+
+
+def _process_session(session_id, cfg, commit, locked_bin=None, *,
+                     overwrite=False, no_write=False,
+                     confidence="high", review_required=False):
+    """Old-signature shim over the refactored _process_session()."""
+    import pandas as pd
+    cubes_dir = qm_mod.CUBES_DIR
+    assert cubes_dir is not None, "test must set qm_mod.CUBES_DIR before calling"
+    chunk_frames = cfg.get("analysis", {}).get("chunk_frames")
+    step3_meta = {
+        "locked_bin":      locked_bin,
+        "locked_range_m":  "",
+        "confidence":      confidence,
+        "run_id":          "test",
+        "review_required": review_required,
+    }
+    return _process_session_impl(
+        session_id,
+        pd.Series(dtype=object),      # `row` — unused by _process_session
+        cfg,
+        commit,
+        Path(cubes_dir),
+        chunk_frames,
+        step3_meta,
+        no_write=no_write,
+        overwrite=overwrite,
+    )
+
 
 N_CHIRPS  = 32
 N_RX      = 4
@@ -584,7 +634,7 @@ class TestComputeQualityMaskPhaseJumpMethod:
             "locked_bin": None, "chunk_frames": None, "method": "mean_phasor",
         }
         res  = _compute_quality_mask(cube, cfg, locked_bin=self.LOCKED_BIN)
-        from scripts.add_quality_mask import _soft_failure_overlap_counts
+        from steps.step_4.add_quality_mask import _soft_failure_overlap_counts
         overlaps = _soft_failure_overlap_counts(res)
         assert "soft_failure_union" in overlaps
 
@@ -612,7 +662,7 @@ class TestComputeQualityMaskPhaseJumpMethod:
 class TestH5RoundTripPhaseJumpNewAttrs:
     N_FRAMES   = 200
     LOCKED_BIN = 28
-    N_TRIM     = 600
+    N_TRIM     = int(_CFG["analysis"]["trim_frames"])  # never hardcode a config value
 
     def _write_h5(self, path: Path, n_analysis: int) -> None:
         n_total = self.N_TRIM + n_analysis
@@ -654,7 +704,7 @@ class TestH5RoundTripPhaseJumpNewAttrs:
         self._write_h5(h5, self.N_FRAMES)
         cfg = self._pj_cfg(method="mean_phasor")
 
-        import scripts.add_quality_mask as qm_mod
+        import steps.step_4.add_quality_mask as qm_mod
         orig = qm_mod.CUBES_DIR
         qm_mod.CUBES_DIR = tmp_path
         try:
@@ -671,7 +721,7 @@ class TestH5RoundTripPhaseJumpNewAttrs:
         self._write_h5(h5, self.N_FRAMES)
         cfg = self._pj_cfg(method="delta_before_mean")
 
-        import scripts.add_quality_mask as qm_mod
+        import steps.step_4.add_quality_mask as qm_mod
         orig = qm_mod.CUBES_DIR
         qm_mod.CUBES_DIR = tmp_path
         try:
@@ -688,7 +738,7 @@ class TestH5RoundTripPhaseJumpNewAttrs:
         self._write_h5(h5, self.N_FRAMES)
         cfg = self._pj_cfg()
 
-        import scripts.add_quality_mask as qm_mod
+        import steps.step_4.add_quality_mask as qm_mod
         orig = qm_mod.CUBES_DIR
         qm_mod.CUBES_DIR = tmp_path
         try:
@@ -710,7 +760,7 @@ class TestH5RoundTripPhaseJumpNewAttrs:
         self._write_h5(h5, self.N_FRAMES)
         cfg = self._pj_cfg()
 
-        import scripts.add_quality_mask as qm_mod
+        import steps.step_4.add_quality_mask as qm_mod
         orig = qm_mod.CUBES_DIR
         qm_mod.CUBES_DIR = tmp_path
         try:

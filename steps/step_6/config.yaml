@@ -34,8 +34,13 @@ heart:
   reject_resp_harmonic_coincidence: true # reject windows where selected peak is coincident
 
   # Step 6.1 — ECA forbidden-zone suppression and strict AHET gate
+  # NOT YET PROMOTED to guard_cardiac_candidate_v1 — see plan S8.8 / exp_eca_modes.
   eca_mode: skip_forbidden_harmonics_v1  # skip k where k*f_r lands inside cardiac band
   eca_forbidden_guard_hz: 0.0            # extend forbidden zone by ±guard on each side
+  eca_cardiac_guard_hz: 0.10             # guard_cardiac_candidate_v1: spare only harmonics
+                                         # within this distance of the cardiac candidate
+  k_max_cap: 10                          # bound on per-window k_max_eff =
+                                         # min(k_max_cap, floor(band_hi / f_r))
   ahet_gate_mode: strict_v1             # evaluate all 3 candidates; sequential rejection
   candidate_min_second_harmonic_ratio_db: 1.0   # 2nd harmonic must be > noise + 1 dB
   candidate_min_prominence: 3.0          # peak must stand out from band floor (linear)

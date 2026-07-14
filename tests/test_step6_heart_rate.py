@@ -530,6 +530,30 @@ class TestHeartSpectrumStageEnum:
 # Mock for estimate_rate_from_phase (avoids scipy.signal.filtfilt -> LAPACK)
 # ---------------------------------------------------------------------------
 
+
+def _fake_eca_evidence(k_max: int, n_cand: int, n_fft: int, k_max_cap: int = 10) -> dict:
+    """The ECA-evidence block every fake estimator must return.
+
+    Cross-review 2026-07-14 (P2): step_6 now REFUSES to truncate a wrong-shaped vector, so a
+    fake emitting the old `(k_max,)` shape fails loudly — as it should. One definition here so
+    the contract cannot drift between fakes.
+    """
+    kr = max(k_max, k_max_cap)
+    return {
+        "eca_skipped_harmonics":          np.zeros(kr, dtype=bool),
+        "eca_retained_ks":                np.zeros(kr, dtype=bool),
+        "eca_cols_retained":              np.zeros((kr, 2), dtype=bool),
+        "k_max_eff":                      k_max,
+        "n_eca_projected":                k_max,
+        "n_eca_cols_selected":            2 * k_max,
+        "n_eca_cols_retained":            2 * k_max,
+        "n_eca_cols_dropped":             0,
+        "candidate_eca_skipped":          np.zeros((n_cand, kr), dtype=bool),
+        "candidate_eca_retained_ks":      np.zeros((n_cand, kr), dtype=bool),
+        "candidate_n_eca_cols_retained":  np.zeros(n_cand, dtype=int),
+    }
+
+
 def _fake_estimate(
     phase, fs, band, f_r_hz=None, k_max=6, ahet_deviation_hz=0.1,
     eca_mode="legacy", ahet_gate_mode="legacy", eca_forbidden_guard_hz=0.0,
@@ -538,8 +562,15 @@ def _fake_estimate(
     high_competitor_min_mag_ratio=0.80,
     candidate_min_peak_to_floor_db=0.0,
     low_candidate_min_peak_to_floor_db=0.0,
+    eca_cardiac_guard_hz=0.10,
+    k_max_cap=10,
+    **_unused,
 ):
-    """Pure-numpy stand-in that returns a valid AHET-accepted or no-ECA result."""
+    """Pure-numpy stand-in that returns a valid AHET-accepted or no-ECA result.
+
+    **_unused keeps this stub tolerant of new estimator kwargs: a forwarding test should
+    fail on a MISSING kwarg, not on the stub's signature lagging behind the real one.
+    """
     n     = len(phase)
     n_fft = n // 2 + 1
     freqs = np.fft.rfftfreq(n, d=1.0 / fs)
@@ -589,7 +620,20 @@ def _fake_estimate(
         # Step 6.1 fields
         "candidate_rejection_code": np.array([rej_code_0] + [rej_code_rest] * (N_CAND - 1), dtype=int),
         "all_candidates_rejected":  False,
-        "eca_skipped_harmonics":    np.zeros(k_max, dtype=bool),
+        # Cross-review comment 12.2: the fake must return the PRODUCTION shape. The real
+        # estimator returns a fixed max(k_max, k_max_cap) vector; returning np.zeros(k_max)
+        # meant these integration tests never exercised the cap-sized artifact path they exist
+        # to protect. `_skip_len` mirrors src/vitals.py.
+        "eca_skipped_harmonics":    np.zeros(max(k_max, k_max_cap), dtype=bool),
+        "eca_retained_ks":          np.zeros(max(k_max, k_max_cap), dtype=bool),
+        "k_max_eff":                k_max,
+        "n_eca_projected":          k_max,
+        "n_eca_cols_selected":      2 * k_max,
+        "n_eca_cols_retained":      2 * k_max,
+        "n_eca_cols_dropped":       0,
+        "candidate_eca_skipped":    np.zeros((N_CAND, max(k_max, k_max_cap)), dtype=bool),
+        "candidate_eca_retained_ks": np.zeros((N_CAND, max(k_max, k_max_cap)), dtype=bool),
+        "candidate_n_eca_cols_retained": np.zeros(N_CAND, dtype=int),
     }
 
 
@@ -1215,7 +1259,7 @@ class TestAhetFailedWithoutHarmonicSuspect:
                 "ahet_attempt_spectrum": np.full((N, n_fft), np.nan),
                 "candidate_rejection_code": np.full(N, -1, dtype=int),
                 "all_candidates_rejected": False,
-                "eca_skipped_harmonics": np.zeros(k_max, dtype=bool),
+                **_fake_eca_evidence(k_max, N, n_fft),
             }
 
         monkeypatch.setattr(s6_mod, "estimate_rate_from_phase", no_eca_result)
@@ -1542,13 +1586,37 @@ class TestStrictV1Gate:
         res = _fake_estimate(phase, fs, (0.8, 2.0), f_r_hz=1.0)
         assert res["candidate_rejection_code"].shape == (AHET_MAX_CANDIDATES,)
 
-    def test_fake_estimate_eca_skip_shape_matches_k_max(self):
+    def test_fake_estimate_eca_skip_shape_matches_reporting_cap(self):
+        """Cross-review comment 12.2 — this test used to assert `(k_max,)`, the OLD shape.
+
+        The real estimator returns a FIXED `max(k_max, k_max_cap)` vector so that `k_max_eff`
+        can vary per window without the NPZ stack breaking or silently truncating k > k_max
+        (plan §8.1b). Asserting `(k_max,)` meant the Step 6 integration tests never exercised
+        the cap-sized path they exist to protect.
+        """
         n, fs = 200, 20.0
         phase = np.zeros(n)
-        for km in (4, 6, 8):
-            res = _fake_estimate(phase, fs, (0.8, 2.0), f_r_hz=1.0, k_max=km)
-            assert res["eca_skipped_harmonics"].shape == (km,), \
-                f"eca_skipped_harmonics shape wrong for k_max={km}"
+        for km, cap in [(4, 10), (6, 10), (8, 10), (6, 16)]:
+            res = _fake_estimate(phase, fs, (0.8, 2.0), f_r_hz=1.0, k_max=km, k_max_cap=cap)
+            expected = (max(km, cap),)
+            assert res["eca_skipped_harmonics"].shape == expected, \
+                f"eca_skipped_harmonics shape wrong for k_max={km}, k_max_cap={cap}"
+            # the cap-sized path must be genuinely exercised: cap > k_max
+            assert res["candidate_eca_skipped"].shape == (AHET_MAX_CANDIDATES, max(km, cap))
+
+    def test_real_estimator_skip_vector_is_cap_sized_not_k_max_sized(self):
+        """The production contract the fake now mirrors — asserted against the REAL estimator."""
+        from src import vitals as _v
+        rng = np.random.default_rng(0)
+        t = np.arange(600) / 20.0
+        x = np.sin(2 * np.pi * 0.3 * t) + 0.1 * np.sin(2 * np.pi * 1.1 * t)
+        x += 0.01 * rng.standard_normal(600)
+        out = _v.estimate_rate_from_phase(
+            x, 20.0, (0.8, 2.0), f_r_hz=0.3, k_max=6, k_max_cap=10,
+            eca_mode="guard_cardiac_candidate_v1",
+        )
+        assert out["eca_skipped_harmonics"].shape == (10,), "must be cap-sized, not k_max-sized"
+        assert out["eca_cols_retained"].shape == (10, 2)
 
     def test_fake_estimate_no_f_r_gives_gate_not_run_code(self):
         """No ECA path: rejection code must be -1 (gate_not_run) for all candidates."""
@@ -1644,7 +1712,7 @@ class TestStrictV1Gate:
                 # strict_v1 must reject with code 3 (prominence_low) for the NaN case
                 "candidate_rejection_code":  np.array([3, 5, 5][:N], dtype=int),
                 "all_candidates_rejected":   True,
-                "eca_skipped_harmonics":     np.zeros(k_max, dtype=bool),
+                **_fake_eca_evidence(k_max, N, n_fft),
             }
 
         # Verify the code contract directly on the mock result
@@ -2000,6 +2068,35 @@ class TestStep62Integration:
         for kw in primary:
             assert kw.get("candidate_min_peak_to_floor_db") == pytest.approx(2.0)
             assert kw.get("low_candidate_min_peak_to_floor_db") == pytest.approx(4.0)
+
+    def test_eca_guard_params_forwarded_from_config(self, tmp_path, monkeypatch):
+        """eca_cardiac_guard_hz and k_max_cap must reach estimate_rate_from_phase.
+
+        Cross-review finding 1: adding the YAML keys is not enough — a value that never
+        reaches the estimator is a silent no-op. Mirrors the peak-to-floor test above.
+        """
+        import steps.step_6.extract_heart_rate as s6_mod
+        captured: list[dict] = []
+
+        def spy(phase, fs, band, **kw):
+            captured.append(kw)
+            return _fake_estimate(phase, fs, band, **kw)
+
+        monkeypatch.setattr(s6_mod, "estimate_rate_from_phase", spy)
+        sid = "step62_eca_fwd"
+        h5_dir, raw_dir, br_dir, row = self._setup_session(tmp_path, sid)
+        cfg = self._cfg_with_step62(h5_dir, raw_dir, br_dir, tmp_path)
+        cfg["heart"]["eca_cardiac_guard_hz"] = 0.07
+        cfg["heart"]["k_max_cap"] = 9
+        out_dir = tmp_path / "results" / sid / "step_6"
+        _process_session(sid, row, cfg, h5_dir, raw_dir, br_dir, out_dir, "test",
+                         no_plots=True)
+
+        primary = [kw for kw in captured if kw.get("f_r_hz") is not None]
+        assert primary, "Expected at least one primary estimator call"
+        for kw in primary:
+            assert kw.get("eca_cardiac_guard_hz") == pytest.approx(0.07)
+            assert kw.get("k_max_cap") == 9
 
     def _run_with_code(self, code: int, tmp_path, monkeypatch, sid: str):
         import steps.step_6.extract_heart_rate as s6_mod
@@ -2547,3 +2644,124 @@ class TestStep63Tracker:
         assert "n_tracker_selected_from_ahet_failed" in summary
         assert "pre_tracker_n_valid_hr" in summary
         assert summary["n_tracker_selected_windows"] > 0
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Stage 0 persistence contract (cross-review 2026-07-14, P1/P2).
+#
+# The estimator returned the ECA basis + candidate-wise evidence, and the per-window dict
+# carried it — but _write_npz() never stacked it, so NONE of it reached disk. No test opened
+# the NPZ and demanded the keys, which is exactly why that slipped through. These tests close
+# that gap: the OFFLINE artifact is the path that will score the ECA modes.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_STAGE0_NPZ_KEYS = {
+    "k_max_eff": 1,
+    "n_eca_projected": 1,
+    "n_eca_cols_selected": 1,
+    "n_eca_cols_retained": 1,
+    "n_eca_cols_dropped": 1,
+    "eca_retained_ks": 2,
+    "eca_cols_retained": 3,
+    "candidate_eca_skipped": 3,
+    "candidate_eca_retained_ks": 3,
+    "candidate_n_eca_cols_retained": 2,
+}
+
+
+def test_npz_persists_eca_basis_and_candidate_evidence(session_dir, mock_estimator):
+    """P1 — every Stage 0 diagnostic must actually reach heart_intermediates.npz."""
+    s = session_dir
+    _process_session(
+        s["sid"], s["row"], s["cfg"],
+        cubes_dir=s["cubes"], data_raw=s["raw"], breathing_rate_dir=s["br_dir"],
+        out_dir=s["out_dir"], commit="test", no_plots=True,
+    )
+    z = np.load(s["out_dir"] / "heart_intermediates.npz", allow_pickle=False)
+    n_windows = z["heart_spectrum"].shape[0]
+
+    missing = [k for k in _STAGE0_NPZ_KEYS if k not in z.files]
+    assert not missing, f"Stage 0 diagnostics missing from the NPZ: {missing}"
+
+    for key, ndim in _STAGE0_NPZ_KEYS.items():
+        a = z[key]
+        assert a.ndim == ndim, f"{key}: expected {ndim}-D per-window stack, got shape {a.shape}"
+        assert a.shape[0] == n_windows, (
+            f"{key}: first axis must be n_windows={n_windows}, got {a.shape}"
+        )
+
+    k_rep = z["eca_retained_ks"].shape[1]
+    assert z["eca_cols_retained"].shape == (n_windows, k_rep, 2)
+    assert z["candidate_eca_skipped"].shape == (n_windows, AHET_MAX_CANDIDATES, k_rep)
+    assert z["candidate_eca_retained_ks"].shape == (n_windows, AHET_MAX_CANDIDATES, k_rep)
+    assert z["candidate_n_eca_cols_retained"].shape == (n_windows, AHET_MAX_CANDIDATES)
+
+
+def test_npz_eca_evidence_is_nonzero_on_valid_windows(session_dir, mock_estimator):
+    """P2 — the keys existing is not enough; a valid window must carry REAL evidence.
+
+    A stack of zeros would satisfy a shape-only test while telling us nothing.
+    """
+    s = session_dir
+    _process_session(
+        s["sid"], s["row"], s["cfg"],
+        cubes_dir=s["cubes"], data_raw=s["raw"], breathing_rate_dir=s["br_dir"],
+        out_dir=s["out_dir"], commit="test", no_plots=True,
+    )
+    z = np.load(s["out_dir"] / "heart_intermediates.npz", allow_pickle=False)
+    df = pd.read_csv(s["out_dir"] / "heart_windows.csv")
+
+    assert (z["k_max_eff"] > 0).any(), "no window recorded a k_max_eff — evidence is all-zero"
+    assert (z["n_eca_projected"] > 0).any()
+    assert (z["n_eca_cols_selected"] > 0).any()
+    # columns retained must never exceed columns selected, per window
+    assert (z["n_eca_cols_retained"] <= z["n_eca_cols_selected"]).all()
+    assert (
+        z["n_eca_cols_retained"] + z["n_eca_cols_dropped"] == z["n_eca_cols_selected"]
+    ).all()
+
+    # the CSV must expose the same scalars (offline scoring reads the CSV)
+    for col in ("k_max_eff", "n_eca_projected", "n_eca_cols_retained", "n_eca_cols_dropped"):
+        assert col in df.columns, f"heart_windows.csv missing {col}"
+
+
+def test_npz_gated_windows_are_sentinel_not_garbage(session_dir, mock_estimator):
+    """P2 — a gated/NaN window must persist ZERO evidence with the SAME shapes, not junk."""
+    s = session_dir
+    _process_session(
+        s["sid"], s["row"], s["cfg"],
+        cubes_dir=s["cubes"], data_raw=s["raw"], breathing_rate_dir=s["br_dir"],
+        out_dir=s["out_dir"], commit="test", no_plots=True,
+    )
+    z = np.load(s["out_dir"] / "heart_intermediates.npz", allow_pickle=False)
+    df = pd.read_csv(s["out_dir"] / "heart_windows.csv")
+    nan_rows = np.where(~df["hr_valid"].astype(bool).values)[0]
+    if len(nan_rows) == 0:
+        pytest.skip("fixture produced no gated windows")
+    for i in nan_rows:
+        # sentinel: no fabricated basis on a window that produced no estimate
+        assert z["n_eca_cols_retained"][i] >= 0
+        assert z["candidate_eca_skipped"][i].shape == z["candidate_eca_skipped"][0].shape
+
+
+def test_step6_shape_contract_fails_loudly_on_cap_mismatch():
+    """P2 — artifact-shape errors must NOT be silently truncated into plausible evidence."""
+    import steps.step_6.extract_heart_rate as s6
+
+    good = np.zeros(10, dtype=bool)
+    assert s6._eca_vec(good, 10, "x").shape == (10,)
+    assert s6._eca_vec(None, 10, "x").shape == (10,)          # absent -> zeros is fine
+    with pytest.raises(ValueError, match="Refusing to truncate"):
+        s6._eca_vec(np.zeros(6, dtype=bool), 10, "x")         # wrong size -> LOUD
+    with pytest.raises(ValueError):
+        s6._cand_eca_2d(np.zeros((3, 6), dtype=bool), 10, "y")
+    with pytest.raises(ValueError):
+        s6._eca_cols(np.zeros((6, 2), dtype=bool), 10)
+
+
+def test_eca_project_refuses_to_truncate_its_diagnostics():
+    """P2 — diag_len < k_max would omit the highest harmonics from the evidence."""
+    from src import vitals as _v
+    x = np.random.default_rng(0).standard_normal(600)
+    with pytest.raises(ValueError, match="would truncate the diagnostics"):
+        _v.eca_project(x, 0.3, 20.0, k_max=10, return_diagnostics=True, diag_len=6)
