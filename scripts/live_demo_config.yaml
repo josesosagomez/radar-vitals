@@ -20,7 +20,9 @@ protocol:
 
 bin_selection:
   enabled: true
-  candidate_bins: null            # null = derive from protocol.subject_distance_m + profile.range_resolution_m
+  candidate_bins: null                      # null = derive from protocol.subject_distance_m + profile.range_resolution_m
+  energy_eligibility_min_settled_db: -12.0   # a bin's hr_valid pass is only eligible to win if its settled energy is within this many dB of the strongest candidate; ineligible bins can win only if no eligible candidate's DSP succeeds. Empirical, validated on 4 sessions / 1 subject (2026-07-14/15) under the protocol scene (single seated subject = dominant in-gate reflector) — re-validate against the 10-subject study, not yet tested with competing reflectors (chair, second person, moving object) inside the gate.
+  settle_skip_s: 5.0                        # eligibility energy measured on warmup frames after this many seconds, so a settling transient cannot inflate a skirt bin past the gate
 
 display:
   matplotlib_backend: QtAgg      # pyside6 is pinned in environment.yml
