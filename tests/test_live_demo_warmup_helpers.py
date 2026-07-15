@@ -344,10 +344,15 @@ def test_ineligible_bin_cannot_outvote_eligible_bin_on_breathing_evidence():
     assert by_bin[4]["energy_eligible"] is True
 
 
-def test_ineligible_bin_wins_only_when_no_eligible_dsp_succeeds():
+def test_ineligible_bin_wins_only_when_no_eligible_dsp_succeeds(capsys):
     """Mixed fallback: the eligible bin's DSP call raises, only an ineligible
     bin's DSP succeeds. The ineligible bin may win here (nothing better exists),
-    but it must be clearly marked as a fallback, not presented as trustworthy."""
+    but it must be clearly marked as a fallback, not presented as trustworthy.
+
+    Also pins the wording fix from cross-model review round 2 (new finding):
+    the ineligible-candidate stderr warning fires BEFORE the eligibility-partition
+    fallback decision, so in exactly this scenario it must not claim the bin was
+    "excluded from selection" when that same bin goes on to win as the fallback."""
     cfg = _base_cfg()
     cfg["profile"]["range_resolution_m"] = 1.0
     cfg["protocol"]["subject_distance_m"] = [1.0, 3.0]
@@ -368,6 +373,10 @@ def test_ineligible_bin_wins_only_when_no_eligible_dsp_succeeds():
     assert "_no_energy_eligible_dsp_success" in evidence["selection_reason"]
     assert evidence["fallback_used"] is True
     assert evidence["eligible_dsp_success_count"] == 0
+
+    captured = capsys.readouterr()
+    assert "excluded from the primary energy-eligible pool" in captured.err
+    assert "excluded from selection" not in captured.err
 
 
 def test_settle_skip_exceeding_window_falls_back_to_full_window(capsys):

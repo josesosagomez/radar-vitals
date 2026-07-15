@@ -778,7 +778,9 @@ def _run_warmup_selection(
             print(
                 f"  WARNING: hr_valid candidate(s) energy-ineligible "
                 f"(< {threshold_db:.1f} dB rel strongest settled candidate) and "
-                f"excluded from selection: {listing}.",
+                f"excluded from the primary energy-eligible pool: {listing}. "
+                f"(May still be selected as a low-confidence fallback if no "
+                f"eligible candidate's DSP succeeds.)",
                 file=sys.stderr,
             )
 
