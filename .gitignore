@@ -7,7 +7,6 @@ __pycache__/
 # Environment / secrets
 .env
 *.key
-*.md
 
 # Large raw/processed data — keep the folder, ignore big blobs.
 # Radar captures and exports can be huge; track configs + metrics, not raw binaries.
@@ -22,6 +21,9 @@ literature*/
 .codex*/
 .pytest_cache*/
 .pytest_tmp*/
+.agents*/
+.codex*/
+
 
 # W&B local cache
 wandb/
