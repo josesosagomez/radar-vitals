@@ -14,7 +14,6 @@ data*/
 
 # Results: keep configs + metrics (json/yaml), ignore heavy artifacts
 results*/
-notes*/
 literature*/
 
 .claude*/

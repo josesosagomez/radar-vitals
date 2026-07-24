@@ -5472,3 +5472,422 @@ decisive endpoint. All 3 existing sessions (`natural`, `paced16`, `sweep`) are
 exploratory-only for this specific design — a confirmatory claim needs a new, as-yet-
 uncaptured session. `scripts/stage1b_lag_statistic.py` is untracked; committing it is a
 separate decision from the other stage1 scripts sitting in the working tree.
+
+## 2026-07-15 - Stage 1B §7(c) numeric pre-registration: items (ii)-(vi) derived; ZERO baseline severe accepts at current HEAD
+
+> **Reconstructed on 2026-07-23** from `notes/note_stage1b_lag_statistic.md` (draft 7, §7c
+> and its "Next" list) and the replay artifacts — the session that did this work ended
+> without appending a HISTORY entry (a §5.5 lapse caught during a 2026-07-23 project audit).
+> Every claim below was re-checked against those artifacts before writing.
+
+**Set out to do:** fill in the Stage 1B lag-10 design's §7(c) numeric pre-registration with
+derived (not invented) numbers, per the previous entry's "Next".
+
+**Worked (with evidence):**
+- All 3 exploratory sessions re-processed end-to-end at current HEAD (`dfe7fb5` — bin-lock
+  fix + Stage-0 DSP), because the original captures predate both. Fresh replays:
+  `results/live_demo/20260715_164124_replay_unknown` (natural, bin 23 — same bin as the
+  pre-fix pick), `20260715_164018_replay_unknown` (paced16, bin 20→26), and
+  `20260715_164132_replay_unknown` (sweep, bin 21→26). Masimo alignment used each ORIGINAL
+  capture's real `elapsed_s` joined by `frame_idx` (the fresh replays' own `elapsed_s` is
+  the known wall-clock landmine under `--replay-fast`).
+- Scored strictly under `notes/comparator_prespec.md`: natural 5/50 accepted, 1 scorable,
+  MAE 0.19 bpm; paced16 23/50, 21 scorable, MAE 0.50 bpm; sweep 30/150, 19 scorable, MAE
+  0.53 bpm. **Severe (>5 bpm) errors: 0 on all three sessions.** All 17 stationarity-gate
+  exclusions were checked individually — every one a real Masimo instability (spread
+  5.1-26.0 bpm), not radar error hidden by the gate.
+- §7(c) items (ii)-(vi) filled with derivations: safety bar = 100% retention of the pooled
+  n=41 scorable accepts (rule-of-three power caveat ≈7.3% recorded honestly); coverage
+  guard = 0% yield loss as a mechanical corollary of (i)+(ii); evaluability floors measured
+  against the pre-existing 30% leverage floor — natural 14.3% FAIL, paced16 0.0% FAIL,
+  sweep 50.0% PASS.
+
+**Failed / did not work, and why:**
+- **Item (i) (the objective bar) is BLOCKED — zero baseline severe accepts exist on current
+  data** (0/41 scorable accepts across all 3 sessions). An empty-population problem, not a
+  small-sample one. Both it and the tied §7(g)-stage-2 utility bar are deferred to a
+  confirmatory capture. Most likely explanation: the bin-lock fix already removed the
+  dominant severe-false-accept mechanism in this dataset — meaning Stage 1B currently has
+  nothing left to veto on existing data.
+- The work session itself failed to log this entry (hence the reconstruction above).
+
+**Retired / no longer used:** nothing.
+
+**Next:** cross-model review of the §7(c) numeric content (the §§2-7g structure had 6 review
+rounds; these numbers had none); compute the non-overlapping-origin independent-attempt
+count for item (iv)'s exact-track floor; design the confirmatory capture so it plausibly
+still produces a severe accept post-bin-fix (e.g. an engineered k·f_r ≈ HR collision) — a
+repeat of the existing stepped-rate protocol may well produce none.
+
+## 2026-07-22 - Session 9: off-protocol headless capture (a mistake; deleted 2026-07-23)
+
+**Set out to do:** not recorded at capture time. The user identified the session as a
+mistake on 2026-07-23 and erased it; per CLAUDE.md §4, what it was is recorded here before
+the numbers are lost.
+
+**What it was (recorded before deletion):** `data/raw/9.bin`, 747,110,400 bytes (sha256
+`82ff3d3cb0aa1325a043b3c037e9459ed67bc9fa4af89b42d7d0a00ffc7303a1`), plus `9_meta.json` and
+`9_LogFile.csv`. Captured Wed 2026-07-22 13:52:00-13:56:47 local (286 s per log, 285 s
+configured), 5700 frames, 513,126 packets received, **0 out-of-sequence, 0 zero-filled** —
+the capture itself was clean. Participant P0011, posture `seated_chair_back`, distance
+182 cm, `stationary_intervals` 0-90 s, **no Masimo reference captured**. Chirp config:
+77 GHz start, 70.006 MHz/µs slope, 256 ADC samples @ 5209 ksps, 4 RX / 1 TX, 32 loops,
+50 ms frame period, range resolution 0.0436 m. This was the first verified standalone use
+of `steps/step_1/capture.py` (with its new 10 s countdown from `4dffce9`) — the tool works
+end-to-end and writes `.bin` + meta + log + manifest row; that knowledge survives the
+deletion.
+
+**Failed / did not work, and why:** the session was off-protocol on at least three axes —
+182 cm distance (protocol max 140 cm), chair-back posture (protocol: back straight, no
+support), and no Masimo ground truth — and was not logged in HISTORY at capture time
+(§3.6). Declared a mistake by the user on 2026-07-23.
+
+**Retired / no longer used:** all three session-9 files deleted from `data/raw/` and its
+row removed from `data/manifest.local.csv` (verified back to header-only, 2026-07-23).
+Nothing was ever processed from it — `data/processed/` was and remains empty; no results or
+figures derive from it.
+
+**Next:** nothing follows from this session.
+
+## 2026-07-23 - Housekeeping: stage-1 scripts committed; HISTORY/HANDOFF brought under version control; branch v9c
+
+**Set out to do:** close the open commit decisions from HANDOFF §3 and stop keeping the
+project record files local-only.
+
+**Worked (with evidence):**
+- `4dffce9` committed the four stage-1 analysis scripts (`stage1a_harmonic_coherence.py`,
+  `stage1b_temporal_continuity.py`, `stage1b_exploratory_motion.py`,
+  `stage1b_lag_statistic.py`) — closing the "commit decision still open for all 4" item —
+  plus `steps/step_1/capture.py` PREPARATION_TIME 60→10 s.
+- `b6f5b73` removed the blanket `*.md` rule from `.gitignore` and committed `HANDOFF.md`,
+  `HISTORY.md`, and `config/set_DCA1000.md` (a one-line DCA1000 network-profile setup
+  command). **This supersedes the 2026-07-15 "local-only by design" decision** for
+  HANDOFF/HISTORY; `notes*/` and `results*/` remain gitignored.
+- Branch `vital_signs_v9c` created from `v9b` (verified identical apart from the md
+  commit: `git diff vital_signs_v9b..vital_signs_v9c --stat` shows only those 4 files).
+- Test suite re-verified on `v9c` at `b6f5b73`: **796 passed, 1 xfailed, 0 failed**
+  (`conda run -n radar-vitals python -m pytest tests/ -q`, 2026-07-23, 42 s).
+
+**Failed / did not work, and why:** nothing attempted beyond the above.
+
+**Retired / no longer used:** the "HISTORY/HANDOFF/notes are not version-controlled by
+design" gotcha (HANDOFF §6) — now false for HISTORY/HANDOFF (still true for `notes/` and
+`results/`).
+
+**Next:** rewrite `HANDOFF.md` to current state — it is stale on: branch name (`v9b`→`v9c`),
+the stage-script commit decision (now closed), §7(c) status (partially done; item (i)
+blocked on a confirmatory capture), the md-tracking gotcha, and the "manifest has 0
+sessions" claim (true again only because session 9 was erased).
+
+## 2026-07-24 - Writing sources, implementation plan, and the mislock mechanism quantified
+
+**Set out to do:** produce a full audit of project state, then build the durable writing
+artefacts the thesis and paper need (chapter source, journal planning), a whole-project
+implementation plan now that BR is a co-equal goal, and presentation material for a postdoc
+application.
+
+**Worked (with evidence):**
+
+- **`THIRD_CHAPTER.md` created** — self-contained thesis-chapter source: theory (FMCW ranging,
+  the 3.2 rad/mm phase relation at 77 GHz, the harmonic signal model), literature review of the
+  6 surveyed methods, method justification, algorithm spec, evaluation methodology, results,
+  negative results, limitations, suggested structure with word budgets, figure list, references.
+  Every empirical claim carries a status tag (`[VERIFIED]` / `[PRELIMINARY]` / `[RETIRED]` /
+  `[PENDING]`) with an explicit promotion rule: promote by re-measuring, never by editing the tag.
+  §17 is a measured inventory of work to date (~18,700 lines code, 797 tests, 4 captures /
+  ~2.52 GB raw, 97 HISTORY entries) — counted from the repo, not estimated.
+- **`JOURNAL_PAPER.md` created** — submission-readiness gate, target-journal comparison
+  (recommendation: IEEE JBHI primary, TBME if the methodology leads; npj Digital Medicine judged
+  out of reach for a 10-subject healthy-volunteer study), novelty ranking, section outline with
+  word budgets, figure plan, anticipated-reviewer-objection table, verified reference list.
+- **`plans/implementation_plan.md` created** — 13 milestones across 4 tracks (governance /
+  blockers / data / methods / output), each independently executable with goal, dependencies,
+  "done when", and risk. Decisions taken with the user: BR reference = Masimo `rr_bpm`
+  cross-checked against the paced metronome rate; Paper 2 staged (joint-Doppler before Capon
+  DOA); both reference papers as an **offline comparison arm**, not production replacements;
+  sequencing = fix blockers → pilot → study → method work.
+- **References verified against source, not memory.** The 6 arXiv papers came from
+  `notes/approach.md`; web-verified additions: Bland & Altman 1986 (Lancet 327:307-310),
+  Droitcour 2004 (TMTT 52(3):838-848), Park 2007 (TMTT 55(5):1073-1079), Li/Lubecke 2013
+  (TMTT 61(5):2046-2060), Alizadeh 2019 (IEEE Access 7:54958-54968), Beltrão NICU 2022 (Sci Rep
+  12). **Deliberately left `[CITATION NEEDED]`**: AAMI EC13 (the widely-quoted "±10% or ±5 bpm"
+  could NOT be verified from open sources — do not cite from memory), ISO 80601-2-61, TI document
+  numbers except DCA1000EVM SPRUIJ4, and the Masimo MightySat PR accuracy spec.
+- **The two `literature/ref_papers/` papers were audited for actual use.** Paper 1 (Ahmed et al.,
+  "Discovering the Unseen", DOI 10.1109/TRS.2024.3412915) **is** used — its Harmonic Accumulation
+  is the *primary* BR estimator in `src/respiration.py`, adapted from the paper's pulse-radar
+  even-harmonic model (2f_b, 4f_b…) to all-harmonic phase (f_b, 2f_b, 3f_b…). It has **never been
+  validated against Masimo**. Paper 2 (Kotte et al., DOI 10.1109/TRS.2024.3352189) is **not
+  referenced anywhere in the code or notes**. Both are simulation-only. Paper 1's Fig. 8(c)-(d)
+  claims correct estimation *at* the 4·f_r = HR collision (f_b = 20, f_h = 80 bpm, SNR 10 dB) —
+  the project's central unsolved problem. Verified enabler for Paper 2: `read_adc_bin` already
+  returns all 4 RX channels and the config is 1 TX / 4 RX, the SIMO setup it assumes — the
+  angular information is in every `.bin` already recorded and is currently averaged away.
+- **The warmup mislock mechanism was quantified for the first time** (previously described only
+  qualitatively). From `results/live_demo/20260714_180523_live_demo_sweep/` and the post-fix
+  replay `20260715_164132_replay_unknown/`:
+  - At t = 147 s: mislocked bin 21 reported **64.4 bpm and passed AHET**; correct bin 26 reported
+    **81.8 bpm**; comparator reference **81.0 bpm** — a 16.6 bpm error indistinguishable at the
+    output from a correct reading.
+  - **The defect was in the selector's scoring**: bin 21 was the only candidate whose HR DSP
+    returned a result, earning an HR-valid bonus worth **1265 points vs 295** for the true chest
+    bin. The selector rewarded "produced an answer" without checking for supporting signal.
+  - **The 5 s settle skip is load-bearing, not cosmetic**: over the full warmup bin 21 measures
+    **−11.0 dB**, *inside* the −12 dB eligibility gate; after skipping the first 5 s (100 frames
+    at 20 Hz) it measures **−28.1 dB** and is correctly ruled ineligible. With the fix:
+    `hr_bonus_vetoed: true`, score 1265 → 265, bin 26 wins on an unchanged 295.
+  - This independently confirms the "28 dB below the chest" claim carried in HANDOFF, which the
+    raw (unskipped) energy alone does not support.
+- **Three figures were generated and visually verified** from committed scripts in `figures/`
+  (see "Retired" — they no longer exist): a system-setup schematic, a synthetic
+  harmonic-collision figure (seed 42, two panels contrasting f_r = 12 bpm resolvable vs
+  f_r = 20 bpm merged), and a three-panel mislock figure built entirely from measured data
+  (energy profile with the gate, paired spectra at t = 147 s, HR-vs-time against Masimo).
+
+**Failed / did not work, and why:**
+- The first draft of the collision figure was **unreadable in its benign panel** — the cardiac
+  peak is genuinely buried among respiratory harmonics, so "no collision" did not read as such.
+  Fixed by overlaying the cardiac-only component as a separate trace. Worth remembering for any
+  future version: the contrast only works if the ground-truth component is drawn separately.
+- An early speaker note described the mislock fix as "skipping the first five seconds", which is
+  **wrong as an explanation** — it implies a timing fix. The fix is a scoring gate; the skip only
+  determines which frames the eligibility energy is measured over. Corrected in all three writing
+  files after checking the actual selection JSON.
+- `conda run` with multi-line inline `python -c` produced silent empty output under this shell;
+  writing scratch scripts to a file and running those worked. Not a project bug, but it wasted a
+  few cycles — prefer script files over inline `-c` for anything multi-line.
+
+**Retired / no longer used:**
+- **`POSTDOC_SLIDES.md` and the entire `figures/` directory (3 scripts + 3 PNG outputs) were
+  deleted from the working tree during this session.** They were never committed, are not
+  recoverable from git, and are not present anywhere under the user's Desktop. **The reason is
+  not recorded — this entry does not assert one.** What they contained: two-slide presentation
+  content with layout sketches and speaker notes, plus `fig_system_setup.py`,
+  `fig_harmonic_collision.py` and `fig_range_bin_mislock.py` with their rendered outputs. **The
+  findings they encoded survive** — every number is recorded in this entry and in
+  `THIRD_CHAPTER.md` §9 / `JOURNAL_PAPER.md` §4.3. What is lost is the plotting code, which would
+  need rewriting to regenerate the images.
+- The 2026-07-15 "HISTORY/HANDOFF/notes are local-only by design" decision remains superseded for
+  HANDOFF/HISTORY (committed `b6f5b73`); `notes/` and `results/` stay gitignored.
+
+**Next:** the plan's immediate actions are (1) live hardware smoke test — the live path has not
+run since 2026-07-14 and is the first blocker before any subject; (2) the respiration-collapse
+fix, which now blocks the whole BR goal; (3) the HA synthetic collision test, cheap and capable of
+reshaping method strategy before data collection; (4) write the BR comparator spec, then deposit
+both pre-registrations publicly **before** the pilot — the pre-registration claim is only
+verifiable if it is timestamped before the data it governs. Ethics approval is in hand
+(reference number still to be recorded for the Methods section). Decide whether to rebuild the
+deleted figure scripts.
+
+---
+
+## 2026-07-24 - Cross-model review of the implementation plan (Codex x Claude Code)
+
+**Set out to do:** process Codex's review of `plans/implementation_plan.md`, the broad plan
+overseeing the HR+BR project, verifying each comment against the repo, the two reference papers
+and the code rather than accepting it on assertion.
+
+**Worked (with evidence):** 19 comments across 3 rounds. 15 applied, 1 withdrawn by Codex after
+debate, 2 escalated to the user and then decided (below), 1 (IP-15) already fixed before it
+landed. Suite unchanged throughout: **796 passed, 1 xfailed** - no code was written, only the
+plan.
+
+Three false repository claims were found and corrected:
+
+- **"797 passing tests" -> 797 test outcomes (796 passed, 1 xfailed).** An xfail is not a pass.
+- **"Respiration collapse 4-for-4 on every Masimo capture" -> 3-for-3.** Only three captures
+  carry a Masimo reference. Measured directly from each run's `live_estimates.csv`: the 6.00 bpm
+  floor-pin occurs in `massimo1` (12 hops), `massimo2` (5) and `sweep` (10), and is **absent**
+  from the unreferenced `live_test1` (minimum BR 16.0 bpm). **The 2026-07-14 sweep entry above
+  (~line 4973) carries the same incorrect "4-for-4" wording; it is corrected here rather than
+  edited, per CLAUDE.md S10.2.**
+- **"1 TX / 4 RX = the SIMO setup Kotte et al. assumes" -> false.** The paper's Sec. IV simulates
+  1 TX and **20 RX** at 24 GHz, 50 ms PRI, N_c = 16. Its eq. (25) requires `R_t^-1` where
+  `R_t = E{Y_t Y_t^H}` is N_c x N_c and the **RX channels supply the snapshots**: at n_R = 4,
+  `rank(R_t) <= 4`, so `R_t` is singular and the inverse does not exist. Its Fig. 5 validation is
+  on generic moving-target Dopplers (-1/-2, -1/4, 1/2.5 Hz), not HR/BR. M9 would have run
+  existing captures through an ill-posed estimator. M9 now requires a paper-faithful 1x20 /
+  N_c=16 reproduction first, then a registered 4-RX ablation specifying covariance estimation,
+  regularisation, rank checks, RX calibration and the chirp-vs-frame slow-time mapping.
+
+Design changes of record: M3's BR comparator is designed from **reference-only** evidence (radar
+agreement is inadmissible - the mirror image of the CLAUDE.md S4 tuning ban); the linalg-free DSP
+cross-model review moved from M11d housekeeping to a **prerequisite of M4**, since M4 produces
+every paper-grade number and executes that path; Bland-Altman for the study must use a
+subject-clustered repeated-measures model (`scripts/plot_bland_altman.py` pools windows as
+independent pairs, `se_loa = sqrt(3*sd^2/n)`, and was never valid even for the n=1 pilot - its
+output is descriptive only); M6 completes against a frozen evaluable-window floor rather than a
+session count; per-distance agreement downgraded to descriptive metadata, since the protocol
+deliberately does not pin distance; M0 gains a frozen comparison discipline naming ECA+AHET
+primary and all other estimators exploratory; M8 gains a paper-faithful reproduction control
+before the transfer test, so a failure can be told apart from our own bug.
+
+**Ethics decisions taken by the user (2026-07-24), on the user's authority - no agent has read
+the approval document:**
+- **The approval COVERS M7's subject-specific collision manoeuvre.** M7 is unblocked.
+- **Recordings may run up to 10 minutes.** This makes session length a live lever for the
+  evidence-floor problem: ~9 usable windows/session at 5 min versus ~19 at 10 min, i.e. ~1.8-8.3
+  accepted windows per subject versus ~3.8-17.5 at 10-46% coverage.
+- **Still unrecorded:** the approval reference number and issuing board, needed for the Methods
+  section.
+
+**Failed / did not work, and why:** two of my own revisions introduced regressions that Codex
+caught, both worth recording because both were the same class of error - writing an acceptance
+criterion that can only be satisfied by success.
+1. My M2 "Done when" required all three referenced captures to produce BR consistent with
+   `rr_bpm`. If the all-harmonic HA adaptation is simply invalid - which M2's own Risk
+   anticipates - that could only be satisfied by tuning until it agreed, violating CLAUDE.md S4
+   and cross-cutting rule 5. M2 now closes on a documented root cause, correct validity
+   semantics and dumped intermediates, and **a negative result closes it**.
+2. Switching the gate wording from "scored" to "confirmatory" made M0 call M5 the first
+   confirmatory capture while M5 is labelled exploratory. Fixed with an explicit three-class
+   vocabulary: pre-freeze exploratory (the 4 existing captures + M1), post-freeze exploratory
+   (M5), confirmatory (M6+).
+
+**Retired / no longer used:** the claim that M0 can establish *"the rules were frozen before any
+data existed."* It was never available - the four existing captures already informed the method's
+design (`THIRD_CHAPTER.md` S10.1; `HANDOFF.md` S4). Codex pressed this via IP-03 arguing M1's
+smoke test should be moved after M0; I declined the reordering but checking the argument exposed
+that the underlying claim was false regardless of where M1 sits, and Codex then **withdrew the
+comment**. M0 now states the attainable claim - **frozen before the confirmatory data** - and
+must enumerate every capture existing at freeze time as exploratory. Overstating this in
+`JOURNAL_PAPER.md` S3.1/S10 would repeat the error that forced the "MAE 0.16 bpm" withdrawal.
+Also retired: "M0-first discipline" as a name for synthetic-control-first (it collided with
+milestone M0); the unguarded "consider 6-7 min" suggestion in M6, replaced by an explicit
+duration decision.
+
+**Next:**
+- **Two decisions still open, both must land in M0's deposit.** (a) **Recording duration** - the
+  approval allows up to 10 min but `notes/protocol.md` still says 5; deciding before the deposit
+  costs nothing, deciding after costs a public amendment. **`notes/protocol.md` needs updating.**
+  (b) **The evidence floor** - deferred by the user on 2026-07-24; deferrable, but not past M0,
+  because a floor chosen after seeing the pilot yield is not a floor. Carried with it: whether to
+  attack coverage (M11a) before freezing, so an improved estimator can be the pre-registered
+  primary rather than a post-hoc footnote.
+- **Downstream documents are now stale** and need re-review before use: `JOURNAL_PAPER.md`
+  (pre-registration strength, pooled Bland-Altman, per-distance claims, test-count wording),
+  `THIRD_CHAPTER.md` (S17.2 test count, S12.4 "4-for-4", Bland-Altman, Kotte characterisation),
+  `notes/protocol.md` (recording duration, collision rationale).
+- **M7's design flaw is open** (not an ethics issue): it selects the paced rate from *resting* HR,
+  but pacing moves HR - the sweep's collision landed at the 21 bpm step, not the designed 18.
+  M7's derived plan must set the rate from HR measured *while paced*.
+- Then M1, M2 and M8 step 1a/1b, which Codex agreed are unblocked.
+
+---
+
+## 2026-07-24 - Protocol updated: recording duration 5 -> 10 minutes, plus two stale claims fixed
+
+**Set out to do:** apply the ethics answer from the review session to `notes/protocol.md`, which
+was the one document still saying 5 minutes after the approval was confirmed to permit 10.
+
+**Worked (with evidence):**
+
+- **Recording duration changed from 5 to 10 minutes** for both study arms. Decided **before** the
+  M0 deposit, so it is frozen protocol rather than a later public amendment - which is the whole
+  reason for doing it now. **The approval's 10-minute ceiling must not be exceeded**; recorded on
+  the user's authority, since the approval document is not in this repo.
+  Effect on the evidence problem that motivated it: ~9 usable (non-overlapping 30 s, post-warmup)
+  windows per session becomes **~19**, i.e. ~1.8-8.3 accepted windows per subject becomes
+  **~3.8-17.5** at the measured 10-46% coverage, before Masimo PI/coverage/stationarity exclusions
+  remove a further 12-20%. Storage rises from ~15 GB to **~31 GB** for the 20-session study.
+- **The risk this introduces is recorded with it, not just the benefit.** The warmup locks **one
+  range bin for the whole session**, so a posture shift late in a longer sit corrupts the tail with
+  no obvious symptom - the same silent-failure class as the 2026-07-14 mislock. The 486 s (~8 min)
+  sweep shows ~8 minutes is tolerable, but that subject was actively pacing rather than sitting
+  through natural breathing. **M5's pilot must verify the locked bin still tracks the chest at
+  minute 9-10** (`scripts/diagnose_live_run.py`); if it does not, the duration comes back down.
+- **Two stale claims in `notes/protocol.md` found and corrected while editing:**
+  - *"there is no standalone capture script"* - **false.** `steps/step_1/capture.py` exists (29 KB)
+    and was verified end-to-end on 2026-07-22 (session 9), writing `.bin` + metadata + SHA-256 +
+    manifest row. The file now records both capture paths and states that `live_demo.py` is the
+    one to use for study sessions, because it produces the diagnostics the analysis depends on.
+  - **The protocol contradicted itself on warmup latency** - "~30 s" in the Warmup & bin lock
+    section (correctly derived from one `window_s` buffer at 20 fps) versus "~40 s" in Session
+    step 5. Corrected to ~30 s, with the contradiction noted inline.
+- **M7's capture is now described in the protocol** as an approved but separate method-development
+  arm, with the explicit instruction **not** to compute its paced rate from resting HR.
+- Consistency check per this file's own header (protocol / `live_demo_config.yaml` / CLAUDE.md /
+  `notes/approach.md`): neither CLAUDE.md nor `notes/approach.md` carries a recording duration, and
+  `live_demo_config.yaml` has `max_live_duration_s: null` (run until Ctrl-C), so **nothing else
+  contradicts the new value**. Test suite unaffected: 796 passed, 1 xfailed.
+
+**Failed / did not work, and why:** nothing failed. One judgement call worth recording: the
+duration is enforced only by operator discipline, because `max_live_duration_s` is `null`. Setting
+it to 600 would make the protocol self-enforcing, but it would also hard-stop a session mid-window
+and it changes capture-tool behaviour, so it was **flagged rather than changed**.
+
+**Retired / no longer used:** the 5-minute recording duration, and the protocol's "Nothing open -
+protocol is fully specified" closing claim, which was false: the evidence floor and the ethics
+reference number are both still open.
+
+**Next:**
+- **The evidence floor is the last open item blocking M0** (deferred by the user 2026-07-24). The
+  10-minute change spent the cheapest lever, so if the floor is still missed the only remaining
+  responses are more sessions or a weaker claim. Fix the floor before the deposit.
+- Record the **ethics approval reference number and issuing board**.
+- `plans/implementation_plan.md` (M0/M5/M6) updated to match; `THIRD_CHAPTER.md` S3.3 and
+  `JOURNAL_PAPER.md` still say 5-minute recordings and are now stale.
+
+---
+
+## 2026-07-24 - Writing artefacts corrected; HANDOFF rewritten to hand off M0 planning
+
+**Set out to do:** propagate the cross-model review's corrections into the two writing artefacts
+(which the review left knowingly stale), and rewrite `HANDOFF.md` so a fresh chat can pick up
+planning for **M0** without reading the whole history.
+
+**Worked (with evidence):**
+
+- **`THIRD_CHAPTER.md` corrected** - five claims, each wrong rather than merely out of date:
+  S17.2/S6/S17.5 test count ("797 tests, all passing" -> 797 outcomes = 796 passed + 1 xfailed,
+  with an explicit note that an xfail is not a pass); S12.4 respiration collapse ("4-for-4" ->
+  **3-for-3**, with the per-capture hop counts and the correction footnote); S7.5 gains a
+  **repeated-measures Bland-Altman** requirement and marks the pooled-independent implementation
+  invalid **including for the n=1 pilot**; S10.3 + S1 + S0 downgrade **per-distance** agreement to
+  descriptive metadata; S14 rewrites the two `literature/ref_papers/` entries with their verified
+  geometry - notably that **Kotte et al. uses 1 TX / 20 RX, not a 4-RX SIMO setup**, and why that
+  makes `R_t` singular at n_R = 4. S3.3 recording duration 5 -> 10 min. S8/S17.4 HISTORY size
+  refreshed (100 dated entries, ~5,800 lines, measured).
+  **No status tag was promoted** - the honesty contract (promote by re-measuring, never by editing
+  the tag) was respected; these are corrections of false statements, not upgrades.
+- **`JOURNAL_PAPER.md` corrected** - S1 test count; S3.2 claim 5 scoped to "across subjects, not
+  distances" with the reason; S7 figure 6 now requires the subject-clustered model and limits
+  `plot_bland_altman.py` to plotting; S8 respiration collapse 4/4 -> 3/3; S10 **states the
+  pre-registration's defensible strength explicitly** ("frozen before the confirmatory data", not
+  "before any data existed", because four captures already shaped the method) and warns that
+  overstating it repeats the withdrawn-MAE error; S10 data-availability updated to the new session
+  size (~1.55 GB per 10-min session, ~31 GB for the study).
+- **`HANDOFF.md` rewritten** (CLAUDE.md S10.1 - replacement, not append), aimed at an
+  **M0-planning** chat: S3 is now a spec of what M0's deposit must contain, what M0 depends on
+  (M3 alone), the evidence-floor arithmetic at both durations, and the ordered immediate actions.
+  Added the three capture classes (pre-freeze exploratory / post-freeze exploratory / confirmatory),
+  the corrected 4-raw-vs-3-referenced capture split, and new landmines: the 10-min duration is
+  operator-enforced only (`max_live_duration_s: null`), a longer session stresses the single locked
+  range bin (check minute 9-10), M7's rate must not come from resting HR, and `notes/` is
+  gitignored so the protocol has no version history.
+- **Every pointer in the rewritten HANDOFF was verified to resolve** (23 files + 3 directories
+  checked). This caught a **dangling glob inherited from the previous HANDOFF**:
+  `results/live_demo/20260715_1640*_replay_unknown/` matches only **one** of the three re-scoring
+  folders, because the other two are `_164124` and `_164132`. Replaced with the three explicit
+  names and their sessions.
+- Test suite unaffected throughout: **796 passed, 1 xfailed**.
+
+**Failed / did not work, and why:** nothing failed. Recording one limitation honestly: the
+corrections to `THIRD_CHAPTER.md` and `JOURNAL_PAPER.md` were made against the review's findings
+and the source documents, but **neither writing file has been re-read end-to-end for internal
+consistency since**; other claims in them may still be stale in ways this pass did not target.
+
+**Retired / no longer used:** the "797 passing tests" figure in all three documents; the "4-for-4"
+respiration-collapse count; the per-distance agreement claim; the description of Kotte et al. as
+matching our 4-RX SIMO hardware; the 5-minute recording duration; and the previous `HANDOFF.md`
+in full (replaced per CLAUDE.md S10.1 - its content is superseded, and the durable record of what
+it said lives in this log).
+
+**Next:**
+- **Plan M0.** Its one blocking decision is the **evidence floor** (deferred 2026-07-24), which
+  must be fixed before the deposit. Carried with it: whether to attack coverage (M11a) before
+  freezing so an improved estimator can be the pre-registered primary.
+- Record the **ethics approval reference number and issuing board**.
+- **Consider tracking `notes/protocol.md` in git before M0 deposits it** - it is a pre-registration
+  input with no version history, which is exactly the provenance a pre-registration trades on.
+- M1, M2, M3 and M8 step 1a/1b are unblocked and can run in parallel with M0 planning.
