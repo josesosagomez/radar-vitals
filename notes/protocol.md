@@ -57,16 +57,19 @@
   the legs throughout — do not move the sensored hand during recording.
 - **Environment:** quiet room, no one walking around, no fan/HVAC airflow at the
   subject.
-- **Recording duration:** **10 minutes** per session (~30 s warmup + ~9.5 min
-  usable), yielding **~19 independent (non-overlapping 30 s) HR windows** after
-  warmup, with headroom for Perfusion-Index / motion exclusions.
+- **Recording duration:** **10 minutes** (600 s) per session, yielding **exactly 20
+  independent non-overlapping 30 s windows** on the frozen frame-index grid
+  (`notes/analysis_prespec.md` §7), `k = 0 … 19`. The first window `k = 0` (`[0, 30) s`)
+  **is scored** — it is the warmup-fill buffer, re-processed with the selected bin via
+  `dsp_override` (not discarded). Radar-acceptance and reference gates then reduce this
+  count; report coverage alongside accuracy.
 
   > **Changed from 5 to 10 minutes on 2026-07-24** — decided *before* the
   > pre-registration deposit, so it is part of the frozen protocol rather than a
   > later amendment. **The ethics approval permits up to 10 minutes** (user-confirmed
   > 2026-07-24; recorded on the user's authority — the approval document itself is
-  > not in this repo, and its reference number and issuing board are still to be
-  > logged). **Do not exceed 10 minutes.**
+  > not in this repo). Approval **`24IBEC051`**, issuing board **IBEC, KAUST**, covers
+  > both collection and publication (user-confirmed 2026-07-25). **Do not exceed 10 minutes.**
   >
   > **Why.** At the measured 10-46% HR coverage, a 5-min session produced only ~9
   > windows, i.e. ~1.8-8.3 accepted windows per subject across both sessions before
@@ -98,8 +101,11 @@
   lock. There is no extra pre-buffer settle delay — HR appears one window after
   the stream starts. The subject must be seated and still from before the run
   starts through the end.
-- If warmup locks a poor bin, re-run rather than nudging the subject — then use
-  `scripts/diagnose_live_run.py <run_dir>` to inspect the warmup decision.
+- If warmup locks a poor bin (**`selected_confidence == "low"`** in
+  `warmup_bin_selection.json`), re-run **at most once** rather than nudging the subject; if the
+  retry is still "low", **record the session anyway** (do not keep retrying). Both attempts and the
+  study-level retry incidence are logged; see the exact disposition in
+  `notes/analysis_prespec.md` §6 (item 7). Inspect with `scripts/diagnose_live_run.py <run_dir>`.
 
 ## Equipment checklist (before each session)
 
@@ -143,6 +149,12 @@ Record in `HISTORY.md`: settle duration, and the PR at the moment recording star
 2. Confirm the Perfusion Index is adequate (low PI segments are treated as unreliable reference —
    flag, do not chase; see CLAUDE.md §4).
 3. **Wait for the SETTLE CRITERION above.** This is a gate, not a suggestion.
+3a. **CLOCK SYNC (mandatory, agreement-blind).** Before recording, synchronise the PC and the
+   Masimo phone to a common NTP time source and **record both clock offsets** in the session log.
+   The PC↔phone offset must be **within ±1 s**; re-check at session end for drift. If it exceeds
+   ±1 s, **resync and restart before recording**. **Never** choose or adjust a time offset by
+   looking at radar–reference agreement (CLAUDE.md §4). The radar frame-0 epoch is taken from the
+   synchronised PC UTC clock (`notes/analysis_prespec.md` §7).
 4. Start Masimo logging; note the start wall-clock time.
 5. Start the radar capture (`scripts/live_demo.py`). Wait out the **~30 s** warmup
    (one full `window_s` buffer at 20 fps; see "Warmup & bin lock" above — this file
@@ -237,8 +249,9 @@ range around the prediction. Full design lives in `plans/implementation_plan.md`
   the agreement precision the study claims. Deferred by the user 2026-07-24, but it
   must be fixed **before** M0 freezes: a floor chosen after seeing the pilot yield
   is not a floor.
-- **Ethics approval reference number and issuing board** — still unrecorded, and
-  required for the Methods section.
+- **Ethics approval** — reference **`24IBEC051`**, issuing board **IBEC, KAUST**
+  (user-confirmed 2026-07-25; covers collection *and* publication). For the Methods
+  section, confirm the full formal expansion of "IBEC" as it appears on the approval.
 
 Next action is a live hardware smoke test on yourself before running any subject
 (`plans/implementation_plan.md` M1).
