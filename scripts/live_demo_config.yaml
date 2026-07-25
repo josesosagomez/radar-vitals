@@ -79,6 +79,12 @@ respiration:
   stft_std_high_bpm: 2.0
   stft_std_medium_bpm: 4.0
   fft_fallback_snr_db: 6.0
+  # M2 STFT-consistency gate (plans/m2_respiration_fix.md §2.3): STFT stability may
+  # support a fusion branch only if its median matches the selected value within
+  # stft_match_bpm (= one 10 s-subwindow FFT bin, 60/stft_subwindow_s) and covers at
+  # least stft_min_valid_fraction of subwindows.
+  stft_match_bpm: 6.0
+  stft_min_valid_fraction: 0.5
   emit_low_confidence: false
 
 # Validated hop-1, 30 s configuration — copied from config_hop1_win30_safe.yaml.

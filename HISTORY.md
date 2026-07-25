@@ -5891,3 +5891,33 @@ it said lives in this log).
 - **Consider tracking `notes/protocol.md` in git before M0 deposits it** - it is a pre-registration
   input with no version history, which is exactly the provenance a pre-registration trades on.
 - M1, M2, M3 and M8 step 1a/1b are unblocked and can run in parallel with M0 planning.
+
+## 2026-07-25 - M2: respiration floor-pin root cause, cross-reviewed fix, implemented
+
+**Set out to do:** close M2 — root-cause the silent 6.0 bpm/`resp_valid=True` collapse,
+cross-review the fix plan (Codex), implement.
+
+**Worked (with evidence):** Root cause verified from checkpointed NPZs
+(`scripts/diagnose_respiration_collapse.py`, SHA-256s recorded): two observed classes — both-branch
+edge selection (23 windows; 16 with a monotone leakage-decay signature) and HA-only edge selection
+(6 windows; 4 supported by 3rd-harmonic inheritance, 18 bpm bin 2.0–3.3× band floor) — blessed by
+fusion flaws (floor agreement read as confirmation; STFT stability of a different rate blessing
+HA's value). 7/29 pinned windows are spectrally unresolved (edge bin is a strict local max) and are
+suppressed only by the band-edge validity veto. Fix (`src/respiration.py`, cross-reviewed:
+7 findings, 2 rounds, 0 escalations — `plans/m2_fix_cross_review.md`): local-max plateau predicate
+in FFT+HA, bin-identity edge veto, STFT median-match on all STFT-dependent fusion branches; 14 new
+NPZ evidence fields; 25 new tests. Reprocessed all 4 captures: 0 floor-pinned-valid windows;
+paced-16 unchanged; HR identical at fixed bins (max |ΔHR| = 0.000 bpm); natural warmup now locks
+bin 27 at high confidence with warmup-verified HR 64.5 (was bin 23, medium, none). Suite 821p/1xf
+at bc12663+.
+
+**Failed / did not work, and why:** The plan's original "6 bpm bin is never a local maximum"
+unifier was falsified by the NPZs (7/29 counterexamples) — caught in cross-review and
+independently; retained as a partial discriminator only. Genuine ≈6 bpm breathing at the edge bin
+is now permanently `resp_valid=False` — a declared coverage sacrifice mandated by the M2 invariant.
+
+**Retired / no longer used:** the `fund_power > noise_floor` HA guard (too weak — permitted
+subharmonic wins); unconditional STFT-stability blessing in fusion.
+
+**Next:** freeze the BR comparator (M3), then score reprocessed BR under it (M2 done-when #5 via
+M4); decide whether live protocol adopts warmup bin 27 for natural sessions; update `HANDOFF.md`.

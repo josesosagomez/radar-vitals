@@ -35,6 +35,8 @@ respiration:
   stft_std_high_bpm: 2.0            # STFT std threshold for high confidence
   stft_std_medium_bpm: 4.0          # STFT std threshold for medium confidence
   fft_fallback_snr_db: 6.0          # min FFT SNR (dB) to use FFT-only fallback when HA fails
+  stft_match_bpm: 6.0               # M2: STFT median must match selected value within this (= one 10 s-subwindow FFT bin)
+  stft_min_valid_fraction: 0.5      # M2: STFT stability needs >= this fraction of valid subwindows
   edge_lock_margin_bpm: 2.0         # estimates within this margin of band edge are flagged and invalidated
   emit_low_confidence: false         # if true, emit radar_rr_bpm even for low confidence
   high_edge_lock_fraction_threshold: 0.5  # diagnostic flag: majority of windows edge-locked suggests wrong bin

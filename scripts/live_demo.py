@@ -1479,6 +1479,34 @@ def main() -> None:
             "resp_spectrum": dsp["fft_r"].get("spectrum", np.array([])),
             "resp_ha_freqs_hz": dsp["ha_r"].get("freqs_hz", np.array([])),
             "resp_ha_spectrum": dsp["ha_r"].get("spectrum", np.array([])),
+            # M2 respiration decision evidence (plans/m2_respiration_fix.md §4.3) — a
+            # field that exists only in an in-memory result dict is not evidence; every
+            # picker/veto decision is persisted per window.
+            "fft_band_argmax_bin": int(dsp["fft_r"].get("fft_band_argmax_bin", -1)),
+            "fft_band_argmax_is_local_max": bool(
+                dsp["fft_r"].get("fft_band_argmax_is_local_max", False)
+            ),
+            "fft_selected_bin": int(dsp["fft_r"].get("fft_selected_bin", -1)),
+            "ha_candidate_freqs_hz": dsp["ha_r"].get(
+                "ha_candidate_freqs_hz", np.array([])
+            ),
+            "ha_candidate_scores": dsp["ha_r"].get(
+                "ha_candidate_scores", np.array([])
+            ),
+            "ha_fund_is_local_max": dsp["ha_r"].get(
+                "ha_fund_is_local_max", np.array([], dtype=bool)
+            ),
+            "ha_selected_bin": int(dsp["ha_r"].get("ha_selected_bin", -1)),
+            "stft_rr_std_bpm": dsp["stft_r"].get("stft_rr_std_bpm", np.nan),
+            "stft_valid_fraction": dsp["stft_r"].get("stft_valid_fraction", np.nan),
+            "resp_edge_veto": bool(dsp["br_result"].get("resp_edge_veto", False)),
+            "resp_edge_veto_reason": str(
+                dsp["br_result"].get("resp_edge_veto_reason", "")
+            ),
+            "resp_fusion_branch": str(
+                dsp["br_result"].get("resp_fusion_branch", "")
+            ),
+            "resp_valid": bool(dsp["br_valid"]),
             # Heart spectra
             "heart_freqs_hz": hr_result.get("freqs_hz", np.array([])),
             "heart_spectrum_pre_eca": hr_result.get("spectrum_pre_eca", np.array([])),
