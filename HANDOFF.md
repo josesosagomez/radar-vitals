@@ -15,9 +15,11 @@ Estimate **heart rate and — co-equally — breathing rate** from a 77 GHz FMCW
 (TI IWR1642BOOST + DCA1000EVM) for a subject seated 0.8–1.4 m from the sensor, chest facing the
 radar. Ground truth is a Masimo MightySat pulse oximeter (1 Hz CSV: `Beats / min` = PR for heart,
 `Breaths / min` = RR for respiration). HR agreement is scored under a **pre-registered comparator**
-(`notes/comparator_prespec.md`) — binding on every HR number in the paper. **The BR comparator now
-exists as a draft** (`notes/comparator_prespec_br.md`, prepared 2026-07-25) but is **not frozen —
-its cross-review (M3) is the only thing M0 waits on.** The DSP extracts chest-wall phase from an
+(`notes/comparator_prespec.md`) — binding on every HR number in the paper. **The BR comparator
+exists** (`notes/comparator_prespec_br.md`) and its **M3 cross-review is 9 rounds deep with all 28
+findings (M3R-01…28) resolved** — see `plans/m3_prespec_cross_review.md` `DEBATE COMMENTS` for the
+authoritative state. It is **not yet formally closed** (awaiting Codex's `NO MORE COMMENTS`) and
+**not frozen** — closing it is the only thing M0 waits on. The DSP extracts chest-wall phase from an
 auto-locked range bin, cancels respiration harmonics (ECA) and verifies the cardiac peak via a
 second-harmonic check (AHET). Output: journal paper + thesis chapter.
 
@@ -126,14 +128,17 @@ nothing was changed in the warmup code.
 
 ---
 
-## 3. Active task / next steps — **cross-review + freeze the BR comparator (M3)**
+## 3. Active task / next steps — **CLOSE the M3 cross-review (not start it)**
 
 **M3 blocks the most:** the M0 deposit needs the frozen BR comparator, and M2's last done-when
-item (#5) is BR scored under it. M3 depends on nothing.
+item (#5) is BR scored under it.
 
-1. **M3** — cross-review `notes/comparator_prespec_br.md` (its header says "awaiting
-   cross-review"; prompt files `plans/m3_codex_review_prompt.md` / `plans/m3_prespec_cross_review.md`
-   already exist). Same Codex-loop pattern as the M2 review. Then freeze.
+1. **M3 close-out** — the review of `notes/comparator_prespec_br.md` + `notes/analysis_prespec.md`
+   already ran (2026-07-25, 9 rounds, 28/28 findings resolved incl. the user's §2b evidence-floor
+   decision in round 8). Remaining: Codex's final confirmation + `NO MORE COMMENTS`, inbox tidy-up,
+   status-header updates. **Resume prompt: `plans/m3_claude_review_loop_prompt.md`** (Codex side:
+   `plans/m3_codex_review_prompt.md`). Note the comparator's own header still says "awaiting
+   cross-review" — stale; the coordination file's debate log is authoritative.
 2. **Score reprocessed BR under the frozen comparator** (closes M2). The post-fix NPZs are ready;
    the reference-only evidence script is `scripts/derive_br_comparator_evidence.py`.
 3. **M0** — the pre-registration freeze and deposit (hard gate before any study capture). Its one
@@ -277,7 +282,8 @@ Also start early: the **linalg-free DSP cross-model review** (gates M4, hence M5
 | Journal paper planning | `JOURNAL_PAPER.md` |
 | Method, literature, algorithm spec | `notes/approach.md` |
 | **Pre-registered HR comparator (binding)** | `notes/comparator_prespec.md` |
-| **BR comparator DRAFT (M3 — awaiting cross-review/freeze)** | `notes/comparator_prespec_br.md` |
+| **BR comparator (M3 — review at final gate, 28/28 resolved, not frozen)** | `notes/comparator_prespec_br.md` |
+| M3 close-out prompt (Claude side) | `plans/m3_claude_review_loop_prompt.md` |
 | BR-comparator design evidence (reference-only) | `scripts/derive_br_comparator_evidence.py` |
 | Frozen analysis pre-spec (scoring grid §7) | `notes/analysis_prespec.md` |
 | Capture inventory (hashes) | `notes/capture_inventory.md` |
