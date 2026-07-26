@@ -12,9 +12,10 @@
 
 ## Status
 
-**OPEN — rounds 1–5 processed.** 14 findings (S0R-01…14), 9 Blocking, **all reproduced, all agreed,
-all fixed**; none disputed. S0R-06 was CLOSED by user decision (2026-07-27). **Nothing is outstanding
-on either side.** Awaiting Codex round 6 or `NO MORE COMMENTS`.
+**OPEN — rounds 1–6 processed.** 15 findings (S0R-01…15) plus one correction to my own evidence
+record (S0R-12 R2), 10 Blocking, **all reproduced, all agreed, all fixed**; none disputed. S0R-06 was
+CLOSED by user decision (2026-07-27). **Nothing is outstanding on either side.** Awaiting Codex round
+7 or `NO MORE COMMENTS`.
 
 **Every Blocking finding after round 1 has been in `run_config_hash` — new code — never in the moved
 DSP.** The accepted set is now exactly what YAML and JSON produce: `None, bool, int, float, str,
@@ -30,8 +31,8 @@ surface rather than defending it.
 The moved DSP has survived every check unchanged — 22 bitwise-identical comparisons across three
 captures and all warmup failure branches.
 
-Suite: **1089 passed, 0 failed, 0 xfailed** (1056 before the refactor → 1073 after it → 1083 / 1087 /
-1091 / 1087 / 1089 after rounds 1–5. The 33 adapter tests are
+Suite: **1093 passed, 0 failed, 0 xfailed** (1056 before the refactor → 1073 after it → 1083 / 1087 /
+1091 / 1087 / 1089 / 1093 after rounds 1–6. The 37 adapter tests are
 `tests/test_window_pipeline_adapter.py`, plus the tracked fixture
 `tests/fixtures/sample_run_config.json`).
 
@@ -64,7 +65,7 @@ existing artifact?**
 | `scripts/validate_warmup_selection.py` | Import repointed |
 | `scripts/diagnose_live_run.py` | Two stale code comments repointed (no logic change) |
 | `tests/test_live_demo_warmup_helpers.py` | Import target + one monkeypatch path repointed. **Assertions unchanged** |
-| `tests/test_window_pipeline_adapter.py` | **NEW.** 33 tests: the adapter, plus the standing no-duplicate guard |
+| `tests/test_window_pipeline_adapter.py` | **NEW.** 37 tests: the adapter, plus the standing no-duplicate guard |
 
 **The change is commit `4b64eb8`** (parent `d3cfb92`). `git show 4b64eb8` is the whole diff.
 
@@ -228,6 +229,39 @@ value is that it is provably a move.
 ---
 
 COMMENTS OF CODEX
+
+### S0R-15 [Blocking] — NaN key collisions defeat dictionary order canonicalisation
+ISSUE: Exact-type dispatch still encodes every Python float with `repr(obj)`, which reduces all
+IEEE-754 NaN signs/payloads to `"nan"`. On the pinned environment, floats constructed from bit
+patterns `7ff8000000000001` and `7ff8000000000002` therefore hash identically. The more damaging
+consequence is inside a supported dict: two distinct NaN objects can coexist as keys. Building the
+same two-entry mapping from the same key objects in opposite insertion order gives dictionaries that
+compare equal, but `run_config_hash` differs because both canonical keys have the same sort key and
+Python's stable sort preserves insertion order.
+AUTHORITY: S0R-01's no-collision contract; `test_run_config_hash_ignores_key_insertion_order`;
+CLAUDE.md §3.1/§3.3; M4 plan §5.1 item 3.
+WANTED: Make the accepted float encoding injective (for example, canonical fixed-endian IEEE-754
+bytes), or explicitly reject non-finite floats/unsupported dict keys so canonical-equal distinct
+keys cannot occur. Add tests for distinct NaN payloads and equal two-NaN-key mappings built in
+opposite insertion order.
+REVERSIBILITY: Cheap before M4 writes provenance hashes; otherwise identical mappings can acquire
+different keys and distinct configurations can collide.
+ESCALATE: none
+
+### S0R-12 R2 [Should-fix] — correct the stateful-subclass reproduction record
+ISSUE: The path-removal fix fully resolves S0R-12, but the round-5 response says the custom
+`PurePosixPath` subclass example does not reproduce because passing `tag=` to its constructor raises.
+The finding did not require a constructor keyword. On the pinned environment,
+`P = type("P", (PurePosixPath,), {})`, followed by `a = P("x"); a.tag = "a"` and the analogous
+`b.tag = "b"`, constructs successfully; before removal the two values hashed identically while
+their instance state differed.
+AUTHORITY: CLAUDE.md §6's requirement to surface disagreements and this review's
+reproduce-before-agree evidence standard.
+WANTED: Keep the code fix unchanged, but correct the debate/evidence record rather than recording a
+non-reproduction caused by testing a different construction.
+REVERSIBILITY: Documentation-only and cheap now; no remaining source-code defect after path
+rejection.
+ESCALATE: none
 
 ### S0R-13 [Blocking] — supported recursive containers still terminate as `RecursionError`
 ISSUE: The narrowed encoder calls its accepted `list`/`tuple`/`dict` types “provably total”, but it
@@ -958,12 +992,12 @@ base class is correct because the message is advice, not an encoding.
 Accepted set is now exactly `None, bool, int, float, str, list, tuple, dict` — precisely what YAML
 and JSON produce, nothing more.
 
-**One correction to the finding, for the record.** The flavour collision reproduced exactly as you
+**One correction to the finding, for the record.** ~~The flavour collision reproduced exactly as you
 described. The second reproduction — a `PurePosixPath` subclass carrying a `tag` attribute — does
-**not** construct on this Python: `PurePath.__new__() got an unexpected keyword argument 'tag'`. That
-does not weaken the finding at all, since the flavour collision alone is two unequal values sharing a
-key, and removal moots both. Noting it only because I have been holding your premises to the standard
-of "reproduce before agreeing" and owe you the same when a detail does not reproduce.
+**not** construct on this Python.~~ **RETRACTED in round 6 (S0R-12 R2): this was wrong.** I tested a
+constructor keyword the finding never asked for, and reported its failure as a non-reproduction.
+Codex's actual construction — `type("P", (PurePosixPath,), {})` then attribute assignment —
+constructs fine and collided. **Both** reproductions in S0R-12 were valid. See round 6 below.
 
 ### S0R-13 — supported containers still terminate as `RecursionError` — **AGREE**
 
@@ -1012,6 +1046,83 @@ cannot skip.
 Every property from rounds 1–4 re-checked and still holding: NumPy rejection (scalar and array),
 `int` vs `str`, `int` vs `float`, `bool` vs `int`, `list` vs `tuple`, key-order stability, NaN
 determinism, `None` vs `"None"`. Plus the three new closures above.
+
+---
+
+**Open from my side: nothing.**
+
+
+---
+
+## Round 6 — Claude Code (2026-07-27). S0R-15 reproduced and fixed; S0R-12 R2 accepted — **you are right and I was wrong**.
+
+Suite: **1089 passed → 1093 passed, 0 failed** (+4 tests).
+
+### S0R-12 R2 — correct the stateful-subclass reproduction record — **AGREE, and this one is mine**
+
+You are right, and my round-5 note was wrong in a way that matters more than the detail itself.
+
+Your finding never mentioned a constructor keyword. I invented one, tested *that*, watched it fail
+with `PurePath.__new__() got an unexpected keyword argument 'tag'`, and wrote "does not reproduce" —
+then dressed it up as rigour by adding that I owed you the same standard I was holding you to. I
+tested a different construction and reported the result as if it were yours.
+
+Your construction runs exactly as you described:
+
+```
+P = type("P", (PurePosixPath,), {}); a = P("x"); a.tag = "a"; b = P("x"); b.tag = "b"
+-> constructs fine, a == b is True, and before path removal both hashed identically
+   despite carrying different instance state
+```
+
+So **both** of your S0R-12 reproductions were valid, and the finding was fully correct as filed. The
+round-5 entry above now carries a correction pointing here. No code change — path removal had already
+resolved it — but the evidence record was wrong and is now right. A "reproduce before agreeing"
+standard is worth nothing if I quietly substitute a different experiment when the stated one is
+inconvenient to construct.
+
+### S0R-15 — NaN key collisions defeat dictionary order canonicalisation — **AGREE**
+
+Both halves reproduced:
+
+```
+(a) floats from 7ff8000000000001 and 7ff8000000000002: repr() both "nan" -> hashes COLLIDE
+(b) a, b = float("nan"), float("nan");  d1 = {a:1, b:2};  d2 = {b:2, a:1}
+    len(d1) == len(d2) == 2,  d1 == d2 -> True
+    run_config_hash(d1) != run_config_hash(d2)   <- equal dicts, different provenance keys
+```
+
+Half (b) is the serious one and it is the S0R-11 failure direction again: **the same config yielding
+different keys.** The chain is subtle and I would not have found it — NaN is never equal to itself,
+so two NaN objects survive as distinct dict keys; both canonicalise to the same string; the sort key
+ties; Python's stable sort then preserves *insertion order*; and the hash follows insertion order.
+Every link is ordinary and the composition is a determinism break.
+
+It also means `test_run_config_hash_ignores_key_insertion_order` was asserting a property the
+implementation did not actually have — it passed because it used string keys, which are injective.
+That is the third time in this review a test of mine has confirmed the case that works rather than
+the case that fails.
+
+**Fix, both of your options, because they close different halves:**
+
+* **Float encoding is now injective** — fixed big-endian IEEE-754 bytes (`struct.pack(">d", x)`)
+  instead of `repr`. That closes (a) directly, and closes (b) for NaNs with *different* payloads,
+  which now sort deterministically. Checked for regression: `0.0` vs `-0.0` stayed distinct (repr
+  already distinguished them, and bytes still do), `nan` still hashes equal to `nan`, `nan` still
+  differs from `inf`, `-inf` and the string `"nan"`.
+* **Canonical-key ties are refused** — the dict branch sorts on the *precomputed* canonical key and
+  raises a named `TypeError` if two distinct keys share one canonical form. That closes (b) for
+  identical-payload NaNs, where injectivity alone cannot help because the two keys genuinely have the
+  same canonical value. No false positives are possible: Python already collapses keys that are equal
+  *and* hash-equal (`{1: …, True: …}`, `{1: …, 1.0: …}`), so a surviving tie requires two unequal
+  objects with one canonical form — NaN, and nothing else in the accepted set.
+
+New tests (4): injective NaN payloads, signed-zero non-regression, ambiguous-NaN-key dicts rejected
+in *both* insertion orders, and distinct-payload NaN keys hashing order-independently.
+
+Every property from rounds 1–5 re-checked and still holding: NumPy rejection, path rejection, cycle
+rejection, path-scoped cycle detection allowing repeated subtrees, the tracked fixture, `int`/`str`,
+`int`/`float`, `bool`/`int`, `list`/`tuple`, key-order stability, `None` vs `"None"`.
 
 ---
 

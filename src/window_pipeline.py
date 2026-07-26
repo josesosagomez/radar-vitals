@@ -18,6 +18,7 @@ from __future__ import annotations
 import collections
 import hashlib
 import json
+import struct
 from dataclasses import dataclass, field, fields
 from pathlib import PurePath
 from typing import Any, Mapping, Protocol, runtime_checkable
@@ -215,7 +216,10 @@ _ATOMIC: dict = {
     type(None): lambda o: ["null", ""],
     bool: lambda o: ["bool", "1" if o else "0"],
     int: lambda o: ["int", str(o)],            # str: exact at arbitrary precision
-    float: lambda o: ["float", repr(o)],       # repr round-trips exactly; nan/inf safe
+    # Fixed big-endian IEEE-754 bytes, NOT repr: repr collapses every NaN sign and
+    # payload to "nan", so distinct floats shared one encoding (S0R-15). Bytes are
+    # injective over the whole float domain, and still distinguish 0.0 from -0.0.
+    float: lambda o: ["float", struct.pack(">d", o).hex()],
     str: lambda o: ["str", o],
 }
 
@@ -274,11 +278,23 @@ def _canonical(obj: Any, _active: set | None = None) -> list:
         _active.add(id(obj))
         try:
             if t is dict:
-                return ["dict", sorted(
-                    ([_canonical(k, _active), _canonical(v, _active)]
-                     for k, v in obj.items()),
-                    key=lambda kv: json.dumps(kv[0], separators=(",", ":")),
-                )]
+                # Sort on the PRECOMPUTED canonical key, and refuse ties. Two distinct
+                # keys with one canonical form make the sort order depend on insertion
+                # order, so equal dicts would hash differently (S0R-15).
+                by_key: dict[str, list] = {}
+                for k, v in obj.items():
+                    ck = _canonical(k, _active)
+                    kj = json.dumps(ck, separators=(",", ":"))
+                    if kj in by_key:
+                        raise TypeError(
+                            "run_config_hash cannot canonicalise a dict with two "
+                            f"distinct keys sharing one canonical form ({kj}). This "
+                            "happens with NaN keys, which are never equal to each "
+                            "other, so their order — and therefore the hash — would "
+                            "depend on insertion order. Use finite, distinct keys."
+                        )
+                    by_key[kj] = [ck, _canonical(v, _active)]
+                return ["dict", [by_key[k] for k in sorted(by_key)]]
             return [t.__name__, [_canonical(v, _active) for v in obj]]
         finally:
             _active.discard(id(obj))   # path-scoped, not global: siblings may repeat

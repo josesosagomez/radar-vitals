@@ -95,7 +95,48 @@ def test_run_config_hash_handles_nan_and_inf_deterministically():
     a = run_config_hash({"x": float("nan")})
     assert a == run_config_hash({"x": float("nan")})
     assert a != run_config_hash({"x": float("inf")})
+    assert a != run_config_hash({"x": float("-inf")})
     assert a != run_config_hash({"x": "nan"})
+
+
+def test_float_encoding_is_injective_over_nan_payloads():
+    """S0R-15. `repr()` collapses every NaN sign and payload to the string "nan", so
+    distinct floats shared one encoding. Fixed big-endian IEEE-754 bytes are injective."""
+    import struct
+
+    n1 = struct.unpack(">d", bytes.fromhex("7ff8000000000001"))[0]
+    n2 = struct.unpack(">d", bytes.fromhex("7ff8000000000002"))[0]
+    assert repr(n1) == repr(n2) == "nan"                      # the mechanism
+    assert run_config_hash({"x": n1}) != run_config_hash({"x": n2})
+
+
+def test_signed_zero_is_still_distinguished():
+    """`repr` distinguished these; the byte encoding must not regress it."""
+    assert 0.0 == -0.0                                        # equal as values...
+    assert run_config_hash({"x": 0.0}) != run_config_hash({"x": -0.0})   # ...distinct bits
+
+
+def test_dict_with_two_canonically_identical_keys_is_rejected():
+    """S0R-15, the damaging half. Two NaN keys are never equal to each other, so both
+    survive in one dict. With a shared canonical form the sort was a tie and Python's
+    stable sort preserved INSERTION order — so two dicts that compare equal hashed
+    differently. Ambiguity is now refused outright."""
+    a, b = float("nan"), float("nan")
+    d1, d2 = {a: 1, b: 2}, {b: 2, a: 1}
+    assert d1 == d2 and len(d1) == 2                          # the mechanism
+    for d in (d1, d2):
+        with pytest.raises(TypeError, match="two distinct keys sharing one canonical"):
+            run_config_hash(d)
+
+
+def test_distinct_nan_keys_hash_order_independently():
+    """With an injective float encoding, NaN keys with DIFFERENT payloads no longer tie,
+    so the sort is deterministic and insertion order stops mattering."""
+    import struct
+
+    n1 = struct.unpack(">d", bytes.fromhex("7ff8000000000001"))[0]
+    n2 = struct.unpack(">d", bytes.fromhex("7ff8000000000002"))[0]
+    assert run_config_hash({n1: 1, n2: 2}) == run_config_hash({n2: 2, n1: 1})
 
 
 def test_numpy_values_are_rejected_with_actionable_guidance():
