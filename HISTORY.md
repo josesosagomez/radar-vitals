@@ -6224,3 +6224,81 @@ estimator adapter; behaviour-preserving, with the 1056-test suite as the regress
 CLAUDE.md §6 review. Then M4 stages 1–7 (manifest → grid → raw reprocessing → gates → ledger →
 statistics → outputs/provenance), then the stage-8 development-mode smoke run on the 3 captures.
 Still open and unchanged: the "34 % of hops" paced-16 decoy figure, and M2 #5.
+
+---
+
+## 2026-07-26/27 - M4 Stage 0 built, and its cross-review closed after 7 rounds
+
+**Set out to do:** build M4 Stage 0 — the shared-callable refactor that `plans/m4_offline_harness.md`
+§5.1 makes a hard prerequisite of every other M4 stage — and take it through its own CLAUDE.md §6
+correctness review.
+
+**Worked (with evidence):**
+
+- **The extraction itself (`4b64eb8`).** `_run_dsp` → `src/window_pipeline.py:run_window_dsp`;
+  `_run_warmup_selection` + `derive_candidate_bins` + `range_energy_by_bin` + `resolve_locked_bin` →
+  `src/warmup_select.py`. `scripts/live_demo.py` lost 489 lines and now **imports** both, so the live
+  path and M4 cannot diverge (M4R-10). Deliberately a move: no constant, comparison, guard or
+  statement order touched, and no "while I'm here" improvement even where one was noticed.
+- **Behaviour preservation proven on real data, not argued.** The pre-refactor implementation was
+  materialised from `d3cfb92` and run in the **same process** as the new one:
+  **22 comparisons — all bitwise identical.** All three Masimo captures (warmup over 14 candidate
+  bins + `run_window_dsp` at four windows spread across each capture), plus all three warmup failure
+  branches (partial DSP failure, all-candidates-fail, only-an-ineligible-bin-succeeds) and
+  empty-candidate `ValueError` parity. Locked bins 27/26/26 unchanged. Re-run after every review
+  round; still 22/22 at close. This mattered because the existing warmup unit tests drive the scorer
+  with a **fake `dsp_fn`** and never execute the real DSP composition at all.
+- **End-to-end:** headless replay wrote all four artifacts, 51 hop rows, bin 27, HR and BR emitting.
+- **Cross-review CLOSED (`plans/m4_stage0_refactor_review.md`).** 15 findings (S0R-01…15) plus one
+  correction to my own evidence record (S0R-12 R2), across **7 Codex passes and 6 response rounds**,
+  10 Blocking, all reproduced before agreement, all resolved, none disputed. Codex posted
+  `NO MORE COMMENTS`. **M4 plan §7 row 0 satisfied — Stage 1 may begin.**
+- **Suite 1056 → 1093**, 0 failed throughout (1073 / 1083 / 1087 / 1091 / 1087 / 1089 / 1093 across
+  the rounds; round 4 deleted 9 tests with the feature they covered).
+- **S0R-06, user decision 2026-07-27:** `notes/analysis_prespec.md` §6 item 7 named the moved
+  function. Corrected pre-freeze, and the pre-spec now carries a dated "Post-cross-review edits
+  (pre-freeze)" block in its own header — a convention that did not previously exist, so the
+  deposited document explains its own post-review history.
+
+**Failed / did not work, and why — this is the substance of the session:**
+
+- **Not one of the 15 findings was in the moved DSP.** All 10 Blocking findings were in the ~12 lines
+  of *new* adapter code I wrote alongside it, and **8 were in `run_config_hash` alone**. The part
+  everyone treated as risky needed zero corrections; the convenience code added on top consumed the
+  entire review.
+- **Three times I fixed the instances a finding cited and left the property that generated them
+  intact**, and each time the next round found another instance. S0R-01 → I tagged types; S0R-07 →
+  I reordered the type checks; S0R-08 → I changed the encoding mechanism; S0R-09/10/11 → three more,
+  all different. What finally closed it was **deleting speculative surface**: NumPy support (5
+  findings, 5 distinct mechanisms — subclass dispatch, `.item()` non-termination, dtype metadata,
+  mask erasure, alignment padding) and `pathlib` support (flavours collide). Neither appears in this
+  project's real configs, which contain only `NoneType`/`bool`/`int`/`float`/`str` — I checked that
+  only in round 4, after four rounds of defending code that protected nothing.
+- **Three of my own tests asserted the case that works rather than the case that fails.** The
+  equality test used valid records, so it missed that two identical *invalid* records compared unequal
+  (NaN != NaN). The key-order test used string keys, so it missed that two NaN keys make equal dicts
+  hash differently. Worst, **S0R-14**: the test I added specifically to prevent vacuous confidence
+  read a **gitignored** path under `if meta.exists()`, so in a clean clone it passed without calling
+  the function at all — and I cited it as round-4 evidence. It proved something on my machine only.
+- **I recorded a false non-reproduction (S0R-12 R2).** Codex's finding gave two reproductions; I
+  invented a constructor keyword it never mentioned, tested that, watched it fail, and wrote "does not
+  reproduce" — while claiming I was holding myself to the reproduce-before-agreeing standard. Their
+  construction works. Retracted in round 6; the round-5 entry is struck through.
+- **I escalated S0R-06 as frozen-content governance on a premise I had not checked.** The pre-spec's
+  own header says "ready for the M0 freeze — **NOT yet frozen**", so the §4 amendment mechanism never
+  applied. Cost the user a decision they should not have had to make.
+- **Two mechanical own-goals:** a PowerShell here-string (`@'…'@`) used inside a **Bash** call put a
+  literal `@` in a commit subject (amended before pushing, `c4330e2` → `4b64eb8`); and I reported
+  "no round 3 has arrived" three minutes before it landed, after checking but not re-checking.
+
+**Retired / no longer used:** NumPy support in `run_config_hash` (and the 9 tests asserting NumPy
+values hash — deleted with the feature, not adapted); `pathlib` support in the same function;
+`repr()`-based float encoding, replaced by injective IEEE-754 bytes; `type(obj).__name__` as a type
+tag; `.item()`-recursive NumPy encoding; `isinstance` dispatch in any encoding path.
+
+**Next:** **M4 Stage 1** — the manifest schema + validation (`plans/m4_offline_harness.md` §4, build
+order row 1), including the objective admission disposition recomputed from primitive fields with a
+named negative test per rule (M4R-04), and development mode separated so it cannot emit scoring
+output. Then stages 2–7, then the stage-8 development-mode smoke run on the 3 captures. Still open and
+unchanged: the "34 % of hops" paced-16 decoy figure, M2 done-when #5, and the fact that no frozen
+scoring number can come from the 4 existing captures (no persisted `frame0_epoch`).

@@ -1,18 +1,17 @@
 # Handoff — radar-vitals
 
-> **Read this + `CLAUDE.md` and you can resume the project.** State **as of 2026-07-26**.
+> **Read this + `CLAUDE.md` and you can resume the project.** State **as of 2026-07-27**.
 > Rewritten, not appended (CLAUDE.md §10). For *what happened and why*, read `HISTORY.md`.
 > Every claim below was re-verified against the repo at the time of writing.
 >
 > **M4 is fully unblocked: both gates cleared (M3, linalg review) AND its build plan is written and
 > cross-reviewed to closure.** No user decision is outstanding.
 >
-> **The active job is to BUILD M4. Stage 0 is DONE and committed (`4b64eb8`); its CLAUDE.md §6
-> review is OPEN and gates Stage 1.** Read `plans/m4_offline_harness.md` (revision 6, the build
-> authority) before anything else, then §3 below. The window DSP and warmup policy now live in
-> `src/window_pipeline.py` and `src/warmup_select.py`, imported by both the live path and M4 — they
-> are no longer private to `scripts/live_demo.py`. Stage 1 does not begin until
-> `plans/m4_stage0_refactor_review.md` closes.
+> **The active job is to BUILD M4. Stage 0 is DONE and its CLAUDE.md §6 review is CLOSED — the
+> next action is Stage 1 (the manifest schema).** Read `plans/m4_offline_harness.md` (revision 6,
+> the build authority) before anything else, then §3 below. The window DSP and warmup policy now
+> live in `src/window_pipeline.py` and `src/warmup_select.py`, imported by both the live path and
+> M4 — they are no longer private to `scripts/live_demo.py`.
 
 ---
 
@@ -36,8 +35,8 @@ survived a full cross-model review on 2026-07-24 and is the scope authority for 
 
 ## 2. Current state
 
-**Branch `vital_signs_v9c`.** Test suite **1056 passed, 0 failed, 0 xfailed**
-(`conda run -n radar-vitals python -m pytest tests/ -q`, 2026-07-26; independently re-run by Codex).
+**Branch `vital_signs_v9c`.** Test suite **1093 passed, 0 failed, 0 xfailed**
+(`conda run -n radar-vitals python -m pytest tests/ -q`, 2026-07-27; independently re-run by Codex).
 There is **no longer an xfail** — the ECA/AHET decoy case now passes (see §2 "partly closed" below).
 v9 UI work remains parked in `git stash@{0}`; relocking/display-holdover stay reverted.
 
@@ -160,14 +159,21 @@ M5, M8, M9 and M10 all wait on it.
 disputed**; Codex signed off with `NO MORE COMMENTS` (`plans/m4_plan_cross_review.md` — status header
 + resolution table at the top of `DEBATE COMMENTS`).
 
-**Stage 0 (§5.1) is BUILT and committed (`4b64eb8`); its review is the current blocker.** The
+**Stage 0 (§5.1) is DONE — built in `4b64eb8`, cross-review CLOSED 2026-07-27.** The
 shared-callable refactor moved the window DSP into `src/window_pipeline.py:run_window_dsp` and the
 warmup policy into `src/warmup_select.py:run_warmup_selection`; `scripts/live_demo.py` imports both.
-It **gates every other stage** and takes its own CLAUDE.md §6 correctness review, which is OPEN in
-`plans/m4_stage0_refactor_review.md` (6 findings so far, S0R-01…06). Reason the stage exists: while
-those were **private functions in a script**, M4 had to duplicate them, and the harness's central
-equality test would then have compared M4 against a duplicate rather than the production path
-(M4R-10). **Stage 1 does not start until that review closes.**
+Reason the stage existed: while those were **private functions in a script**, M4 had to duplicate
+them, and the harness's central equality test would then have compared M4 against a duplicate rather
+than the production path (M4R-10).
+
+Its review (`plans/m4_stage0_refactor_review.md`) ran **7 Codex passes / 6 response rounds, 15
+findings, 10 Blocking, all resolved, none disputed**; Codex signed off with `NO MORE COMMENTS`.
+**Not one finding was in the moved DSP** — all 10 Blocking findings were in the new estimator-adapter
+code, 8 in `run_config_hash` alone. The extraction is proven behaviour-identical to `d3cfb92` by
+**22 bitwise-identical comparisons** (all three Masimo captures × four windows each, plus all three
+warmup failure branches); locked bins 27/26/26 unchanged.
+
+**The next action is Stage 1**, the manifest schema + validation (plan §4, build-order row 1).
 
 The loop produced **two user decisions** (M2 #5 stays open; `linear` percentile) and **two
 pre-deposit clarifications now written into the binding specs** (`linear`; the usable-HR-sample
@@ -226,11 +232,21 @@ first time**, closing **M2 done-when #5**.
   M4R-11) — **one set** for the median, the stationarity quantiles and the coverage count, so there is
   exactly one denominator. Written into `notes/comparator_prespec.md` §2.1. Makes HR symmetric with
   BR's explicit finite-RRp counting.
-- **Stage 0 (the shared-callable refactor) precedes all M4 work** (M4R-10). Done in `4b64eb8`: the
-  window DSP and warmup policy live in `src/window_pipeline.py` and `src/warmup_select.py`, imported
-  by both the live path and M4. Without it, M4's equality test compares M4 to a duplicate of itself.
-  **Never re-add a private DSP or warmup copy to `scripts/live_demo.py`** —
-  `tests/test_window_pipeline_adapter.py` fails if anyone does.
+- **Stage 0 (the shared-callable refactor) precedes all M4 work** (M4R-10). Done in `4b64eb8`,
+  reviewed and closed 2026-07-27: the window DSP and warmup policy live in `src/window_pipeline.py`
+  and `src/warmup_select.py`, imported by both the live path and M4. Without it, M4's equality test
+  compares M4 to a duplicate of itself. **Never re-add a private DSP or warmup copy to
+  `scripts/live_demo.py`** — `tests/test_window_pipeline_adapter.py` fails if anyone does.
+- **`run_config_hash` accepts ONLY what YAML/JSON produce** — `None, bool, int, float, str, list,
+  tuple, dict` — dispatched on `type(obj)` with **no `isinstance` in any encoding path**. NumPy and
+  `pathlib` support were both tried and **removed after review** (S0R-07…12): six Blocking findings
+  between them, every one a different way for a value to carry state the encoder could not see. Do
+  not "helpfully" re-add either. It is an **exact-run provenance key only** — never an
+  estimator-equivalence or grouping key.
+- **A `WindowEstimate` with a true validity flag always carries a finite rate** — the adapter raises
+  otherwise (S0R-02), so the scorer never has to guess whether the flag or the value wins. Its
+  equality is NaN-aware and the record is unhashable by design (S0R-03). **It is not the Stage 3
+  equality oracle** — that comparison must use the native DSP payload.
 - **Never put a number in a document bound for the M0 deposit unless it traces to a committed script**
   (M4R-13, CLAUDE.md §3.1). A Monte-Carlo frequency was inserted into both comparators during this
   loop and retracted: it reported an unstated simulation parameter, not the data. Self-contained
@@ -369,6 +385,10 @@ first time**, closing **M2 done-when #5**.
 | **Whole-project milestone plan** | `plans/implementation_plan.md` |
 | **M4 build plan — rev 6, cross-review COMPLETE, ACTIVE build authority** | `plans/m4_offline_harness.md` |
 | **M4 plan review record — COMPLETE (M4R-01…15, 8 rounds)** | `plans/m4_plan_cross_review.md` |
+| **Stage 0 code review — COMPLETE (S0R-01…15, 7 rounds)** | `plans/m4_stage0_refactor_review.md` |
+| Stage 0 review — Codex-side prompt (loop closed) | `plans/m4_stage0_codex_review_prompt.md` |
+| Estimator adapter + `run_config_hash` tests | `tests/test_window_pipeline_adapter.py` |
+| Tracked config fixture (provenance regression guard) | `tests/fixtures/sample_run_config.json` |
 | M4 plan review — Codex-side prompt (loop closed) | `plans/m4_plan_codex_review_prompt.md` |
 | Thesis chapter source | `THIRD_CHAPTER.md` |
 | Journal paper planning | `JOURNAL_PAPER.md` |
