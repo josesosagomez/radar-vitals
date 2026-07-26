@@ -1,223 +1,324 @@
 # M4 — Offline evaluation harness (HR + BR): implementation plan
 
-> **Status: DRAFT, awaiting cross-model review (CLAUDE.md §5.2 — plan → review → build).**
-> Written 2026-07-26, after the linalg-free DSP review closed (`plans/m4_linalg_free_dsp_review.md`).
-> Both M4 gates (M3, linalg review) are cleared. Nothing in this plan has been built yet.
+> **Status: REVISION 2, under cross-model review** (`plans/m4_plan_cross_review.md`).
+> Revision 1 drew **9 Blocking findings (M4R-01…09), all agreed, none disputed** — including two
+> architecture errors. This revision rewrites §§2–8 against them. Written 2026-07-26.
+> Both M4 gates (M3, linalg review) are cleared. **No M4 code exists yet.**
 
 ---
 
 ## 1. What M4 is
 
-One tracked entry point that turns a run folder into paper-grade agreement numbers for **both**
-vitals, under **both** frozen comparators, on the frozen non-overlapping 30 s grid — writing config,
-seed, git commit and input SHA-256 alongside every result (CLAUDE.md §3).
+One tracked entry point that **reprocesses a capture's raw `adc_stream.bin` offline** and turns it
+into paper-grade agreement numbers for **both** vitals, under **both** frozen comparators, on the
+frozen non-overlapping 30 s grid — logging config, seed, package versions, scoring commit and every
+input hash alongside every result (CLAUDE.md §3.1).
 
 M4 is the acceptance harness for every later milestone: M0's CI machinery, M5's pilot, M6's study,
-and the M8/M9/M10 method work all report through it. It is the single most reusable artefact in the
-plan, so its correctness matters more than its speed.
+and the M8/M9/M10 method work all report through it.
 
 ---
 
-## 2. Two decisions that set this plan's shape
+## 2. Decisions that set this plan's shape
 
-### 2.1 The regression anchor — **Option A** (user decision, 2026-07-26)
+### 2.1 The regression anchor — **Option A** (user, 2026-07-26)
 
-`plans/implementation_plan.md` §M4's done-when says M4 must reproduce the pilot HR numbers
-**0.19 / 0.50 / 0.53 bpm** "exactly". That anchor is **retired**. It cannot be met and should not be:
+The pilot MAEs **0.19 / 0.50 / 0.53 bpm** are **retired, not reproduced**: no committed script
+produced them, they used a nearest-hop rule §7 later froze differently, and they predate the
+band-pass fix (2026-06-30 `1847d7f` → 2026-07-26). The scorer is validated instead against
+**independently specified golden fixtures** (§6.2). Option B was declined — it would have to guess an
+undocumented rule *and* resurrect the retired filter, and a reconstruction tuned until it emits 0.19
+proves nothing.
 
-1. **No committed script produced those numbers** — there is nothing to reproduce, only something to
-   guess at.
-2. **They used a "nearest-hop" window rule** that `notes/analysis_prespec.md` §7 later froze
-   differently (boundary-aligned, `[k·600, (k+1)·600)`).
-3. **They were produced under the retired brick-wall band-pass** (2026-06-30 `1847d7f` → 2026-07-26),
-   which the cross-review established was an unintended estimator change.
+### 2.2 The existing captures are **development/demonstration only** — and **M2 #5 stays OPEN**
 
-**Under Option A:** M4's scorer is validated against **synthetic windows with hand-computable
-expected answers**, and the frozen-§7 outputs become canonical. The old numbers are recorded in
-`HISTORY.md` as superseded. A reconstruction of the old rule (Option B) was declined: it would have
-to guess an undocumented rule *and* resurrect the deleted filter to be a true bridge, and a
-reconstruction tuned until it emits 0.19 proves nothing.
+*(Revised per M4R-03. Revision 1 claimed a "descriptive" run under the frozen comparator closed M2
+done-when #5. It does not.)*
 
-### 2.2 The existing captures cannot produce a frozen scoring number — **this is a scope constraint**
+`notes/analysis_prespec.md` §7: the 4 existing captures lack a persisted `frame0_epoch`; alignment
+reconstructed from `start_wall_utc` is APPROXIMATE and is "used **only** for reference-characterization
+design evidence, **never** for a frozen scoring number". **An agreement value computed under an
+unknown startup offset is not the frozen-comparator outcome merely because it is labelled
+descriptive.**
 
-`notes/analysis_prespec.md` §7 is explicit:
+Two distinct alignment defects, not one:
+- **Original captures:** `start_wall_utc` is written before DCA/IWR configuration
+  (`live_demo.py:1213` vs `1300+`), so the offset is capture-startup latency — approximate.
+- **Replay folders:** their `start_wall_utc` is the *replay launch* (`2026-07-26T14:36:54`) versus the
+  capture's `2026-07-13T15:20:03` — **13 days out**. Not an approximation at all.
 
-> **The 4 existing exploratory captures lack a persisted `frame0_epoch`.** Any window alignment
-> reconstructed for them from `start_wall_utc` is **APPROXIMATE** … and is used **only for
-> reference-characterization design evidence**, never for a frozen scoring number.
+**Therefore:**
+- M4's run on the existing captures is **development/demonstration only**, labelled **exploratory and
+  apparent/in-sample**. Never "under the frozen comparator".
+- **M2 done-when #5 remains OPEN** (user decision, 2026-07-26; Codex's reviewer recommendation
+  concurred). It is **not** superseded — "superseded" would imply the obligation was discharged, and
+  it was not. It closes when a capture carrying a persisted `frame0_epoch` exists and is scored.
+- M4's own done-when is **implementation-scoped** (§9) and does not depend on closing M2 #5.
 
-`frame0_epoch` is bound to the UTC time at receipt of frame 0. `run_metadata.json`'s
-`start_wall_utc` is written *before* DCA/IWR configuration (`live_demo.py:1213` vs `1300+`), so the
-offset is the capture-startup latency — not sub-second, and not recoverable after the fact.
+### 2.3 Percentile convention — **`linear`** (user, 2026-07-26)
 
-**Consequence, and it is stronger than "n=1 is descriptive":** running M4 on the three Masimo
-captures produces a **validation and demonstration output, explicitly labelled non-scoring**. Even
-with a perfect scorer and 10 subjects, alignment on *these four files* would remain inadmissible.
+*(New, per M4R-09.)* Both comparators gate on `p90 − p10` and the LoA CI uses endpoint percentiles,
+but no frozen text names the quantile method. Measured over the admissible regime (n ∈ [24, 30]
+integer-valued PR samples, 4000 trials, 9 NumPy methods):
 
-**This is a tension with `plans/implementation_plan.md` §M4's done-when**, which asks for numbers
-from exactly these captures. Proposed resolution, for the reviewer to accept or reject: M4's
-done-when is met by (a) synthetic validation, (b) an end-to-end run on the three captures emitting
-**descriptive, alignment-flagged** HR and BR, and (c) the harness being ready to produce frozen
-numbers the moment a capture carries a persisted `frame0_epoch`. **M2 done-when #5 ("M4 reports the
-BR outcome under the frozen comparator") is satisfied by (b)** — the BR outcome is reported, with its
-alignment status declared. See §7 for the forward requirement this places on M1/M5.
+| gate | windows where the method alone decides the verdict |
+|---|---|
+| **HR, 5.0 bpm** | **1993 / 4000 (≈ 50 %)** |
+| BR, 2.0 bpm | 8 / 4000 |
+
+Example (n = 28): `higher`/`nearest` → 5.000 (**admit**); `linear` 5.300, `midpoint` 5.500,
+`hazen` 5.700, `median_unbiased` 5.833, `lower`/`averaged_inverted_cdf` 6.000, `weibull` 6.100
+(**exclude**). Integer PR over ~28 samples puts p90/p10 between order statistics almost every time.
+
+**Resolution: `method="linear"`** — NumPy's default, and what the existing design-evidence scripts
+already used, so it minimises retro-inconsistency. Adopted as an **explicit pre-deposit
+clarification**, same class as the M3R-40 half-open harmonisation. **Named explicitly and passed
+explicitly at every call site** — never left to a library default — in stationarity gates,
+sensitivity tables and bootstrap CI endpoints. A boundary fixture on which ≥ 2 standard methods
+differ is mandatory (§6.2).
 
 ---
 
-## 3. Inputs, and what must never be read
+## 3. Inputs — raw ADC, bound by a manifest
 
-**Input:** a replay/live run folder. Canonical set for the first run is the **2026-07-26 post-filter-fix**
-generation: `20260726_173434` (natural), `_173653` (paced16), `_173914` (sweep) — never the
-2026-07-25 pre-fix dirs, which were produced by the retired filter.
+*(Rewritten per M4R-01 and M4R-04. Revision 1 made `live_estimates.csv` the radar input, which
+violates CLAUDE.md §4.)*
 
-| use | do not use | why |
+**The radar input is the original capture folder's `adc_stream.bin`.** CLAUDE.md §4: *"No HR/BR value
+shown by `scripts/live_demo.py` (or its `live_estimates.csv`) is paper-grade… Paper metrics are
+computed offline by re-processing the run's saved raw `adc_stream.bin`."* `implementation_plan.md`
+§M4: the entry point *"reprocesses `adc_stream.bin` offline"*.
+
+`live_estimates.csv` is a **non-authoritative diagnostic cross-check only**. It rounds HR/BR to 2 dp,
+omits a row entirely when a DSP call raises, and cannot distinguish a missing estimate from a corrupt
+artifact. The 2026-07-26 replay folders contain **no `adc_stream.bin`** and are reframed as **evidence
+for the `600k + 599` row mapping only** (independently verified by both models: `ReplayFrameSource`
+emits zero-based indices, the first 600-frame buffer emits at 599, stored runs contain exactly
+6 / 6 / 16 rows `599, 1199, …`).
+
+| use | never use | why |
 |---|---|---|
-| `hr_bpm_raw` | `hr_bpm_smooth` | online median smoother, not the validated estimator (CLAUDE.md §4) |
-| `hr_bpm_raw` | `fallback_hr_bpm` | a naive argmax — it lies (HANDOFF §5) |
-| `br_bpm` | — | |
-| `ahet_verified`, `resp_valid` | — | false → radar-NaN, not "excluded" |
-| `frame_idx` | `elapsed_s` | wall-clock, ~0 under `--replay-fast` |
+| `adc_stream.bin` from the original capture | any replay folder's outputs | CLAUDE.md §4; replay folders have no ADC and a 13-day-wrong origin |
+| manifest `frame0_epoch` | `start_wall_utc` | written pre-configuration; not a frame-0 timestamp |
 | Masimo integer `Timestamp`/`epoch_utc` | `Date`/`Time` strings | CLAUDE.md §9 |
 | `Beats / min` (PR), `Breaths / min` (RRp) | SpO2 / PI / PVi as a rate | CLAUDE.md §9 |
 
 ---
 
-## 4. Architecture
+## 4. The M4 study/session manifest (versioned, validated before implementation)
 
-Pure scoring logic separated from I/O so the whole comparator is unit-testable without a run folder.
+*(New, per M4R-04. A run folder plus two fields cannot form the frozen estimand sets: the inspected
+replay metadata has `session_id="unknown"`, `posture=None`, `distance=None`, and nothing binds a run
+to a Masimo file, subject, arm or data role.)*
 
-```
-src/scoring.py          NEW. Pure functions, no file I/O, no globals:
-                          window_grid(n_frames)              -> [(k, lo_frame, hi_frame)]
-                          reference_window(masimo, k, ...)   -> epoch span (half-open)
-                          hr_reference(samples)              -> (value, gate verdicts)
-                          br_reference(samples)              -> (value, gate verdicts)
-                          agreement(pairs)                   -> MAE/RMSE/bias/n/coverage
-                          bland_altman(pairs, subjects)      -> point estimate (+ CI when admissible)
-scripts/run_m4_harness.py  NEW. Entry point: run folder(s) -> results/<experiment>/<timestamp>/
-src/masimo.py           REUSE unchanged (parser, PI, PR, RR).
-src/compare.py          NOT reused for scoring. It implements the OLD PI-gated-*mean* comparator
-                        (`pr_bpm_mean`), which the frozen spec replaced with a median. Leave it in
-                        place, mark it superseded; do not import it into the new path.
-scripts/plot_bland_altman.py  REUSE FOR PLOTTING ONLY. Its statistics
-                        (`se_loa = sqrt(3·SD²/n)`, no subject term) are invalid for repeated
-                        measures and were never valid for the pilot either.
-```
+A versioned manifest binds, **by path + SHA-256**, for each session:
 
-**Determinism:** no RNG except the cluster bootstrap, which takes an explicit seed logged with the
-result. Same input + same config + same seed → byte-identical output.
+| group | fields |
+|---|---|
+| **Identity / estimands** | subject ID, arm (natural / paced), commanded paced rate (12/15/18), data role (§3.1), study admission disposition |
+| **Timebase** | `frame0_epoch` (synchronised PC UTC at receipt of frame 0), start **and** end PC↔phone clock offsets (§6: NTP-synced, max ±1 s, re-checked at session end; offset > ±1 s ⇒ resync and restart; **no offset may be chosen by optimising radar–reference agreement**) |
+| **Integrity** | raw checksum, truncation bytes, packet-loss statistics, **per-frame validity / zero-fill map** |
+| **Provenance** | capture config, capture-time git commit, Masimo CSV path + hash, commanded-rate schedule |
+| **Disposition** | intended duration vs early stop, retry / replacement status and reason (§6) |
+
+**Frozen-scoring mode fails loudly on any missing required field.** A separate **development mode**
+exists for the 4 existing captures and is made **impossible to mistake for scoring output** (distinct
+output directory, `mode: DEVELOPMENT` in every artifact, and the words *exploratory / apparent /
+in-sample* on every emitted table).
 
 ---
 
-## 5. The scoring rules, restated from the frozen specs
+## 5. Architecture
 
-These are transcribed, not invented. Any disagreement with the source documents is a bug in this
-plan, and the specs win.
+```
+src/m4/manifest.py     NEW. Manifest schema, validation, hashing. Fails loudly in scoring mode.
+src/m4/reprocess.py    NEW. Raw-ADC exact-grid reprocessing (§6.1):
+                         decode adc_stream.bin -> complete 600-frame slices
+                         warmup/bin-lock semantics applied to k=0
+                         one shared full-precision DSP call per slice
+                         DSP failure / invalid / zero-filled slice -> RECORDED radar-NaN disposition
+                         persists per-window intermediates
+src/m4/scoring.py      NEW. Pure, no I/O. Subject/arm structures (NOT generic pair pools):
+                         window_grid, reference windows, HR/BR gates, disposition hierarchy,
+                         subject-weighted MAE/RMSE/bias/coverage, ANOVA LoA, cluster bootstrap
+scripts/run_m4_harness.py  NEW. Entry point: manifest -> results/<experiment>/<timestamp>/
+src/masimo.py          REUSE unchanged.
+src/vitals.py, src/respiration.py  REUSE — the SAME DSP the live path calls. M4 must not fork it.
+src/compare.py         SUPERSEDED, not imported. Implements the old PI-gated-*mean* comparator.
+scripts/plot_bland_altman.py  PLOTTING ONLY. Its statistics are invalid for repeated measures.
+```
 
-### 5.1 Window grid (`notes/analysis_prespec.md` §7, FROZEN)
-- 30 s = **600 frames** at 20 Hz. Windows are half-open frame intervals `[k·600, (k+1)·600)`.
-- **`k = 0` IS scored.** Warmup bin-selection runs on the `k = 0` buffer and is applied back to it
-  via `dsp_override`, so the window has a valid estimate.
-- Window `k` is scored by the single estimate whose analysis window is exactly that interval —
-  in `live_estimates.csv` the row with **`frame_idx = 600·k + 599`**. **Greedy selection of accepted
-  hops is forbidden** (it maximises accepted windows and is estimator-dependent).
-- A window is scored **iff** it is a complete 600 frames.
-- Yield: 180 s → 6 windows; 480 s → 16; 600 s → exactly 20. *(Verified against the three captures:
-  6 / 6 / 16.)*
-- Reference span for window `k` is the half-open epoch interval `[E(k·600), E((k+1)·600))` with
-  `E(i) = frame0_epoch + i/20`; a Masimo sample at integer epoch `e` belongs iff
-  `E(k·600) ≤ e < E((k+1)·600)`. **HR and BR use the identical half-open rule** (M3R-40).
-
-### 5.2 HR comparator (`notes/comparator_prespec.md`)
-- **Reference:** median of **PI-gated** PR samples in the window (`PI ≥ 0.5`).
-- **Gates, ALL required:** PI (drop samples `< 0.5`); **coverage ≥ 80 %** of the 30 expected samples
-  surviving the PI gate; **stationarity** — exclude if `p90 − p10` of gated PR `> 5.0 bpm`.
-- **Sensitivity table required:** exclusion fraction at **3 / 5 / 8 bpm**.
-
-### 5.3 BR comparator (`notes/comparator_prespec_br.md`)
-- **Reference:** median of **finite** RRp samples in the window.
-- **Gates, ALL required:** **availability ≥ 24 finite `rr_bpm` samples**; **stationarity** —
-  exclude if `p90 − p10` of finite RRp `> 2.0 bpm`.
-- **PI is NOT a BR admissibility gate** — reported as a per-window flag / sensitivity covariate only.
-  No manufacturer-validated PI threshold exists for RRp; borrowing the PR value would freeze an
-  unsupported exclusion.
-- **Paced sessions:** compute and report agreement against **both** RRp *and* the commanded metronome
-  rate, clearly labelled. The metronome is **target-concordance, not physiological truth** — RRp
-  remains the measured reference and disagreement is not resolved in the metronome's favour.
-- **Natural sessions:** RRp only. Use the words "compared with", never "validated against".
-
-### 5.4 Reporting (both vitals)
-- **Coverage alongside accuracy, always.** Emit total windows, excluded-by-PI (HR) /
-  excluded-by-availability (BR), excluded-by-coverage, excluded-by-non-stationarity, radar-NaN, final n.
-- **Radar-NaN is not an exclusion** — it is a covered window the radar declined to estimate, and it
-  belongs in the coverage denominator. Conflating the two inflates apparent accuracy.
-- **Bland–Altman:** the constant `μ ± 1.96·SD` **point estimate** is primary and never switched
-  post-hoc. Its CI is the **whole-subject cluster bootstrap** (M3R-29 Option A), which **requires
-  ≥ 2 subjects** — on the pilot it must be **suppressed, not degenerate**. MOVER is a pre-named
-  *candidate* sensitivity, reported only after implementation + statistician math-review (M3R-46);
-  **not in this build**.
-- **Distance:** descriptive only, and **not recorded in the 4 existing captures** — this breakdown
-  applies from M5 onward.
+**Determinism:** no RNG except the cluster bootstrap at its frozen seed. Same manifest + config +
+seed → byte-identical output.
 
 ---
 
-## 6. Build order — scoring core and tests before any capture is scored (CLAUDE.md §5.3)
+## 6. The rules, restated from the frozen specs
 
-Each stage is unit-tested and committed before the next begins.
+Transcribed, not invented. Any disagreement with the source is a bug in this plan and the source wins.
+
+### 6.1 Window grid (`analysis_prespec.md` §7, FROZEN)
+- 30 s = **600 frames** at 20 Hz; half-open frame intervals `[k·600, (k+1)·600)`.
+- **`k = 0` IS scored** — warmup bin-selection runs on the `k=0` buffer and is applied back to it.
+  M4 reproduces this directly from raw rather than inheriting it from a CSV; the all-DSP-failed `k=0`
+  case becomes a **recorded radar-NaN disposition**, not a missing row.
+- A window is scored **iff** it is a complete 600 frames. Incomplete tail dropped.
+- Reference span for window `k` is `[E(k·600), E((k+1)·600))`, `E(i) = frame0_epoch + i/20`; a sample
+  at integer epoch `e` belongs iff `E(k·600) ≤ e < E((k+1)·600)`. **HR and BR share this half-open
+  rule** (M3R-40). `frame0_epoch` may be **fractional** — endpoint inclusion must be tested for it.
+- Yields: 180 s → 6; 480 s → 16; 600 s → exactly 20.
+- **Boundary-aligned, never greedy** — greedy selection of accepted hops is forbidden.
+
+### 6.2 HR comparator (`comparator_prespec.md`)
+Reference = **median of PI-gated PR** (`PI ≥ 0.5`). Gates, all required: PI; **coverage ≥ 80 %** of
+30 expected samples surviving the PI gate; **stationarity** `p90 − p10 > 5.0 bpm` ⇒ exclude.
+
+### 6.3 BR comparator (`comparator_prespec_br.md`)
+Reference = **median of finite RRp**. Gates, all required: **availability ≥ 24 finite `rr_bpm`
+samples** (one gate, not two — revision 1 duplicated it); **stationarity** `p90 − p10 > 2.0 bpm` ⇒
+exclude. **PI is NOT a BR gate** — reported as a per-window flag / sensitivity covariate only.
+**Paced:** report agreement against **both** RRp *and* the commanded metronome, clearly labelled;
+the metronome is **target-concordance, not truth**. **Natural:** RRp only; the words are "compared
+with", never "validated against".
+
+### 6.4 Statistics — the frozen variance-components model (`analysis_prespec.md` §1)
+*(Rewritten per M4R-02. Revision 1 said "μ ± 1.96·SD point estimate is primary" — that HANDOFF
+sentence is about not switching to MOVER post-hoc, and is not the estimator.)*
+
+Per **arm**, over subjects `s` with `n_s` windows, `N_a = Σ n_s`, `S_a` subjects:
+- `MSW = SSW/(N_a − S_a)` where `SSW = Σ_s Σ_k (d_sk − d̄_s)²`; **`σ²_w = MSW`**
+- `MSB = SSB/(S_a − 1)`; **`n0 = (N_a − Σ_s n_s²/N_a)/(S_a − 1)`**;
+  **`σ²_b = max((MSB − MSW)/n0, 0)`** (truncated)
+- **bias `μ_a = d̄` subject-weighted**; **`LoA_a = μ_a ± 1.96·√(σ²_b + σ²_w)`**
+- **Estimable iff `S_a ≥ 2` AND `N_a > S_a`.** If either fails, the arm reports **descriptive-only:
+  observed bias and observed SD, with the population LoA *and* its CI both suppressed.** *(At one
+  subject this suppresses the point estimate too — revision 1 wrongly kept it.)*
+- **CI:** whole-subject nonparametric cluster bootstrap; resample `S_a` subjects with replacement
+  (a subject drawn twice enters as two distinct clusters with all its windows); recompute the **exact**
+  estimator each replicate; **B = 10 000**; **seed = 20260725**; two-sided **95 %** percentile per
+  endpoint (`method="linear"`, §2.3); non-estimable replicates excluded; **> 5 % failures ⇒ demote
+  the arm to descriptive-only**.
+- **Pooling (§3.2, binding):** MAE/RMSE/coverage are **arm-specific and subject-weighted** (each
+  subject equal regardless of `n_s`); accuracy and coverage have **distinct subject sets**;
+  **HR excludes the 18 bpm subjects from the inferential paced arm, BR includes them**; per-rate
+  breakdowns are descriptive-only; **no combined natural+paced headline.**
+
+### 6.5 Disposition hierarchy — one partition (M4R-05)
+Revision 1 said radar-NaN "is not an exclusion" while requiring the ledger to sum. Both cannot hold.
+
+**Primary, mutually exclusive, per `analysis_prespec.md` §6 (reference failure precedes radar-NaN):**
+
+```
+total_complete_windows = reference_failures
+                       + reference_admissible_radar_nan
+                       + evaluable
+```
+Reference gates are applied **first**; radar-NaN is the disposition **only** for a
+reference-admissible window. Overlapping views (e.g. inadmissible-reference **and** radar-NaN) are
+retained in a **separate diagnostic cross-tab**, never in the primary ledger. **BR:** one
+`excluded_by_availability`. **HR:** a deterministic split between missing-finite-PR coverage and
+PI-induced insufficiency, with underlying sample counts also reported. Every cross-product tested.
+
+### 6.6 Required outputs (M4R-06 — gates are not the whole comparator)
+- HR stationarity sensitivity at **3 / 5 / 8** bpm; **BR at 2 / 3 / 5** bpm.
+- **HR severe-error counts > 5 bpm**; **BR error tails > 2 / > 3 / > 5 bpm** vs RRp and, when paced,
+  vs the commanded target.
+- HR **evidence-floor** and **LoA-CI precision** dispositions — reported **without deleting otherwise
+  usable subjects**.
+- Per-arm LoA diagnostics: **proportional-bias / heteroscedasticity, residual skew / QQ,
+  within-session lag-1 autocorrelation**, and the **subject-clustered regression-LoA descriptive
+  sensitivity** (not optional; only MOVER is out of scope).
+- Coverage alongside accuracy, always; per-session and subject-weighted coverage from the **frozen
+  denominator** (§3.2).
+- Data-role labels (§3.1) enforced on every table.
+
+### 6.7 Provenance (M4R-08)
+The reproducibility boundary is the **M4 scoring tree**, not the capture's commit. Confirmed
+`git_dirty = true` on both the replay (`5537df51`) and original-capture (`403c245f`) metadata, so a
+bare commit + dirty flag identifies nothing.
+
+- **Frozen-scoring mode requires a clean committed M4 worktree** (or an exactly reconstructable
+  source bundle). Dirty runs are labelled non-scoring.
+- **Scoring commit recorded separately from source-capture commit.**
+- Hash and list **every** consumed file: ADC, Masimo CSV, session/study manifest, capture config,
+  scoring config, metadata, validity map, target schedule.
+- Log package/environment versions and the frozen bootstrap seed.
+- **Never reject an older raw capture on its capture-time commit** — reprocessing old raw ADC with
+  the current scorer is M4's purpose. Reject only incompatible/missing schemas or unreproducible
+  scoring code. *(This overturns revision 1's proposal to refuse pre-filter-fix folders.)*
+
+---
+
+## 7. Build order — core and tests before any capture is scored (CLAUDE.md §5.3)
 
 | # | Stage | Done when |
 |---|---|---|
-| 1 | **Window grid.** `window_grid`, frame↔window mapping, `frame_idx = 600k+599` lookup, incomplete-tail rejection. | Hand-checked yields 6/6/16/20; a partial trailing window is dropped; a missing `frame_idx` row raises rather than silently skipping a window. |
-| 2 | **Reference aggregation + gates**, HR and BR, on **synthetic Masimo frames** with hand-computed expected values. | Every gate fires exactly at its boundary (PI 0.5, coverage 24/30, stationarity 5.0 / 2.0 bpm), tested from both sides. Median-vs-mean divergence asserted on a skewed window. |
-| 3 | **Metrics.** MAE/RMSE/bias/n, the coverage ledger, the 3/5/8 stationarity sensitivity table. | Metrics match hand arithmetic on a fixture; the ledger's categories sum to the window total exactly. |
-| 4 | **Bland–Altman.** Point estimate; cluster bootstrap behind an `n_subjects ≥ 2` guard. | Point estimate matches hand arithmetic; bootstrap **refuses** on 1 subject with a clear message rather than emitting a degenerate interval. |
-| 5 | **Harness wiring + provenance.** Run folder → `results/<experiment>/<timestamp>/` with config, seed, git commit, input SHA-256, and an explicit `alignment: APPROXIMATE` flag. | Re-running reproduces byte-identical output; the alignment flag is present and true. |
-| 6 | **Run on the 3 Masimo captures.** | HR recomputed under the frozen grid; **BR emitted for the first time**; both labelled descriptive / non-scoring per §2.2. Closes **M2 done-when #5**. |
+| 1 | **Manifest schema + validation** (§4) | Scoring mode rejects every missing required field with a named error; development mode is separately labelled and cannot emit scoring output. |
+| 2 | **Window grid.** `[k·600,(k+1)·600)`, fractional-`frame0_epoch` endpoint inclusion, incomplete-tail rejection. | Yields 6/6/16/20 by hand; both boundary seconds land in exactly one window under a fractional origin. |
+| 3 | **Raw-ADC exact-grid reprocessing** (§6.1). | M4's per-window DSP output **equals a direct shared-DSP call on the same saved 600-frame slice at full precision**; a forced DSP failure yields a *recorded* radar-NaN, not a missing window; `k=0` reproduces the warmup semantics. |
+| 4 | **Reference aggregation + gates**, on **raw-format** Masimo CSVs (not clean DataFrames). | Every gate fires exactly at its boundary (PI 0.5, coverage 24/30, 5.0 / 2.0 bpm) tested **at equality**; `linear` named explicitly; the ≥2-method boundary fixture pins it. |
+| 5 | **Disposition ledger** (§6.5). | The partition identity holds on every cross-product, including inadmissible-reference **and** radar-NaN. |
+| 6 | **Subject/arm statistics** (§6.4). | Hand-computed `MSW`, `MSB`, `n0`, both variance components and LoA on an **unequal-window multi-subject** fixture; subject-weighted ≠ pooled demonstrated; `S_a<2` or `N_a≤S_a` emits descriptive-only with **both** LoA and CI suppressed; bootstrap honours B/seed and the >5 % demotion rule. |
+| 7 | **Required outputs** (§6.6) + provenance (§6.7). | Every named output present in the schema; scoring mode refuses a dirty worktree; every consumed file hashed. |
+| 8 | **End-to-end smoke on the 3 captures.** | Runs in **development mode**, labelled exploratory / apparent / in-sample. **Not** a numeric oracle, **not** under the frozen comparator, does **not** close M2 #5. |
 
-**Synthetic validation is the Option A backbone.** Stage 2–4 fixtures are built so the correct answer
-is computable by hand — e.g. a window of 30 PR samples with a known median, a known `p90 − p10`, and
-a known count below PI 0.5 — so a scorer bug cannot hide behind plausible-looking output. This is what
-replaces "reproduce 0.19 exactly".
+### 7.1 Golden fixtures — the load-bearing validation (M4R-07)
+
+Revision 1's hand-computable DataFrames were necessary but not sufficient: a bug shared between
+fixture and implementation, or living **outside** the pure functions, passes them. Named failure
+modes: Masimo schema/column handling, duplicate-epoch merging, finite-value counting,
+fractional-origin endpoint inclusion, exact-grid selection, run↔reference binding, subject weighting,
+arm pooling, disposition precedence.
+
+**Three checked-in golden fixtures, with expected-result JSON written BY HAND — never generated by
+scorer code** (this constraint is what defeats the shared-bug problem):
+
+1. **Raw-format Masimo CSV** with a duplicate epoch, a missing second, NaN PR/RRp, PI **below and
+   exactly at** 0.5, skewed values, and samples exactly on **both** boundaries under a **fractional**
+   `frame0_epoch`.
+2. **Exact-grid estimator stub** whose 600-frame windows carry sentinel outputs while **neighbouring
+   3 s hop positions carry deliberate distractors**, plus a failed estimate and an incomplete tail.
+3. **Unequal-count multi-subject natural/paced fixture** with a zero-evaluable subject, an 18 bpm
+   subject and cross-failure windows, with hand-derived subject-weighted metrics, ledger, ANOVA LoA
+   and pooling answers.
+
+The three real captures are an **end-to-end smoke test only, never the numeric oracle.**
 
 ---
 
-## 7. Forward requirement this creates (M1 / M5)
+## 8. Forward requirement for scorable captures (M1 / M5)
 
-For any capture to yield a **frozen** scoring number, the capture path must persist:
+No capture can yield a frozen number until the **full §4 manifest** can be populated — not merely
+`frame0_epoch` and a validity map (revision 1 understated this). Minimum new capture-path work:
 
-1. **`frame0_epoch`** — synchronised-clock UTC at receipt/assembly of frame index 0. **Not**
-   `start_wall_utc`.
-2. **A per-frame validity / zero-fill map** — not merely aggregate `n_dropped` /
-   `zero_filled_bytes`, which cannot identify *which* windows are affected. A window containing any
-   dropped or zero-filled frame is flagged from that map and its estimate treated as radar-NaN.
+1. **Persist `frame0_epoch`** — synchronised PC UTC at receipt of frame 0. Not `start_wall_utc`.
+2. **Persist a per-frame validity / zero-fill map** — aggregate `n_dropped` cannot identify *which*
+   windows are affected. A window containing any dropped/zero-filled frame ⇒ radar-NaN.
+3. **Log start and end PC↔phone clock offsets** (NTP, ±1 s, re-check for drift).
+4. **Record subject, arm, commanded rate, data role, admission/retry disposition** at capture time.
 
-Neither exists today. **This should be implemented before M1's smoke test**, so M1 validates the
-capture path that M5/M6 will actually rely on. Flagged here because it is easy to discover too late.
+**This should land before M1's smoke test**, so M1 validates the capture path M5/M6 will rely on.
 
 ---
 
-## 8. Explicitly out of scope
+## 9. Done-when (implementation-scoped)
 
-- Reproducing 0.19 / 0.50 / 0.53 (§2.1).
-- MOVER CI (M3R-46 — needs statistician review first).
+1. Stages 1–7 complete, each unit-tested, with the three golden fixtures passing against hand-written
+   expected JSON.
+2. Raw-reprocessing equality against a direct shared-DSP call demonstrated at full precision.
+3. An end-to-end **development-mode** run on the 3 Masimo captures, emitting HR and BR labelled
+   exploratory / apparent / in-sample.
+4. Scoring mode demonstrably **refuses** an incomplete manifest and a dirty worktree.
+
+**Explicitly NOT in the done-when:** reproducing 0.19/0.50/0.53 (§2.1), and closing **M2 done-when
+#5**, which stays **open** until a capture with a persisted `frame0_epoch` exists (§2.2).
+
+---
+
+## 10. Out of scope
+
+- MOVER CI (M3R-46 — needs statistician review). The **regression-LoA sensitivity is in scope**.
 - Per-distance agreement claims (not recorded in these captures; forbidden without amendment).
 - Promoting `guard_cardiac_candidate_v1` (blocked on `experiments/exp_eca_modes`).
-- Re-measuring the "34 % of hops" paced-16 decoy figure — related, still open, but not M4.
-- Fixing `elapsed_s` in `live_demo.py`. M4 is made **immune** to it by using `frame_idx` throughout;
-  the underlying bug stays recorded.
-
----
-
-## 9. Questions for the cross-reviewer
-
-1. **§2.2 is the big one.** Is the proposed done-when resolution right — synthetic validation +
-   a descriptive, alignment-flagged run — or does the approximate `frame0_epoch` make even a
-   *descriptive* BR number from these captures misleading enough to withhold? M2 #5 hangs on this.
-2. Is `frame_idx = 600·k + 599` the correct reading of "the estimate whose analysis window is exactly
-   `[k·600, (k+1)·600)`"? It assumes `frame_idx` is the **last** frame of the analysis buffer —
-   consistent with the first CSV row being `frame_idx = 599`, but worth an independent check.
-3. Is putting **radar-NaN in the coverage denominator but not the exclusion ledger** the right
-   reading of both specs' "report coverage alongside accuracy"?
-4. Should the harness **refuse to run** on a folder whose git commit predates the filter fix, rather
-   than trusting the operator to pick the 2026-07-26 dirs?
-5. Anything in §5 that misreads a frozen spec. Those are transcription bugs and the specs win.
+- Re-measuring the "34 % of hops" paced-16 decoy figure — still open, not M4.
+- Fixing `elapsed_s` in `live_demo.py`. M4 is **immune** by using `frame_idx` throughout.
