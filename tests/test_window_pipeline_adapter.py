@@ -118,11 +118,52 @@ def test_numpy_array_dtype_and_shape_participate_in_the_hash():
     assert run_config_hash({"x": np.array([[1, 2]])}) != run_config_hash({"x": np.array([1, 2])})
 
 
-def test_unsupported_numpy_scalar_is_rejected_naming_its_dtype():
-    """The rejection must name the dtype the caller passed, not the Python type its
-    `.item()` happened to produce."""
-    with pytest.raises(TypeError, match="NumPy scalar of dtype"):
-        run_config_hash({"x": np.datetime64("2026-07-26")})
+def test_object_dtype_is_rejected_because_its_bytes_are_process_local():
+    """Object dtype is the one NumPy case that cannot be hashed deterministically: the
+    buffer holds pointers, so the same config would hash differently between runs."""
+    with pytest.raises(TypeError, match="object dtype"):
+        run_config_hash({"x": np.array([object()], dtype=object)})
+    with pytest.raises(TypeError, match="object dtype"):
+        run_config_hash({"x": np.array(["a", "b"], dtype=object)})
+
+
+def test_numpy_scalar_encoding_terminates_for_dtypes_whose_item_stays_in_numpy():
+    """S0R-08. `np.longdouble("1.25").item()` returns another `np.longdouble` on this
+    platform, so encoding by recursing through `.item()` never terminated and raised
+    RecursionError instead of hashing or rejecting."""
+    assert isinstance(np.longdouble("1.25").item(), np.longdouble)   # the mechanism
+    h = run_config_hash({"x": np.longdouble("1.25")})
+    assert isinstance(h, str) and len(h) == 64
+    assert h == run_config_hash({"x": np.longdouble("1.25")})
+    assert h != run_config_hash({"x": np.longdouble("1.5")})
+
+
+def test_structured_void_scalars_with_different_dtypes_do_not_collide():
+    """S0R-08. Every structured scalar has class name `void`, so tagging by class name
+    made `[("x","<i4")]` and `[("y","<i8")]` holding the same value hash identically.
+    The dtype descriptor carries field names, offsets and itemsize; the class name does
+    not."""
+    a = np.array([(1,)], dtype=[("x", "<i4")])[0]
+    b = np.array([(1,)], dtype=[("y", "<i8")])[0]
+    assert type(a).__name__ == type(b).__name__ == "void"            # the mechanism
+    assert run_config_hash({"x": a}) != run_config_hash({"x": b})
+
+
+def test_numpy_byte_order_and_field_names_participate_in_the_hash():
+    assert run_config_hash({"x": np.array([1], dtype="<i4")}) != run_config_hash(
+        {"x": np.array([1], dtype=">i4")}
+    )
+    assert run_config_hash({"x": np.array([(1,)], dtype=[("x", "<i4")])}) != run_config_hash(
+        {"x": np.array([(1,)], dtype=[("z", "<i4")])}
+    )
+
+
+def test_non_contiguous_array_hashes_by_value_not_buffer_layout():
+    """A view's stride pattern must not change the hash of the values it presents."""
+    base = np.arange(6, dtype="<i4").reshape(2, 3)
+    view = base.T                      # non-contiguous
+    assert not view.flags["C_CONTIGUOUS"]
+    assert run_config_hash({"x": view}) == run_config_hash({"x": np.array(view)})
 
 
 def test_run_config_hash_rejects_what_it_cannot_canonicalise():

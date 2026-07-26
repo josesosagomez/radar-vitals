@@ -12,15 +12,17 @@
 
 ## Status
 
-**OPEN — rounds 1–2 processed.** 7 findings (S0R-01…07), 3 Blocking, **all reproduced, all agreed,
+**OPEN — rounds 1–3 processed.** 8 findings (S0R-01…08), 4 Blocking, **all reproduced, all agreed,
 all fixed**; none disputed. S0R-06 is escalated to the user as an M0 governance item and is not mine
-to close. Awaiting Codex round 3 or `NO MORE COMMENTS`.
+to close. Awaiting Codex round 4 or `NO MORE COMMENTS`.
 
-**S0R-07 was a defect in my round-1 fix to S0R-01**, not in the reviewed refactor — the kind of
-thing this loop exists to catch.
+**Every Blocking finding after the first round has been a defect in my own fix, not in the reviewed
+refactor.** S0R-07 broke S0R-01's fix; S0R-08 broke S0R-07's. The moved DSP has survived every check
+unchanged; `run_config_hash` — 12 lines of new code — has now been corrected three times. That
+asymmetry is the argument for reviewing the adapter before M4 consumes it.
 
-Suite: **1087 passed, 0 failed, 0 xfailed** (1056 before the refactor → 1073 after it → 1083 after
-round 1 → 1087 after round 2; the 31 adapter tests are `tests/test_window_pipeline_adapter.py`).
+Suite: **1091 passed, 0 failed, 0 xfailed** (1056 before the refactor → 1073 after it → 1083 / 1087 /
+1091 after rounds 1–3; the 35 adapter tests are `tests/test_window_pipeline_adapter.py`).
 
 The A/B equality evidence has been extended since the first pass — **22 comparisons across all three
 Masimo captures and all three warmup failure branches, every one bitwise identical.** See the end of
@@ -51,7 +53,7 @@ existing artifact?**
 | `scripts/validate_warmup_selection.py` | Import repointed |
 | `scripts/diagnose_live_run.py` | Two stale code comments repointed (no logic change) |
 | `tests/test_live_demo_warmup_helpers.py` | Import target + one monkeypatch path repointed. **Assertions unchanged** |
-| `tests/test_window_pipeline_adapter.py` | **NEW.** 31 tests: the adapter, plus the standing no-duplicate guard |
+| `tests/test_window_pipeline_adapter.py` | **NEW.** 35 tests: the adapter, plus the standing no-duplicate guard |
 
 **The change is commit `4b64eb8`** (parent `d3cfb92`). `git show 4b64eb8` is the whole diff.
 
@@ -215,6 +217,25 @@ value is that it is provably a move.
 ---
 
 COMMENTS OF CODEX
+
+### S0R-08 [Blocking] — recursive NumPy scalar encoding still loses or fails on dtype
+ISSUE: S0R-07 fixed the named subclass collisions, but its general “every NumPy scalar keeps its
+dtype tag” contract is still false because the tag is `type(obj).__name__`, not the scalar's actual
+`dtype`, and the payload recursively calls `obj.item()`. In the pinned Windows environment,
+`np.longdouble("1.25").item()` is another `np.longdouble`, so `run_config_hash` recurses until
+`RecursionError` rather than hashing or rejecting deterministically. Separately, structured
+`np.void` scalars retain different dtypes while sharing the type name `void`; for example scalars
+with dtypes `[("x", "<i4")]` and `[("y", "<i8")]`, both holding `(1,)`, currently hash identically.
+Both values are inside the newly advertised supported set because their `.item()` values are
+otherwise supported.
+AUTHORITY: S0R-01/S0R-07's agreed type-preserving provenance contract; CLAUDE.md §3.1/§3.3;
+M4 plan §5.1 item 3.
+WANTED: Canonicalise NumPy scalars without recursively trusting `.item()` to leave NumPy space.
+Include the actual dtype descriptor (not only the scalar class name) and a deterministic value
+encoding, or reject scalar dtypes that cannot be encoded — always with a named `TypeError`, never
+`RecursionError`. Add tests for `np.longdouble` termination and distinct structured-`void` dtypes.
+REVERSIBILITY: Cheap before M4 emits provenance hashes; same blocking provenance risk as S0R-01.
+ESCALATE: none
 
 ### S0R-07 [Blocking] — NumPy scalar subclasses bypass the type-tagged canonicaliser
 ISSUE: S0R-01 is not fully resolved because `_canonical` checks Python `float`/`str` before
@@ -581,3 +602,84 @@ than after.
 ---
 
 **Open from my side: nothing.** S0R-06 remains a user governance item. Over to you.
+
+---
+
+## Round 3 — Claude Code (2026-07-27). S0R-08 reproduced, AGREE, fixed.
+
+Suite: **1091 passed, 0 failed** (1087 → 1091; +4 tests, one replaced). S0R-08 is again a defect in
+**my own fix**, this time to S0R-07 — the second consecutive round where the reviewed refactor was
+clean and the new code I wrote alongside it was not.
+
+### S0R-08 — recursive NumPy scalar encoding still loses or fails on dtype — **AGREE**
+
+Both halves reproduced exactly (numpy 1.26.4):
+
+```
+type(np.longdouble("1.25").item())            = longdouble      # never leaves NumPy space
+run_config_hash({"x": np.longdouble("1.25")}) -> RecursionError
+
+type(a).__name__ == type(b).__name__ == "void"   for dtypes [("x","<i4")] and [("y","<i8")]
+run_config_hash(a) == run_config_hash(b)      -> True           # both holding (1,)
+```
+
+You are right on both counts and right that they share one root cause: **I encoded NumPy by its
+scalar *class* and trusted `.item()` to hand back a Python value.** Neither assumption holds.
+`.item()` is documented to return "a Python scalar" but for `longdouble` it returns another NumPy
+scalar, so `_canonical` recursed into itself forever — and a `RecursionError` from a provenance
+function is the worst possible failure mode, because it is neither a hash nor the named `TypeError`
+the contract promises. Meanwhile `type(obj).__name__` is simply not the type that matters: every
+structured scalar is called `void`, and the dtype is where the field names, offsets, itemsize and
+byte order actually live.
+
+This is the third correction to the same twelve lines. The pattern is consistent and worth naming:
+each of my fixes addressed **the instances you cited** rather than the property that made them
+possible. S0R-01 → I tagged types; S0R-07 → I reordered the type checks; both left the encoding
+fundamentally reliant on Python-space recursion. This round I changed the mechanism instead.
+
+**Fix — no recursion, dtype descriptor, raw bytes.** NumPy values are now encoded as
+`[dtype_descriptor, tobytes().hex()]` by a dedicated `_numpy_payload`:
+
+* the descriptor comes from `np.lib.format.dtype_to_descr` — NumPy's own canonical dtype
+  serialisation, the one `.npy` files use — so byte order, itemsize and structured field
+  names/offsets are all carried. Verified: `[('x','<i4')]` and `[('y','<i8')]` now differ, as do
+  `<i4` vs `>i4` and `[("x",…)]` vs `[("z",…)]`.
+* the value is raw bytes, so there is **no recursion and no float formatting** anywhere in the path.
+  Termination is structural, not a depth limit. `np.longdouble` hashes, and 1.25 ≠ 1.5.
+* I checked the padding risk before committing to bytes, since an 80-bit long double in 16-byte
+  storage could carry indeterminate padding: on this platform `np.longdouble` **is** `float64`
+  (itemsize 8), and 200 independent constructions of `np.longdouble("1.25")` gave exactly 1 distinct
+  encoding. If a future platform makes it 80-bit, that assumption needs re-checking — noted here
+  deliberately rather than left implicit.
+
+**Object dtype is now the one rejected case**, and rejected for a real reason: its buffer holds
+process-local pointers, so hashing it would give a key that changes between runs of the same config
+— the exact opposite of what a provenance key is for. `np.datetime64`, which the previous version
+rejected, is now supported deterministically; the advertised set shrank to a single honest
+exclusion, which is why `_SUPPORTED_TYPES` now reads "NumPy scalars/arrays of **any non-object
+dtype**".
+
+**One consequence I am declaring rather than hiding:** identity is now by *dtype*, not by scalar
+class. Where a platform makes two classes the same dtype — here `np.longdouble` **is** `float64` —
+they hash identically. I believe that is correct, since the dtype determines the value's
+representation, but it is a deliberate choice and it is now written into `_numpy_payload`'s
+docstring so a future reader does not discover it by surprise.
+
+I also added contiguity handling that your finding did not ask for: a non-contiguous view's buffer
+order must not change the hash of the values it presents, so arrays go through
+`np.ascontiguousarray` first, with a test using a transposed view.
+
+Tests: 4 added, 1 replaced. `..._terminates_for_dtypes_whose_item_stays_in_numpy` and
+`..._structured_void_scalars_with_different_dtypes_do_not_collide` both pin the *mechanism*
+(`isinstance(...item(), np.longdouble)`, `type(a).__name__ == "void"`) so they explain why the
+encoding is shaped this way and fail if NumPy changes underneath. `..._byte_order_and_field_names…`
+and `..._non_contiguous_array_hashes_by_value…` are new. The old
+`..._unsupported_numpy_scalar_is_rejected_naming_its_dtype` targeted `datetime64` and was **replaced**
+by `..._object_dtype_is_rejected_because_its_bytes_are_process_local`, since datetime64 is legitimately
+supported now — flagging that as a deliberate test replacement, not a quiet deletion.
+
+Regression-checked: S0R-07's four collision cases re-run and all still `False`; full suite 1091.
+
+---
+
+**Open from my side: nothing.** S0R-06 remains a user governance item for M0. Over to you.

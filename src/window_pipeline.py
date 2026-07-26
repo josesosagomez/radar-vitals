@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any, Mapping, Protocol, runtime_checkable
 
 import numpy as np
+from numpy.lib import format as _npformat
 
 from .respiration import (
     extract_chest_phase,
@@ -210,8 +211,55 @@ class WindowEstimator(Protocol):
 #: support and the implementation cannot drift apart (S0R-07).
 _SUPPORTED_TYPES = (
     "None, bool, int, float, complex, str, Path, list, tuple, mapping, and NumPy "
-    "scalars/arrays whose element type is itself one of these"
+    "scalars/arrays of any non-object dtype"
 )
+
+
+def _numpy_payload(x: "np.generic | np.ndarray") -> list:
+    """Encode a NumPy value as `[dtype_descriptor, raw_bytes_hex]`.
+
+    Deliberately does **not** recurse through `.item()` (S0R-08). Two reasons that
+    approach was wrong:
+
+    * `.item()` is not guaranteed to leave NumPy space — on this platform
+      `np.longdouble("1.25").item()` is another `np.longdouble`, so the recursion never
+      terminated and raised `RecursionError` instead of hashing or rejecting.
+    * the tag was `type(obj).__name__`, which is not the dtype. Structured `np.void`
+      scalars all share the name `void`, so `[("x", "<i4")]` and `[("y", "<i8")]`
+      holding the same value hashed identically.
+
+    The dtype descriptor is NumPy's own canonical serialisation (the one `.npy` files
+    use), so it distinguishes byte order, itemsize and structured field names/offsets.
+    Raw bytes then pin the value exactly, with no float formatting in the path.
+
+    **Declared consequence:** identity is by *dtype*, not by scalar class. Where a
+    platform makes two classes the same dtype — here `np.longdouble` is `float64` — the
+    two hash identically. That is correct: the dtype is what determines the value's
+    representation.
+
+    Object dtype is rejected: its bytes are process-local pointers, so hashing them
+    would produce a key that changes between runs of the same config.
+    """
+    if x.dtype.hasobject:
+        raise TypeError(
+            f"run_config_hash cannot canonicalise NumPy object dtype ({x.dtype!r}) "
+            "deterministically: its buffer holds process-local pointers, so the same "
+            f"config would hash differently between runs. Supported: {_SUPPORTED_TYPES}."
+        )
+    try:
+        descr = _npformat.dtype_to_descr(x.dtype)
+    except Exception as exc:                      # pragma: no cover - defensive
+        raise TypeError(
+            f"run_config_hash cannot canonicalise NumPy dtype {x.dtype!r} "
+            f"deterministically: {exc}. Supported: {_SUPPORTED_TYPES}."
+        ) from exc
+
+    def _plain(d):                                 # tuples -> lists, for stable JSON
+        if isinstance(d, (list, tuple)):
+            return [_plain(v) for v in d]
+        return d
+
+    return [_plain(descr), x.tobytes().hex()]
 
 
 def _canonical(obj: Any) -> list:
@@ -227,7 +275,8 @@ def _canonical(obj: Any) -> list:
     `np.int64` and `np.bool_` do not. Testing the built-ins first therefore preserved the
     dtype of some scalars and silently erased it for others — an inconsistency inside the
     very contract that was meant to remove ambiguity. NumPy scalars now always keep their
-    dtype tag.
+    dtype, encoded by `_numpy_payload` rather than by recursing through `.item()`
+    (S0R-08).
 
     Unsupported types raise rather than being coerced: a provenance key must never
     quietly absorb something it cannot represent.
@@ -237,25 +286,10 @@ def _canonical(obj: Any) -> list:
 
     # ── NumPy first: several NumPy scalars subclass Python built-ins (S0R-07) ──
     if isinstance(obj, np.generic):
-        try:
-            payload = _canonical(obj.item())
-        except TypeError as exc:
-            raise TypeError(
-                f"run_config_hash cannot canonicalise NumPy scalar of dtype "
-                f"{obj.dtype!r} deterministically (value: {obj!r}): its Python value is "
-                f"unsupported. Supported: {_SUPPORTED_TYPES}."
-            ) from exc
-        return [f"np.{type(obj).__name__}", payload]
+        return ["np.scalar", _numpy_payload(obj)]
     if isinstance(obj, np.ndarray):
-        try:
-            payload = _canonical(obj.tolist())
-        except TypeError as exc:
-            raise TypeError(
-                f"run_config_hash cannot canonicalise NumPy array of dtype "
-                f"{obj.dtype!r} deterministically: its element type is unsupported. "
-                f"Supported: {_SUPPORTED_TYPES}."
-            ) from exc
-        return ["ndarray", [str(obj.dtype), list(obj.shape), payload]]
+        # Contiguous copy first: a view's buffer order must not change the hash.
+        return ["ndarray", [list(obj.shape), _numpy_payload(np.ascontiguousarray(obj))]]
 
     if isinstance(obj, bool):                      # before int — bool subclasses int
         return ["bool", "1" if obj else "0"]
