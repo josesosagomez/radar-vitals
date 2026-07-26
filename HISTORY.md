@@ -5957,3 +5957,43 @@ window convention (harmonised to half-open, M3R-40).
 **Next:** Get Codex's round-3 verdict on M3R-29/31/41 (esp. the MOVER math sign-off). Then the docs are
 ready for the M0 freeze (user's irreversible act — not done here). M2 done-when #5: score the post-fix
 replay BR (2026-07-25 NPZs) under the frozen comparator.
+
+## 2026-07-26 — M3 cross-review CLOSED (rounds 13–19; M3R-42…48 + the user decisions)
+
+**Set out to do:** Carry the M3 review to closure after the M3R-29…41 batch.
+
+**Worked (with evidence):** Codex ran rounds 13–19 (`plans/m3_prespec_cross_review.md`) and posted
+**`NO MORE COMMENTS` on 2026-07-26 — all 48 findings (M3R-01…48) resolved**; committed at `f137132`.
+User decisions recorded: **M3R-40** HR comparator harmonised to half-open `[t−30 s, t)` (pre-deposit
+clarification, no DOI existed); **M3R-34** Masimo spot-check intended-use dispositioned (labelling is
+about battery endurance + unattended-safety alarms, not 10-min accuracy; battery-check added to the
+protocol; document number pinned to **`LAB-10168A`**, correcting a `lab-10169a` filename typo);
+**M3R-29** primary CI = **Option A cluster-bootstrap** (fully specified, estimand-matched by
+construction; MOVER demoted to a pre-named *candidate* sensitivity, validated/reported only after M4
+implementation + statistician review + benchmark); **M3R-42** ≥8/10 read study-wide not per-arm
+(paced-HR arm-specific LoA rests on ≤7 subjects by design, accepted); **M3R-45** the bootstrap's
+small-sample under-coverage is **anti-conservative** for the ≤5 bpm precision gate — knowingly
+accepted as a declared risk. Should-fix items M3R-43/44/46/47/48 applied (spot-check rationale as an
+explicit study assumption; M0-plan A4 defers to §1; MOVER validation wording; point-LoA-vs-bootstrap
+serial-dependence separated; status labels → cross-review COMPLETE). Both deposit documents now
+declare cross-review COMPLETE / ready for the M0 freeze — **not frozen**. Coordination file compacted
+to a 48-row resolution table (full verbatim debate preserved in git history). Edits in
+`notes/analysis_prespec.md`, `notes/comparator_prespec_br.md`, `notes/comparator_prespec.md`,
+`notes/protocol.md`, `plans/m0_preregistration.md`, `plans/m3_prespec_cross_review.md`,
+`scripts/derive_br_comparator_evidence.py`.
+
+**Failed / did not work, and why:** **M3R-29 could not be resolved by argument** — MOVER-as-primary is
+not executable without either the (paywalled) Zou/Graybill–Wang equations transcribed into §1 or a
+built+math-reviewed+benchmarked M4 implementation; escalated to the user, who chose Option A
+(bootstrap primary). I also **made and corrected an error (M3R-45)**: in the round-10→12 batch I had
+labelled the bootstrap under-coverage "conservative" for the precision gate when it is
+**anti-conservative** (an over-narrow CI can falsely *retain* a confirmatory headline) — Codex caught
+it, I fixed the direction, and the user accepted the anti-conservative gate as a declared limitation.
+
+**Retired / no longer used:** MOVER-as-primary (round-10→12 choice, reversed to Option A
+cluster-bootstrap primary at round 14); the "under-coverage is conservative" claim (backwards); the
+closed-interval HR window convention (harmonised to half-open); the stale three-level
+`√(σ²_b+σ²_s+σ²_w)` agreement model still described in the M0 plan's A4 (now defers to §1).
+
+**Next:** M0 freeze (the user's irreversible Zenodo act) once the M4 harness exists; M2 done-when #5 —
+score the post-fix replay BR (the 2026-07-25 NPZs) under the now-complete comparator.
