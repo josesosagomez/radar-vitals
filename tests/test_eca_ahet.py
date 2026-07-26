@@ -354,7 +354,66 @@ def test_new_mode_cancels_noncolliding_harmonics_in_band():
     pre = _inband_power(out["spectrum_pre_eca"], out["freqs_hz"])
     post = _inband_power(out["spectrum_first_pass"], out["freqs_hz"])
     removed_db = 10 * np.log10(post / pre)
-    assert removed_db < -3.0, f"expected material in-band suppression, got {removed_db:+.2f} dB"
+
+    # ── What this test asserts, and why it changed on 2026-07-26 ──────────────────────────
+    # Cross-review LFR-06. The original assertion was `removed_db < -3.0` on TOTAL in-band
+    # power. After the LFR-01 band-pass fix that ratio became -2.87 dB, and my first response
+    # was to relax the threshold and add an absolute guard `post < 5.146e3`, justified as
+    # pinning "residual contamination".
+    #
+    # Codex was right that this is the wrong physical quantity, and the guard was actively
+    # unsafe. Total in-band power is dominated by the two things ECA must PRESERVE, not
+    # remove — measured on this exact signal:
+    #
+    #     bin              pre      post     change
+    #     k=4  1.200 Hz  37.392   37.391    -0.00 dB   <- deliberately SPARED (guard)
+    #     cardiac 1.067 Hz 37.577  37.576   -0.00 dB   <- must survive
+    #     k=3  0.900 Hz  40.240    2.359   -24.64 dB   <- projected out
+    #     k=5  1.500 Hz  29.983    2.074   -23.20 dB   <- projected out
+    #     k=6  1.800 Hz  25.063    1.256   -26.00 dB   <- projected out
+    #
+    # So a LOWER total would also be produced by erasing the cardiac peak — the exact
+    # over-cancellation regression this test exists to catch would have made it pass more
+    # easily. The absolute guard is therefore removed and replaced by targeted per-bin
+    # assertions on the quantities that actually define correct cancellation.
+    # ──────────────────────────────────────────────────────────────────────────────────────
+    freqs = out["freqs_hz"]
+    pre_spec, post_spec = out["spectrum_pre_eca"], out["spectrum_first_pass"]
+    skipped = set((np.flatnonzero(out["eca_skipped_harmonics"]) + 1).tolist())
+
+    def _atten_db(hz):
+        b = int(np.argmin(np.abs(freqs - hz)))
+        return 20 * np.log10(max(post_spec[b], 1e-30) / max(pre_spec[b], 1e-30))
+
+    # (a) every SELECTED in-band respiratory harmonic is materially cancelled.
+    # Margin 15 dB against an observed 23-26 dB: comfortably inside the real behaviour, far
+    # outside the ~0 dB the pre-fix `skip_forbidden_harmonics_v1` bug produced.
+    projected = [k for k in range(1, out["k_max_eff"] + 1)
+                 if BAND_G[0] <= k * f_r <= BAND_G[1] and k not in skipped]
+    assert projected, "no in-band harmonic was projected — the test signal is not exercising ECA"
+    for k in projected:
+        a = _atten_db(k * f_r)
+        assert a < -15.0, (
+            f"harmonic k={k} at {k * f_r:.3f} Hz was only attenuated {a:+.2f} dB "
+            f"(expected < -15 dB); ECA is not cancelling what it selected"
+        )
+
+    # (b) the cardiac peak is PRESERVED. This is the assertion the old total-power guard
+    # could not make, and the one that fails first on an over-cancellation regression.
+    cardiac_change = _atten_db(f_h)
+    assert cardiac_change > -1.0, (
+        f"cardiac tone at {f_h:.4f} Hz lost {cardiac_change:+.2f} dB — ECA is eating the "
+        f"signal it exists to expose"
+    )
+    # ...and so is any deliberately spared harmonic.
+    for k in sorted(skipped):
+        if BAND_G[0] <= k * f_r <= BAND_G[1]:
+            a = _atten_db(k * f_r)
+            assert a > -1.0, f"spared harmonic k={k} was attenuated {a:+.2f} dB despite the guard"
+
+    # (c) coarse secondary check only — retained for continuity with the original test, and
+    # explicitly NOT interpreted as "residual contamination" (see above).
+    assert removed_db < -2.0, f"expected material in-band suppression, got {removed_db:+.2f} dB"
     assert out["n_eca_projected"] >= 3, "non-colliding in-band harmonics must be projected out"
 
 
@@ -402,21 +461,40 @@ def test_derive_k_max_eff_ceiling_is_inclusive():
     assert vitals.derive_k_max_eff(16 / 60, 2.0, 20) == 7
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "KNOWN DESIGN HOLE in guard_cardiac_candidate_v1 — plan S7.1 materialised. "
-        "prov_cand_hz is the argmax of the CONTAMINATED pre-ECA spectrum, so when a "
-        "respiratory harmonic outranks the heart (34% of hops on the paced-16 capture), the "
-        "guard SPARES the decoy. The decoy survives ECA at full strength, becomes rank-0, and "
-        "strict_v1 returns the first passing candidate — the true heart sits at rank 1 with "
-        "p2f=33 dB and is never reached. `legacy` gets this right precisely because it "
-        "unconditionally cancels k<=4. This mode is NOT promoted in any config. "
-        "The extended-ceiling repair (v2) was REJECTED: it needs the 2k*f_r line cancelled, "
-        "but a f_r error of 1/10 of an FFT bin destroys that, and on real captures the high-k "
-        "harmonics are not coherent lines at all. See notes/plan_eca_forbidden_zone.md PART IV."
-    ),
-)
+# ─────────────────────────────────────────────────────────────────────────────
+# XFAIL REMOVED 2026-07-26 — cross-review LFR-01/LFR-02 closed this synthetic hole.
+#
+# This test was `xfail(strict=True)` with the note "so it flips to XPASS the moment it is
+# fixed". It flipped. The historical reason is preserved verbatim:
+#
+#   "KNOWN DESIGN HOLE in guard_cardiac_candidate_v1 — plan S7.1 materialised. prov_cand_hz
+#    is the argmax of the CONTAMINATED pre-ECA spectrum, so when a respiratory harmonic
+#    outranks the heart (34% of hops on the paced-16 capture), the guard SPARES the decoy.
+#    The decoy survives ECA at full strength, becomes rank-0, and strict_v1 returns the first
+#    passing candidate — the true heart sits at rank 1 with p2f=33 dB and is never reached.
+#    `legacy` gets this right precisely because it unconditionally cancels k<=4. This mode is
+#    NOT promoted in any config. The extended-ceiling repair (v2) was REJECTED: it needs the
+#    2k*f_r line cancelled, but a f_r error of 1/10 of an FFT bin destroys that, and on real
+#    captures the high-k harmonics are not coherent lines at all.
+#    See notes/plan_eca_forbidden_zone.md PART IV."
+#
+# WHY IT NOW PASSES. The hole's mechanism was "the decoy survives ECA at full strength".
+# Under the brick-wall band-pass it did, because the mask admitted the respiratory harmonic's
+# out-of-band leak unattenuated, letting the decoy outrank the heart in the pre-ECA spectrum
+# that prov_cand_hz is drawn from. With the Butterworth response restored the decoy no longer
+# wins that ranking. Measured across seeds 0-5 on this exact signal:
+#
+#     brick wall   : 2 true HR, 3 decoy (~71 bpm), 1 other wrong HR   -> 4/6 hard failures
+#     butterworth  : 6 true HR (96.00 bpm)                            -> 0/6 hard failures
+#
+# WHAT THIS DOES **NOT** ESTABLISH. The quoted "34% of hops on the paced-16 capture" is a
+# REAL-DATA claim, and it has not been re-measured — the replays have not been reprocessed
+# under the new filter at the time of writing. Six synthetic seeds are not four captures.
+# Treat the design hole as CLOSED ON SYNTHETICS ONLY until the paced-16 replay is re-run and
+# the hop percentage re-measured. `guard_cardiac_candidate_v1` remains un-promoted in every
+# config, and this test passing is not grounds to promote it (HANDOFF: promotion is blocked
+# on `experiments/exp_eca_modes`, which does not exist).
+# ─────────────────────────────────────────────────────────────────────────────
 def test_does_not_confidently_report_a_respiratory_harmonic_as_hr():
     """§8.4 — the plan's BIGGEST risk (§7.1), attacked directly.
 
@@ -427,8 +505,9 @@ def test_does_not_confidently_report_a_respiratory_harmonic_as_hr():
     Required: strict AHET must not confidently return the decoy. Returning the true HR is
     the good outcome; returning NaN is acceptable. Reporting the harmonic is a hard failure.
 
-    CURRENTLY FAILS — this is the acceptance test the plan set for itself, and the plan
-    does not pass it. Marked xfail(strict) so it flips to XPASS the moment it is fixed.
+    PASSES since 2026-07-26 (returns the true 96 bpm), as a consequence of the LFR-01/LFR-02
+    band-pass fix rather than of any change to the ECA/AHET logic. See the block above for
+    what that does and does not establish.
     """
     f_r = 0.30                          # 4·f_r = 1.20 Hz = 72 bpm — the decoy
     f_h = 1.60                          # 96 bpm — true heart, far from every k·f_r

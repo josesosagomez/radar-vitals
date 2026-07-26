@@ -9,7 +9,7 @@ The pure-signal functions (`bandpass_filter`, `estimate_rate_from_phase`) have n
 dependency and are covered by tests/test_vitals_synthetic.py.
 
 exp002 additions (arXiv:2503.07062):
-  - eca_project(): QR-based respiration subspace cancellation
+  - eca_project(): respiration subspace cancellation (modified Gram-Schmidt; was QR)
   - refine_freq_hz(): parabolic interpolation beyond FFT bin resolution
   - estimate_rate_from_phase() extended with f_r_hz kwarg for ECA + AHET path
   - run_pipeline_locked() wired to estimate f_r per window and apply ECA + AHET
@@ -17,8 +17,9 @@ exp002 additions (arXiv:2503.07062):
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
 import numpy as np
-from scipy.signal import find_peaks
+from scipy.signal import butter, find_peaks, freqz
 
 # Physiological bands (Hz). Heart 0.8-2.0 Hz = 48-120 bpm; respiration 0.1-0.5 Hz = 6-30 bpm.
 HEART_BAND_HZ = (0.8, 2.0)
@@ -31,6 +32,14 @@ INTERMEDIATE_SCHEMA_VERSION = 1
 # left-edge peak in the post-ECA cardiac band spectrum.  Candidates below
 # band_lo + MIN_CARDIAC_BAND_MARGIN_HZ are treated as filter-edge artifacts.
 # Assumption: HR > 57 bpm for seated/standing adults in this study.
+#
+# Cross-review 2026-07-26 (LFR-01/LFR-03): this rationale is stated against the
+# Butterworth response, and between 2026-06-30 (`1847d7f`) and that review the
+# filter was in fact a brick-wall mask — under which the leak this constant
+# guards is *worse*, not absent (see `bandpass_filter`).  The constant was
+# therefore doing undeclared work for that period.  `bandpass_filter` now
+# restores the Butterworth response the comment describes, so the two agree
+# again.  The 57 bpm floor remains an assumption, not a measurement.
 MIN_CARDIAC_BAND_MARGIN_HZ: float = 0.15   # 0.8 + 0.15 = 0.95 Hz = 57 bpm
 # Tolerance for the INCLUSIVE band-ceiling test in ECA harmonic selection. The cardiac
 # spectrum mask uses `freqs <= band_hi`, so ECA must too, or the two disagree exactly at
@@ -47,20 +56,113 @@ class VitalsParams:
     resp_band_hz: tuple = RESP_BAND_HZ
 
 
-def bandpass_filter(x: np.ndarray, fs: float, lo: float, hi: float, order: int = 4) -> np.ndarray:
-    """Zero-phase FFT-domain bandpass.
+@lru_cache(maxsize=64)
+def _zero_phase_butter_response(
+    n_ext: int, fs: float, lo: float, hi: float, order: int
+) -> np.ndarray:
+    """|H(f)|^2 of an order-`order` Butterworth bandpass, on the rfft grid of length `n_ext`.
 
-    The live-demo environment has shown hard Windows failures inside the
-    LAPACK solve used by scipy.signal filtfilt initial-condition helpers.
-    Frequency-domain masking keeps the filter deterministic and avoids that
-    non-catchable runtime path.
+    Squaring the magnitude reproduces the forward-backward (zero-phase) response that
+    `scipy.signal.filtfilt` produces, without running filtfilt.
+
+    LAPACK safety (the whole reason this module avoids scipy's filter path): `butter()` is
+    algebraic only — analytic prototype poles, `lp2bp_zpk`, `bilinear_zpk`, `zpk2tf` — and
+    `freqz()` is polynomial evaluation. Neither reaches `np.linalg`. What crashed Windows was
+    `filtfilt`'s initial-condition helper `lfilter_zi`, which solves a companion-matrix system
+    via `np.linalg.solve`. That call is not on this path.
+
+    Cached because the response depends only on (length, fs, band, order) — never on the
+    signal — so per-window recomputation would be pure waste.
     """
-    del order  # Kept for backward-compatible call sites.
+    b, a = butter(order, [lo / (0.5 * fs), hi / (0.5 * fs)], btype="band")
+    freqs = np.fft.rfftfreq(n_ext, d=1.0 / fs)
+    _, h = freqz(b, a, worN=2 * np.pi * freqs / fs)
+    resp = np.abs(h) ** 2
+    resp.setflags(write=False)          # cached array must not be mutated by a caller
+    return resp
+
+
+def bandpass_filter(x: np.ndarray, fs: float, lo: float, hi: float, order: int = 4) -> np.ndarray:
+    """Zero-phase Butterworth bandpass, evaluated in the FFT domain.
+
+    Reproduces `scipy.signal.filtfilt(butter(order, [lo, hi], 'band'), x)` — same response,
+    same odd-reflected edge policy — without entering the LAPACK path that hard-crashes the
+    live-demo Windows environment (see `_zero_phase_butter_response`).
+
+    Cross-model review 2026-07-26, findings **LFR-01** and **LFR-02**
+    (`plans/m4_linalg_free_dsp_review.md`)
+    -------------------------------------------------------------------------------------
+    This function previously applied a rectangular *brick-wall* mask to the rfft of the raw
+    (un-windowed, non-periodic) window. That was introduced on 2026-06-30 (`1847d7f`) as a
+    transparent substitution for filtfilt, but it silently changed the estimator:
+
+      * **Response.** A hard rectangle has unity gain at both band edges, where the order-4
+        forward-backward response is 0.5, and no transition band at all. On the 486
+        exact-unique stored 600-sample phase windows this moved 77 respiration and ~120
+        cardiac peak bins, and flipped 34 `ahet_verified` validity flags.
+      * **Edges.** `rfft`/`irfft` filter the *periodic extension* of a non-periodic window,
+        so wrap-around contaminated the signal handed to `eca_project` — which runs before
+        the Hann analysis taper, so the taper could not undo it.
+
+    The two compound into a concrete failure. Because the mask was applied to an un-windowed
+    segment, a respiratory harmonic just below `lo` leaks a tail across the cutoff; the
+    rectangle then **keeps that tail while discarding the main lobe**. Measured on synthetics
+    (N=600, fs=20, cardiac at 1.20 Hz), as a ratio of the strongest artifact in
+    [0.8, 0.95) Hz to the true cardiac peak:
+
+        f_r      2*f_r     brick wall      this implementation
+        0.34 Hz  0.68 Hz   0.977           0.019
+        0.36 Hz  0.72 Hz   1.570           0.126
+
+    A ratio >= 1 means the artifact outranks the real peak and argmax-in-band picks it. The
+    brick wall crossed that line at f_r = 0.36 Hz — 21.6 bpm breathing, inside the range the
+    `sweep` capture steps through by design. `MIN_CARDIAC_BAND_MARGIN_HZ` was carrying this,
+    undeclared, having been derived against the Butterworth response restored here.
+    `tests/test_vitals_linalg_free.py` pins the behaviour.
+
+    Edge policy
+    -----------
+    The window is odd-reflected (antisymmetric about each endpoint) by `n - 1` samples per
+    side before the transform and the centre is cropped afterwards — the same extension
+    `filtfilt` applies by default (`padtype='odd'`). The pad is deliberately larger than
+    filtfilt's `3 * max(len(a), len(b)) = 27`: an IIR filter's contamination decays with the
+    impulse response, whereas FFT-domain filtering wraps *globally*, so the pad is sized to
+    the window rather than to the filter. `n - 1` is the largest odd extension the standard
+    construction admits.
+    """
     x_arr = np.asarray(x, dtype=float)
-    freqs = np.fft.rfftfreq(x_arr.size, d=1.0 / fs)
-    spec = np.fft.rfft(x_arr - np.mean(x_arr))
-    mask = (freqs >= lo) & (freqs <= hi)
-    return np.fft.irfft(spec * mask, n=x_arr.size)
+    n = x_arr.size
+
+    # Cross-review LFR-05: an earlier version returned the demeaned input unchanged for n < 4.
+    # That is a silent failure (CLAUDE.md §4) — the caller receives plausible-looking data
+    # labelled as band-passed when no response was ever applied. Refuse instead.
+    if not 0.0 < lo < hi:
+        raise ValueError(f"bandpass_filter: need 0 < lo < hi, got lo={lo}, hi={hi}")
+    if hi >= 0.5 * fs:
+        raise ValueError(
+            f"bandpass_filter: hi={hi} Hz is at or above Nyquist ({0.5 * fs} Hz) for fs={fs}"
+        )
+    # A band-pass is only meaningful if the window spans at least one full period of the
+    # lowest passed frequency; below that, `lo` is not present in the record to pass or
+    # reject. Derived (n >= fs / lo), not tuned: 25 samples for the 0.8 Hz cardiac edge at
+    # 20 Hz, 200 for the 0.1 Hz respiration edge. Production windows are 400/600 — unaffected.
+    min_n = int(np.ceil(fs / lo))
+    if n < min_n:
+        raise ValueError(
+            f"bandpass_filter: {n} samples is too short for lo={lo} Hz at fs={fs} Hz — "
+            f"need at least {min_n} (one full period of lo). Returning an unfiltered signal "
+            f"here would silently mislabel it as band-passed."
+        )
+
+    x0 = x_arr - np.mean(x_arr)
+    pad = n - 1
+    left = 2.0 * x0[0] - x0[pad:0:-1]
+    right = 2.0 * x0[-1] - x0[-2:-(pad + 2):-1]
+    ext = np.concatenate([left, x0, right])
+
+    resp = _zero_phase_butter_response(ext.size, float(fs), float(lo), float(hi), int(order))
+    y = np.fft.irfft(np.fft.rfft(ext) * resp, n=ext.size)
+    return y[pad:pad + n]
 
 
 def refine_freq_hz(spectrum: np.ndarray, freqs: np.ndarray, peak_idx: int) -> float:
@@ -213,7 +315,11 @@ def eca_project(
     return_diagnostics: bool = False,
     diag_len: int | None = None,
 ):
-    """Remove respiratory harmonics from phase signal using QR projection.
+    """Remove respiratory harmonics from phase signal by orthogonal-complement projection.
+
+    The orthonormal basis is built by modified Gram-Schmidt, not `np.linalg.qr` (see below);
+    the projector is mathematically the QR projector `I - Q Q^T`, verified equal to it to
+    ~1e-14 across the admissible domain by `tests/test_vitals_linalg_free.py` (LFR-04).
 
     Which harmonics are projected is decided by eca_harmonic_ks() — see there.
     `cardiac_guard_hz`, `band_hi` and `hard_floor_k` are explicit parameters (previously
@@ -415,7 +521,8 @@ def estimate_rate_from_phase(
     # No-ECA path: f_r_hz is None OR physiological outlier gate fired     #
     # ------------------------------------------------------------------ #
     if f_r_hz is None or f_r_is_outlier:
-        x_filt = bandpass_filter(x, fs, band[0], band[1])
+        # order pinned explicitly (LFR-03): it is a live parameter again, not a no-op.
+        x_filt = bandpass_filter(x, fs, band[0], band[1], order=4)
         n = len(x_filt)
         win = np.hanning(n)
         spectrum = np.abs(np.fft.rfft(x_filt * win))
@@ -490,7 +597,7 @@ def estimate_rate_from_phase(
     # Widen the bandpass to preserve 2nd cardiac harmonic (up to 2×band_hi).
     # This lets AHET check [2×f_h ± 0.1 Hz] without hitting the filter rolloff.
     bp_hi = min(2.0 * band[1], fs * 0.45)
-    x_bp = bandpass_filter(x, fs, band[0], bp_hi)
+    x_bp = bandpass_filter(x, fs, band[0], bp_hi, order=4)   # order pinned (LFR-03)
     n = len(x_bp)
     hann = np.hanning(n)
 

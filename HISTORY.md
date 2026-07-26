@@ -5997,3 +5997,141 @@ closed-interval HR window convention (harmonised to half-open); the stale three-
 
 **Next:** M0 freeze (the user's irreversible Zenodo act) once the M4 harness exists; M2 done-when #5 —
 score the post-fix replay BR (the 2026-07-25 NPZs) under the now-complete comparator.
+
+## 2026-07-26 — Start of B (properly close M2 #5): linalg-free DSP review set up + M4 grounded
+
+**Set out to do:** Close M2 done-when #5 "properly" (user chose the full path, not a quick preview):
+the linalg-free DSP cross-model review (M4's gate) → build the M4 offline harness → score BR.
+
+**Worked (with evidence):** Established that M2 #5 is really an **M4 deliverable** and M4 has an unmet
+gate — the **linalg-free DSP cross-model review** (CLAUDE.md §6) of the two replacements in
+`src/vitals.py`: `bandpass_filter` (FFT brick-wall mask replacing `scipy.signal.filtfilt`, ~L50–63)
+and `eca_project` (single-pass modified Gram–Schmidt replacing `np.linalg.qr`, ~L203–298). Drafted the
+review **coordination file** `plans/m4_linalg_free_dsp_review.md` (brief + concrete correctness
+questions A1–A5 FFT-mask, B6–B9 MGS + my author self-assessment) and the **Codex-side review prompt**
+`plans/m4_linalg_codex_review_prompt.md` (LFR-NN findings, same loop protocol as M3). Both uncommitted
+(Codex edits the coordination file during the loop). Grounded the M4 build by reading the code:
+`src/compare.py` implements the **old** PI-gated-*mean* comparator, **not** the frozen median/
+stationarity/coverage one, and no offline harness exists — so M4 is a real build. The replay
+`live_estimates.csv` is per-hop (30 s window, 3 s = 60-frame hop) keyed by end-frame `frame_idx`; the
+frozen §7 non-overlapping grid maps to hops where `frame_idx = 600·k+599`; score `hr_bpm_raw` / `br_bpm`
+(not the online smoother, not `fallback_hr_bpm`), with `ahet_verified`/`resp_valid` → radar-NaN.
+
+**Failed / did not work, and why:** No blocker, but a **provenance gap surfaced**: the pilot HR numbers
+M4 is asked to "reproduce exactly" (0.19/0.50/0.53) trace to **no committed script**, and were computed
+**pre-freeze** under a *"nearest hop to the boundary"* window rule that §7 **later froze differently**
+(exact `[k·600,(k+1)·600)` boundary-aligned). So M4's frozen-§7 HR numbers may differ slightly and that
+would be **correct, not a bug**. Surfaced to the user as an A/B choice (A: validate the scorer on
+synthetic windows + report frozen-§7 numbers as canonical; B: also reconstruct the old rule as a bridge)
+— **awaiting the user's A/B decision before writing the M4 plan and building.**
+
+**Retired / no longer used:** nothing.
+
+**Next:** (1) Run the linalg-free DSP review loop with Codex (`plans/m4_linalg_codex_review_prompt.md`);
+Claude processes LFR-NN findings into the coordination file's `DEBATE COMMENTS`, applies fixes to
+`src/vitals.py` + tests, loops to `NO MORE COMMENTS`. (2) On the user's A/B call, write the M4 plan and
+build the harness incrementally (scoring core + unit tests first, per §5.3), then run it on the 3 Masimo
+captures → reproduce HR under the frozen §7 grid + emit BR for the first time, closing M2 #5 (trusted
+once the linalg review clears). The two tracks are independent and can run in parallel.
+
+## 2026-07-26 — Linalg-free DSP cross-review COMPLETE: a 4-week silent estimator regression found and reverted
+
+**Set out to do:** Run the linalg-free DSP review loop with Codex to clear M4's gate.
+
+**Worked (with evidence):** Loop closed — **7 findings (LFR-01…LFR-07), 5 rounds, all resolved, no
+escalation**; Codex posted `NO MORE COMMENTS` and signed off on both replacements
+(`plans/m4_linalg_free_dsp_review.md`, status header + resolution table). **M4's review gate is
+CLEARED.** Final suite **1056 passed, 0 failed, 0 xfailed** (was 1022 + 1 xfailed), independently
+re-run by Codex.
+
+**The central finding (LFR-01/02) is a negative result about our own process.** On **2026-06-30,
+commit `1847d7f`**, `bandpass_filter` was changed from `filtfilt(butter(4,…))` to an FFT brick-wall
+mask. The commit presents this as a transparent substitution to dodge a Windows LAPACK crash. It was
+not transparent — it silently replaced the estimator, and **that estimator produced every number this
+project has quoted since**, including the preliminary 0.19/0.50/0.53 MAEs. Codex measured 77/486
+respiration and ~120/486 cardiac peak-bin changes vs the former path on stored windows; both
+independently reproduced (486 exact-unique windows, 77/486 and max Δ16.41 bpm matched exactly).
+
+Worse than "different": **worse**. Because the mask was applied to an un-windowed, non-periodic
+segment, a respiratory harmonic just below `lo` leaks a tail across the cutoff and the rectangle
+**keeps the tail while discarding the main lobe**. Ratio of the strongest artifact in the guarded
+[0.8, 0.95) Hz margin to the true cardiac peak (N=600, fs=20, cardiac 1.20 Hz):
+
+| f_r | 2·f_r | brick wall | restored Butterworth | filtfilt |
+|---|---|---|---|---|
+| 0.34 Hz | 0.68 Hz | **0.977** | 0.019 | 0.019 |
+| 0.36 Hz | 0.72 Hz | **1.570** | 0.126 | 0.126 |
+
+A ratio ≥ 1 means the artifact **outranks the true peak** and argmax-in-band selects it. The brick
+wall crossed that line at f_r = 0.36 Hz = **21.6 bpm breathing — inside the range the `sweep` capture
+steps through by design**. `MIN_CARDIAC_BAND_MARGIN_HZ` had been carrying this undeclared, its stated
+Butterworth rationale (`src/vitals.py` L28–34) having been false for four weeks.
+
+**Fix:** `bandpass_filter` rewritten as odd-reflect (`n−1` per side) → `rfft` → `|H_butter4(f)|²` →
+`irfft` → centre crop = a faithful LAPACK-free `filtfilt(butter(4), padtype='odd')`. `butter`/`freqz`
+are algebraic/polynomial only and never reach `np.linalg`; the crash was `filtfilt`'s `lfilter_zi`.
+Measured: cutoffs 0.500001/0.500008 (vs the mask's 1.0), passband ≈1.0, monotone roll-off, order
+sweep 0.1803/0.0461/0.0105 for order 2/4/6, offset invariance 4.7e-14, edge/interior 0.9996.
+
+**Impact on the four captures (`scripts/compare_filter_fix_impact.py`, committed):** far smaller than
+predicted. **No warmup bin moved** (27/26/26). **BR bitwise identical** — `src/respiration.py` never
+calls `bandpass_filter`. **HR max |Δ| = 0.00088 bpm.** Coverage **improved**: paced16 23→28/51
+(45.1→54.9%), sweep 30→35/151 (19.9→23.2%), natural unchanged, **0 windows lost**. M2 floor-pin
+invariant holds (0 floor-pinned-and-valid) on all three. Codex independently confirmed **0/486**
+cardiac peak-bin changes vs the former `filtfilt` and max accepted-rate diff 0.00078 bpm.
+
+Verified the near-null result was not a stale-code artifact (CLAUDE.md §4): post- vs pre-fix NPZs show
+`heart_spectrum` differing 52% relative, `peak_to_floor_ratio_db` by 2.5 dB, and
+`accepted_candidate_rank`/`candidate_rejection_codes`/`spectrum_stage` all differing. The reconciliation
+is that **AHET only verifies windows whose cardiac peak is unambiguous** — precisely the windows a
+response change cannot move. The effect lands on coverage, not accuracy. Also verified the coverage
+gain is not garbage: all 10 new accepts lie inside both the previously-accepted and Masimo PR ranges
+(±5 bpm), and every one had been rejected on a **floor/ratio** gate, never a wrong-frequency one.
+
+**Other findings:** LFR-03 `order` made live and pinned at both call sites, stale QR→MGS declarations
+corrected. LFR-04 `tests/test_vitals_linalg_free.py` — 5 MGS invariants × 40 domain points, 0 skips,
+no `np.linalg.qr` in test or production (MGS vs QR agree to 5.8e-15). LFR-05 `bandpass_filter` now
+raises below one period of `lo` (`n < ceil(fs/lo)`) instead of returning unfiltered data.
+
+**A known bug closed, but only partly.** The strict-xfail AHET decoy test
+(`test_does_not_confidently_report_a_respiratory_harmonic_as_hr`) now XPASSes — brick wall gave 2/6
+correct across seeds 0–5, the Butterworth gives 6/6 — because the hole's mechanism ("the decoy
+survives ECA at full strength") was the mask admitting the leak. Marker removed, historical reason
+preserved verbatim. **Its headline claim "34% of hops on the paced-16 capture" is REAL-DATA and was
+NOT re-measured**; annotated CLOSED ON SYNTHETICS ONLY. `guard_cardiac_candidate_v1` stays un-promoted.
+
+**Failed / did not work, and why:**
+- **My rebuttal of LFR-01 was wrong.** I set out to argue the brick wall was *safer* at the 2·f_r leak
+  and that restoring Butterworth would reintroduce it. Measurement showed the exact opposite. Recorded
+  because it is the reason the finding got stronger, not weaker, on verification.
+- **My prediction to the user was wrong.** I said the fix would move every HR/BR number and invalidate
+  M2's bitwise-identical evidence. BR is bitwise identical (BR does not use this filter — a fact I had
+  already established and failed to carry into the prediction) and HR moved ≤0.001 bpm.
+- **Three of the seven findings were defects in work produced during this loop, not in the original
+  code.** LFR-05 (my `n < 4` early return silently returned unfiltered data), **LFR-06** (my "residual
+  contamination" guard `post < 5.146e3` measured total in-band power, which is dominated by the
+  cardiac peak and the deliberately spared harmonic — it would have been satisfied *more easily* by
+  erasing the cardiac signal, i.e. it would have blessed the over-cancellation regression it was
+  written to catch), and **LFR-07** (my endpoint test asserted `trended == clean`, which `False ==
+  False` satisfies, so a both-invalid regression would have passed vacuously). **06 and 07 are the
+  same failure mode: a guard that gets easier to satisfy as the code gets worse.**
+- **My first end-to-end edge test probed the wrong thing.** It used a step at the window midpoint and
+  failed. Before changing it I checked whether that was an edge-policy defect — it is not; it flips
+  identically under the old brick wall, because a 20× broadband mid-record transient is a real
+  artifact and refusing to verify is correct. Replaced with edge-localised perturbations.
+- **One test threshold was relaxed** (−3.0 → −2.0 dB in `test_new_mode_cancels_noncolliding_harmonics_in_band`),
+  recorded rather than silently adjusted. The ratio fell only because ECA's input got cleaner; it is
+  now retained as a coarse secondary check while the real assertions are per-harmonic (projected k
+  attenuated < −15 dB; observed 23–26 dB) plus cardiac preservation within 1 dB.
+
+**Retired / no longer used:** the **FFT brick-wall band-pass** (2026-06-30 `1847d7f` → 2026-07-26),
+retired as an unintended estimator change; do not reintroduce a rectangular mask. The `del order`
+no-op parameter. The strict xfail marker on the AHET decoy test. My absolute total-power ECA guard
+(`post < 5.146e3`) — never trust total in-band power as a cancellation metric; it moves the wrong way.
+
+**Next:** M4 is now unblocked on its review gate and is the active build. Still blocked on the
+**user's A/B decision** about the soft 0.19/0.50/0.53 anchor (validate on synthetics and treat frozen-§7
+as canonical, vs also reconstructing the old nearest-hop rule). Then: M4 plan → build incrementally
+(scoring core + unit tests first, §5.3) → run on the 3 Masimo captures → reproduce HR under the frozen
+§7 grid and emit **BR for the first time**, closing M2 #5. Not re-measured and still open: the "34% of
+hops" paced-16 decoy figure.
