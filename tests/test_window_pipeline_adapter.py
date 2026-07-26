@@ -180,6 +180,30 @@ def test_dispatch_is_by_exact_type_so_subclasses_are_rejected():
             run_config_hash({"x": value})
 
 
+def test_root_must_be_an_exact_dict():
+    """S0R-17. The signature said `Mapping[str, Any]` while the runtime rejected
+    `MappingProxyType` and silently accepted a *list* root. Annotation and runtime now
+    agree on one contract."""
+    from types import MappingProxyType
+
+    assert len(run_config_hash({"a": 1})) == 64
+    for bad in ([1, 2], (1, 2), "a", 3, None, MappingProxyType({"a": 1})):
+        with pytest.raises(TypeError, match="exact dict at the root"):
+            run_config_hash(bad)
+
+
+def test_accepted_set_is_not_everything_yaml_can_load():
+    """S0R-17. The docs claimed the set was 'exactly what YAML and JSON produce'. It is
+    not, in both directions — this pins the actual boundary so the claim stays honest."""
+    import datetime
+
+    for outside in (datetime.date(2026, 7, 27), {1, 2}, frozenset({1})):
+        with pytest.raises(TypeError, match="cannot canonicalise"):
+            run_config_hash({"x": outside})
+    assert len(run_config_hash({"x": (1, 2)})) == 64      # accepted, though YAML/JSON
+    assert len(run_config_hash({"x": [1, 2]})) == 64      # never produce a tuple
+
+
 def test_a_real_project_config_hashes():
     """The contract must actually cover what this project feeds it. Guards against a
     future narrowing that looks principled and breaks the only real caller.
@@ -325,6 +349,45 @@ def test_record_is_unhashable_because_equality_is_nan_aware():
     a = as_window_estimate(_dsp_dict(), run_config_hash="h")
     with pytest.raises(TypeError):
         hash(a)
+
+
+@pytest.mark.parametrize("truthy", ["false", "0", "no", [0], 1, 0, "", None])
+def test_validity_flags_are_not_coerced_by_truthiness(truthy):
+    """S0R-18. `bool("false")` is True, so a foreign estimator reporting
+    `hr_valid="false"` had its disposition silently REVERSED and its rejected rate
+    promoted to a scored one — by the very boundary meant to prevent that. Only an exact
+    bool is sanctioned; `np.bool_` and integer 0/1 are deliberately NOT."""
+    with pytest.raises(TypeError, match="must be an exact bool"):
+        as_window_estimate(
+            {"hr_valid": truthy, "hr_raw": 72.0, "br_valid": False}, run_config_hash="h"
+        )
+    with pytest.raises(TypeError, match="must be an exact bool"):
+        as_window_estimate(
+            {"hr_valid": False, "br_valid": truthy, "br_bpm": 15.0}, run_config_hash="h"
+        )
+
+
+def test_numpy_bool_is_not_a_sanctioned_validity_flag():
+    with pytest.raises(TypeError, match="must be an exact bool"):
+        as_window_estimate(
+            {"hr_valid": np.bool_(True), "hr_raw": 72.0, "br_valid": False},
+            run_config_hash="h",
+        )
+
+
+def test_absent_validity_flags_still_default_to_false():
+    """The missing-field default is preserved: absent means invalid, not an error."""
+    est = as_window_estimate({}, run_config_hash="h")
+    assert est.hr_valid is False and est.br_valid is False
+    assert np.isnan(est.hr_bpm) and np.isnan(est.br_bpm)
+
+
+def test_production_dsp_flags_satisfy_the_exact_bool_contract():
+    """`run_window_dsp` must keep producing flags the adapter accepts — otherwise this
+    tightening would break the only real producer."""
+    est = as_window_estimate(_dsp_dict(), run_config_hash="h")
+    assert est.hr_valid is True and est.br_valid is True
+    assert type(_dsp_dict()["hr_valid"]) is bool
 
 
 def test_valid_flag_with_a_missing_rate_raises():

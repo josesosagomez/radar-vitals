@@ -237,8 +237,10 @@ def _canonical(obj: Any, _active: set | None = None) -> list:
     different mask (S0R-10), and made NumPy scalars subclassing `float`/`str` lose their
     dtype (S0R-07).
 
-    **The accepted set is exactly what YAML and JSON produce.** Two speculative
-    extensions were tried and both failed review:
+    **The accepted set covers this project's JSON/YAML-derived configs** — not everything
+    those formats can express (`yaml.safe_load` also yields `date` and `set`, both
+    rejected), and `tuple` is accepted although neither format produces one (S0R-17).
+    Two speculative extensions were tried and both failed review:
 
     * *NumPy* — five Blocking findings across three rounds, five different mechanisms:
       subclass dispatch (S0R-07), non-terminating `.item()` recursion and
@@ -253,7 +255,8 @@ def _canonical(obj: Any, _active: set | None = None) -> list:
     Neither appears in this project's real configs (`scripts/live_demo_config.yaml` and
     the `config` block of `run_metadata.json` contain only `NoneType`, `bool`, `int`,
     `float` and `str` — verified, not assumed). Both are now loud, named errors naming
-    the conversion.
+    the conversion. Anything else outside the set is rejected the same way, so widening
+    the contract is a deliberate act rather than an accident.
 
     **Cycles are rejected, not crashed into** (S0R-13). `_active` tracks the containers
     on the *current* traversal path, so a self-referential list or dict — which YAML
@@ -324,7 +327,7 @@ def _canonical(obj: Any, _active: set | None = None) -> list:
     )
 
 
-def run_config_hash(cfg: Mapping[str, Any]) -> str:
+def run_config_hash(cfg: dict) -> str:
     """Deterministic SHA256 over the **complete run config**.
 
     This is an *exact-run provenance* key and nothing else. It is deliberately sensitive
@@ -338,15 +341,31 @@ def run_config_hash(cfg: Mapping[str, Any]) -> str:
     behaviour. If M4 later needs "did these two runs use the same DSP?", that requires a
     separate, explicitly scoped hash — not a quiet redefinition of this one.
 
-    Accepts, **by exact type**: `None`, `bool`, `int`, `float`, `str`, `list`, `tuple`,
-    `dict` — exactly what YAML and JSON produce, verified against
-    `scripts/live_demo_config.yaml` and the `config` block of a real `run_metadata.json`,
-    both of which contain only `NoneType`/`bool`/`int`/`float`/`str`. Everything else —
-    **including all NumPy values and all `pathlib` paths** — raises `TypeError` naming
-    the conversion, rather than being coerced. Reference cycles raise too, rather than
-    exhausting the stack. See `_canonical` for why the set is exact and why the two
-    speculative extensions were removed.
+    **The root must be an exact `dict`** — the shape every config in this project has.
+    A non-dict root (including a `Mapping` subclass such as `MappingProxyType`) raises,
+    so the annotation and the runtime agree; previously the signature advertised
+    `Mapping[str, Any]` while rejecting `MappingProxyType` and silently accepting a
+    *list* root (S0R-17).
+
+    Nested values are accepted **by exact type**: `None`, `bool`, `int`, `float`, `str`,
+    `list`, `tuple`, `dict`. That covers **this project's JSON/YAML-derived configs** —
+    verified against `scripts/live_demo_config.yaml` and the `config` block of a real
+    `run_metadata.json`, both of which contain only `NoneType`/`bool`/`int`/`float`/`str`.
+    It is deliberately **not** a claim to cover everything those formats can express:
+    `yaml.safe_load` can yield `date` and `set`, which are rejected, and `tuple` is
+    accepted although neither format produces one.
+
+    Everything else — **including all NumPy values and all `pathlib` paths** — raises
+    `TypeError` naming the conversion, rather than being coerced. Reference cycles raise
+    too, rather than exhausting the stack. See `_canonical` for why the set is exact and
+    why the two speculative extensions were removed.
     """
+    if type(cfg) is not dict:
+        raise TypeError(
+            f"run_config_hash needs an exact dict at the root, got {type(cfg).__name__}. "
+            "A run config is a mapping; hashing a bare sequence or a Mapping subclass "
+            "would make the annotation and the runtime disagree. Convert with dict(cfg)."
+        )
     canonical = json.dumps(_canonical(cfg), separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
@@ -425,6 +444,27 @@ def as_window_estimate(
     online median (not paper-grade) and the second is a naive argmax (CLAUDE.md §4).
     """
 
+    def _flag(key: str, vital: str) -> bool:
+        """Read a validity flag without coercing it.
+
+        `bool(...)` was worse than no check at all here (S0R-18): a foreign estimator
+        reporting `hr_valid="false"` — or `"0"`, or `[0]` — had its disposition silently
+        **reversed** into True, and the finite-rate invariant below then happily promoted
+        a rejected window's rate into a paper-grade number. This is the boundary whose
+        entire job is to stop exactly that.
+        """
+        if key not in dsp:
+            return False                       # absent stays False, as before
+        value = dsp[key]
+        if type(value) is not bool:            # exact: np.bool_ and 0/1 are NOT sanctioned
+            raise TypeError(
+                f"{vital} validity flag {key!r} must be an exact bool, got "
+                f"{type(value).__name__} ({value!r}) from estimator {estimator_id!r}. "
+                "Truthiness coercion is refused here because it can reverse a rejection "
+                "into a scored rate."
+            )
+        return value
+
     def _rate(valid: bool, value, vital: str, key: str) -> float:
         if not valid:
             return float("nan")
@@ -442,8 +482,8 @@ def as_window_estimate(
             )
         return rate
 
-    hr_valid = bool(dsp.get("hr_valid", False))
-    br_valid = bool(dsp.get("br_valid", False))
+    hr_valid = _flag("hr_valid", "HR")
+    br_valid = _flag("br_valid", "BR")
     f_r = dsp.get("f_r_hz")
     return WindowEstimate(
         estimator_id=estimator_id,

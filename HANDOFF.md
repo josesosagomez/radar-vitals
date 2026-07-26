@@ -7,11 +7,12 @@
 > **M4 is fully unblocked: both gates cleared (M3, linalg review) AND its build plan is written and
 > cross-reviewed to closure.** No user decision is outstanding.
 >
-> **The active job is to BUILD M4. Stage 0 is DONE and its CLAUDE.md §6 review is CLOSED — the
-> next action is Stage 1 (the manifest schema).** Read `plans/m4_offline_harness.md` (revision 6,
-> the build authority) before anything else, then §3 below. The window DSP and warmup policy now
-> live in `src/window_pipeline.py` and `src/warmup_select.py`, imported by both the live path and
-> M4 — they are no longer private to `scripts/live_demo.py`.
+> **The active job is to BUILD M4. Stage 0 is built; its CLAUDE.md §6 review signed off and was
+> then REOPENED with three further findings (all fixed) — Stage 1 waits on a renewed sign-off.**
+> Read `plans/m4_offline_harness.md` (revision 6, the build authority) before anything else, then
+> §3 below. The window DSP and warmup policy now live in `src/window_pipeline.py` and
+> `src/warmup_select.py`, imported by both the live path and M4 — they are no longer private to
+> `scripts/live_demo.py`.
 
 ---
 
@@ -35,7 +36,7 @@ survived a full cross-model review on 2026-07-24 and is the scope authority for 
 
 ## 2. Current state
 
-**Branch `vital_signs_v9c`.** Test suite **1093 passed, 0 failed, 0 xfailed**
+**Branch `vital_signs_v9c`.** Test suite **1106 passed, 0 failed, 0 xfailed**
 (`conda run -n radar-vitals python -m pytest tests/ -q`, 2026-07-27; independently re-run by Codex).
 There is **no longer an xfail** — the ECA/AHET decoy case now passes (see §2 "partly closed" below).
 v9 UI work remains parked in `git stash@{0}`; relocking/display-holdover stay reverted.
@@ -159,21 +160,23 @@ M5, M8, M9 and M10 all wait on it.
 disputed**; Codex signed off with `NO MORE COMMENTS` (`plans/m4_plan_cross_review.md` — status header
 + resolution table at the top of `DEBATE COMMENTS`).
 
-**Stage 0 (§5.1) is DONE — built in `4b64eb8`, cross-review CLOSED 2026-07-27.** The
+**Stage 0 (§5.1) is BUILT (`4b64eb8`); its cross-review signed off on 2026-07-27 and was then
+REOPENED the same day with S0R-16/17/18 — all three fixed, awaiting a renewed sign-off.** The
 shared-callable refactor moved the window DSP into `src/window_pipeline.py:run_window_dsp` and the
 warmup policy into `src/warmup_select.py:run_warmup_selection`; `scripts/live_demo.py` imports both.
 Reason the stage existed: while those were **private functions in a script**, M4 had to duplicate
 them, and the harness's central equality test would then have compared M4 against a duplicate rather
 than the production path (M4R-10).
 
-Its review (`plans/m4_stage0_refactor_review.md`) ran **7 Codex passes / 6 response rounds, 15
-findings, 10 Blocking, all resolved, none disputed**; Codex signed off with `NO MORE COMMENTS`.
-**Not one finding was in the moved DSP** — all 10 Blocking findings were in the new estimator-adapter
-code, 8 in `run_config_hash` alone. The extraction is proven behaviour-identical to `d3cfb92` by
-**22 bitwise-identical comparisons** (all three Masimo captures × four windows each, plus all three
-warmup failure branches); locked bins 27/26/26 unchanged.
+Its review (`plans/m4_stage0_refactor_review.md`) has run **8 Codex passes / 7 response rounds, 18
+findings, 11 Blocking, all resolved, none disputed**. **Not one finding was in the moved DSP** — all
+11 Blocking findings were in the new estimator-adapter code: **9 in `run_config_hash`** and **2 in
+`as_window_estimate`**. The extraction is proven behaviour-identical to `d3cfb92` by **22
+bitwise-identical comparisons** (all three Masimo captures × four windows each, plus all three warmup
+failure branches); locked bins 27/26/26 unchanged. Suite **1106 passed**.
 
-**The next action is Stage 1**, the manifest schema + validation (plan §4, build-order row 1).
+**The next action is to close the review loop**, then Stage 1 — the manifest schema + validation
+(plan §4, build-order row 1). Do not start Stage 1 while the loop is open (plan §7 row 0).
 
 The loop produced **two user decisions** (M2 #5 stays open; `linear` percentile) and **two
 pre-deposit clarifications now written into the binding specs** (`linear`; the usable-HR-sample

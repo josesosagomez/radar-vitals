@@ -6302,3 +6302,55 @@ named negative test per rule (M4R-04), and development mode separated so it cann
 output. Then stages 2–7, then the stage-8 development-mode smoke run on the 3 captures. Still open and
 unchanged: the "34 % of hops" paced-16 decoy figure, M2 done-when #5, and the fact that no frozen
 scoring number can come from the 4 existing captures (no persisted `frame0_epoch`).
+
+---
+
+## 2026-07-27 - Correction to the entry above, and three more Stage 0 findings
+
+**Set out to do:** record that the M4 Stage 0 review, having signed off, was **reopened** by Codex
+with three further findings — one of which is a defect in the closure record written in the entry
+immediately above this one.
+
+**Worked (with evidence):**
+
+- **S0R-18 [Blocking] — `as_window_estimate` coerced its validity flags with `bool(...)`.** A
+  foreign estimator reporting `hr_valid="false"` (or `"0"`, or `[0]`) had its disposition silently
+  **reversed** to True, after which the finite-rate invariant promoted the rejected window's rate
+  into a scored one. Reproduced exactly. The adapter is the boundary whose entire purpose is to stop
+  an invalid estimate surfacing as a paper-grade number, and it was doing the opposite for any
+  non-bool truthy value. Fixed: validity flags must now be an **exact `bool`** — `np.bool_` and
+  integer 0/1 are deliberately *not* sanctioned — with the missing-field default of False preserved.
+  9 new tests.
+- **S0R-17 [Should-fix] — the root contract and the annotation disagreed.** `run_config_hash` was
+  annotated `Mapping[str, Any]` yet rejected `MappingProxyType({"a": 1})` while silently **accepting
+  a list root**. The repeated narrative claim that the accepted set was "exactly what YAML and JSON
+  produce" was also false in both directions: `yaml.safe_load` yields `date` and `set`, both
+  rejected, and `tuple` is accepted although neither format produces one. Fixed: exact `dict` root
+  enforced, annotation matched to it, and the claim narrowed to "*this project's* JSON/YAML-derived
+  configs". 2 new tests.
+- **Suite 1093 → 1106**, 0 failed. The 22-comparison A/B equality against `d3cfb92` was re-run at
+  sign-off and is unchanged: still all bitwise identical.
+
+**Failed / did not work, and why:**
+
+- **The closure record in the entry above miscounts its own headline finding (S0R-16).** It states
+  that 8 of the 10 Blocking findings were in `run_config_hash`. The correct figure is **9** — S0R-01,
+  07, 08, 09, 10, 11, 12, 13 and 15 — with only S0R-02 elsewhere. Counting S0R-18, the split is now
+  **11 Blocking: 9 in `run_config_hash`, 2 in `as_window_estimate`.** The same entry's "~12 lines of
+  new adapter code" figure is unsupported: it described `run_config_hash` as first written, not the
+  code the findings were actually raised against. **The entry above is left unedited** — `HISTORY.md`
+  is append-only (CLAUDE.md §10.2) — and this entry is the correction of record. `HANDOFF.md` and the
+  review's status block, which are rewritable, have been corrected in place.
+- **The pattern held one more time.** Having just written in that entry that my recurring failure was
+  fixing cited instances rather than the property behind them, I signed off a summary containing a
+  miscount and an unsupported figure, in the block explicitly labelled authoritative. A summary
+  asserting a lesson is not exempt from the lesson.
+- **Stage 1 has NOT begun and must not**, contrary to what the entry above implies: plan §7 row 0
+  gates it on a closed review, and the review is open again pending Codex's response to round 7.
+
+**Retired / no longer used:** `bool(...)` coercion of estimator validity flags; the
+`Mapping[str, Any]` root annotation; the claim that the hash's accepted set equals what YAML/JSON can
+produce.
+
+**Next:** await Codex round 8 or a renewed `NO MORE COMMENTS`. Then M4 Stage 1 — the manifest schema
+and validation (plan §4, build-order row 1).

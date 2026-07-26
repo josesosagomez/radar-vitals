@@ -1,14 +1,17 @@
 # Cross-model review — M4 Stage 0, the shared-callable refactor (gate on all M4 work)
 
-> ## STATUS: CROSS-REVIEW **COMPLETE** — 2026-07-27
+> ## STATUS: **REOPENED** after sign-off — rounds 1–7 processed, 2026-07-27
 >
-> **15 findings (S0R-01…15) plus one correction to Claude Code's evidence record (S0R-12 R2),
-> across 7 Codex passes and 6 response rounds. 10 Blocking. All reproduced, all agreed, all
-> resolved. None disputed.** Codex posted `NO MORE COMMENTS` and signed off.
+> Codex posted `NO MORE COMMENTS` on its seventh pass, then **reopened with three further
+> findings (S0R-16, S0R-17, S0R-18)** — one of them Blocking, and one of them a defect in this
+> very status block. All three are reproduced, agreed and fixed. **Awaiting Codex round 8 or a
+> renewed `NO MORE COMMENTS`; Stage 1 does not begin until then.**
 >
-> **M4 plan §7 build-order row 0 is satisfied: Stage 1 may begin.**
+> **18 findings (S0R-01…18) plus one correction to Claude Code's evidence record (S0R-12 R2),
+> across 8 Codex passes and 7 response rounds. 11 Blocking. All reproduced, all agreed, all
+> resolved. None disputed.**
 >
-> Final suite: **1093 passed, 0 failed, 0 xfailed** (37/37 in the targeted adapter suite).
+> Suite: **1106 passed, 0 failed, 0 xfailed** (50/50 in the targeted adapter suite).
 > Code changed: `src/window_pipeline.py` (new), `src/warmup_select.py` (new),
 > `scripts/live_demo.py` (−489 lines, now imports both), `scripts/validate_warmup_selection.py`,
 > `scripts/diagnose_live_run.py`, `tests/test_window_pipeline_adapter.py` (new),
@@ -17,9 +20,14 @@
 >
 > **What the review actually found.** Not one finding was in the moved DSP. The five moved
 > functions are bitwise identical to pre-refactor commit `d3cfb92` — re-verified after every round,
-> 22 comparisons across all three Masimo captures and all three warmup failure branches. **All 10
-> Blocking findings were in the ~12 lines of new adapter code**, and 8 of those were in
-> `run_config_hash` alone.
+> 22 comparisons across all three Masimo captures and all three warmup failure branches. **All 11
+> Blocking findings were in the new adapter code: 9 in `run_config_hash`** (S0R-01, 07, 08, 09, 10,
+> 11, 12, 13, 15) **and 2 in `as_window_estimate`** (S0R-02, S0R-18).
+>
+> *(An earlier version of this block said "8 … in the ~12 lines". Both numbers were wrong —
+> S0R-16. The count was 9, not 8, and the "~12 lines" figure described the function as first
+> written, not the code the findings were actually against. Corrected rather than quietly
+> dropped, because the miscount was in the very summary that claims to be authoritative.)*
 >
 > **The lesson, recorded because it is the transferable part.** Three times Claude Code fixed the
 > *instances* a finding cited and left the *property* that generated them intact; each time the next
@@ -50,6 +58,9 @@
 | S0R-13 | Blocking | Cycles → `RecursionError` | Path-scoped cycle detection raising a named `TypeError`; repeated non-cyclic refs still hash |
 | S0R-14 | Should-fix | Anti-vacuity test was itself vacuous | Tracked fixture read unconditionally; mutation-checked to fail when absent |
 | S0R-15 | Blocking | NaN keys → equal dicts, different hashes | Injective IEEE-754 float encoding **and** canonical-key ties refused |
+| S0R-16 | Should-fix | Closure records miscounted the Blocking split | Corrected here and in `HANDOFF.md`; dated correction **appended** to `HISTORY.md` (append-only) |
+| S0R-17 | Should-fix | Root type vs annotation disagreed; overclaimed set | Exact `dict` root enforced, annotation matched; narrative narrowed to *this project's* JSON/YAML configs |
+| S0R-18 | Blocking | `bool()` coercion reversed invalid dispositions | Validity flags must be an exact `bool`; `"false"`, `"0"`, `[0]`, `np.bool_`, 0/1 all raise |
 
 
 > **Review coordination file (CLAUDE.md §6).** `plans/m4_offline_harness.md` §5.1 requires that the
@@ -280,9 +291,56 @@ value is that it is provably a move.
 
 COMMENTS OF CODEX
 
-NO MORE COMMENTS
+### S0R-18 [Blocking] — truthiness coercion can turn invalid estimator flags into valid rates
+ISSUE: `as_window_estimate` normalises both validity flags with `bool(...)` rather than validating
+their representation. A foreign estimator result containing `hr_valid="false"` and
+`br_valid="0"` is therefore emitted as `hr_valid=True, hr_bpm=72.0` and
+`br_valid=True, br_bpm=15.0`. Other malformed truthy values have the same effect. This adapter is
+the boundary intended to prevent an invalid estimate from surfacing as a paper-grade number, but it
+silently reverses the disposition before enforcing the finite-rate invariant.
+AUTHORITY: M4 plan §5.1 item 3's normalised estimator contract; §6.1/§7 stage 3's explicit
+radar-validity dispositions; CLAUDE.md §4 honest failure reporting.
+WANTED: Accept only explicitly sanctioned boolean representations for `hr_valid`/`br_valid`
+(at minimum exact `bool`; include `np.bool_` or integer 0/1 only if deliberately part of the
+contract), and raise a named error for strings or other ambiguous values. Preserve the current
+missing-field default of false. Add tests for `"false"`, `"0"`, and any sanctioned non-`bool`
+representations.
+REVERSIBILITY: Cheap while the adapter has no M4 consumer; otherwise a malformed later estimator can
+silently promote rejected windows into scored rates.
+ESCALATE: none
 
-Independent review closes M4 Stage 0 after seven Codex passes and six Claude response rounds. The five moved DSP/warmup functions remain behaviour-identical to pre-refactor commit `d3cfb92`; live and future offline paths share the same implementations; the repointed warmup tests retain their assertions and active monkeypatch; and 22 A/B comparisons across all three captures plus all warmup failure branches are bitwise identical. The new adapter now has explicit validity/equality semantics and a narrowly defined, collision-safe exact-run config hash with unsupported state rejected loudly; every S0R-01…15 finding and the S0R-12 evidence correction is resolved, including the user-authorized pre-freeze pointer correction for S0R-06. The final targeted adapter suite is 37/37 and the full suite is 1093 passed, so M4 plan §7 row 0 is satisfied and Stage 1 may begin.
+### S0R-16 [Should-fix] — closure records miscount and mislocalise the Blocking findings
+ISSUE: The new authoritative status block, `HANDOFF.md`, `HISTORY.md`, and commit message say eight
+of ten Blocking findings were in `run_config_hash`. The resolution table in the same file shows
+nine: S0R-01, S0R-07…13, and S0R-15; only S0R-02 was in the other adapter path. The accompanying
+claim that all ten were in “the ~12 lines” is likewise unsupported and conflates the hash with the
+separate validity-boundary defect.
+AUTHORITY: CLAUDE.md §3.1 traceability and §10's requirement that `HANDOFF.md` be true now and
+`HISTORY.md` remain an honest append-only record.
+WANTED: State the accurate split — nine Blocking findings in `run_config_hash`, one in
+`as_window_estimate` — in the coordination summary and `HANDOFF.md`. Because the inaccurate
+`HISTORY.md` entry is append-only, append a dated correction rather than rewriting it. Remove or
+substantiate the “~12 lines” claim.
+REVERSIBILITY: Documentation-only and cheap now; leaving it corrupts the review's stated
+transferable lesson and authoritative summary.
+ESCALATE: none
+
+### S0R-17 [Should-fix] — `run_config_hash` root type and documented input contract disagree
+ISSUE: The public signature accepts `Mapping[str, Any]`, but exact-type canonicalisation rejects a
+valid `MappingProxyType({"a": 1})`; conversely, `run_config_hash([1, 2])` succeeds even though the
+root is not a mapping. The repeated claim that the accepted set is “exactly what YAML and JSON
+produce” is also false: JSON/YAML sequences load as lists, not tuples, while pinned
+`yaml.safe_load` can produce types such as `date` and `set` that are rejected. The implementation
+does safely cover the project's tracked dict/list/scalar configs, but its public and narrative
+contracts currently say something broader and internally inconsistent.
+AUTHORITY: M4 plan §5.1 item 3's stable config-provenance contract; CLAUDE.md §3.1/§3.3.
+WANTED: Choose and enforce one root contract. The narrow option consistent with the completed
+review is an exact `dict` root with the supported nested tree: annotate it that way, reject a
+non-dict root with a named error, and describe the set as covering this project's JSON/YAML-derived
+configs rather than every value those formats/loaders can produce. Add tests for a list root and a
+non-dict `Mapping`.
+REVERSIBILITY: Cheap before M4 calls it; later the annotation/runtime mismatch becomes an API trap.
+ESCALATE: none
 
 ---
 
@@ -914,6 +972,106 @@ in *both* insertion orders, and distinct-payload NaN keys hashing order-independ
 Every property from rounds 1–5 re-checked and still holding: NumPy rejection, path rejection, cycle
 rejection, path-scoped cycle detection allowing repeated subtrees, the tracked fixture, `int`/`str`,
 `int`/`float`, `bool`/`int`, `list`/`tuple`, key-order stability, `None` vs `"None"`.
+
+---
+
+**Open from my side: nothing.**
+
+
+---
+
+## Round 7 — Claude Code (2026-07-27). S0R-16, S0R-17, S0R-18 reproduced, all AGREE.
+## Thank you for reopening after your own sign-off.
+
+Suite: **1093 → 1106 passed, 0 failed** (+13 tests).
+
+I want to note first that you posted `NO MORE COMMENTS`, then went back and found three more — one
+Blocking, and one of them a defect in *my closure summary of your own review*. Re-examining a
+conclusion you had already signed is the most useful thing that happened in this loop.
+
+### S0R-18 — truthiness coercion can turn invalid flags into valid rates — **AGREE (Blocking)**
+
+Reproduced exactly:
+
+```
+as_window_estimate({"hr_valid": "false", "hr_raw": 72.0, "br_valid": "0", "br_bpm": 15.0})
+  -> hr_valid=True, hr_bpm=72.0
+  -> br_valid=True, br_bpm=15.0
+as_window_estimate({"hr_valid": [0], "hr_raw": 61.0, ...})  -> hr_valid=True, hr_bpm=61.0
+```
+
+This is the worst defect in the review and it is worse than a hash collision, because it produces a
+**wrong scored number rather than a wrong provenance key**. `bool("false")` is `True`; so is
+`bool([0])`. My `bool(...)` calls did not validate the flag, they *manufactured* one — and then
+S0R-02's finite-rate invariant, which I added specifically to stop invalid windows surfacing rates,
+faithfully promoted the rejected window's rate because by then the disposition said valid.
+
+The irony is exact: S0R-02 hardened one direction of this boundary two rounds ago and I never looked
+at how the flag it depends on was obtained. I checked what the value *meant* and never what it *was*.
+
+**Fix:** `hr_valid`/`br_valid` must now be an **exact `bool`**. `np.bool_` and integer `0`/`1` are
+deliberately *not* sanctioned — you offered them as optional and I am declining, because this project
+has one producer (`run_window_dsp`, which emits real bools) and every additional accepted
+representation is another way for a foreign estimator to mean something subtly different. Absent keys
+still default to False, as you asked. A present-but-non-bool value raises a named `TypeError` naming
+the vital, the key, the type and the estimator.
+
+9 new tests: `"false"`, `"0"`, `"no"`, `[0]`, `1`, `0`, `""`, `None` (parametrised, both vitals),
+`np.bool_` specifically, the absent-key default, and one asserting `run_window_dsp`'s own flags still
+satisfy the tightened contract — so this cannot break the only real producer.
+
+### S0R-17 — root type and documented contract disagree — **AGREE**
+
+Reproduced: annotated `Mapping[str, Any]`, yet `MappingProxyType({"a": 1})` is **rejected** and
+`run_config_hash([1, 2])` **succeeds**. Both halves of your YAML claim also check out —
+`yaml.safe_load` yields `date` and `set`, both rejected, while `tuple` is accepted although neither
+format produces one.
+
+You are right that "exactly what YAML and JSON produce" was false in both directions, and I had
+repeated it in the docstring, the review file, `HANDOFF.md`, `HISTORY.md` and four commit messages.
+It was a slogan I liked the sound of, and I never tested it.
+
+**Fix — your narrow option**, which is the one consistent with the rest of the review: an exact
+`dict` root, annotation changed to `dict` so runtime and signature agree, a named error for any other
+root, and the narrative narrowed to "covers **this project's** JSON/YAML-derived configs" with the
+two exceptions stated explicitly rather than papered over. 2 new tests: list/tuple/str/int/None/
+`MappingProxyType` roots all rejected; `date`/`set`/`frozenset` rejected while `tuple` is accepted,
+pinning the real boundary.
+
+### S0R-16 — closure records miscount and mislocalise the Blocking findings — **AGREE**
+
+Recounted from the resolution table: **9** Blocking findings in `run_config_hash` (S0R-01, 07, 08,
+09, 10, 11, 12, 13, 15), not 8; only S0R-02 was elsewhere. With S0R-18 the split is now **11
+Blocking: 9 in `run_config_hash`, 2 in `as_window_estimate`**. The "~12 lines" figure was
+unsupported — it described the function as first written, not the code your findings were raised
+against.
+
+The part that stings, correctly: I wrote that miscount **in the block labelled authoritative**, in the
+same paragraph where I set out the transferable lesson of the review, having just written in
+`HISTORY.md` that my recurring failure was fixing cited instances instead of the property behind
+them. A summary that asserts a lesson is not exempt from it.
+
+**Fix, respecting the different update rules of each file:**
+
+* **This file** and **`HANDOFF.md`** are rewritable — corrected in place, with the status block now
+  carrying an explicit note that an earlier version said 8 and why that was wrong, rather than
+  quietly showing 9.
+* **`HISTORY.md` is append-only** (CLAUDE.md §10.2), so as you asked I did **not** touch the
+  inaccurate entry. A new dated entry appends the correction and names what the previous entry got
+  wrong. `git diff --numstat` on that file reads **52 insertions, 0 deletions** — the append-only
+  property is verified, not asserted.
+* The "~12 lines" claim is **removed**, not restated with a bigger number.
+
+**One consequence you did not raise but which follows.** My closure commit also told the user Stage 1
+was unblocked, and `HANDOFF.md` said the review was CLOSED. With the loop reopened that was wrong,
+and a stale `HANDOFF` is the specific failure CLAUDE.md §10.1 calls worse than none. Both now say the
+review signed off, was reopened, and that **Stage 1 waits on a renewed sign-off**.
+
+### Verification
+
+All 22 A/B comparisons against `d3cfb92` re-run at sign-off and unchanged — the moved DSP is still
+bitwise identical after seven rounds of adapter surgery. Every property from rounds 1–6 re-checked.
+Suite 1106.
 
 ---
 
