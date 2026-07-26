@@ -1,9 +1,13 @@
 # M4 — Offline evaluation harness (HR + BR): implementation plan
 
-> **Status: REVISION 4, under cross-model review** (`plans/m4_plan_cross_review.md`).
-> Revision 4 adds the frozen evidence-floor/precision **consequences** (M4R-12), **removes an
-> untraceable Monte-Carlo claim** I had inserted into binding documents (M4R-13), puts **Stage 0 into
-> the done-when** (M4R-14), and adds **measured distance + posture** to the manifest (M4R-15).
+> **Status: REVISION 5, under cross-model review** (`plans/m4_plan_cross_review.md`).
+> Revision 5 deletes the retracted Monte-Carlo **value itself** from §2.3 — restating it inside a
+> retraction note still published an unsupported number (M4R-13) — and makes the design-field
+> validation **executable**: `distance_m` finite and `0.8 ≤ d ≤ 1.4` inclusive, `posture == seated`,
+> with equality boundaries pinned in stage 1 (M4R-15).
+> Revision 4 added the frozen evidence-floor/precision **consequences** (M4R-12), removed the
+> untraceable claim from the binding comparators (M4R-13), put **Stage 0 into the done-when**
+> (M4R-14), and added distance + posture to the manifest (M4R-15).
 > Prior status line, retained for history:
 > Revision 1 drew 9 Blocking findings; revision 2 resolved M4R-01/03/08/09 and drew four PARTIALs
 > plus **M4R-10 (Blocking)** and **M4R-11**. **All 11 findings agreed, none disputed.**
@@ -74,11 +78,13 @@ the verdict.
 **admit**. Same window, opposite admissibility. Recorded in full in `notes/comparator_prespec.md`
 §2.2.
 
-*(A Monte-Carlo frequency claim — "1993/4000, ≈ 50 %" — appeared in revision 2 and briefly in the
-binding comparators. **Removed**: it traced to no committed script and depended on an unstated
-assumed PR distribution, so it was neither regenerable nor auditable, which CLAUDE.md §3.1 forbids
-outright in documents bound for the public M0 deposit. The deterministic example establishes the
-ambiguity; the decision never rested on its frequency.)*
+*(An earlier Monte-Carlo frequency claim — asserting how often the method alone decides the verdict —
+appeared in revision 2 and briefly in the binding comparators. **Removed, value and all**: it traced
+to no committed script and depended on an unstated assumed PR distribution, so it was neither
+regenerable nor auditable, which CLAUDE.md §3.1 forbids outright in documents bound for the public M0
+deposit. Restating the figure even inside a retraction note would keep publishing an unsupported
+number, so it is not repeated here. The deterministic example above establishes the ambiguity, and
+the `linear` decision never rested on a frequency.)*
 
 **Resolution: `method="linear"`** — NumPy's default, and what the existing design-evidence scripts
 already used, so it minimises retro-inconsistency. Adopted as an **explicit pre-deposit
@@ -140,7 +146,19 @@ A versioned manifest binds, **by path + SHA-256**, for each session:
 | group | fields |
 |---|---|
 | **Identity / estimands** | subject ID, arm (natural / paced), commanded paced rate (12/15/18), data role (§3.1), study admission disposition |
-| **Design / descriptive** | **measured continuous distance** and **posture** (M4R-15). Distance is a required descriptive breakdown from M5 onward; posture is fixed *seated* by the estimand, so the manifest must let M4 **verify** a session belongs to the fixed-posture design rather than assume it. Scoring mode validates allowed values and ranges, and distance metadata accompanies every applicable per-subject result. **This creates no post-hoc distance strata and no inferential per-distance claim.** Their absence is exactly why the 4 exploratory captures cannot be used for distance reporting (`posture=None`, `distance_cm=None`). |
+| **Design / descriptive** | **`distance_m`** and **`posture`** (M4R-15), with an **executable** contract — see below. Distance is a required descriptive breakdown from M5 onward; posture is fixed *seated* by the estimand, so the manifest must let M4 **verify** design membership rather than assume it. Distance metadata accompanies every applicable per-subject result. **No post-hoc distance strata and no inferential per-distance claim.** Their absence is why the 4 exploratory captures cannot support distance reporting (`posture=None`, `distance_cm=None`). |
+
+**Executable validation contract for the design fields** (M4R-15 — "validates allowed values and
+ranges" is not a contract; two implementations could accept different sessions while both claiming to
+follow this plan):
+
+| field | canonical form | scoring-mode rule |
+|---|---|---|
+| **`distance_m`** | float, **metres** — one canonical name and unit, matching `protocol.subject_distance_m` in `scripts/live_demo_config.yaml` | must be **finite** and **`0.8 ≤ distance_m ≤ 1.4`** (`notes/protocol.md`: "must be within 0.8–1.4 m"). **Inclusive at both ends.** Reject NaN/inf/missing. The legacy `run_metadata.json` field is `distance_cm` — conversion is explicit and lossless, never implicit |
+| **`posture`** | the canonical string **`seated`** | must equal `seated`; any other value or a missing field is rejected in scoring mode, because the estimand fixes posture and a differing session is not a member of this design |
+
+Stage 1 pins the **equality boundaries** (0.8 and 1.4 accepted; 0.79 and 1.41 rejected) and the
+non-finite/missing cases.
 | **Timebase** | `frame0_epoch` (synchronised PC UTC at receipt of frame 0), start **and** end PC↔phone clock offsets (§6: NTP-synced, max ±1 s, re-checked at session end; offset > ±1 s ⇒ resync and restart; **no offset may be chosen by optimising radar–reference agreement**) |
 | **Integrity** | raw checksum, truncation bytes, packet-loss statistics, **per-frame validity / zero-fill map** |
 | **Provenance** | capture config, capture-time git commit, Masimo CSV path + hash, commanded-rate schedule |
@@ -413,8 +431,9 @@ No capture can yield a frozen number until the **full §4 manifest** can be popu
    windows are affected. A window containing any dropped/zero-filled frame ⇒ radar-NaN.
 3. **Log start and end PC↔phone clock offsets** (NTP, ±1 s, re-check for drift).
 4. **Record subject, arm, commanded rate, data role, admission/retry disposition** at capture time.
-5. **Record measured continuous distance and posture** (M4R-15) — required descriptive metadata from
-   M5 onward, and not reliably reconstructable after the session.
+5. **Record `distance_m` (metres, 0.8–1.4 inclusive) and `posture` (`seated`)** (M4R-15) — required
+   descriptive metadata from M5 onward, validated against the §4 contract, and not reliably
+   reconstructable after the session.
 
 **This should land before M1's smoke test**, so M1 validates the capture path M5/M6 will rely on.
 
