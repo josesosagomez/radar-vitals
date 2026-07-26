@@ -147,23 +147,30 @@ accuracy is not the problem, coverage is.
 Both gates are cleared. M4 is now the critical path: it produces every paper-grade number, and M0,
 M5, M8, M9 and M10 all wait on it.
 
-### 3.0 One user decision, needed before the build
+### 3.0 The plan exists; it needs cross-review before any code
 
-`src/compare.py` implements the **old PI-gated-*mean*** comparator, **not** the frozen
-median/coverage/stationarity one, and no offline harness exists. The regression anchor in
-`plans/implementation_plan.md` — "M4 must reproduce the known pilot HR numbers (0.19/0.50/0.53)" — is
-**soft**: those numbers trace to no committed script, were computed pre-freeze under a *nearest-hop*
-rule that §7 later froze differently, **and** under the now-retired brick-wall filter. M4's frozen-§7
-HR may therefore differ, correctly.
+**`plans/m4_offline_harness.md`** is written and is the build authority. Per CLAUDE.md §5.2 it must
+be **cross-model reviewed before implementation starts** — that review has **not** been run yet. It
+carries 5 explicit questions for the reviewer (§9 of that plan).
 
-**User must pick:** **(A)** validate the scorer on synthetic windows and report frozen-§7 numbers as
-canonical *(recommended)*; **(B)** additionally reconstruct the old rule as a bridge to explain the
-delta. Ask before building the regression test around either.
+**The A/B regression-anchor decision is CLOSED: Option A** (user, 2026-07-26). The
+0.19/0.50/0.53 anchor is **retired** — no committed script produced it, it used a nearest-hop rule
+§7 later froze differently, and it predates the filter fix. The scorer is instead validated on
+**synthetic windows with hand-computable answers**, and frozen-§7 outputs become canonical.
+
+**A scope constraint found while writing the plan, which the reviewer must rule on.**
+`notes/analysis_prespec.md` §7 states the 4 existing captures **lack a persisted `frame0_epoch`**, so
+any alignment reconstructed from `start_wall_utc` is APPROXIMATE and is "used only for
+reference-characterization design evidence, **never for a frozen scoring number**." So M4's run on
+these captures is a **validation/demonstration output, explicitly non-scoring** — a stronger limit
+than "n=1 is descriptive", and one that no amount of scorer correctness removes. This is in tension
+with `plans/implementation_plan.md` §M4's done-when, which asks for numbers from exactly these
+captures; the proposed resolution is in the plan's §2.2.
 
 ### 3.1 The build
 
-Write the M4 plan first, then build incrementally — **scoring core + unit tests before any capture is
-scored** (CLAUDE.md §5.3). Design already grounded:
+Build incrementally — **scoring core + unit tests before any capture is scored** (CLAUDE.md §5.3);
+staged table in the plan's §6. Design already grounded:
 
 - **Input:** the replay `live_estimates.csv` of the **2026-07-26** post-fix runs (§2).
 - **Grid:** the frozen §7 non-overlapping grid — the hop where `frame_idx = 600·k + 599`.
@@ -190,6 +197,15 @@ first time**, closing **M2 done-when #5**.
 
 ## 4. Decisions that matter (do not silently reverse)
 
+- **M4's regression anchor is Option A** (user, 2026-07-26): the pilot MAEs 0.19/0.50/0.53 are
+  **retired, not reproduced**. M4 is validated on synthetic windows with hand-computable answers, and
+  frozen-§7 outputs are canonical. Reconstructing the old nearest-hop rule was **declined** — it would
+  have to guess an undocumented rule *and* resurrect the retired brick-wall filter to be a true
+  bridge, and a reconstruction tuned until it emits 0.19 proves nothing.
+- **No frozen scoring number can come from the 4 existing captures** (`notes/analysis_prespec.md` §7):
+  they lack a persisted `frame0_epoch`, so alignment is APPROXIMATE by construction. M4's output on
+  them is descriptive and must be labelled non-scoring. **`start_wall_utc` is NOT frame-0** — it is
+  written before DCA/IWR configuration, so the offset is capture-startup latency.
 - **The band-pass is a zero-phase order-4 Butterworth with an odd-reflected edge policy**
   (2026-07-26, cross-reviewed, LFR-01/02). **Never reintroduce a rectangular/brick-wall mask** — it
   lets a 2·f_r artifact outrank the true cardiac peak at 20–22 bpm breathing. The pad is `n−1` per
@@ -313,6 +329,7 @@ first time**, closing **M2 done-when #5**.
 |---|---|
 | Project rules (read first) | `CLAUDE.md` |
 | **Whole-project milestone plan** | `plans/implementation_plan.md` |
+| **M4 build plan (ACTIVE — needs cross-review before coding)** | `plans/m4_offline_harness.md` |
 | Thesis chapter source | `THIRD_CHAPTER.md` |
 | Journal paper planning | `JOURNAL_PAPER.md` |
 | Method, literature, algorithm spec | `notes/approach.md` |
