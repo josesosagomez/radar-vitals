@@ -7,11 +7,12 @@
 > **M4 is fully unblocked: both gates cleared (M3, linalg review) AND its build plan is written and
 > cross-reviewed to closure.** No user decision is outstanding.
 >
-> **The active job is to BUILD M4 — and the first step is the §5.1 Stage 0 refactor, NOT the
-> harness.** Read `plans/m4_offline_harness.md` (revision 6, the build authority) before anything
-> else, then §3 below. Stage 0 extracts `_run_dsp` and `_run_warmup_selection` out of
-> `scripts/live_demo.py` into `src/`; it gates every other stage and takes its own CLAUDE.md §6
-> review. Skipping it makes the harness's central correctness test meaningless (M4R-10).
+> **The active job is to BUILD M4. Stage 0 is DONE and committed (`4b64eb8`); its CLAUDE.md §6
+> review is OPEN and gates Stage 1.** Read `plans/m4_offline_harness.md` (revision 6, the build
+> authority) before anything else, then §3 below. The window DSP and warmup policy now live in
+> `src/window_pipeline.py` and `src/warmup_select.py`, imported by both the live path and M4 — they
+> are no longer private to `scripts/live_demo.py`. Stage 1 does not begin until
+> `plans/m4_stage0_refactor_review.md` closes.
 
 ---
 
@@ -159,11 +160,14 @@ M5, M8, M9 and M10 all wait on it.
 disputed**; Codex signed off with `NO MORE COMMENTS` (`plans/m4_plan_cross_review.md` — status header
 + resolution table at the top of `DEBATE COMMENTS`).
 
-**Start at §5.1 Stage 0, not at the harness.** Stage 0 is the shared-callable refactor and it **gates
-every other stage**; it takes its own CLAUDE.md §6 correctness review. Reason: `_run_dsp` and
-`_run_warmup_selection` are **private functions in `scripts/live_demo.py`**, so without extraction M4
-must duplicate them — and the harness's central equality test would then compare M4 against a
-duplicate rather than against the production path (M4R-10).
+**Stage 0 (§5.1) is BUILT and committed (`4b64eb8`); its review is the current blocker.** The
+shared-callable refactor moved the window DSP into `src/window_pipeline.py:run_window_dsp` and the
+warmup policy into `src/warmup_select.py:run_warmup_selection`; `scripts/live_demo.py` imports both.
+It **gates every other stage** and takes its own CLAUDE.md §6 correctness review, which is OPEN in
+`plans/m4_stage0_refactor_review.md` (6 findings so far, S0R-01…06). Reason the stage exists: while
+those were **private functions in a script**, M4 had to duplicate them, and the harness's central
+equality test would then have compared M4 against a duplicate rather than the production path
+(M4R-10). **Stage 1 does not start until that review closes.**
 
 The loop produced **two user decisions** (M2 #5 stays open; `linear` percentile) and **two
 pre-deposit clarifications now written into the binding specs** (`linear`; the usable-HR-sample
@@ -222,9 +226,11 @@ first time**, closing **M2 done-when #5**.
   M4R-11) — **one set** for the median, the stationarity quantiles and the coverage count, so there is
   exactly one denominator. Written into `notes/comparator_prespec.md` §2.1. Makes HR symmetric with
   BR's explicit finite-RRp counting.
-- **Stage 0 (the shared-callable refactor) precedes all M4 work** (M4R-10). `_run_dsp` and
-  `_run_warmup_selection` must move out of `scripts/live_demo.py` into `src/`, imported by both the
-  live path and M4. Without it, M4's equality test compares M4 to a duplicate of itself.
+- **Stage 0 (the shared-callable refactor) precedes all M4 work** (M4R-10). Done in `4b64eb8`: the
+  window DSP and warmup policy live in `src/window_pipeline.py` and `src/warmup_select.py`, imported
+  by both the live path and M4. Without it, M4's equality test compares M4 to a duplicate of itself.
+  **Never re-add a private DSP or warmup copy to `scripts/live_demo.py`** —
+  `tests/test_window_pipeline_adapter.py` fails if anyone does.
 - **Never put a number in a document bound for the M0 deposit unless it traces to a committed script**
   (M4R-13, CLAUDE.md §3.1). A Monte-Carlo frequency was inserted into both comparators during this
   loop and retracted: it reported an unstated simulation parameter, not the data. Self-contained
@@ -387,7 +393,8 @@ first time**, closing **M2 done-when #5**.
 | Live/replay demo **and capture tool** | `scripts/live_demo.py` |
 | Live demo config | `scripts/live_demo_config.yaml` |
 | Standalone headless capture | `steps/step_1/capture.py` |
-| Warmup bin-lock + eligibility logic | `scripts/live_demo.py:_run_warmup_selection` |
+| Warmup bin-lock + eligibility logic | `src/warmup_select.py:run_warmup_selection` |
+| Window-level DSP composition (shared by live + M4) | `src/window_pipeline.py:run_window_dsp` |
 | Bin-lock validation (tracked, regenerable) | `scripts/validate_warmup_selection.py` |
 | Run post-mortem ("why was HR blank?") | `scripts/diagnose_live_run.py` |
 | **Core DSP (Butterworth band-pass + ECA + AHET)** | `src/vitals.py` |

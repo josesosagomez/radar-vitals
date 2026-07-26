@@ -1,6 +1,6 @@
 """M4 Stage 0: the normalised estimator adapter, and the no-duplicate invariant.
 
-The adapter (`WindowEstimate` + `config_hash`) is what lets M8/M9/M10 estimators enter
+The adapter (`WindowEstimate` + `run_config_hash`) is what lets M8/M9/M10 estimators enter
 the M4 grid and scoring path without copying the comparator (plan §5.1 item 3).
 
 The identity tests at the bottom are the standing guard for M4R-10: if anyone ever
@@ -30,7 +30,7 @@ from src.window_pipeline import (  # noqa: E402
     REJECTION_CODE_NAMES,
     WindowEstimate,
     as_window_estimate,
-    config_hash,
+    run_config_hash,
     run_window_dsp,
 )
 
@@ -52,40 +52,68 @@ def _dsp_dict(**over) -> dict:
 
 # ── config_hash ───────────────────────────────────────────────────────────────
 
-def test_config_hash_is_deterministic_across_calls():
+def test_run_config_hash_is_deterministic_across_calls():
     cfg = {"heart": {"k_max": 4}, "phase": {"method": "atan2"}}
-    assert config_hash(cfg) == config_hash(cfg)
+    assert run_config_hash(cfg) == run_config_hash(cfg)
 
 
-def test_config_hash_ignores_key_insertion_order():
+def test_run_config_hash_ignores_key_insertion_order():
     a = {"heart": {"k_max": 4, "band_hz": [0.8, 2.0]}, "phase": {"method": "atan2"}}
     b = {"phase": {"method": "atan2"}, "heart": {"band_hz": [0.8, 2.0], "k_max": 4}}
-    assert config_hash(a) == config_hash(b)
+    assert run_config_hash(a) == run_config_hash(b)
 
 
-def test_config_hash_changes_when_any_value_changes():
+def test_run_config_hash_changes_when_any_value_changes():
     a = {"heart": {"k_max": 4}}
     b = {"heart": {"k_max": 5}}
-    assert config_hash(a) != config_hash(b)
+    assert run_config_hash(a) != run_config_hash(b)
 
 
-def test_config_hash_survives_non_json_values():
-    """A config carrying e.g. a Path must hash, not raise — configs are read from YAML
-    but callers may inject resolved paths."""
-    h = config_hash({"out": Path("results/x"), "n": np.int64(3)})
+def test_run_config_hash_supports_paths_and_numpy_scalars():
+    h = run_config_hash({"out": Path("results/x"), "n": np.int64(3)})
     assert isinstance(h, str) and len(h) == 64
+
+
+def test_run_config_hash_does_not_collide_across_types():
+    """S0R-01. The first version stringified non-JSON values, so a Path hashed
+    identically to its string and a numpy scalar identically to its digits. A
+    provenance key that cannot tell those apart silently misattributes a run."""
+    assert run_config_hash({"x": Path("a")}) != run_config_hash({"x": "a"})
+    assert run_config_hash({"x": np.int64(3)}) != run_config_hash({"x": "3"})
+    assert run_config_hash({"x": np.int64(3)}) != run_config_hash({"x": 3})
+    assert run_config_hash({"x": 3}) != run_config_hash({"x": "3"})
+    assert run_config_hash({"x": 3}) != run_config_hash({"x": 3.0})
+    assert run_config_hash({"x": True}) != run_config_hash({"x": 1})
+    assert run_config_hash({"x": [1, 2]}) != run_config_hash({"x": (1, 2)})
+    assert run_config_hash({"x": None}) != run_config_hash({"x": "None"})
+
+
+def test_run_config_hash_rejects_what_it_cannot_canonicalise():
+    """Deterministic rejection beats silent coercion for a provenance key."""
+    class Opaque:
+        pass
+
+    with pytest.raises(TypeError, match="cannot canonicalise"):
+        run_config_hash({"x": Opaque()})
+
+
+def test_run_config_hash_handles_nan_and_inf_deterministically():
+    a = run_config_hash({"x": float("nan")})
+    assert a == run_config_hash({"x": float("nan")})
+    assert a != run_config_hash({"x": float("inf")})
+    assert a != run_config_hash({"x": "nan"})
 
 
 # ── as_window_estimate ────────────────────────────────────────────────────────
 
-def test_adapter_carries_estimator_id_and_config_hash():
-    est = as_window_estimate(_dsp_dict(), cfg_hash="abc123")
+def test_adapter_carries_estimator_id_and_run_config_hash():
+    est = as_window_estimate(_dsp_dict(), run_config_hash="abc123")
     assert est.estimator_id == ESTIMATOR_ID
-    assert est.config_hash == "abc123"
+    assert est.run_config_hash == "abc123"
 
 
 def test_adapter_passes_through_valid_rates():
-    est = as_window_estimate(_dsp_dict(), cfg_hash="h")
+    est = as_window_estimate(_dsp_dict(), run_config_hash="h")
     assert est.hr_bpm == pytest.approx(72.5)
     assert est.br_bpm == pytest.approx(15.25)
     assert est.hr_valid is True and est.br_valid is True
@@ -97,7 +125,7 @@ def test_invalid_hr_becomes_nan_even_when_a_rate_is_present():
     """An unverified window must never surface a number. `hr_raw` can still hold a
     value when ahet_verified is False, so the NaN rule is enforced at the boundary."""
     est = as_window_estimate(
-        _dsp_dict(hr_valid=False, hr_raw=61.0, rej_reason="ratio_db_low"), cfg_hash="h"
+        _dsp_dict(hr_valid=False, hr_raw=61.0, rej_reason="ratio_db_low"), run_config_hash="h"
     )
     assert est.hr_valid is False
     assert np.isnan(est.hr_bpm)
@@ -105,7 +133,7 @@ def test_invalid_hr_becomes_nan_even_when_a_rate_is_present():
 
 
 def test_invalid_br_becomes_nan_even_when_a_rate_is_present():
-    est = as_window_estimate(_dsp_dict(br_valid=False, br_bpm=6.0), cfg_hash="h")
+    est = as_window_estimate(_dsp_dict(br_valid=False, br_bpm=6.0), run_config_hash="h")
     assert est.br_valid is False
     assert np.isnan(est.br_bpm)
 
@@ -113,7 +141,7 @@ def test_invalid_br_becomes_nan_even_when_a_rate_is_present():
 def test_adapter_does_not_expose_the_naive_argmax_fallback():
     """`fallback_hr_bpm` is a LIAR (CLAUDE.md §4) — it must not reach the scorer as a
     rate field. It stays reachable only inside `raw` for diagnostics."""
-    est = as_window_estimate(_dsp_dict(), cfg_hash="h")
+    est = as_window_estimate(_dsp_dict(), run_config_hash="h")
     assert not hasattr(est, "fallback_hr_bpm")
     assert "fallback_hr_bpm" not in {f for f in est.__dataclass_fields__}
     assert est.raw["fallback_hr_bpm"] == 51.0
@@ -121,23 +149,67 @@ def test_adapter_does_not_expose_the_naive_argmax_fallback():
 
 def test_adapter_accepts_a_foreign_estimator_id():
     """M8/M9/M10 estimators reuse the record rather than copying the comparator."""
-    est = as_window_estimate(_dsp_dict(), estimator_id="ha_paper1_v1", cfg_hash="h")
+    est = as_window_estimate(_dsp_dict(), estimator_id="ha_paper1_v1", run_config_hash="h")
     assert est.estimator_id == "ha_paper1_v1"
 
 
 def test_missing_optional_fields_do_not_raise():
-    est = as_window_estimate({"hr_valid": False, "br_valid": False}, cfg_hash="h")
+    est = as_window_estimate({"hr_valid": False, "br_valid": False}, run_config_hash="h")
     assert np.isnan(est.hr_bpm) and np.isnan(est.br_bpm)
     assert est.br_confidence == "low"
     assert est.f_r_hz is None
 
 
 def test_record_is_frozen_and_raw_is_excluded_from_equality():
-    a = as_window_estimate(_dsp_dict(), cfg_hash="h")
-    b = as_window_estimate(_dsp_dict(fallback_hr_bpm=99.0), cfg_hash="h")
+    a = as_window_estimate(_dsp_dict(), run_config_hash="h")
+    b = as_window_estimate(_dsp_dict(fallback_hr_bpm=99.0), run_config_hash="h")
     assert a == b, "raw is diagnostic payload and must not affect record equality"
     with pytest.raises(Exception):
         a.hr_bpm = 1.0  # frozen dataclass
+
+
+def test_two_identical_invalid_records_compare_equal():
+    """S0R-03. Both rates are NaN in an invalid record, and NaN != NaN, so plain
+    dataclass equality reports two identical failure states as different — the
+    dominant case, which the valid-rate test above never exercised."""
+    a = as_window_estimate({"hr_valid": False, "br_valid": False}, run_config_hash="h")
+    b = as_window_estimate({"hr_valid": False, "br_valid": False}, run_config_hash="h")
+    assert a == b
+
+
+def test_records_differing_in_a_normalised_field_are_unequal():
+    a = as_window_estimate(_dsp_dict(), run_config_hash="h")
+    assert a != as_window_estimate(_dsp_dict(), run_config_hash="other")
+    assert a != as_window_estimate(_dsp_dict(hr_raw=70.0), run_config_hash="h")
+    assert a != as_window_estimate(_dsp_dict(br_valid=False), run_config_hash="h")
+    assert a.__eq__(object()) is NotImplemented
+
+
+def test_record_is_unhashable_because_equality_is_nan_aware():
+    a = as_window_estimate(_dsp_dict(), run_config_hash="h")
+    with pytest.raises(TypeError):
+        hash(a)
+
+
+def test_valid_flag_with_a_missing_rate_raises():
+    """S0R-02. A record whose disposition and value contradict each other would leave
+    the scorer to guess which field wins."""
+    with pytest.raises(ValueError, match="HR is marked valid"):
+        as_window_estimate({"hr_valid": True, "br_valid": False}, run_config_hash="h")
+    with pytest.raises(ValueError, match="BR is marked valid"):
+        as_window_estimate({"hr_valid": False, "br_valid": True}, run_config_hash="h")
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
+def test_valid_flag_with_a_non_finite_rate_raises(bad):
+    with pytest.raises(ValueError, match="HR is marked valid"):
+        as_window_estimate(
+            {"hr_valid": True, "hr_raw": bad, "br_valid": False}, run_config_hash="h"
+        )
+    with pytest.raises(ValueError, match="BR is marked valid"):
+        as_window_estimate(
+            {"hr_valid": False, "br_valid": True, "br_bpm": bad}, run_config_hash="h"
+        )
 
 
 # ── the no-duplicate invariant (M4R-10) ───────────────────────────────────────

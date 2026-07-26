@@ -18,7 +18,8 @@ from __future__ import annotations
 import collections
 import hashlib
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
+from pathlib import Path
 from typing import Any, Mapping, Protocol, runtime_checkable
 
 import numpy as np
@@ -205,28 +206,96 @@ class WindowEstimator(Protocol):
     ) -> dict: ...
 
 
-def config_hash(cfg: Mapping[str, Any]) -> str:
-    """Deterministic SHA256 over a config mapping.
+def _canonical(obj: Any) -> list:
+    """Encode a config value as an unambiguous `[type_tag, payload]` pair.
 
-    Canonical JSON (sorted keys, non-JSON values stringified) so the same config
-    always hashes the same regardless of dict insertion order. Carried on every
-    `WindowEstimate` so a result can never be silently attributed to the wrong config.
+    **Every** node is tagged, including plain strings, so no value can ever collide with
+    another value's encoding — the defect in the first version, which stringified
+    non-JSON values and so hashed `Path("a")` identically to `"a"` and `np.int64(3)`
+    identically to `"3"` (S0R-01).
+
+    Unsupported types raise rather than being coerced: a provenance key must never
+    quietly absorb something it cannot represent.
     """
-    canonical = json.dumps(cfg, sort_keys=True, default=str, separators=(",", ":"))
+    if obj is None:
+        return ["null", ""]
+    if isinstance(obj, bool):                      # before int — bool subclasses int
+        return ["bool", "1" if obj else "0"]
+    if isinstance(obj, int):
+        return ["int", str(obj)]                   # str: exact for arbitrary precision
+    if isinstance(obj, float):
+        return ["float", repr(obj)]                # repr round-trips exactly; nan/inf safe
+    if isinstance(obj, str):
+        return ["str", obj]
+    if isinstance(obj, Path):
+        return ["path", obj.as_posix()]
+    if isinstance(obj, np.generic):                # np.int64(3) != 3 != "3"
+        return [f"np.{type(obj).__name__}", _canonical(obj.item())]
+    if isinstance(obj, np.ndarray):
+        return ["ndarray", [str(obj.dtype), list(obj.shape), _canonical(obj.tolist())]]
+    if isinstance(obj, tuple):
+        return ["tuple", [_canonical(v) for v in obj]]
+    if isinstance(obj, list):
+        return ["list", [_canonical(v) for v in obj]]
+    if isinstance(obj, Mapping):
+        items = sorted(
+            ([_canonical(k), _canonical(v)] for k, v in obj.items()),
+            key=lambda kv: json.dumps(kv[0], separators=(",", ":")),
+        )
+        return ["dict", items]
+    raise TypeError(
+        f"config_hash cannot canonicalise {type(obj).__name__!r} deterministically "
+        f"(value: {obj!r}). Convert it to a supported type — None, bool, int, float, "
+        "str, Path, numpy scalar/array, list, tuple, mapping — before hashing."
+    )
+
+
+def run_config_hash(cfg: Mapping[str, Any]) -> str:
+    """Deterministic SHA256 over the **complete run config**.
+
+    This is an *exact-run provenance* key and nothing else. It is deliberately sensitive
+    to the whole config, including fields (display backend, output paths) that cannot
+    affect the DSP: whole-config sensitivity is the safe direction for provenance, and
+    the alternative — a hand-maintained list of "DSP-relevant" keys — rots silently as
+    the config grows (S0R-01).
+
+    **Do not use it as an estimator-equivalence or grouping key.** Two runs that differ
+    only in a display setting produce different hashes here and that is correct
+    behaviour. If M4 later needs "did these two runs use the same DSP?", that requires a
+    separate, explicitly scoped hash — not a quiet redefinition of this one.
+
+    Raises `TypeError` on a value it cannot canonicalise, rather than coercing it.
+    """
+    canonical = json.dumps(_canonical(cfg), separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class WindowEstimate:
     """One window's estimator-agnostic result, tagged with its provenance.
 
-    `hr_bpm` / `br_bpm` are NaN whenever the corresponding validity flag is False —
-    the scorer maps an invalid estimate to a *recorded* radar-NaN disposition, never
-    to a missing window. `raw` keeps the estimator's native dict for evidence dumps.
+    The record enforces a **two-way** invariant (S0R-02): a rate is NaN whenever its
+    validity flag is False, and a True validity flag is guaranteed to carry a finite
+    rate. A record whose disposition and value contradict each other cannot be
+    constructed through `as_window_estimate`, so the scorer never has to guess which
+    field wins. The scorer maps an invalid estimate to a *recorded* radar-NaN
+    disposition, never to a missing window.
+
+    `raw` keeps the estimator's native dict for evidence dumps and is excluded from
+    equality.
+
+    **Equality is NaN-aware and semantic** (S0R-03): two separately-constructed invalid
+    records compare equal, which plain dataclass equality would not give (NaN != NaN).
+    The record is deliberately **unhashable** — semantic NaN equality and hashing cannot
+    both hold consistently, and nothing needs it in a set or dict key.
+
+    **This summary record is not the Stage 3 equality oracle.** Plan §7 stage 3 requires
+    full-precision agreement between M4 and a direct shared-DSP call; that comparison
+    must be made against the native DSP/evidence payload, not against this lossy summary.
     """
 
     estimator_id: str
-    config_hash: str
+    run_config_hash: str
     hr_bpm: float
     hr_valid: bool
     br_bpm: float
@@ -236,31 +305,71 @@ class WindowEstimate:
     rejection_reason: str = ""
     raw: dict = field(default_factory=dict, repr=False, compare=False)
 
+    __hash__ = None   # see class docstring: semantic NaN equality precludes hashing
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, WindowEstimate):
+            return NotImplemented
+
+        def _same(a, b) -> bool:
+            if isinstance(a, float) and isinstance(b, float):
+                return a == b or (np.isnan(a) and np.isnan(b))
+            return a == b
+
+        return all(
+            _same(getattr(self, f.name), getattr(other, f.name))
+            for f in fields(self)
+            if f.compare
+        )
+
 
 def as_window_estimate(
     dsp: dict,
     *,
     estimator_id: str = ESTIMATOR_ID,
-    cfg_hash: str,
+    run_config_hash: str,
 ) -> WindowEstimate:
     """Normalise a `run_window_dsp`-shaped result dict into a `WindowEstimate`.
 
-    Enforces the NaN-when-invalid rule at the boundary so no downstream consumer can
-    read a rate off an unverified window. `hr_bpm_smooth` and `fallback_hr_bpm` are
-    deliberately NOT carried: the first is an online median (not paper-grade) and the
-    second is a naive argmax (CLAUDE.md §4).
+    Enforces the record's two-way invariant at the boundary:
+
+    * validity False → the rate is forced to NaN, so no downstream consumer can read a
+      rate off an unverified window;
+    * validity True → the rate **must** be present and finite, or this raises. A
+      silently contradictory record (`hr_valid=True, hr_bpm=NaN`) would leave the scorer
+      to guess which field wins, and CLAUDE.md §4 requires the failure be reported, not
+      absorbed (S0R-02).
+
+    `hr_bpm_smooth` and `fallback_hr_bpm` are deliberately NOT carried: the first is an
+    online median (not paper-grade) and the second is a naive argmax (CLAUDE.md §4).
     """
+
+    def _rate(valid: bool, value, vital: str, key: str) -> float:
+        if not valid:
+            return float("nan")
+        if value is None:
+            raise ValueError(
+                f"{vital} is marked valid but {key!r} is missing from the estimator "
+                f"result. A valid estimate must carry a finite rate (estimator "
+                f"{estimator_id!r})."
+            )
+        rate = float(value)
+        if not np.isfinite(rate):
+            raise ValueError(
+                f"{vital} is marked valid but {key!r} is {rate!r}. A valid estimate "
+                f"must carry a finite rate (estimator {estimator_id!r})."
+            )
+        return rate
+
     hr_valid = bool(dsp.get("hr_valid", False))
     br_valid = bool(dsp.get("br_valid", False))
-    hr_bpm = float(dsp.get("hr_raw", np.nan)) if hr_valid else float("nan")
-    br_bpm = float(dsp.get("br_bpm", np.nan)) if br_valid else float("nan")
     f_r = dsp.get("f_r_hz")
     return WindowEstimate(
         estimator_id=estimator_id,
-        config_hash=cfg_hash,
-        hr_bpm=hr_bpm,
+        run_config_hash=run_config_hash,
+        hr_bpm=_rate(hr_valid, dsp.get("hr_raw"), "HR", "hr_raw"),
         hr_valid=hr_valid,
-        br_bpm=br_bpm,
+        br_bpm=_rate(br_valid, dsp.get("br_bpm"), "BR", "br_bpm"),
         br_valid=br_valid,
         br_confidence=str(dsp.get("br_confidence", "low")),
         f_r_hz=None if f_r is None else float(f_r),

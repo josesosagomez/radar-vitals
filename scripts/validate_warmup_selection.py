@@ -1,6 +1,6 @@
 """Regenerable evidence for the warmup range-bin selection fix (2026-07-14/15).
 
-Re-runs the REAL `_run_warmup_selection` (same code path live_demo.py uses at
+Re-runs the REAL `src.warmup_select.run_warmup_selection` (same code path live_demo.py uses at
 session start) on the first 600 frames of each recorded session's raw
 `adc_stream.bin`, using that session's own stored config, and compares the
 selected bin against the expected pick established by offline forensics
