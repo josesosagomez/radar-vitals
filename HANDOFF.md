@@ -4,9 +4,14 @@
 > Rewritten, not appended (CLAUDE.md §10). For *what happened and why*, read `HISTORY.md`.
 > Every claim below was re-verified against the repo at the time of writing.
 >
-> **Both of M4's gates are now CLEARED (M3 and the linalg-free DSP review). The active job is to
-> BUILD M4 — the offline evaluation harness.** Start at §3. Read `plans/implementation_plan.md` §M4
-> first. One user decision is open before the build starts (§3, the A/B call).
+> **M4 is fully unblocked: both gates cleared (M3, linalg review) AND its build plan is written and
+> cross-reviewed to closure.** No user decision is outstanding.
+>
+> **The active job is to BUILD M4 — and the first step is the §5.1 Stage 0 refactor, NOT the
+> harness.** Read `plans/m4_offline_harness.md` (revision 6, the build authority) before anything
+> else, then §3 below. Stage 0 extracts `_run_dsp` and `_run_warmup_selection` out of
+> `scripts/live_demo.py` into `src/`; it gates every other stage and takes its own CLAUDE.md §6
+> review. Skipping it makes the harness's central correctness test meaningless (M4R-10).
 
 ---
 
