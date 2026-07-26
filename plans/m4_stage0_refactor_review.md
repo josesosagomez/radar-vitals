@@ -13,8 +13,9 @@
 ## Status
 
 **OPEN — rounds 1–3 processed.** 8 findings (S0R-01…08), 4 Blocking, **all reproduced, all agreed,
-all fixed**; none disputed. S0R-06 is escalated to the user as an M0 governance item and is not mine
-to close. Awaiting Codex round 4 or `NO MORE COMMENTS`.
+all fixed**; none disputed. **S0R-06 is now CLOSED** by user decision (2026-07-27) — the pointer was
+corrected and the edit logged in the pre-spec's own header. **Nothing is outstanding on either
+side.** Awaiting Codex round 4 or `NO MORE COMMENTS`.
 
 **Every Blocking finding after the first round has been a defect in my own fix, not in the reviewed
 refactor.** S0R-07 broke S0R-01's fix; S0R-08 broke S0R-07's. The moved DSP has survived every check
@@ -503,6 +504,30 @@ governance action rather than a tidy-up inside a refactor.
 **Escalated to the user** as an M0 amendment item, recorded here so it cannot be lost between now
 and deposit. Note it is not urgent for correctness — no number depends on it — but it must be
 resolved *before* deposit, since after deposit it is permanent.
+
+---
+
+**CLOSED — user decision 2026-07-27: correct the pointer now.** Applied: `notes/analysis_prespec.md`
+§6 item 7 now names `src/warmup_select.py:run_warmup_selection`.
+
+**Correction to how both of us framed this finding.** Your title and my round-1 response both called
+the file *frozen* pre-registration content. It is not — its own status header reads "**ready for the
+M0 freeze — NOT yet frozen** (the freeze is the user's irreversible act)". The §4 amendment
+mechanism governs changes *after* deposit and therefore never applied here. The honest constraint was
+narrower than either of us stated: this document closed a 48-finding cross-review, so an edit after
+sign-off must be deliberate, recorded, and must not touch a rule — not that it required amendment
+machinery. I escalated on a premise I had not checked, which is the same failure mode as the findings
+you have been raising against my code.
+
+What changed: the parenthetical only. **No rule, trigger, threshold or definition** was touched — the
+frozen trigger still reads `selected_confidence` from `warmup_bin_selection.json`, and Stage 0 leaves
+that field written identically (proven bitwise across all three captures and all warmup failure
+branches, see the evidence table above).
+
+Traceability, since the edit lands after the M3 sign-off: a dated **"Post-cross-review edits
+(pre-freeze)"** block now sits in the pre-spec's own status header, stating what changed, that it is
+location-only, the commit that moved the function, and this finding ID. The deposited document
+therefore explains its own post-review history rather than relying on git archaeology.
 
 ---
 

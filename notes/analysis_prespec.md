@@ -10,6 +10,15 @@
 > **Cross-review COMPLETE:** all M3 findings (M3R-01…48) are **resolved** across 17 rounds (see
 > `plans/m3_prespec_cross_review.md`); this pre-spec is **ready for the M0 freeze — NOT yet frozen**
 > (the freeze is the user's irreversible act).
+>
+> **Post-cross-review edits (pre-freeze), logged so the deposit is self-documenting:**
+> **2026-07-27 — §6 item 7, location-only.** The parenthetical naming the code that sets
+> `selected_confidence == "low"` was updated from `live_demo.py:_run_warmup_selection` to
+> `src/warmup_select.py:run_warmup_selection`: the M4 Stage 0 refactor (`4b64eb8`) moved that
+> function, verified behaviour-identical. **No rule, trigger, threshold or definition changed** —
+> the frozen trigger still reads `selected_confidence` from `warmup_bin_selection.json`, and that
+> field is written identically. Raised as S0R-06 in `plans/m4_stage0_refactor_review.md`; user
+> decision 2026-07-27.
 
 ---
 
@@ -424,7 +433,7 @@ bias/error.
    separately-logged **no-agreement** session (radar-only, descriptive at most).
 7. **Poor warmup bin-lock (outcome-blind).** **Frozen trigger:** re-run iff
    `warmup_bin_selection.json` reports **`selected_confidence == "low"`**.
-   (`live_demo.py:_run_warmup_selection` sets "low" when no energy-eligible candidate yields a
+   (`src/warmup_select.py:run_warmup_selection` sets "low" when no energy-eligible candidate yields a
    valid, confident DSP winner — i.e. **all** candidates energy-ineligible, **or** an
    energy-eligible candidate wins but lacks the required HR/BR validity/confidence.) Warmup
    selection **runs the DSP internally**, so it is **reference/agreement-blind and pre-*display*,
