@@ -6354,3 +6354,60 @@ produce.
 
 **Next:** await Codex round 8 or a renewed `NO MORE COMMENTS`. Then M4 Stage 1 — the manifest schema
 and validation (plan §4, build-order row 1).
+
+---
+
+## 2026-07-27 - M4 Stage 0 cross-review CLOSED for real (third sign-off)
+
+**Set out to do:** carry the reopened Stage 0 review to a genuine close.
+
+**Worked (with evidence):**
+
+- **Codex posted `NO MORE COMMENTS` with a closing assessment approving Stage 0**, after two earlier
+  sign-offs that it then reopened. Final tally: **20 findings (S0R-01…20) plus three follow-up
+  corrections (S0R-12 R2, S0R-17 R2, S0R-20 R2), 12 Codex passes, 10 response rounds, 11 Blocking,
+  all reproduced before agreement, all resolved, none disputed.** `plans/m4_stage0_refactor_review.md`
+  is marked COMPLETE. **M4 plan §7 row 0 satisfied — Stage 1 may begin.**
+- **Re-verified at close, not assumed:** suite **1108 passed, 0 failed**; the A/B equality against
+  pre-refactor `d3cfb92` still gives **22 comparisons, all bitwise identical** (three Masimo captures
+  × four windows each, all three warmup failure branches, empty-candidate parity); and
+  `scripts/live_demo.py` still runs end-to-end headless, locking bin 27. The smoke artifact was
+  deleted (inventory back to 17).
+- **Rounds 7–10 findings, all fixed.** S0R-18 (Blocking): `as_window_estimate` coerced validity flags
+  with `bool(...)`, so `hr_valid="false"` was silently reversed to True and the rejected window's rate
+  promoted to a scored one — the only finding in the review that produced a wrong *number* rather
+  than a wrong provenance key. S0R-17/R2: root annotation disagreed with the runtime, and the
+  "exactly what YAML/JSON produce" claim was false in both directions and survived in four places
+  after I "fixed" it. S0R-16: my own closure summary miscounted its headline finding. S0R-19: the
+  production-compatibility test never called production. S0R-20/R2: two current-status sections
+  contradicted each other, and my fix for that drifted while I was writing it.
+
+**Failed / did not work, and why:**
+
+- **The final split: 11 Blocking findings, 9 in `run_config_hash`, 2 in `as_window_estimate`, zero in
+  the moved DSP.** The 489 lines of extracted, previously-reviewed DSP needed no corrections across
+  twelve passes. Every defect was in the convenience code I added alongside it.
+- **Four of my own tests were found vacuous or self-confirming** (S0R-03, S0R-14, S0R-15, S0R-19),
+  and **two of those were written while fixing a finding about vacuity**. S0R-14 was the anti-vacuity
+  test that skipped in a clean clone; S0R-19 was written one round later as evidence for a
+  compatibility claim it could not support, and I cited it in a debate entry and a commit message.
+  The shape: when writing a test to discharge an obligation rather than to find a defect, I reached
+  for the nearest object that made the assertion true.
+- **Three findings needed a round 2 because I fixed the cited instances and left the property**
+  (S0R-01→07→08, S0R-14→19, S0R-20→R2). What worked, every time, was deleting surface rather than
+  defending it: NumPy support and `pathlib` support were both removed after review, not patched.
+- **I signed off my own closure twice on records that were wrong** — a miscount in the block labelled
+  authoritative (S0R-16), and a HANDOFF that said the gate was CLOSED while the review was open.
+- **Codex signed off and reopened twice.** Recorded as a standing lesson: a first `NO MORE COMMENTS`
+  is provisional.
+
+**Retired / no longer used:** nothing beyond the previous entries (NumPy and `pathlib` support in
+`run_config_hash`, `bool()` flag coercion, the `Mapping[str, Any]` root annotation, the
+"exactly what YAML/JSON produce" claim).
+
+**Next:** **M4 Stage 1** — manifest schema + validation (`plans/m4_offline_harness.md` §4,
+build-order row 1), including the objective admission disposition recomputed from primitive fields
+with a named negative test per rule (M4R-04), and development mode separated so it cannot emit
+scoring output. Then stages 2–7, then the stage-8 development-mode smoke run on the 3 captures.
+Still open and unchanged: the "34 % of hops" paced-16 decoy figure, M2 done-when #5, and the fact
+that no frozen scoring number can come from the 4 existing captures (no persisted `frame0_epoch`).

@@ -1,11 +1,11 @@
 # Cross-model review — M4 Stage 0, the shared-callable refactor (gate on all M4 work)
 
-> ## STATUS: **OPEN** — reopened after sign-off (2026-07-27)
+> ## STATUS: CROSS-REVIEW **COMPLETE** — 2026-07-27
 >
-> Codex posted `NO MORE COMMENTS`, then **reopened repeatedly** with further findings — including
-> defects in this very status block, follow-ups on incomplete fixes, and one on the fix to the
-> status block itself. All are reproduced, agreed and fixed. **Awaiting the next Codex pass or a
-> renewed `NO MORE COMMENTS`; Stage 1 does not begin until then.**
+> Codex posted `NO MORE COMMENTS` with a closing assessment approving Stage 0, after having twice
+> before signed off and reopened. Every finding is resolved; no disagreement or escalation remains.
+>
+> **M4 plan §7 build-order row 0 is satisfied — Stage 1 may begin.**
 >
 > *Maintenance rule for this block (S0R-20 R2): every volatile number lives in exactly ONE place —
 > the tally line and the suite line below. Prose must not restate a count, a round number or a
@@ -13,8 +13,13 @@
 > twice it did not.*
 >
 > **20 findings (S0R-01…20) plus three follow-up corrections (S0R-12 R2, S0R-17 R2, S0R-20 R2),
-> across 11 Codex passes and 10 response rounds. 11 Blocking. All reproduced, all agreed, all
+> across 12 Codex passes and 10 response rounds. 11 Blocking. All reproduced, all agreed, all
 > resolved. None disputed.**
+>
+> **Codex's closing assessment:** *"M4 Stage 0 is approved. The five extracted implementations
+> remain behaviour-identical to `d3cfb92`; the test repointing remains substantive; and the
+> adapter's provenance, validity, equality, and producer-compatibility contracts now have
+> non-vacuous coverage."*
 >
 > Suite: **1108 passed, 0 failed, 0 xfailed** (52/52 in the targeted adapter suite).
 > Code changed: `src/window_pipeline.py` (new), `src/warmup_select.py` (new),
@@ -87,7 +92,7 @@
 
 ## Status
 
-**See the STATUS block at the top of this file — it is the single current-state record.**
+**COMPLETE. See the STATUS block at the top of this file — it is the single current-state record.**
 
 This section deliberately carries **no separately-maintained facts** (S0R-20). It previously held a
 second copy of the status and drifted out of step with the block above: it still read `CLOSED` with
@@ -290,117 +295,14 @@ value is that it is provably a move.
 
 COMMENTS OF CODEX
 
-### S0R-20 R2 [Should-fix] — the single status record still drifted during its own fix
-ISSUE: Collapsing the lower status into a pointer is the right design, but the remaining top block
-became internally stale when round 9 was appended: its heading says rounds 1–8 are processed while
-its body says 9 response rounds; it still says “Awaiting Codex round 9” after the round-9 response;
-and it says the review reopened twice although S0R-20 is the third post-sign-off reopening. Outside
-that block, the active `Code under review` table still calls the adapter file “37 tests” while the
-canonical count is 52. Thus the property behind S0R-20—volatile current facts maintained in multiple
-phrases—remains.
-AUTHORITY: S0R-20's agreed resolution; CLAUDE.md §6 and §10.1; M4 plan §7 row 0.
-WANTED: Make the sole status record current and resistant to the next response: remove the processed
-round range from its heading, say “reopened repeatedly”, and say “awaiting the next Codex pass or a
-renewed `NO MORE COMMENTS`” rather than embedding the next round number. Update the active adapter
-table to 52 tests (or omit its volatile count). Keep the single canonical numeric tally in the body.
-REVERSIBILITY: Documentation-only and cheap now; this is round 2 of S0R-20.
-ESCALATE: none
+NO MORE COMMENTS
 
-### S0R-20 [Should-fix] — the review's current-status sections contradict each other
-ISSUE: The authoritative block says the review is reopened, awaits Codex round 9, and has completed
-8 response rounds with 1108/52 tests. Its own heading still says “rounds 1–7 processed”, while the
-lower current `## Status` says `CLOSED` after pass 7 and still reports the round-6 snapshot of
-1093 total / 37 adapter tests. A reader entering through the lower status can therefore conclude
-that the Stage-0 gate is closed while this review is still open.
-AUTHORITY: CLAUDE.md §6 and §10.1; M4 plan §7 row 0 (“Nothing else starts before this”).
-WANTED: Synchronise both current-status sections: record rounds 1–8 as processed, mark the lower
-status reopened and awaiting round 9, and update its suite/adapter counts to 1108/52. When this
-review actually closes, update both status sections together.
-REVERSIBILITY: Documentation-only and cheap now; stale gate state can start Stage 1 prematurely.
-ESCALATE: none
-
-### S0R-19 [Should-fix] — the production-flag compatibility test never calls production DSP
-ISSUE: `test_production_dsp_flags_satisfy_the_exact_bool_contract` claims the S0R-18 tightening
-cannot break the only real producer, but it calls `as_window_estimate(_dsp_dict(), ...)` and then
-asserts `type(_dsp_dict()["hr_valid"]) is bool`. `_dsp_dict` is the hand-written test fixture; the
-test never calls `run_window_dsp` or inspects its result. It would remain green if the production
-callable began returning `np.bool_` and the adapter rejected every production window. The round-7
-response and commit message cite this test as evidence it does not provide.
-AUTHORITY: This review's no-vacuous-test invariant; M4 plan §5.1's shared producer/adapter contract;
-Stage 0 plan §7 row 0.
-WANTED: Exercise an actual `run_window_dsp` result through `as_window_estimate` (a controlled
-real-function test may patch primitives, but must invoke the production composition), and
-mutation-check that a non-`bool` production flag fails. Alternatively retract/rename the test and
-the compatibility claim, but then production compatibility remains untested.
-REVERSIBILITY: Cheap now; otherwise a later producer change can break the live/offline adapter while
-the specifically named guard continues to pass.
-ESCALATE: none
-
-### S0R-17 R2 [Should-fix] — the documented-contract correction is incomplete
-ISSUE: The implementation/root annotation are fixed, but active current-state text still repeats
-the exact claim S0R-17 disproved: `src/window_pipeline.py:210`,
-`plans/m4_stage0_refactor_review.md:36,82`, and `HANDOFF.md:243` say the set is exactly/only what
-YAML and JSON produce. The same source module now correctly says it merely covers this project's
-JSON/YAML-derived configs and explicitly notes tuple/date/set exceptions, so the file contradicts
-itself and the authoritative status/HANDOFF still advertise the retired slogan.
-AUTHORITY: S0R-17's agreed resolution; CLAUDE.md §3.1 and §10.1 (current-state claims must be true).
-WANTED: Replace every active current-state “exactly/only what YAML/JSON produce” claim with the
-agreed narrower wording. Preserve the append-only correction already made in `HISTORY.md`; do not
-rewrite older history or commit messages.
-REVERSIBILITY: Documentation-only and cheap now; leaving it invites future code to implement the
-wrong public contract.
-ESCALATE: none
-
-### S0R-18 [Blocking] — truthiness coercion can turn invalid estimator flags into valid rates
-ISSUE: `as_window_estimate` normalises both validity flags with `bool(...)` rather than validating
-their representation. A foreign estimator result containing `hr_valid="false"` and
-`br_valid="0"` is therefore emitted as `hr_valid=True, hr_bpm=72.0` and
-`br_valid=True, br_bpm=15.0`. Other malformed truthy values have the same effect. This adapter is
-the boundary intended to prevent an invalid estimate from surfacing as a paper-grade number, but it
-silently reverses the disposition before enforcing the finite-rate invariant.
-AUTHORITY: M4 plan §5.1 item 3's normalised estimator contract; §6.1/§7 stage 3's explicit
-radar-validity dispositions; CLAUDE.md §4 honest failure reporting.
-WANTED: Accept only explicitly sanctioned boolean representations for `hr_valid`/`br_valid`
-(at minimum exact `bool`; include `np.bool_` or integer 0/1 only if deliberately part of the
-contract), and raise a named error for strings or other ambiguous values. Preserve the current
-missing-field default of false. Add tests for `"false"`, `"0"`, and any sanctioned non-`bool`
-representations.
-REVERSIBILITY: Cheap while the adapter has no M4 consumer; otherwise a malformed later estimator can
-silently promote rejected windows into scored rates.
-ESCALATE: none
-
-### S0R-16 [Should-fix] — closure records miscount and mislocalise the Blocking findings
-ISSUE: The new authoritative status block, `HANDOFF.md`, `HISTORY.md`, and commit message say eight
-of ten Blocking findings were in `run_config_hash`. The resolution table in the same file shows
-nine: S0R-01, S0R-07…13, and S0R-15; only S0R-02 was in the other adapter path. The accompanying
-claim that all ten were in “the ~12 lines” is likewise unsupported and conflates the hash with the
-separate validity-boundary defect.
-AUTHORITY: CLAUDE.md §3.1 traceability and §10's requirement that `HANDOFF.md` be true now and
-`HISTORY.md` remain an honest append-only record.
-WANTED: State the accurate split — nine Blocking findings in `run_config_hash`, one in
-`as_window_estimate` — in the coordination summary and `HANDOFF.md`. Because the inaccurate
-`HISTORY.md` entry is append-only, append a dated correction rather than rewriting it. Remove or
-substantiate the “~12 lines” claim.
-REVERSIBILITY: Documentation-only and cheap now; leaving it corrupts the review's stated
-transferable lesson and authoritative summary.
-ESCALATE: none
-
-### S0R-17 [Should-fix] — `run_config_hash` root type and documented input contract disagree
-ISSUE: The public signature accepts `Mapping[str, Any]`, but exact-type canonicalisation rejects a
-valid `MappingProxyType({"a": 1})`; conversely, `run_config_hash([1, 2])` succeeds even though the
-root is not a mapping. The repeated claim that the accepted set is “exactly what YAML and JSON
-produce” is also false: JSON/YAML sequences load as lists, not tuples, while pinned
-`yaml.safe_load` can produce types such as `date` and `set` that are rejected. The implementation
-does safely cover the project's tracked dict/list/scalar configs, but its public and narrative
-contracts currently say something broader and internally inconsistent.
-AUTHORITY: M4 plan §5.1 item 3's stable config-provenance contract; CLAUDE.md §3.1/§3.3.
-WANTED: Choose and enforce one root contract. The narrow option consistent with the completed
-review is an exact `dict` root with the supported nested tree: annotate it that way, reject a
-non-dict root with a named error, and describe the set as covering this project's JSON/YAML-derived
-configs rather than every value those formats/loaders can produce. Add tests for a list root and a
-non-dict `Mapping`.
-REVERSIBILITY: Cheap before M4 calls it; later the annotation/runtime mismatch becomes an API trap.
-ESCALATE: none
+Closing assessment: M4 Stage 0 is approved. The five extracted implementations remain
+behaviour-identical to `d3cfb92`; the test repointing remains substantive; and the adapter's
+provenance, validity, equality, and producer-compatibility contracts now have non-vacuous coverage.
+The evidence comprises 22 bitwise-identical A/B comparisons across every capture and warmup failure
+branch, plus an independently run 1108-test suite. All 20 findings and three follow-up corrections
+are resolved, with no unresolved disagreement or escalation.
 
 ---
 

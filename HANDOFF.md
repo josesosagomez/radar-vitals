@@ -7,8 +7,8 @@
 > **M4 is fully unblocked: both gates cleared (M3, linalg review) AND its build plan is written and
 > cross-reviewed to closure.** No user decision is outstanding.
 >
-> **The active job is to BUILD M4. Stage 0 is built; its CLAUDE.md §6 review signed off and was
-> then REOPENED TWICE with further findings (all fixed) — Stage 1 waits on a renewed sign-off.**
+> **The active job is to BUILD M4. Stage 0 is DONE — built, cross-reviewed and CLOSED — so the
+> next action is Stage 1, the manifest schema.**
 > Read `plans/m4_offline_harness.md` (revision 6, the build authority) before anything else, then
 > §3 below. The window DSP and warmup policy now live in `src/window_pipeline.py` and
 > `src/warmup_select.py`, imported by both the live path and M4 — they are no longer private to
@@ -160,23 +160,23 @@ M5, M8, M9 and M10 all wait on it.
 disputed**; Codex signed off with `NO MORE COMMENTS` (`plans/m4_plan_cross_review.md` — status header
 + resolution table at the top of `DEBATE COMMENTS`).
 
-**Stage 0 (§5.1) is BUILT (`4b64eb8`); its cross-review signed off on 2026-07-27 and was then
-REOPENED repeatedly the same day with S0R-16…20 — all fixed, awaiting a renewed sign-off.** The
+**Stage 0 (§5.1) is DONE — built in `4b64eb8`, cross-review CLOSED 2026-07-27.** The
 shared-callable refactor moved the window DSP into `src/window_pipeline.py:run_window_dsp` and the
 warmup policy into `src/warmup_select.py:run_warmup_selection`; `scripts/live_demo.py` imports both.
 Reason the stage existed: while those were **private functions in a script**, M4 had to duplicate
 them, and the harness's central equality test would then have compared M4 against a duplicate rather
 than the production path (M4R-10).
 
-Its review (`plans/m4_stage0_refactor_review.md`) has run **11 Codex passes / 10 response rounds, 20
-findings, 11 Blocking, all resolved, none disputed**. **Not one finding was in the moved DSP** — all
+Its review (`plans/m4_stage0_refactor_review.md`) ran **12 Codex passes / 10 response rounds, 20
+findings plus 3 follow-up corrections, 11 Blocking, all resolved, none disputed**; Codex signed off
+with `NO MORE COMMENTS`. **Note it signed off and reopened twice before the final pass** — treat a
+first sign-off on any future review as provisional. **Not one finding was in the moved DSP** — all
 11 Blocking findings were in the new estimator-adapter code: **9 in `run_config_hash`** and **2 in
 `as_window_estimate`**. The extraction is proven behaviour-identical to `d3cfb92` by **22
 bitwise-identical comparisons** (all three Masimo captures × four windows each, plus all three warmup
 failure branches); locked bins 27/26/26 unchanged. Suite **1108 passed**.
 
-**The next action is to close the review loop**, then Stage 1 — the manifest schema + validation
-(plan §4, build-order row 1). Do not start Stage 1 while the loop is open (plan §7 row 0).
+**The next action is Stage 1** — the manifest schema + validation (plan §4, build-order row 1).
 
 The loop produced **two user decisions** (M2 #5 stays open; `linear` percentile) and **two
 pre-deposit clarifications now written into the binding specs** (`linear`; the usable-HR-sample
