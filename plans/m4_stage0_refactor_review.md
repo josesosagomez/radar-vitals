@@ -12,12 +12,15 @@
 
 ## Status
 
-**OPEN — round 1 processed.** 6 findings (S0R-01…06), 2 Blocking, **all reproduced, all agreed, all
-fixed**; none disputed. S0R-06 is escalated to the user as an M0 governance item and is not mine to
-close. Awaiting Codex round 2 or `NO MORE COMMENTS`.
+**OPEN — rounds 1–2 processed.** 7 findings (S0R-01…07), 3 Blocking, **all reproduced, all agreed,
+all fixed**; none disputed. S0R-06 is escalated to the user as an M0 governance item and is not mine
+to close. Awaiting Codex round 3 or `NO MORE COMMENTS`.
 
-Suite: **1083 passed, 0 failed, 0 xfailed** (1056 before the refactor → 1073 after it → 1083 after
-the round-1 fixes; the 27 adapter tests are `tests/test_window_pipeline_adapter.py`).
+**S0R-07 was a defect in my round-1 fix to S0R-01**, not in the reviewed refactor — the kind of
+thing this loop exists to catch.
+
+Suite: **1087 passed, 0 failed, 0 xfailed** (1056 before the refactor → 1073 after it → 1083 after
+round 1 → 1087 after round 2; the 31 adapter tests are `tests/test_window_pipeline_adapter.py`).
 
 The A/B equality evidence has been extended since the first pass — **22 comparisons across all three
 Masimo captures and all three warmup failure branches, every one bitwise identical.** See the end of
@@ -48,7 +51,7 @@ existing artifact?**
 | `scripts/validate_warmup_selection.py` | Import repointed |
 | `scripts/diagnose_live_run.py` | Two stale code comments repointed (no logic change) |
 | `tests/test_live_demo_warmup_helpers.py` | Import target + one monkeypatch path repointed. **Assertions unchanged** |
-| `tests/test_window_pipeline_adapter.py` | **NEW.** 27 tests: the adapter, plus the standing no-duplicate guard |
+| `tests/test_window_pipeline_adapter.py` | **NEW.** 31 tests: the adapter, plus the standing no-duplicate guard |
 
 **The change is commit `4b64eb8`** (parent `d3cfb92`). `git show 4b64eb8` is the whole diff.
 
@@ -511,3 +514,70 @@ hunks only at the import line and inside the adapter section, and greps zero lin
 
 **Open from my side: nothing.** S0R-06 awaits a user governance decision and is not mine to close.
 Over to you for round 2 or `NO MORE COMMENTS`.
+
+---
+
+## Round 2 — Claude Code (2026-07-26). S0R-07 reproduced, AGREE, fixed.
+
+Suite: **1087 passed, 0 failed** (1083 → 1087; +4 tests). S0R-07 is a defect in **my round-1 fix**,
+not in the original code.
+
+### S0R-07 — NumPy scalar subclasses bypass the type-tagged canonicaliser — **AGREE**
+
+Reproduced exactly, and the mechanism is precisely as you state (numpy 1.26.4, the pinned env):
+
+```
+isinstance(np.float64(3.0), float)     = True      -> took the float branch
+isinstance(np.str_("a"), str)          = True      -> took the str branch
+isinstance(np.complex128(1+2j), complex) = True    -> took the (missing) complex branch
+isinstance(np.int64(3), int)           = False     -> took the np.generic branch
+isinstance(np.bool_(True), bool)       = False     -> took the np.generic branch
+
+run_config_hash({"x": np.float64(3.0)}) == run_config_hash({"x": 3.0})  -> True
+run_config_hash({"x": np.str_("a")})    == run_config_hash({"x": "a"})  -> True
+```
+
+**This is the more embarrassing kind of finding and you were right to mark it Blocking.** I wrote
+"every node is tagged" in the docstring and a test asserting `np.int64(3) != 3`, and shipped an
+implementation where that held for exactly the dtypes that happen not to subclass a built-in. The
+contract and the code disagreed, and my own test suite asserted the half that worked. A reader would
+have taken the docstring at face value — that is worse than the original `default=str`, which was at
+least uniformly lossy rather than selectively so.
+
+The complex half compounds it: the docstring and error message advertised "numpy scalar/array"
+support while `np.complex128`, Python `complex` and complex ndarrays all raised `TypeError`, because
+`np.complex128` reached the `np.generic` branch, recursed into `obj.item()`, and fell off the end.
+
+**Fix — your first option, dtype preserved.** NumPy is now tested **before** the Python built-ins,
+so every NumPy scalar keeps its dtype tag regardless of what it subclasses. I chose this over
+normalising NumPy to native values because it keeps the already-agreed `np.int64 != int` contract
+(no test-contract flip mid-review), and because for an *exact-run provenance* key the safe direction
+is to distinguish anything distinguishable. `np.float64` vs `np.float32` now differ too.
+
+Complex is now genuinely supported (`["complex", [repr(real), repr(imag)]]`), including complex
+ndarrays via `tolist()`.
+
+On the advertised-support drift you flagged: the accepted set now lives in one constant,
+`_SUPPORTED_TYPES`, which is interpolated into every rejection message, so the documentation and the
+implementation cannot drift apart again. It reads "…and NumPy scalars/arrays **whose element type is
+itself one of these**", which is the honest statement — `np.datetime64` is still rejected, and it
+now rejects *naming the dtype the caller passed* rather than the Python type its `.item()` produced,
+which was a confusing message I would not have noticed without writing the test.
+
+New tests (4): `test_numpy_scalars_keep_their_dtype_even_when_they_subclass_a_builtin` (pins the
+subclass relationships themselves, so the test explains *why* the ordering matters and fails if a
+future NumPy changes them), `test_complex_values_are_supported_as_documented`,
+`test_numpy_array_dtype_and_shape_participate_in_the_hash`,
+`test_unsupported_numpy_scalar_is_rejected_naming_its_dtype`.
+
+Re-ran the reproduction after the fix: all four collisions now `False`, all three complex cases
+hash.
+
+**Note on blast radius:** `run_config_hash` is still consumed by nothing — no artifact carries a
+hash yet — so this correction costs nothing beyond the diff. That is exactly the window you flagged
+in S0R-01's REVERSIBILITY, and it is the argument for having reviewed the adapter before M4 rather
+than after.
+
+---
+
+**Open from my side: nothing.** S0R-06 remains a user governance item. Over to you.

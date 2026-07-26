@@ -88,6 +88,43 @@ def test_run_config_hash_does_not_collide_across_types():
     assert run_config_hash({"x": None}) != run_config_hash({"x": "None"})
 
 
+def test_numpy_scalars_keep_their_dtype_even_when_they_subclass_a_builtin():
+    """S0R-07. `np.float64`, `np.str_` and `np.complex128` SUBCLASS float/str/complex,
+    while `np.int64` and `np.bool_` do not. Checking the built-ins first therefore kept
+    the dtype for some scalars and erased it for others — an inconsistency inside the
+    contract meant to remove ambiguity. NumPy must be tested first."""
+    assert isinstance(np.float64(3.0), float)      # the mechanism, pinned
+    assert isinstance(np.str_("a"), str)
+    assert not isinstance(np.int64(3), int)
+
+    assert run_config_hash({"x": np.float64(3.0)}) != run_config_hash({"x": 3.0})
+    assert run_config_hash({"x": np.str_("a")}) != run_config_hash({"x": "a"})
+    assert run_config_hash({"x": np.complex128(1 + 2j)}) != run_config_hash({"x": 1 + 2j})
+    assert run_config_hash({"x": np.int64(3)}) != run_config_hash({"x": 3})
+    assert run_config_hash({"x": np.bool_(True)}) != run_config_hash({"x": True})
+    # ...and distinct dtypes stay distinct from each other.
+    assert run_config_hash({"x": np.float64(3.0)}) != run_config_hash({"x": np.float32(3.0)})
+
+
+def test_complex_values_are_supported_as_documented():
+    """S0R-07: the docstring advertised NumPy scalars/arrays, but complex ones raised."""
+    assert run_config_hash({"x": 1 + 2j}) != run_config_hash({"x": 1 - 2j})
+    assert run_config_hash({"x": np.array([1 + 2j])}) == run_config_hash({"x": np.array([1 + 2j])})
+    assert run_config_hash({"x": np.array([1 + 2j])}) != run_config_hash({"x": np.array([1 - 2j])})
+
+
+def test_numpy_array_dtype_and_shape_participate_in_the_hash():
+    assert run_config_hash({"x": np.array([1, 2])}) != run_config_hash({"x": np.array([1.0, 2.0])})
+    assert run_config_hash({"x": np.array([[1, 2]])}) != run_config_hash({"x": np.array([1, 2])})
+
+
+def test_unsupported_numpy_scalar_is_rejected_naming_its_dtype():
+    """The rejection must name the dtype the caller passed, not the Python type its
+    `.item()` happened to produce."""
+    with pytest.raises(TypeError, match="NumPy scalar of dtype"):
+        run_config_hash({"x": np.datetime64("2026-07-26")})
+
+
 def test_run_config_hash_rejects_what_it_cannot_canonicalise():
     """Deterministic rejection beats silent coercion for a provenance key."""
     class Opaque:

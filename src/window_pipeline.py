@@ -206,6 +206,14 @@ class WindowEstimator(Protocol):
     ) -> dict: ...
 
 
+#: Exactly what `_canonical` accepts. Kept in the error message so the advertised
+#: support and the implementation cannot drift apart (S0R-07).
+_SUPPORTED_TYPES = (
+    "None, bool, int, float, complex, str, Path, list, tuple, mapping, and NumPy "
+    "scalars/arrays whose element type is itself one of these"
+)
+
+
 def _canonical(obj: Any) -> list:
     """Encode a config value as an unambiguous `[type_tag, payload]` pair.
 
@@ -214,25 +222,53 @@ def _canonical(obj: Any) -> list:
     non-JSON values and so hashed `Path("a")` identically to `"a"` and `np.int64(3)`
     identically to `"3"` (S0R-01).
 
+    **NumPy is checked before the Python built-ins, and the order matters** (S0R-07):
+    `np.float64`, `np.str_` and `np.complex128` *subclass* `float`/`str`/`complex`, while
+    `np.int64` and `np.bool_` do not. Testing the built-ins first therefore preserved the
+    dtype of some scalars and silently erased it for others — an inconsistency inside the
+    very contract that was meant to remove ambiguity. NumPy scalars now always keep their
+    dtype tag.
+
     Unsupported types raise rather than being coerced: a provenance key must never
     quietly absorb something it cannot represent.
     """
     if obj is None:
         return ["null", ""]
+
+    # ── NumPy first: several NumPy scalars subclass Python built-ins (S0R-07) ──
+    if isinstance(obj, np.generic):
+        try:
+            payload = _canonical(obj.item())
+        except TypeError as exc:
+            raise TypeError(
+                f"run_config_hash cannot canonicalise NumPy scalar of dtype "
+                f"{obj.dtype!r} deterministically (value: {obj!r}): its Python value is "
+                f"unsupported. Supported: {_SUPPORTED_TYPES}."
+            ) from exc
+        return [f"np.{type(obj).__name__}", payload]
+    if isinstance(obj, np.ndarray):
+        try:
+            payload = _canonical(obj.tolist())
+        except TypeError as exc:
+            raise TypeError(
+                f"run_config_hash cannot canonicalise NumPy array of dtype "
+                f"{obj.dtype!r} deterministically: its element type is unsupported. "
+                f"Supported: {_SUPPORTED_TYPES}."
+            ) from exc
+        return ["ndarray", [str(obj.dtype), list(obj.shape), payload]]
+
     if isinstance(obj, bool):                      # before int — bool subclasses int
         return ["bool", "1" if obj else "0"]
     if isinstance(obj, int):
         return ["int", str(obj)]                   # str: exact for arbitrary precision
     if isinstance(obj, float):
         return ["float", repr(obj)]                # repr round-trips exactly; nan/inf safe
+    if isinstance(obj, complex):
+        return ["complex", [repr(obj.real), repr(obj.imag)]]
     if isinstance(obj, str):
         return ["str", obj]
     if isinstance(obj, Path):
         return ["path", obj.as_posix()]
-    if isinstance(obj, np.generic):                # np.int64(3) != 3 != "3"
-        return [f"np.{type(obj).__name__}", _canonical(obj.item())]
-    if isinstance(obj, np.ndarray):
-        return ["ndarray", [str(obj.dtype), list(obj.shape), _canonical(obj.tolist())]]
     if isinstance(obj, tuple):
         return ["tuple", [_canonical(v) for v in obj]]
     if isinstance(obj, list):
@@ -244,9 +280,8 @@ def _canonical(obj: Any) -> list:
         )
         return ["dict", items]
     raise TypeError(
-        f"config_hash cannot canonicalise {type(obj).__name__!r} deterministically "
-        f"(value: {obj!r}). Convert it to a supported type — None, bool, int, float, "
-        "str, Path, numpy scalar/array, list, tuple, mapping — before hashing."
+        f"run_config_hash cannot canonicalise {type(obj).__name__!r} deterministically "
+        f"(value: {obj!r}). Convert it first. Supported: {_SUPPORTED_TYPES}."
     )
 
 
