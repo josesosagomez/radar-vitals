@@ -6135,3 +6135,92 @@ as canonical, vs also reconstructing the old nearest-hop rule). Then: M4 plan �
 (scoring core + unit tests first, §5.3) → run on the 3 Masimo captures → reproduce HR under the frozen
 §7 grid and emit **BR for the first time**, closing M2 #5. Not re-measured and still open: the "34% of
 hops" paced-16 decoy figure.
+
+## 2026-07-26 — M4 plan written and cross-reviewed: 15 findings, 13 Blocking, before a line of code
+
+**Set out to do:** Decide the M4 regression anchor, write the M4 build plan, and cross-review it
+before implementation (CLAUDE.md §5.2).
+
+**Worked (with evidence):** **Option A chosen by the user** — the pilot MAEs 0.19/0.50/0.53 are
+**retired, not reproduced**: no committed script produced them, they used a nearest-hop rule §7 later
+froze differently, and they predate the band-pass fix. Validation moves to synthetic fixtures.
+Option B (reconstruct the old rule) was declined — it would have to guess an undocumented rule *and*
+resurrect the retired brick-wall filter, and a reconstruction tuned until it emits 0.19 proves nothing.
+
+`plans/m4_offline_harness.md` written, then cross-reviewed to closure:
+**15 findings (M4R-01…15) across 8 rounds, 13 Blocking, ALL agreed, NONE disputed**; Codex signed off
+with `NO MORE COMMENTS` on revision 6 (`plans/m4_plan_cross_review.md`, status header + resolution
+table). **Six revisions of the plan.** No M4 code was written at any point.
+
+**The two findings that justify reviewing plans rather than diffs:**
+- **M4R-01** — the draft made `live_estimates.csv` the radar input. CLAUDE.md §4 states in as many
+  words that no value in that file is paper-grade and that paper metrics reprocess `adc_stream.bin`.
+  Verification made it worse: the 2026-07-26 replay folders contain **no `adc_stream.bin`**, and
+  their `start_wall_utc` is `2026-07-26T14:36:54` against the capture's `2026-07-13T15:20:03` —
+  **13 days apart**, so Masimo alignment would have matched zero samples.
+- **M4R-02** — the statistical core was transcribed from a HANDOFF sentence about *not switching to
+  MOVER post-hoc* and used as if it were the estimator. The frozen §1 model is an unbalanced one-way
+  ANOVA variance-components LoA, **estimable only if `S_a ≥ 2` ∧ `N_a > S_a`**. The draft would have
+  printed a population LoA from a **single subject** — the exact defect `plot_bland_altman.py` is
+  condemned for. A later round found `SSB` was never defined at all, and that §1's `SSB` uses a
+  **window-weighted** grand mean while the reported bias is **subject-weighted** — confusing them
+  changes `σ²_b` on every unequal-`n_s` arm.
+
+**M4R-10 invalidated the plan's own strongest claim.** Revision 2 asserted M4 and the live path share
+the DSP and made a "direct shared-DSP equality" test the harness's central correctness check. But
+`_run_dsp` and `_run_warmup_selection` are **private functions in `scripts/live_demo.py`**
+(`tests/test_live_demo_warmup_helpers.py:22` imports the latter from there), so M4 would have
+duplicated them — and the equality test would have compared M4 against *whichever duplicate the test
+author chose*. **Two copies that drift apart both pass.** Revision 3 added **Stage 0**: extract both
+into `src/`, imported by both call sites, plus a normalised estimator adapter (ID + config hash) so
+M8/M9/M10 enter the same grid without copying the comparator. Stage 0 now gates every other stage and
+takes its own §6 review.
+
+**Two user decisions and two pre-deposit clarifications, both written into the BINDING specs** — not
+just the plan, because M0 deposits the comparators, so a rule living only in a plan would publish an
+ambiguous spec:
+- **Quantile method = `linear`** (M4R-09), in `notes/comparator_prespec.md` §2.2,
+  `notes/comparator_prespec_br.md` §2.2 and `notes/analysis_prespec.md` §1. Neither comparator named
+  one; with integer PR over 24–30 samples the interpolation rule alone can flip a `p90 − p10` verdict.
+  Evidence is a **self-contained** 30-sample window (`3 × 71`, `23 × 72`, `4 × 77` bpm): `linear`
+  5.100 / `lower` 6.000 / `midpoint` 5.500 → exclude, versus `higher` 5.000 / `nearest` 5.000 →
+  admit. Must be passed explicitly at every call site.
+- **Usable HR reference sample = `pr_bpm` finite ∧ `pi` finite ∧ `pi ≥ 0.5`** (M4R-11), in
+  `notes/comparator_prespec.md` §2.1 — **one set** for median, stationarity quantiles and coverage,
+  so there is exactly one denominator. Makes HR symmetric with BR's explicit finite-RRp counting.
+  Effect on existing data nil: all three CSVs have zero non-finite PR/PI/RR and zero PI < 0.5.
+- **M2 done-when #5 remains OPEN**, not superseded (M4R-03) — approximate alignment cannot produce a
+  frozen-comparator outcome, and no capture that can discharge it exists yet.
+
+**Failed / did not work, and why:**
+- **I inserted an untraceable number into documents bound for the public M0 deposit** (M4R-13). I
+  took "1993/4000 (≈ 50 %)" from a **scratchpad** script — uncommitted, to be deleted — and wrote it
+  into both comparators and the plan. Worse than untraceable: the frequency was **not a property of
+  the data** but of an assumption I never stated (`x = round(normal(72, σ=2.2))`; at σ=1.0 it
+  collapses, at σ=4.0 it changes again), so it read as an empirical finding while reporting my choice
+  of a simulation parameter. Removed entirely. The n=28 worked example I had also published was
+  **equally unreproducible** — spreads without the underlying samples — so it was replaced too, by a
+  fully self-contained example. This is the same class of error that forced the "MAE 0.16 bpm"
+  withdrawal.
+- **Three further findings were defects introduced while fixing earlier findings:** M4R-13 above;
+  M4R-07's leftover "3 s hop distractor" fixture, inherited from the discarded CSV architecture,
+  which would have tested nothing under the raw pipeline; and M4R-15's second half, where my fix
+  **broke the §4 manifest table** — inserting prose mid-table orphaned the Timebase, Integrity,
+  Provenance and Disposition rows, silently dropping four of six required groups from anything a
+  reader would see. Reads fine in a diff.
+- **My §2.2 inference was an overreach** (M4R-03): §7 forbids a *frozen scoring number* from
+  approximate alignment; I inferred a *descriptive* one was fine and that it closed M2 #5. It does not.
+- **My proposal to reject captures predating the filter fix was backwards** (M4R-08) — reprocessing
+  old raw ADC with the current scorer is M4's purpose; the reproducibility boundary is the M4 scoring
+  tree, not the capture commit.
+
+**Retired / no longer used:** the pilot MAE anchor 0.19/0.50/0.53 as an M4 regression target
+(Option A); `src/compare.py`'s PI-gated-*mean* comparator, superseded by the frozen median rule and
+not to be imported into the M4 path; the untraceable Monte-Carlo frequency claim in all documents.
+
+**Next:** **Stage 0 first** — extract `_run_dsp` → `src/window_pipeline.py` and
+`_run_warmup_selection` → `src/warmup_select.py`, both imported by `live_demo.py` and M4, plus the
+estimator adapter; behaviour-preserving, with the 1056-test suite as the regression guard and its own
+CLAUDE.md §6 review. Then M4 stages 1–7 (manifest → grid → raw reprocessing → gates → ledger →
+statistics → outputs/provenance), then the stage-8 development-mode smoke run on the 3 captures.
+Still open and unchanged: the "34 % of hops" paced-16 decoy figure, and M2 #5.

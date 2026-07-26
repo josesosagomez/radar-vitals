@@ -147,15 +147,22 @@ accuracy is not the problem, coverage is.
 Both gates are cleared. M4 is now the critical path: it produces every paper-grade number, and M0,
 M5, M8, M9 and M10 all wait on it.
 
-### 3.0 The plan exists; it needs cross-review before any code
+### 3.0 The plan is written AND cross-reviewed. **Implementation may begin.**
 
-**`plans/m4_offline_harness.md`** is written and is the build authority. Per CLAUDE.md §5.2 it must
-be **cross-model reviewed before implementation starts**. **The review loop is SET UP and ready to
-run** — coordination file `plans/m4_plan_cross_review.md`, Codex-side prompt to paste
-`plans/m4_plan_codex_review_prompt.md`, findings numbered `M4R-NN`. Same mechanics as the linalg
-loop: watch the coordination file, process each finding into `DEBATE COMMENTS` (verify →
-AGREE/DISAGREE/PARTIAL), apply agreed changes to the plan, 3-round cap, loop to `NO MORE COMMENTS`.
-**Implementation begins only after that.** The review has **not** been run yet.
+**`plans/m4_offline_harness.md` revision 6** is the build authority. Its cross-model review is
+**COMPLETE** (2026-07-26): **15 findings (M4R-01…15) over 8 rounds, 13 Blocking, all resolved, none
+disputed**; Codex signed off with `NO MORE COMMENTS` (`plans/m4_plan_cross_review.md` — status header
++ resolution table at the top of `DEBATE COMMENTS`).
+
+**Start at §5.1 Stage 0, not at the harness.** Stage 0 is the shared-callable refactor and it **gates
+every other stage**; it takes its own CLAUDE.md §6 correctness review. Reason: `_run_dsp` and
+`_run_warmup_selection` are **private functions in `scripts/live_demo.py`**, so without extraction M4
+must duplicate them — and the harness's central equality test would then compare M4 against a
+duplicate rather than against the production path (M4R-10).
+
+The loop produced **two user decisions** (M2 #5 stays open; `linear` percentile) and **two
+pre-deposit clarifications now written into the binding specs** (`linear`; the usable-HR-sample
+rule) — see §4.
 
 **The A/B regression-anchor decision is CLOSED: Option A** (user, 2026-07-26). The
 0.19/0.50/0.53 anchor is **retired** — no committed script produced it, it used a nearest-hop rule
@@ -201,6 +208,22 @@ first time**, closing **M2 done-when #5**.
 
 ## 4. Decisions that matter (do not silently reverse)
 
+- **The quantile method is `linear`** (user, 2026-07-26, M4R-09) — a **pre-deposit clarification now
+  written into `notes/comparator_prespec.md` §2.2, `notes/comparator_prespec_br.md` §2.2 and
+  `notes/analysis_prespec.md` §1**. Neither comparator named one, and with integer PR over 24–30
+  samples the interpolation rule alone can flip a `p90 − p10` verdict (self-contained worked example
+  in the HR comparator). **Pass it explicitly at every call site** — never rely on a library default.
+- **A usable HR reference sample is `pr_bpm` finite ∧ `pi` finite ∧ `pi ≥ 0.5`** (user, 2026-07-26,
+  M4R-11) — **one set** for the median, the stationarity quantiles and the coverage count, so there is
+  exactly one denominator. Written into `notes/comparator_prespec.md` §2.1. Makes HR symmetric with
+  BR's explicit finite-RRp counting.
+- **Stage 0 (the shared-callable refactor) precedes all M4 work** (M4R-10). `_run_dsp` and
+  `_run_warmup_selection` must move out of `scripts/live_demo.py` into `src/`, imported by both the
+  live path and M4. Without it, M4's equality test compares M4 to a duplicate of itself.
+- **Never put a number in a document bound for the M0 deposit unless it traces to a committed script**
+  (M4R-13, CLAUDE.md §3.1). A Monte-Carlo frequency was inserted into both comparators during this
+  loop and retracted: it reported an unstated simulation parameter, not the data. Self-contained
+  worked examples — data stated in full, inline — are the safe alternative.
 - **M4's regression anchor is Option A** (user, 2026-07-26): the pilot MAEs 0.19/0.50/0.53 are
   **retired, not reproduced**. M4 is validated on synthetic windows with hand-computable answers, and
   frozen-§7 outputs are canonical. Reconstructing the old nearest-hop rule was **declined** — it would
@@ -333,9 +356,9 @@ first time**, closing **M2 done-when #5**.
 |---|---|
 | Project rules (read first) | `CLAUDE.md` |
 | **Whole-project milestone plan** | `plans/implementation_plan.md` |
-| **M4 build plan (ACTIVE — needs cross-review before coding)** | `plans/m4_offline_harness.md` |
-| **M4 plan review — coordination file (loop set up, not yet run)** | `plans/m4_plan_cross_review.md` |
-| **M4 plan review — Codex-side prompt (paste into Codex)** | `plans/m4_plan_codex_review_prompt.md` |
+| **M4 build plan — rev 6, cross-review COMPLETE, ACTIVE build authority** | `plans/m4_offline_harness.md` |
+| **M4 plan review record — COMPLETE (M4R-01…15, 8 rounds)** | `plans/m4_plan_cross_review.md` |
+| M4 plan review — Codex-side prompt (loop closed) | `plans/m4_plan_codex_review_prompt.md` |
 | Thesis chapter source | `THIRD_CHAPTER.md` |
 | Journal paper planning | `JOURNAL_PAPER.md` |
 | Method, literature, algorithm spec | `notes/approach.md` |
