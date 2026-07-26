@@ -1,8 +1,11 @@
 # M4 — Offline evaluation harness (HR + BR): implementation plan
 
-> **Status: REVISION 5, under cross-model review** (`plans/m4_plan_cross_review.md`).
-> Revision 5 deletes the retracted Monte-Carlo **value itself** from §2.3 — restating it inside a
-> retraction note still published an unsupported number (M4R-13) — and makes the design-field
+> **Status: REVISION 6, under cross-model review** (`plans/m4_plan_cross_review.md`).
+> Revision 6 repairs the §4 manifest table: revision 5 inserted the executable contract mid-table,
+> which terminated it and orphaned the Timebase / Integrity / Provenance / Disposition rows. The
+> manifest is now one contiguous six-group table and the contract lives in **§4.1** (M4R-15).
+> Revision 5 deleted the retracted Monte-Carlo **value itself** from §2.3 — restating it inside a
+> retraction note still published an unsupported number (M4R-13) — and made the design-field
 > validation **executable**: `distance_m` finite and `0.8 ≤ d ≤ 1.4` inclusive, `posture == seated`,
 > with equality boundaries pinned in stage 1 (M4R-15).
 > Revision 4 added the frozen evidence-floor/precision **consequences** (M4R-12), removed the
@@ -146,11 +149,16 @@ A versioned manifest binds, **by path + SHA-256**, for each session:
 | group | fields |
 |---|---|
 | **Identity / estimands** | subject ID, arm (natural / paced), commanded paced rate (12/15/18), data role (§3.1), study admission disposition |
-| **Design / descriptive** | **`distance_m`** and **`posture`** (M4R-15), with an **executable** contract — see below. Distance is a required descriptive breakdown from M5 onward; posture is fixed *seated* by the estimand, so the manifest must let M4 **verify** design membership rather than assume it. Distance metadata accompanies every applicable per-subject result. **No post-hoc distance strata and no inferential per-distance claim.** Their absence is why the 4 exploratory captures cannot support distance reporting (`posture=None`, `distance_cm=None`). |
+| **Design / descriptive** | **`distance_m`** and **`posture`** (M4R-15), under the executable contract in §4.1. Distance is a required descriptive breakdown from M5 onward; posture is fixed *seated* by the estimand, so the manifest must let M4 **verify** design membership rather than assume it. Distance metadata accompanies every applicable per-subject result. **No post-hoc distance strata and no inferential per-distance claim.** Their absence is why the 4 exploratory captures cannot support distance reporting (`posture=None`, `distance_cm=None`). |
+| **Timebase** | `frame0_epoch` (synchronised PC UTC at receipt of frame 0), start **and** end PC↔phone clock offsets (§6: NTP-synced, max ±1 s, re-checked at session end; offset > ±1 s ⇒ resync and restart; **no offset may be chosen by optimising radar–reference agreement**) |
+| **Integrity** | raw checksum, truncation bytes, packet-loss statistics, **per-frame validity / zero-fill map** |
+| **Provenance** | capture config, capture-time git commit, Masimo CSV path + hash, commanded-rate schedule |
+| **Disposition** | intended duration vs early stop, retry / replacement status and reason (§6) |
 
-**Executable validation contract for the design fields** (M4R-15 — "validates allowed values and
-ranges" is not a contract; two implementations could accept different sessions while both claiming to
-follow this plan):
+### 4.1 Executable validation contract for the design fields
+
+*(M4R-15 — "scoring mode validates allowed values and ranges" is not a contract; two implementations
+could accept different sessions while both claiming to follow this plan.)*
 
 | field | canonical form | scoring-mode rule |
 |---|---|---|
@@ -159,10 +167,6 @@ follow this plan):
 
 Stage 1 pins the **equality boundaries** (0.8 and 1.4 accepted; 0.79 and 1.41 rejected) and the
 non-finite/missing cases.
-| **Timebase** | `frame0_epoch` (synchronised PC UTC at receipt of frame 0), start **and** end PC↔phone clock offsets (§6: NTP-synced, max ±1 s, re-checked at session end; offset > ±1 s ⇒ resync and restart; **no offset may be chosen by optimising radar–reference agreement**) |
-| **Integrity** | raw checksum, truncation bytes, packet-loss statistics, **per-frame validity / zero-fill map** |
-| **Provenance** | capture config, capture-time git commit, Masimo CSV path + hash, commanded-rate schedule |
-| **Disposition** | intended duration vs early stop, retry / replacement status and reason (§6) |
 
 **Frozen-scoring mode fails loudly on any missing required field.** A separate **development mode**
 exists for the 4 existing captures and is made **impossible to mistake for scoring output** (distinct

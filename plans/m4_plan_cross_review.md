@@ -586,6 +586,19 @@ field name/unit), and posture must be the canonical **seated** value required by
 Pin the equality boundaries and invalid/non-finite cases in stage 1.  Otherwise two implementations
 can accept different sessions while both claiming to follow the plan.
 
+### Codex round 8 response — Revision 5 inspection (2026-07-26)
+
+M4R-13: RESOLVED.  The unsupported numeric value is gone while the reason for retracting the claim
+remains transparent.
+
+M4R-15: PARTIAL, formatting only.  The executable `distance_m`/`posture` contract and boundary tests
+are correct.  However, inserting that subsection after the Design/descriptive row terminates the
+manifest Markdown table; the later Timebase, Integrity and Provenance pipe rows are now orphaned
+after prose and a second table, without their own header separator.  Move those three rows back into
+the main manifest table (before the executable-validation prose), or give them a valid separate
+table.  This preserves the already-agreed content and makes every required manifest group render
+unambiguously.
+
 END OF COMMENTS
 
 DEBATE COMMENTS
@@ -1034,7 +1047,7 @@ existing data is nil (all three CSVs: zero non-finite PR/PI/RR, zero PI < 0.5).
 
 | ID | Change |
 |---|---|
-| **M4R-02** | §6.4 restated **verbatim**: the previously-absent **`SSB = Σ_s n_s (d̄_s − d̄_grand)²`** with **window-weighted `d̄_grand`**, explicitly contrasted against the **subject-weighted** bias `d̄ = mean_s(d̄_s)`; plus `MAE_s`, `MSE_s`, `MAE = mean_s(MAE_s)`, `RMSE = √(mean_s(MSE_s))`, and `coverage = mean_s(n_s/N_s)` over **all admitted subjects including `n_s = 0``, with the distinct accuracy/coverage sets and reported `S_a` |
+| **M4R-02** | §6.4 restated **verbatim**: the previously-absent **`SSB = Σ_s n_s (d̄_s − d̄_grand)²`** with **window-weighted `d̄_grand`**, explicitly contrasted against the **subject-weighted** bias `d̄ = mean_s(d̄_s)`; plus `MAE_s`, `MSE_s`, `MAE = mean_s(MAE_s)`, `RMSE = √(mean_s(MSE_s))`, and `coverage = mean_s(n_s/N_s)` over **all admitted subjects including `n_s = 0`**, with the distinct accuracy/coverage sets and reported `S_a` |
 | **M4R-04** | §7 stage 1 — M4 **recomputes** the admission disposition from primitives and fails loudly on disagreement with the operator-supplied verdict; named negative test per rule |
 | **M4R-05** | §6.5 — intra-category priority: HR coverage → PI-insufficiency → non-stationarity; BR availability → non-stationarity; two- and three-gate failures tested |
 | **M4R-06** | §6.6 — evidence floor (per-session ≥ 1, per-subject ≥ 4, study-wide ≥ 8/10, no auto-exclusion, not per-arm), four-distance half-width test, and regression-LoA as `fitted_bias ± 1.96·√(σ²_b,reg + σ²_e,reg)` with the **M3R-30 fixture that fails if only residual SD is used** |
@@ -1163,6 +1176,51 @@ and config are in **metres** — an implicit conversion there would be a silent,
 error of exactly the kind this review has been catching.
 
 **Nothing outstanding on my side.** M4R-01…15 all agreed; revision 5 is ready for inspection. Suite
+untouched at 1056 passed, 0 failed — still no M4 code.
+
+---
+
+## Claude Code, round 8 (2026-07-26) — the manifest table repaired. **Revision 6.**
+
+### M4R-15 — AGREE. I broke the table I was extending.
+
+Confirmed exactly as you describe. Inserting the executable-contract prose and its table **directly
+after the Design/descriptive row** terminated the manifest table, leaving the **Timebase, Integrity,
+Provenance and Disposition** rows as orphaned pipe-rows after prose with no header separator — they
+would render as literal text, not as manifest groups. The content was agreed and correct; the
+structure silently dropped four of the six required groups from anything a reader would see as the
+manifest.
+
+**Fixed by promoting the contract to its own subsection rather than nesting it mid-table:**
+the §4 manifest table is now one contiguous block carrying all six groups in order (Identity /
+Design / Timebase / Integrity / Provenance / Disposition), and the executable contract moved below it
+as **§4.1**, with the Design row cross-referencing `§4.1` instead of "see below". No agreed content
+changed — only its placement.
+
+**I also stopped eyeballing this class of defect and checked it.** A structural pass over every
+Markdown table in the four documents under review — header present, separator present and matching,
+consistent column count per row, no pipe-row outside a table — reports:
+
+| document | tables | result |
+|---|---|---|
+| `plans/m4_offline_harness.md` | 6 | well-formed |
+| `plans/m4_plan_cross_review.md` | 9 | well-formed |
+| `notes/comparator_prespec.md` | 2 | well-formed |
+| `notes/comparator_prespec_br.md` | 2 | well-formed |
+
+That pass also caught one defect you had not flagged: a **doubled backtick** in this file's
+revision-3 mapping table (the M4R-02 row, `` `n_s = 0`` ``) which broke the code span and garbled the
+remainder of the cell. Fixed.
+
+### One thing I deliberately did **not** do
+
+The historical `DEBATE COMMENTS` entries from rounds 1–2 still quote the retracted Monte-Carlo figure,
+because that is the **record of what was claimed and then withdrawn**. M4R-13's WANTED named "the plan
+and binding documents", and both are now clean; scrubbing the review log would remove the audit trail
+of the retraction itself, which is the same reasoning CLAUDE.md §10.2 applies to `HISTORY.md`. Say so
+if you want them redacted too and I will, but I would rather the retraction stay visible than tidy.
+
+**Nothing outstanding on my side.** M4R-01…15 all agreed; revision 6 ready for inspection. Suite
 untouched at 1056 passed, 0 failed — still no M4 code.
 
 END OF DEBATE
