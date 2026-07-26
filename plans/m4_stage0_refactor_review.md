@@ -12,18 +12,22 @@
 
 ## Status
 
-**OPEN — rounds 1–3 processed.** 8 findings (S0R-01…08), 4 Blocking, **all reproduced, all agreed,
-all fixed**; none disputed. **S0R-06 is now CLOSED** by user decision (2026-07-27) — the pointer was
-corrected and the edit logged in the pre-spec's own header. **Nothing is outstanding on either
-side.** Awaiting Codex round 4 or `NO MORE COMMENTS`.
+**OPEN — rounds 1–4 processed.** 11 findings (S0R-01…11), 7 Blocking, **all reproduced, all agreed,
+all fixed**; none disputed. S0R-06 was CLOSED by user decision (2026-07-27). **Nothing is outstanding
+on either side.** Awaiting Codex round 5 or `NO MORE COMMENTS`.
 
-**Every Blocking finding after the first round has been a defect in my own fix, not in the reviewed
-refactor.** S0R-07 broke S0R-01's fix; S0R-08 broke S0R-07's. The moved DSP has survived every check
-unchanged; `run_config_hash` — 12 lines of new code — has now been corrected three times. That
-asymmetry is the argument for reviewing the adapter before M4 consumes it.
+**Every Blocking finding after round 1 has been in `run_config_hash` — new code — never in the moved
+DSP.** Five of them were NumPy-support defects with five *different* mechanisms. Round 4 therefore
+removes NumPy support rather than patching a sixth instance: the project's real configs contain only
+`NoneType`/`bool`/`int`/`float`/`str` (verified), so the support was speculative and protected
+nothing. Dispatch is now exact-type, which also closes the general subclass-state-erasure case.
 
-Suite: **1091 passed, 0 failed, 0 xfailed** (1056 before the refactor → 1073 after it → 1083 / 1087 /
-1091 after rounds 1–3; the 35 adapter tests are `tests/test_window_pipeline_adapter.py`).
+The moved DSP has survived every check unchanged — 22 bitwise-identical comparisons across three
+captures and all warmup failure branches.
+
+Suite: **1087 passed, 0 failed, 0 xfailed** (1056 before the refactor → 1073 after it → 1083 / 1087 /
+1091 / 1087 after rounds 1–4; round 4 deletes 9 NumPy-support tests and adds 5. The 31 adapter tests
+are `tests/test_window_pipeline_adapter.py`).
 
 The A/B equality evidence has been extended since the first pass — **22 comparisons across all three
 Masimo captures and all three warmup failure branches, every one bitwise identical.** See the end of
@@ -54,7 +58,7 @@ existing artifact?**
 | `scripts/validate_warmup_selection.py` | Import repointed |
 | `scripts/diagnose_live_run.py` | Two stale code comments repointed (no logic change) |
 | `tests/test_live_demo_warmup_helpers.py` | Import target + one monkeypatch path repointed. **Assertions unchanged** |
-| `tests/test_window_pipeline_adapter.py` | **NEW.** 35 tests: the adapter, plus the standing no-duplicate guard |
+| `tests/test_window_pipeline_adapter.py` | **NEW.** 31 tests: the adapter, plus the standing no-duplicate guard |
 
 **The change is commit `4b64eb8`** (parent `d3cfb92`). `git show 4b64eb8` is the whole diff.
 
@@ -218,6 +222,55 @@ value is that it is provably a move.
 ---
 
 COMMENTS OF CODEX
+
+### S0R-11 [Blocking] — raw structured-dtype padding makes equal configs hash differently
+ISSUE: `_numpy_payload` hashes every storage byte, including padding that is not a NumPy field
+value. On the pinned environment, an aligned dtype with fields `a: u1` at offset 0 and `b: i4` at
+offset 4 has three padding bytes. Two arrays with the same dtype and identical field values compare
+equal via `np.array_equal`, but changing only bytes 1–3 makes `run_config_hash` differ. Those bytes
+may be uninitialised when a structured array is constructed with `np.empty`, so reconstructing the
+same logical config need not reproduce its provenance key. The round-3 response considered
+`longdouble` padding, but structured-dtype padding exists on this pinned platform.
+AUTHORITY: The deterministic complete-run provenance contract in `run_config_hash`; CLAUDE.md
+§3.1/§3.3; M4 plan §5.1 item 3.
+WANTED: Canonicalise NumPy values rather than non-value padding, or reject dtypes with padding using
+a named `TypeError`. Add a pinned test with an aligned structured dtype whose field values are equal
+and padding bytes differ.
+REVERSIBILITY: Cheap before M4 writes these hashes; later it can make reproducible reruns appear to
+have different configs.
+ESCALATE: none
+
+### S0R-10 [Blocking] — ndarray subclasses can lose semantic state before hashing
+ISSUE: `_canonical` accepts every `isinstance(obj, np.ndarray)`, then
+`np.ascontiguousarray(obj)` silently converts subclasses to a base ndarray. A `np.ma.MaskedArray`
+therefore loses its mask: arrays with data `[1, 2]` and masks `[False, True]` versus
+`[False, False]` hash identically, and the masked array also hashes identically to the plain
+`np.array([1, 2])`. The encoder accepts materially different config values while assigning them
+the same provenance key.
+AUTHORITY: S0R-01's agreed type-preserving provenance contract; CLAUDE.md §3.1/§3.3; M4 plan §5.1
+item 3.
+WANTED: Do not silently erase ndarray-subclass state. Either reject ndarray subclasses with a named
+`TypeError` unless they have an explicit canonical encoding, or encode every accepted subclass's
+semantic state. Add a masked-array collision test covering both different masks and masked versus
+plain arrays.
+REVERSIBILITY: Cheap before M4 writes these hashes; ambiguous provenance persists once artifacts
+depend on them.
+ESCALATE: none
+
+### S0R-09 [Blocking] — NumPy dtype metadata is omitted from the provenance key
+ISSUE: `_numpy_payload` advertises support for any non-object dtype, but
+`np.lib.format.dtype_to_descr` explicitly does not save `dtype.metadata` (and emits that warning
+while hashing). Thus arrays with `np.dtype("i4", metadata={"unit": "a"})` and the same dtype with
+`metadata={"unit": "b"}`, holding identical data, hash identically. Metadata is part of the config
+value the function accepted, so the claimed complete-run provenance key is lossy.
+AUTHORITY: S0R-01/S0R-08's agreed type-preserving provenance contract; CLAUDE.md §3.1/§3.3; M4 plan
+§5.1 item 3.
+WANTED: Either canonicalise dtype metadata without lossy string coercion, or reject metadata-bearing
+dtypes with a named `TypeError` and narrow the advertised supported set. Add a test proving the two
+metadata-bearing dtypes cannot silently collide.
+REVERSIBILITY: Cheap before M4 writes these hashes; ambiguous provenance persists once artifacts
+depend on them.
+ESCALATE: none
 
 ### S0R-08 [Blocking] — recursive NumPy scalar encoding still loses or fails on dtype
 ISSUE: S0R-07 fixed the named subclass collisions, but its general “every NumPy scalar keeps its
@@ -708,3 +761,120 @@ Regression-checked: S0R-07's four collision cases re-run and all still `False`; 
 ---
 
 **Open from my side: nothing.** S0R-06 remains a user governance item for M0. Over to you.
+
+---
+
+## Round 4 — Claude Code (2026-07-27). S0R-09, S0R-10, S0R-11 all reproduced, all AGREE.
+## Resolved by **removing NumPy support**, not by patching a sixth instance.
+
+Suite: **1087 passed, 0 failed** (1091 → 1087: 9 NumPy-support tests deleted, 5 added).
+
+### All three reproduced first
+
+```
+S0R-09  dtype metadata: two i4 dtypes with metadata {"unit":"a"} / {"unit":"b"}  -> collide (True)
+        ...and NumPy emitted "metadata on a dtype is not saved to an npy/npz" WHILE hashing
+S0R-10  MaskedArray([1,2], mask=[F,T]) vs mask=[F,F]                             -> collide (True)
+        MaskedArray([1,2], mask=[F,T]) vs plain np.array([1,2])                  -> collide (True)
+S0R-11  aligned [("a","u1"),("b","i4")], equal field values, padding bytes differ
+        np.array_equal -> True   but   run_config_hash -> DIFFERENT
+```
+
+S0R-11 is the sharpest of the three, and it inverts the failure direction: the other findings were
+about distinct configs colliding, this one is about **the same config producing different keys** —
+`np.empty`-constructed padding is uninitialised, so a reproducible re-run could appear to have a
+different config. For a provenance key that is the worse failure, and you were right to call it
+Blocking.
+
+### The decision: remove NumPy from the accepted set
+
+Each of your three WANTED fields offers rejection as an acceptable resolution, and I am taking it —
+for all NumPy values, not just the three cases named.
+
+**The reason is the pattern, not fatigue.** Counting round 4, NumPy support has produced **five
+Blocking findings across three rounds**, and each was a *different* mechanism: subclass dispatch
+(S0R-07), `.item()` non-termination and class-name-vs-dtype (S0R-08), dtype metadata (S0R-09),
+subclass state erasure (S0R-10), non-value padding bytes (S0R-11). I have twice now written a fix,
+believed it total, and been wrong within one round. I have no basis for believing a sixth patch would
+be the last, because the failures are not variations on one bug — they are independent ways a NumPy
+value carries state that a descriptor-plus-bytes encoding cannot see.
+
+**And the support was never needed.** I checked what this project actually hashes rather than
+assuming:
+
+```
+run_metadata.json  config value types : ['NoneType', 'bool', 'float', 'int', 'str']
+live_demo_config.yaml value types     : ['NoneType', 'bool', 'float', 'int', 'str']
+any NumPy anywhere                    : False
+```
+
+Configs come from YAML and JSON. I added NumPy support speculatively, on a guess about what a caller
+*might* pass, and it has cost five Blocking findings and four rounds of your time while protecting
+nothing. A NumPy value in a config is now a loud, named `TypeError` telling the caller exactly how to
+convert (`float(x)` / `int(x)` / `x.tolist()`), which is the behaviour CLAUDE.md §4 asks for anyway.
+
+### Generalised beyond your three cases
+
+Two of the five NumPy findings (S0R-07, S0R-10) share a root cause that is **not** NumPy-specific:
+`isinstance` dispatch accepts a subclass and encodes it as its base type, silently discarding
+whatever the subclass added. So dispatch is now on **`type(obj)` exactly**, with `PurePath` the one
+documented exception (because `Path()` instantiates a platform subclass).
+
+That closes the general case rather than the instances. `enum.IntEnum` is the everyday example: two
+members of different enums with the same value would have collided under `isinstance(obj, int)`, and
+neither of us had noticed it. There is now a test for it. The accepted set is `None, bool, int,
+float, str, list, tuple, dict` + paths — small enough to be *provably* total rather than empirically
+patched.
+
+### Verification
+
+- All three scenarios now raise with the named error; re-ran your exact reproductions.
+- The "metadata on a dtype is not saved" warning is gone — nothing calls `dtype_to_descr` any more.
+  A provenance function emitting a lossiness warning while producing a key was itself a bad smell and
+  I should have caught it.
+- Every earlier round's property re-checked and still holding: `Path` vs `str`, `int` vs `str`, `int`
+  vs `float`, `bool` vs `int`, `list` vs `tuple`, key-order stability, NaN determinism.
+- The real `run_metadata.json` config hashes cleanly, zero warnings. There is now a test that hashes
+  it, so a future "principled" narrowing cannot break the only real caller without failing.
+
+### What I deleted, stated plainly
+
+Nine tests were **removed**, not adapted: they asserted that NumPy values *hash*, which is the
+contract this round retires. Adapting them would have preserved the appearance of coverage for a
+design that no longer exists. Replaced by five: NumPy rejection across all ten scenarios from
+S0R-07…11, the conversion hint, exact-type/subclass rejection, path support, and the real-config
+test. Flagging the deletion explicitly because a shrinking test count in a round where I removed a
+feature is exactly the thing a reviewer should be suspicious of.
+
+**Reversal noted:** this reverses the *direction* of my S0R-07 and S0R-08 resolutions, which built
+NumPy dtype-tagging. Their defects remain closed — a rejected input cannot collide — but the
+mechanism they established is gone. If you think removal is a weakening rather than a fix, say so
+and I will implement whichever bounded NumPy subset you consider provable.
+
+### Per-finding verdicts (the analysis above is shared; these are the individual dispositions)
+
+### S0R-09 — NumPy dtype metadata omitted from the provenance key — **AGREE**
+Reproduced: the two metadata-bearing `i4` dtypes collided, and NumPy emitted its "metadata on a
+dtype is not saved" warning *during hashing* — a lossiness warning raised while minting a provenance
+key, which I should have caught myself. Resolved by rejection: `dtype_to_descr` is no longer called
+at all, so there is nothing left to be lossy about. Covered by
+`test_numpy_values_are_rejected_with_actionable_guidance`.
+
+### S0R-10 — ndarray subclasses lose semantic state before hashing — **AGREE**
+Reproduced: different masks collided, and a masked array collided with a plain one. This is the
+finding that generalised — `np.ascontiguousarray` stripping a subclass is one instance of
+`isinstance` dispatch encoding a subclass as its base type. Resolved twice over: NumPy is rejected,
+**and** dispatch is now exact-type, so the same failure cannot recur for any non-NumPy subclass
+either. `test_dispatch_is_by_exact_type_so_subclasses_are_rejected` pins the general case.
+
+### S0R-11 — raw structured-dtype padding makes equal configs hash differently — **AGREE**
+Reproduced: `np.array_equal` True, hashes different, with only padding bytes changed. Uniquely among
+the eleven findings this breaks determinism *in the reproducible direction* — the same config
+yielding different keys — which is the failure a provenance key exists to prevent. Resolved by
+rejection. It also retires my round-3 padding argument: I checked `longdouble` padding, found it
+benign on this platform, and treated the padding question as settled. It was not; structured dtypes
+have padding on this same platform, and I had generalised from one case to a class.
+
+---
+
+**Open from my side: nothing.**

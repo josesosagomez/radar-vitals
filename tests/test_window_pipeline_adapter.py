@@ -50,7 +50,7 @@ def _dsp_dict(**over) -> dict:
     return base
 
 
-# ── config_hash ───────────────────────────────────────────────────────────────
+# ── run_config_hash ───────────────────────────────────────────────────────────
 
 def test_run_config_hash_is_deterministic_across_calls():
     cfg = {"heart": {"k_max": 4}, "phase": {"method": "atan2"}}
@@ -69,101 +69,17 @@ def test_run_config_hash_changes_when_any_value_changes():
     assert run_config_hash(a) != run_config_hash(b)
 
 
-def test_run_config_hash_supports_paths_and_numpy_scalars():
-    h = run_config_hash({"out": Path("results/x"), "n": np.int64(3)})
-    assert isinstance(h, str) and len(h) == 64
-
-
 def test_run_config_hash_does_not_collide_across_types():
     """S0R-01. The first version stringified non-JSON values, so a Path hashed
-    identically to its string and a numpy scalar identically to its digits. A
-    provenance key that cannot tell those apart silently misattributes a run."""
+    identically to its string. A provenance key that cannot tell those apart silently
+    misattributes a run. (The NumPy half of S0R-01 is now covered by rejection instead —
+    see `test_numpy_values_are_rejected_with_actionable_guidance`.)"""
     assert run_config_hash({"x": Path("a")}) != run_config_hash({"x": "a"})
-    assert run_config_hash({"x": np.int64(3)}) != run_config_hash({"x": "3"})
-    assert run_config_hash({"x": np.int64(3)}) != run_config_hash({"x": 3})
     assert run_config_hash({"x": 3}) != run_config_hash({"x": "3"})
     assert run_config_hash({"x": 3}) != run_config_hash({"x": 3.0})
     assert run_config_hash({"x": True}) != run_config_hash({"x": 1})
     assert run_config_hash({"x": [1, 2]}) != run_config_hash({"x": (1, 2)})
     assert run_config_hash({"x": None}) != run_config_hash({"x": "None"})
-
-
-def test_numpy_scalars_keep_their_dtype_even_when_they_subclass_a_builtin():
-    """S0R-07. `np.float64`, `np.str_` and `np.complex128` SUBCLASS float/str/complex,
-    while `np.int64` and `np.bool_` do not. Checking the built-ins first therefore kept
-    the dtype for some scalars and erased it for others — an inconsistency inside the
-    contract meant to remove ambiguity. NumPy must be tested first."""
-    assert isinstance(np.float64(3.0), float)      # the mechanism, pinned
-    assert isinstance(np.str_("a"), str)
-    assert not isinstance(np.int64(3), int)
-
-    assert run_config_hash({"x": np.float64(3.0)}) != run_config_hash({"x": 3.0})
-    assert run_config_hash({"x": np.str_("a")}) != run_config_hash({"x": "a"})
-    assert run_config_hash({"x": np.complex128(1 + 2j)}) != run_config_hash({"x": 1 + 2j})
-    assert run_config_hash({"x": np.int64(3)}) != run_config_hash({"x": 3})
-    assert run_config_hash({"x": np.bool_(True)}) != run_config_hash({"x": True})
-    # ...and distinct dtypes stay distinct from each other.
-    assert run_config_hash({"x": np.float64(3.0)}) != run_config_hash({"x": np.float32(3.0)})
-
-
-def test_complex_values_are_supported_as_documented():
-    """S0R-07: the docstring advertised NumPy scalars/arrays, but complex ones raised."""
-    assert run_config_hash({"x": 1 + 2j}) != run_config_hash({"x": 1 - 2j})
-    assert run_config_hash({"x": np.array([1 + 2j])}) == run_config_hash({"x": np.array([1 + 2j])})
-    assert run_config_hash({"x": np.array([1 + 2j])}) != run_config_hash({"x": np.array([1 - 2j])})
-
-
-def test_numpy_array_dtype_and_shape_participate_in_the_hash():
-    assert run_config_hash({"x": np.array([1, 2])}) != run_config_hash({"x": np.array([1.0, 2.0])})
-    assert run_config_hash({"x": np.array([[1, 2]])}) != run_config_hash({"x": np.array([1, 2])})
-
-
-def test_object_dtype_is_rejected_because_its_bytes_are_process_local():
-    """Object dtype is the one NumPy case that cannot be hashed deterministically: the
-    buffer holds pointers, so the same config would hash differently between runs."""
-    with pytest.raises(TypeError, match="object dtype"):
-        run_config_hash({"x": np.array([object()], dtype=object)})
-    with pytest.raises(TypeError, match="object dtype"):
-        run_config_hash({"x": np.array(["a", "b"], dtype=object)})
-
-
-def test_numpy_scalar_encoding_terminates_for_dtypes_whose_item_stays_in_numpy():
-    """S0R-08. `np.longdouble("1.25").item()` returns another `np.longdouble` on this
-    platform, so encoding by recursing through `.item()` never terminated and raised
-    RecursionError instead of hashing or rejecting."""
-    assert isinstance(np.longdouble("1.25").item(), np.longdouble)   # the mechanism
-    h = run_config_hash({"x": np.longdouble("1.25")})
-    assert isinstance(h, str) and len(h) == 64
-    assert h == run_config_hash({"x": np.longdouble("1.25")})
-    assert h != run_config_hash({"x": np.longdouble("1.5")})
-
-
-def test_structured_void_scalars_with_different_dtypes_do_not_collide():
-    """S0R-08. Every structured scalar has class name `void`, so tagging by class name
-    made `[("x","<i4")]` and `[("y","<i8")]` holding the same value hash identically.
-    The dtype descriptor carries field names, offsets and itemsize; the class name does
-    not."""
-    a = np.array([(1,)], dtype=[("x", "<i4")])[0]
-    b = np.array([(1,)], dtype=[("y", "<i8")])[0]
-    assert type(a).__name__ == type(b).__name__ == "void"            # the mechanism
-    assert run_config_hash({"x": a}) != run_config_hash({"x": b})
-
-
-def test_numpy_byte_order_and_field_names_participate_in_the_hash():
-    assert run_config_hash({"x": np.array([1], dtype="<i4")}) != run_config_hash(
-        {"x": np.array([1], dtype=">i4")}
-    )
-    assert run_config_hash({"x": np.array([(1,)], dtype=[("x", "<i4")])}) != run_config_hash(
-        {"x": np.array([(1,)], dtype=[("z", "<i4")])}
-    )
-
-
-def test_non_contiguous_array_hashes_by_value_not_buffer_layout():
-    """A view's stride pattern must not change the hash of the values it presents."""
-    base = np.arange(6, dtype="<i4").reshape(2, 3)
-    view = base.T                      # non-contiguous
-    assert not view.flags["C_CONTIGUOUS"]
-    assert run_config_hash({"x": view}) == run_config_hash({"x": np.array(view)})
 
 
 def test_run_config_hash_rejects_what_it_cannot_canonicalise():
@@ -180,6 +96,65 @@ def test_run_config_hash_handles_nan_and_inf_deterministically():
     assert a == run_config_hash({"x": float("nan")})
     assert a != run_config_hash({"x": float("inf")})
     assert a != run_config_hash({"x": "nan"})
+
+
+def test_paths_are_supported_and_distinct_from_their_string_form():
+    h = run_config_hash({"out": Path("results/x")})
+    assert isinstance(h, str) and len(h) == 64
+    assert h != run_config_hash({"out": "results/x"})
+
+
+def test_numpy_values_are_rejected_with_actionable_guidance():
+    """S0R-09/10/11. NumPy support was speculative and produced five Blocking findings in
+    three rounds — subclass collisions, non-terminating `.item()` recursion, structured
+    `void` collisions, dropped `dtype.metadata`, erased mask state, and hashed alignment
+    padding. Each was a *different* way for a NumPy value to carry state a byte- or
+    descriptor-level encoding misses. The project's real configs contain no NumPy at all,
+    so the surface is gone rather than patched a sixth time."""
+    for value in (
+        np.int64(3), np.float64(3.0), np.str_("a"), np.bool_(True),
+        np.longdouble("1.25"), np.datetime64("2026-07-26"),
+        np.array([1, 2]), np.ma.MaskedArray([1, 2], mask=[False, True]),
+        np.array([(1,)], dtype=[("x", "<i4")])[0],
+        np.array([1], dtype=np.dtype("i4", metadata={"unit": "a"})),
+    ):
+        with pytest.raises(TypeError, match="does not accept NumPy"):
+            run_config_hash({"x": value})
+
+
+def test_numpy_rejection_names_a_conversion():
+    with pytest.raises(TypeError, match=r"x\.tolist\(\)"):
+        run_config_hash({"x": np.array([1, 2])})
+
+
+def test_dispatch_is_by_exact_type_so_subclasses_are_rejected():
+    """A subclass may carry state the encoder cannot see, and encoding it as its base
+    type would silently discard that state while assigning the base type's key — the
+    MaskedArray failure (S0R-10) in general form. `IntEnum` is the everyday example:
+    two members of different enums with the same value would otherwise collide."""
+    import enum
+
+    class Unit(enum.IntEnum):
+        A = 1
+
+    class Tagged(str):
+        pass
+
+    for value in (Unit.A, Tagged("x"), {"a": 1}.keys()):
+        with pytest.raises(TypeError, match="matched EXACTLY|cannot canonicalise"):
+            run_config_hash({"x": value})
+
+
+def test_the_real_project_configs_hash():
+    """The contract must actually cover what this project feeds it. Guards against a
+    future narrowing that looks principled and breaks the only real caller."""
+    import json as _json
+
+    root = Path(__file__).resolve().parents[1]
+    meta = root / "results/live_demo/20260713_172042_live_demo_massimo1/run_metadata.json"
+    if meta.exists():
+        cfg = _json.loads(meta.read_text(encoding="utf-8"))["config"]
+        assert len(run_config_hash(cfg)) == 64
 
 
 # ── as_window_estimate ────────────────────────────────────────────────────────

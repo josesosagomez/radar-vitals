@@ -19,11 +19,10 @@ import collections
 import hashlib
 import json
 from dataclasses import dataclass, field, fields
-from pathlib import Path
+from pathlib import PurePath
 from typing import Any, Mapping, Protocol, runtime_checkable
 
 import numpy as np
-from numpy.lib import format as _npformat
 
 from .respiration import (
     extract_chest_phase,
@@ -206,116 +205,83 @@ class WindowEstimator(Protocol):
         cfg: dict,
     ) -> dict: ...
 
+#: Exactly what `_canonical` accepts, by EXACT type. Interpolated into every rejection
+#: message so the advertised set and the implementation cannot drift apart (S0R-07).
+_SUPPORTED_TYPES = "None, bool, int, float, str, list, tuple, dict, and pathlib paths"
 
-#: Exactly what `_canonical` accepts. Kept in the error message so the advertised
-#: support and the implementation cannot drift apart (S0R-07).
-_SUPPORTED_TYPES = (
-    "None, bool, int, float, complex, str, Path, list, tuple, mapping, and NumPy "
-    "scalars/arrays of any non-object dtype"
-)
-
-
-def _numpy_payload(x: "np.generic | np.ndarray") -> list:
-    """Encode a NumPy value as `[dtype_descriptor, raw_bytes_hex]`.
-
-    Deliberately does **not** recurse through `.item()` (S0R-08). Two reasons that
-    approach was wrong:
-
-    * `.item()` is not guaranteed to leave NumPy space — on this platform
-      `np.longdouble("1.25").item()` is another `np.longdouble`, so the recursion never
-      terminated and raised `RecursionError` instead of hashing or rejecting.
-    * the tag was `type(obj).__name__`, which is not the dtype. Structured `np.void`
-      scalars all share the name `void`, so `[("x", "<i4")]` and `[("y", "<i8")]`
-      holding the same value hashed identically.
-
-    The dtype descriptor is NumPy's own canonical serialisation (the one `.npy` files
-    use), so it distinguishes byte order, itemsize and structured field names/offsets.
-    Raw bytes then pin the value exactly, with no float formatting in the path.
-
-    **Declared consequence:** identity is by *dtype*, not by scalar class. Where a
-    platform makes two classes the same dtype — here `np.longdouble` is `float64` — the
-    two hash identically. That is correct: the dtype is what determines the value's
-    representation.
-
-    Object dtype is rejected: its bytes are process-local pointers, so hashing them
-    would produce a key that changes between runs of the same config.
-    """
-    if x.dtype.hasobject:
-        raise TypeError(
-            f"run_config_hash cannot canonicalise NumPy object dtype ({x.dtype!r}) "
-            "deterministically: its buffer holds process-local pointers, so the same "
-            f"config would hash differently between runs. Supported: {_SUPPORTED_TYPES}."
-        )
-    try:
-        descr = _npformat.dtype_to_descr(x.dtype)
-    except Exception as exc:                      # pragma: no cover - defensive
-        raise TypeError(
-            f"run_config_hash cannot canonicalise NumPy dtype {x.dtype!r} "
-            f"deterministically: {exc}. Supported: {_SUPPORTED_TYPES}."
-        ) from exc
-
-    def _plain(d):                                 # tuples -> lists, for stable JSON
-        if isinstance(d, (list, tuple)):
-            return [_plain(v) for v in d]
-        return d
-
-    return [_plain(descr), x.tobytes().hex()]
+#: Exact-type encoders for the atomic values. Keyed by `type(obj)`, never `isinstance`
+#: — see `_canonical` for why.
+_ATOMIC: dict = {
+    type(None): lambda o: ["null", ""],
+    bool: lambda o: ["bool", "1" if o else "0"],
+    int: lambda o: ["int", str(o)],            # str: exact at arbitrary precision
+    float: lambda o: ["float", repr(o)],       # repr round-trips exactly; nan/inf safe
+    str: lambda o: ["str", o],
+}
 
 
 def _canonical(obj: Any) -> list:
     """Encode a config value as an unambiguous `[type_tag, payload]` pair.
 
-    **Every** node is tagged, including plain strings, so no value can ever collide with
-    another value's encoding — the defect in the first version, which stringified
-    non-JSON values and so hashed `Path("a")` identically to `"a"` and `np.int64(3)`
-    identically to `"3"` (S0R-01).
+    **Every** node is tagged, including plain strings, so no value can collide with
+    another value's encoding (S0R-01).
 
-    **NumPy is checked before the Python built-ins, and the order matters** (S0R-07):
-    `np.float64`, `np.str_` and `np.complex128` *subclass* `float`/`str`/`complex`, while
-    `np.int64` and `np.bool_` do not. Testing the built-ins first therefore preserved the
-    dtype of some scalars and silently erased it for others — an inconsistency inside the
-    very contract that was meant to remove ambiguity. NumPy scalars now always keep their
-    dtype, encoded by `_numpy_payload` rather than by recursing through `.item()`
-    (S0R-08).
+    **Dispatch is on `type(obj)`, not `isinstance`.** A subclass may carry state this
+    encoder cannot see, and encoding it as its base type silently discards that state
+    while assigning it the base type's provenance key. That is not hypothetical: it is
+    what made `np.ma.MaskedArray` hash identically to a plain array with a different
+    mask (S0R-10), and what made NumPy scalars that subclass `float`/`str` lose their
+    dtype (S0R-07). Exact-type dispatch makes the accepted set *provable* rather than
+    empirically patched, which four rounds of findings showed the isinstance-based
+    version could not be.
 
-    Unsupported types raise rather than being coerced: a provenance key must never
-    quietly absorb something it cannot represent.
+    **NumPy is deliberately NOT supported.** It was added speculatively and produced
+    five Blocking review findings in three rounds — subclass collisions (S0R-07),
+    non-terminating `.item()` recursion and structured-`void` collisions (S0R-08),
+    dropped `dtype.metadata` (S0R-09), erased mask state (S0R-10), and hashed
+    uninitialised alignment padding, so equal configs could hash differently (S0R-11).
+    Every one was a *different* way for a NumPy value to carry state that a byte- or
+    descriptor-level encoding misses. Meanwhile the project's real configs
+    (`scripts/live_demo_config.yaml`, the `config` block of `run_metadata.json`) contain
+    only `NoneType`, `bool`, `int`, `float` and `str` — verified, not assumed. Supporting
+    NumPy bought nothing and cost correctness, so a NumPy value is now a loud, named
+    error telling the caller to convert it.
+
+    The single `isinstance` exception is `PurePath`, because `Path()` instantiates a
+    platform subclass; it is encoded by its POSIX string form, and path subclasses
+    carrying extra state are outside the contract.
     """
-    if obj is None:
-        return ["null", ""]
+    encode = _ATOMIC.get(type(obj))
+    if encode is not None:
+        return encode(obj)
 
-    # ── NumPy first: several NumPy scalars subclass Python built-ins (S0R-07) ──
-    if isinstance(obj, np.generic):
-        return ["np.scalar", _numpy_payload(obj)]
-    if isinstance(obj, np.ndarray):
-        # Contiguous copy first: a view's buffer order must not change the hash.
-        return ["ndarray", [list(obj.shape), _numpy_payload(np.ascontiguousarray(obj))]]
-
-    if isinstance(obj, bool):                      # before int — bool subclasses int
-        return ["bool", "1" if obj else "0"]
-    if isinstance(obj, int):
-        return ["int", str(obj)]                   # str: exact for arbitrary precision
-    if isinstance(obj, float):
-        return ["float", repr(obj)]                # repr round-trips exactly; nan/inf safe
-    if isinstance(obj, complex):
-        return ["complex", [repr(obj.real), repr(obj.imag)]]
-    if isinstance(obj, str):
-        return ["str", obj]
-    if isinstance(obj, Path):
-        return ["path", obj.as_posix()]
-    if isinstance(obj, tuple):
-        return ["tuple", [_canonical(v) for v in obj]]
-    if isinstance(obj, list):
+    t = type(obj)
+    if t is list:
         return ["list", [_canonical(v) for v in obj]]
-    if isinstance(obj, Mapping):
-        items = sorted(
+    if t is tuple:
+        return ["tuple", [_canonical(v) for v in obj]]
+    if t is dict:
+        return ["dict", sorted(
             ([_canonical(k), _canonical(v)] for k, v in obj.items()),
             key=lambda kv: json.dumps(kv[0], separators=(",", ":")),
+        )]
+    if isinstance(obj, PurePath):          # Path() returns a platform subclass
+        return ["path", obj.as_posix()]
+
+    if isinstance(obj, (np.generic, np.ndarray)):
+        raise TypeError(
+            f"run_config_hash does not accept NumPy values (got {t.__name__!r}, dtype "
+            f"{getattr(obj, 'dtype', '?')!r}). NumPy values can carry state that no "
+            "byte-level encoding captures reliably — dtype metadata, masks, alignment "
+            "padding — so hashing them risks either colliding distinct configs or "
+            "giving the same config different keys. Convert first: float(x) / int(x) / "
+            "bool(x) / str(x) for scalars, x.tolist() for arrays."
         )
-        return ["dict", items]
     raise TypeError(
-        f"run_config_hash cannot canonicalise {type(obj).__name__!r} deterministically "
-        f"(value: {obj!r}). Convert it first. Supported: {_SUPPORTED_TYPES}."
+        f"run_config_hash cannot canonicalise {t.__name__!r} deterministically "
+        f"(value: {obj!r}). Note the accepted types are matched EXACTLY, so a subclass "
+        "is rejected on purpose: it may carry state this encoder cannot see. Convert it "
+        f"to a supported type first. Supported: {_SUPPORTED_TYPES}."
     )
 
 
@@ -333,7 +299,13 @@ def run_config_hash(cfg: Mapping[str, Any]) -> str:
     behaviour. If M4 later needs "did these two runs use the same DSP?", that requires a
     separate, explicitly scoped hash — not a quiet redefinition of this one.
 
-    Raises `TypeError` on a value it cannot canonicalise, rather than coercing it.
+    Accepts, **by exact type**: `None`, `bool`, `int`, `float`, `str`, `list`, `tuple`,
+    `dict`, plus `pathlib` paths. That is the shape a YAML/JSON config actually has —
+    verified against `scripts/live_demo_config.yaml` and the `config` block of a real
+    `run_metadata.json`, both of which contain only `NoneType`/`bool`/`int`/`float`/`str`.
+    Everything else, **including all NumPy values**, raises `TypeError` with guidance
+    rather than being coerced. See `_canonical` for why that set is exact and why NumPy
+    support was removed.
     """
     canonical = json.dumps(_canonical(cfg), separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
