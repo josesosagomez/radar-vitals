@@ -79,7 +79,24 @@ behaviour, exactly as M3 requires. **PI is deliberately NOT a primary BR admissi
 | gate | rule | rationale |
 |---|---|---|
 | **Availability (coverage)** | require **≥ 24 finite `rr_bpm` samples** in the exact 30 s (600-frame) interval — i.e. ≥ 80 % of the 30 expected once-per-second values are present and non-missing | a median resting on a few samples is not a reference; counts *finite RRp*, not "samples surviving a PI gate". |
-| **Stationarity** | exclude if **`p90 − p10` of the finite RRp inside the window > 2.0 bpm** | see §2.3. |
+| **Stationarity** | exclude if **`p90 − p10` of the finite RRp inside the window > 2.0 bpm**, quantiles computed with the **`linear`** method (see below) | see §2.3. |
+
+> **PRE-DEPOSIT CLARIFICATION — quantile method (user decision 2026-07-26, M4 plan review M4R-09).**
+> Neither comparator named a quantile interpolation method. Measured over the admissible regime
+> (24–30 samples, nine NumPy methods), the method alone decides the **HR** 5.0 bpm gate on ≈ 50 % of
+> windows; **BR is far less affected** (8 / 4000 simulated windows straddle the 2.0 bpm threshold)
+> because RRp varies less within a window — but the ambiguity is **identical in kind**, and RRp's
+> coarse integer resolution means it can still land exactly on the threshold.
+>
+> **Resolved: `method="linear"`** — NumPy's default and the one already used by
+> `scripts/derive_br_comparator_evidence.py`, applied **identically to HR and BR** so the two
+> comparators cannot diverge on a numerical convention. Named and passed explicitly at every call
+> site — this gate, the §2.3 sensitivity table, and the `notes/analysis_prespec.md` §1 bootstrap CI
+> endpoints. Recorded identically in `notes/comparator_prespec.md` §2.2.
+>
+> **Status:** pre-deposit clarification (no public DOI yet), same class as M3R-40. It resolves an
+> ambiguity; it does not change the 2.0 bpm threshold, and §2.3's "exactly 2.0 bpm is retained"
+> boundary rule is unaffected.
 
 **On PI (why it is not a primary gate).** Masimo Corporation, *MightySat™ Rx Fingertip Pulse
 Oximeter — Home Care Manual*, © 2019 (revision code **0119**, i.e. January 2019), **p. 10**, states:

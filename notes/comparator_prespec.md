@@ -65,7 +65,25 @@ For a radar window ending at time `t`, the span is the **half-open** interval `[
 |---|---|---|
 | **PI** | drop samples with `Perfusion Index < 0.5` | CLAUDE.md §4 — low PI means the reference itself is untrustworthy. Never chase it. |
 | **Coverage** | require ≥ **80 %** of the 30 expected samples surviving the PI gate | a window scored on a handful of samples is not scored |
-| **Stationarity** | exclude if **`p90 − p10` of the PI-gated PR inside the window > 5.0 bpm** | see §2.3 |
+| **Stationarity** | exclude if **`p90 − p10` of the PI-gated PR inside the window > 5.0 bpm**, quantiles computed with the **`linear`** method (see below) | see §2.3 |
+
+> **PRE-DEPOSIT CLARIFICATION — quantile method (user decision 2026-07-26, M4 plan review M4R-09).**
+> This specification did not name a quantile interpolation method, and the omission is **not**
+> cosmetic. Over the admissible regime (24–30 integer-valued PR samples), NumPy's nine quantile
+> methods disagree about `p90 − p10` often enough that **the method alone decides this gate's verdict
+> on ≈ 50 % of windows** (measured: 1993 / 4000 simulated windows straddle the 5.0 bpm threshold).
+> Worked example at n = 28: `higher`/`nearest` give 5.000 (**admit**) while `linear` 5.300,
+> `midpoint` 5.500, `hazen` 5.700, `median_unbiased` 5.833, `lower`/`averaged_inverted_cdf` 6.000 and
+> `weibull` 6.100 all give **exclude**. Discretisation is the cause: integer PR over ~28 samples puts
+> p90/p10 between order statistics almost every time.
+>
+> **Resolved: `method="linear"`** — NumPy's default, and the method the existing design-evidence
+> scripts already used, so it minimises retro-inconsistency. It must be **named and passed explicitly
+> at every call site**, never left to a library default, in this gate, the §2.3 sensitivity table and
+> the `notes/analysis_prespec.md` §1 bootstrap CI endpoints.
+>
+> **Status:** a pre-deposit clarification, in the same class as the M3R-40 half-open harmonisation —
+> **no public DOI exists yet**. It resolves an ambiguity; it does not change a decided threshold.
 
 **Reference intended-use disposition (device-wide; user decision 2026-07-26, M3R-34).** The Masimo
 MightySat™ Rx *Home Care Manual* (`literature/ref_papers/lab-10168a_master.pdf`, p. 10) states the

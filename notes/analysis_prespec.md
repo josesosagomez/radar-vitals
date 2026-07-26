@@ -98,7 +98,12 @@ estimate — with no external formula to transcribe and no not-yet-existing impl
 **Recipe:** resample `S_a` subjects with replacement (a subject drawn twice enters as two distinct
 clusters with all its windows); on each resample recompute `μ_a`, `σ²_w = MSW`,
 `σ²_b = max((MSB − MSW)/n0, 0)` and `LoA_a = μ_a ± 1.96·√(σ²_b + σ²_w)`; **B = 10 000** replicates;
-fixed **seed = 20260725**; **two-sided 95 %** percentile interval (2.5 / 97.5), taken per endpoint. A
+fixed **seed = 20260725**; **two-sided 95 %** percentile interval (2.5 / 97.5), taken per endpoint,
+with the percentile computed by the **`linear`** method (**pre-deposit clarification, user decision
+2026-07-26, M4 plan review M4R-09** — the same convention now named in `notes/comparator_prespec.md`
+§2.2 and `notes/comparator_prespec_br.md` §2.2 for the `p90 − p10` stationarity gates; it must be
+passed explicitly at every call site, never left to a library default, so the CI endpoints and the
+admissibility gates cannot diverge on a numerical convention). A
 replicate whose resample **fails the estimability conditions above** (< 2 distinct subjects, or no
 subject with ≥ 2 windows) is **recorded and excluded**; if **> 5 % of replicates fail**, the arm
 reports **descriptive-only** (no population-LoA CI). The primary is subject to the **same estimability

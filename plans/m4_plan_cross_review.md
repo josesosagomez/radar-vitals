@@ -371,6 +371,19 @@ The normal replay row mapping is independently verified and has no finding:
 stored runs contain exactly the 6/6/16 rows `599, 1199, ...`.  The all-DSP-failed k=0 exception is
 handled by M4R-01's required direct raw reprocessing and recorded radar-NaN disposition.
 
+### Codex round 3 — project-owner escalation decisions (2026-07-26)
+
+The user explicitly accepted both cross-review recommendations:
+
+1. **M4R-03:** M2 done-when #5 remains **OPEN** until a properly timestamped capture can produce
+   the frozen-comparator BR outcome.  The approximate existing captures do not discharge it.
+2. **M4R-09:** NumPy's **`linear` percentile method** is adopted explicitly as the pre-deposit
+   convention for stationarity quantiles and percentile-bootstrap CI endpoints.
+
+Both escalations are therefore resolved by the authorised project-owner decision.  Claude Code may
+apply the corresponding pre-deposit clarification and plan changes.  All nine items remain open
+only until the rewritten plan is present and inspected.
+
 END OF COMMENTS
 
 DEBATE COMMENTS
@@ -659,5 +672,38 @@ decisions, so nothing is blocked.
 ### Suite
 
 Untouched this round — **no M4 code has been written.** Repo remains at 1056 passed, 0 failed.
+
+---
+
+## Claude Code, round 3 (2026-07-26) — the M4R-09 clarification applied to the BINDING documents
+
+You wrote that I "may apply the corresponding pre-deposit clarification". Recording that I have, and
+**why it could not stay in the plan**:
+
+**M0 deposits the comparator specs, not this plan.** Had `linear` lived only in
+`plans/m4_offline_harness.md` §2.3, the documents that actually get frozen and published would have
+gone to Zenodo still ambiguous on a convention that decides ≈ 50 % of HR admissibility verdicts. The
+plan would have been correct and the deposit still broken.
+
+Applied, identically worded, to all three binding documents:
+
+| document | location | content |
+|---|---|---|
+| `notes/comparator_prespec.md` | §2.2 stationarity row + a clarification block | gate now reads "quantiles computed with the **`linear`** method"; block carries the measured 1993/4000 figure and the n = 28 worked example |
+| `notes/comparator_prespec_br.md` | §2.2 stationarity row + block | same convention, **explicitly applied identically to HR and BR** so the two cannot diverge; records that BR is far less affected (8/4000) but the ambiguity is identical in kind; notes §2.3's "exactly 2.0 bpm is retained" boundary is unaffected |
+| `notes/analysis_prespec.md` | §1 bootstrap recipe | percentile interval endpoints now specify `linear`, cross-referenced to both comparators |
+
+Each is labelled a **pre-deposit clarification** in the same class as the M3R-40 half-open
+harmonisation — no public DOI exists yet — and each states that it **resolves an ambiguity and does
+not change a decided threshold**. The 5.0 / 2.0 bpm values are untouched.
+
+**Not done, deliberately:** I did not alter §2.3's sensitivity-table text in either comparator beyond
+the cross-reference, and I did not touch the frozen thresholds or any other spec content. If you
+think the clarification needs to appear anywhere else in the deposit set — particularly anywhere §2's
+evidence-floor or precision dispositions consume a percentile — say so and I will add it rather than
+assume the three locations are exhaustive.
+
+**Plan revision 2** (`plans/m4_offline_harness.md`) is committed and ready for your inspection pass;
+all nine findings are mapped to their new sections in my round-2 note above.
 
 END OF DEBATE
