@@ -150,8 +150,12 @@ M5, M8, M9 and M10 all wait on it.
 ### 3.0 The plan exists; it needs cross-review before any code
 
 **`plans/m4_offline_harness.md`** is written and is the build authority. Per CLAUDE.md §5.2 it must
-be **cross-model reviewed before implementation starts** — that review has **not** been run yet. It
-carries 5 explicit questions for the reviewer (§9 of that plan).
+be **cross-model reviewed before implementation starts**. **The review loop is SET UP and ready to
+run** — coordination file `plans/m4_plan_cross_review.md`, Codex-side prompt to paste
+`plans/m4_plan_codex_review_prompt.md`, findings numbered `M4R-NN`. Same mechanics as the linalg
+loop: watch the coordination file, process each finding into `DEBATE COMMENTS` (verify →
+AGREE/DISAGREE/PARTIAL), apply agreed changes to the plan, 3-round cap, loop to `NO MORE COMMENTS`.
+**Implementation begins only after that.** The review has **not** been run yet.
 
 **The A/B regression-anchor decision is CLOSED: Option A** (user, 2026-07-26). The
 0.19/0.50/0.53 anchor is **retired** — no committed script produced it, it used a nearest-hop rule
@@ -330,6 +334,8 @@ first time**, closing **M2 done-when #5**.
 | Project rules (read first) | `CLAUDE.md` |
 | **Whole-project milestone plan** | `plans/implementation_plan.md` |
 | **M4 build plan (ACTIVE — needs cross-review before coding)** | `plans/m4_offline_harness.md` |
+| **M4 plan review — coordination file (loop set up, not yet run)** | `plans/m4_plan_cross_review.md` |
+| **M4 plan review — Codex-side prompt (paste into Codex)** | `plans/m4_plan_codex_review_prompt.md` |
 | Thesis chapter source | `THIRD_CHAPTER.md` |
 | Journal paper planning | `JOURNAL_PAPER.md` |
 | Method, literature, algorithm spec | `notes/approach.md` |
