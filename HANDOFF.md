@@ -168,7 +168,7 @@ Reason the stage existed: while those were **private functions in a script**, M4
 them, and the harness's central equality test would then have compared M4 against a duplicate rather
 than the production path (M4R-10).
 
-Its review (`plans/m4_stage0_refactor_review.md`) has run **10 Codex passes / 9 response rounds, 20
+Its review (`plans/m4_stage0_refactor_review.md`) has run **11 Codex passes / 10 response rounds, 20
 findings, 11 Blocking, all resolved, none disputed**. **Not one finding was in the moved DSP** — all
 11 Blocking findings were in the new estimator-adapter code: **9 in `run_config_hash`** and **2 in
 `as_window_estimate`**. The extraction is proven behaviour-identical to `d3cfb92` by **22

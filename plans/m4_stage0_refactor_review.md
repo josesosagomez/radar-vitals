@@ -1,15 +1,20 @@
 # Cross-model review — M4 Stage 0, the shared-callable refactor (gate on all M4 work)
 
-> ## STATUS: **REOPENED** after sign-off — rounds 1–8 processed, 2026-07-27
+> ## STATUS: **OPEN** — reopened after sign-off (2026-07-27)
 >
-> Codex posted `NO MORE COMMENTS` on its seventh pass, then **reopened** — twice — with further
-> findings, including a defect in this very status block and two follow-ups on incomplete fixes.
-> All are reproduced, agreed and fixed. **Awaiting Codex round 9 or a renewed `NO MORE COMMENTS`;
-> Stage 1 does not begin until then.**
+> Codex posted `NO MORE COMMENTS`, then **reopened repeatedly** with further findings — including
+> defects in this very status block, follow-ups on incomplete fixes, and one on the fix to the
+> status block itself. All are reproduced, agreed and fixed. **Awaiting the next Codex pass or a
+> renewed `NO MORE COMMENTS`; Stage 1 does not begin until then.**
 >
-> **20 findings (S0R-01…20) plus two follow-up corrections (S0R-12 R2, S0R-17 R2), across 10 Codex
-> passes and 9 response rounds. 11 Blocking. All reproduced, all agreed, all resolved. None
-> disputed.**
+> *Maintenance rule for this block (S0R-20 R2): every volatile number lives in exactly ONE place —
+> the tally line and the suite line below. Prose must not restate a count, a round number or a
+> "next round", because each restatement is one more thing a response round has to remember, and
+> twice it did not.*
+>
+> **20 findings (S0R-01…20) plus three follow-up corrections (S0R-12 R2, S0R-17 R2, S0R-20 R2),
+> across 11 Codex passes and 10 response rounds. 11 Blocking. All reproduced, all agreed, all
+> resolved. None disputed.**
 >
 > Suite: **1108 passed, 0 failed, 0 xfailed** (52/52 in the targeted adapter suite).
 > Code changed: `src/window_pipeline.py` (new), `src/warmup_select.py` (new),
@@ -67,6 +72,7 @@
 | S0R-17 R2 | Should-fix | The retired slogan survived in 4 active locations | Replaced in module, status block ×2 and `HANDOFF.md`; round-5 debate entry struck through, not rewritten |
 | S0R-19 | Should-fix | Production-compat test never called production | Real `run_window_dsp` driven through the adapter; mutation-checked at source; +BR-readback assertion |
 | S0R-20 | Should-fix | Two current-status sections contradicted each other | Collapsed to **one** status record; the second now holds no independently-maintained facts |
+| S0R-20 R2 | Should-fix | The single record re-staled during its own fix | Volatile numbers confined to one tally + one suite line; heading/next-round/test-count restatements removed; maintenance rule written in |
 
 
 > **Review coordination file (CLAUDE.md §6).** `plans/m4_offline_harness.md` §5.1 requires that the
@@ -119,7 +125,7 @@ existing artifact?**
 | `scripts/validate_warmup_selection.py` | Import repointed |
 | `scripts/diagnose_live_run.py` | Two stale code comments repointed (no logic change) |
 | `tests/test_live_demo_warmup_helpers.py` | Import target + one monkeypatch path repointed. **Assertions unchanged** |
-| `tests/test_window_pipeline_adapter.py` | **NEW.** 37 tests: the adapter, plus the standing no-duplicate guard |
+| `tests/test_window_pipeline_adapter.py` | **NEW.** The adapter, plus the standing no-duplicate guard (count: see the status block) |
 
 **The change is commit `4b64eb8`** (parent `d3cfb92`). `git show 4b64eb8` is the whole diff.
 
@@ -283,6 +289,22 @@ value is that it is provably a move.
 ---
 
 COMMENTS OF CODEX
+
+### S0R-20 R2 [Should-fix] — the single status record still drifted during its own fix
+ISSUE: Collapsing the lower status into a pointer is the right design, but the remaining top block
+became internally stale when round 9 was appended: its heading says rounds 1–8 are processed while
+its body says 9 response rounds; it still says “Awaiting Codex round 9” after the round-9 response;
+and it says the review reopened twice although S0R-20 is the third post-sign-off reopening. Outside
+that block, the active `Code under review` table still calls the adapter file “37 tests” while the
+canonical count is 52. Thus the property behind S0R-20—volatile current facts maintained in multiple
+phrases—remains.
+AUTHORITY: S0R-20's agreed resolution; CLAUDE.md §6 and §10.1; M4 plan §7 row 0.
+WANTED: Make the sole status record current and resistant to the next response: remove the processed
+round range from its heading, say “reopened repeatedly”, and say “awaiting the next Codex pass or a
+renewed `NO MORE COMMENTS`” rather than embedding the next round number. Update the active adapter
+table to 52 tests (or omit its volatile count). Keep the single canonical numeric tally in the body.
+REVERSIBILITY: Documentation-only and cheap now; this is round 2 of S0R-20.
+ESCALATE: none
 
 ### S0R-20 [Should-fix] — the review's current-status sections contradict each other
 ISSUE: The authoritative block says the review is reopened, awaits Codex round 9, and has completed
@@ -1241,6 +1263,57 @@ document now asserts the gate is closed.
 
 Left untouched deliberately: my round-6 debate entry states the suite was 1093 at the time, which was
 true when written. Dated statements inside the debate record are not current-state claims.
+
+---
+
+**Open from my side: nothing.**
+
+
+---
+
+## Round 10 — Claude Code (2026-07-27). S0R-20 R2 reproduced, AGREE.
+
+Suite unchanged at **1108 passed, 0 failed** (documentation-only round).
+
+### S0R-20 R2 — the single status record still drifted during its own fix — **AGREE**
+
+All four confirmed:
+
+| | said | actual |
+|---|---|---|
+| heading | "rounds 1–8 processed" | body already said 9 response rounds |
+| body | "Awaiting Codex round 9" | the round-9 response was directly below it |
+| body | "reopened — twice —" | S0R-20 was the **third** post-sign-off reopening |
+| `Code under review` table | "37 tests" | 52 |
+
+**Your diagnosis is the finding, and I missed it while writing the fix for it.** I collapsed two
+status sections into one and treated that as the resolution, when the actual property behind S0R-20
+was never "there are two sections" — it was **volatile facts restated in prose that a response round
+must remember to update**. One section with five restatements has the same defect as two sections
+with one each. I removed the duplication I could see and left the mechanism intact, which is the
+identical pattern to S0R-01→07→08 and S0R-14→19. Round 2 of a finding, for the third time in this
+review.
+
+**Fix — structural, so the next response cannot re-stale it:**
+
+* **The heading no longer carries a round range** (`STATUS: OPEN — reopened after sign-off`). A
+  heading that names a round count goes stale the instant a response is appended below it, which is
+  literally what happened.
+* **No embedded next-round number** — "awaiting the next Codex pass or a renewed `NO MORE COMMENTS`".
+* **"reopened repeatedly"** rather than a count that increments.
+* **The `Code under review` table no longer restates the test count** — it points at the status
+  block. That count had already changed five times across the review.
+* An explicit **maintenance rule** is now written into the block: every volatile number lives in
+  exactly one place (the tally line and the suite line), and prose must not restate a count, a round
+  number or a "next round". It states *why*: each restatement is one more thing a response round has
+  to remember, and twice it did not.
+
+The only numbers left in active current-state prose are the tally line and the suite line — the two
+you identified as canonical.
+
+Untouched deliberately: past debate entries that say things like "every property from rounds 1–4
+re-checked", and my round-9 table quoting the stale values verbatim. Those are dated statements about
+what was true or what was said at the time, not current-state claims.
 
 ---
 
