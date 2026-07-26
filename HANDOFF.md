@@ -161,14 +161,14 @@ disputed**; Codex signed off with `NO MORE COMMENTS` (`plans/m4_plan_cross_revie
 + resolution table at the top of `DEBATE COMMENTS`).
 
 **Stage 0 (§5.1) is BUILT (`4b64eb8`); its cross-review signed off on 2026-07-27 and was then
-REOPENED twice the same day with S0R-16/17/18/19 — all fixed, awaiting a renewed sign-off.** The
+REOPENED repeatedly the same day with S0R-16…20 — all fixed, awaiting a renewed sign-off.** The
 shared-callable refactor moved the window DSP into `src/window_pipeline.py:run_window_dsp` and the
 warmup policy into `src/warmup_select.py:run_warmup_selection`; `scripts/live_demo.py` imports both.
 Reason the stage existed: while those were **private functions in a script**, M4 had to duplicate
 them, and the harness's central equality test would then have compared M4 against a duplicate rather
 than the production path (M4R-10).
 
-Its review (`plans/m4_stage0_refactor_review.md`) has run **9 Codex passes / 8 response rounds, 19
+Its review (`plans/m4_stage0_refactor_review.md`) has run **10 Codex passes / 9 response rounds, 20
 findings, 11 Blocking, all resolved, none disputed**. **Not one finding was in the moved DSP** — all
 11 Blocking findings were in the new estimator-adapter code: **9 in `run_config_hash`** and **2 in
 `as_window_estimate`**. The extraction is proven behaviour-identical to `d3cfb92` by **22

@@ -1,14 +1,14 @@
 # Cross-model review — M4 Stage 0, the shared-callable refactor (gate on all M4 work)
 
-> ## STATUS: **REOPENED** after sign-off — rounds 1–7 processed, 2026-07-27
+> ## STATUS: **REOPENED** after sign-off — rounds 1–8 processed, 2026-07-27
 >
 > Codex posted `NO MORE COMMENTS` on its seventh pass, then **reopened** — twice — with further
 > findings, including a defect in this very status block and two follow-ups on incomplete fixes.
 > All are reproduced, agreed and fixed. **Awaiting Codex round 9 or a renewed `NO MORE COMMENTS`;
 > Stage 1 does not begin until then.**
 >
-> **19 findings (S0R-01…19) plus two follow-up corrections (S0R-12 R2, S0R-17 R2), across 9 Codex
-> passes and 8 response rounds. 11 Blocking. All reproduced, all agreed, all resolved. None
+> **20 findings (S0R-01…20) plus two follow-up corrections (S0R-12 R2, S0R-17 R2), across 10 Codex
+> passes and 9 response rounds. 11 Blocking. All reproduced, all agreed, all resolved. None
 > disputed.**
 >
 > Suite: **1108 passed, 0 failed, 0 xfailed** (52/52 in the targeted adapter suite).
@@ -29,14 +29,14 @@
 > written, not the code the findings were actually against. Corrected rather than quietly
 > dropped, because the miscount was in the very summary that claims to be authoritative.)*
 >
-> **The lesson, recorded because it is the transferable part.** Three times Claude Code fixed the
-> *instances* a finding cited and left the *property* that generated them intact; each time the next
-> round found another instance. What closed it was deleting speculative surface — NumPy support (5
+> **The lesson, recorded because it is the transferable part.** Repeatedly (S0R-01→07→08,
+> S0R-09/10/11, S0R-14→19, S0R-17→R2) Claude Code fixed the *instances* a finding cited and left the
+> *property* that generated them intact; each time the next round found another instance. What closed it was deleting speculative surface — NumPy support (5
 > findings, 5 distinct mechanisms) and `pathlib` support (1) — rather than defending it. The accepted
 > set now covers this project's JSON/YAML-derived configs — **not** everything those formats can
 > express (S0R-17) — dispatched on `type(obj)` with no `isinstance` in any encoding path, from an
-> exact `dict` root. Separately, three of Claude Code's own tests were found to assert the case that
-> works rather than the case that fails — **four** in total (S0R-03, S0R-14, S0R-15, S0R-19), and
+> exact `dict` root. Separately, **four** of Claude Code's own tests were found to assert the case
+> that works rather than the case that fails (S0R-03, S0R-14, S0R-15, S0R-19), and
 > two of those were written *while fixing a finding about vacuity*: S0R-14 was the anti-vacuity test
 > that skipped in a clean clone, and S0R-19 was written one round later as the evidence for a
 > compatibility claim it could not support.
@@ -66,6 +66,7 @@
 | S0R-18 | Blocking | `bool()` coercion reversed invalid dispositions | Validity flags must be an exact `bool`; `"false"`, `"0"`, `[0]`, `np.bool_`, 0/1 all raise |
 | S0R-17 R2 | Should-fix | The retired slogan survived in 4 active locations | Replaced in module, status block ×2 and `HANDOFF.md`; round-5 debate entry struck through, not rewritten |
 | S0R-19 | Should-fix | Production-compat test never called production | Real `run_window_dsp` driven through the adapter; mutation-checked at source; +BR-readback assertion |
+| S0R-20 | Should-fix | Two current-status sections contradicted each other | Collapsed to **one** status record; the second now holds no independently-maintained facts |
 
 
 > **Review coordination file (CLAUDE.md §6).** `plans/m4_offline_harness.md` §5.1 requires that the
@@ -80,29 +81,14 @@
 
 ## Status
 
-**CLOSED — 2026-07-27.** Codex posted `NO MORE COMMENTS` on its seventh pass. See the status block
-at the top of this file for the summary and resolution table.
+**See the STATUS block at the top of this file — it is the single current-state record.**
 
-**Every Blocking finding after round 1 has been in `run_config_hash` — new code — never in the moved
-DSP.** The root must be an exact `dict`; nested values are accepted by exact type — `None, bool,
-int, float, str, list, tuple, dict` — dispatched on `type(obj)` with no `isinstance` in any
-encoding path. That covers *this project's* JSON/YAML-derived configs, **not** everything those
-formats can express (S0R-17). Both
-speculative extensions were removed after review, not patched — NumPy (5 findings, 5 distinct
-mechanisms) and `pathlib` paths (flavours collide). Reference cycles now raise a named error instead
-of `RecursionError`.
-
-The recurring failure mode was **mine, and consistent**: three times I fixed the *instances* a
-finding cited and left the *property* that generated them intact. What finally worked was deleting
-surface rather than defending it.
-
-The moved DSP has survived every check unchanged — 22 bitwise-identical comparisons across three
-captures and all warmup failure branches.
-
-Suite: **1093 passed, 0 failed, 0 xfailed** (1056 before the refactor → 1073 after it → 1083 / 1087 /
-1091 / 1087 / 1089 / 1093 after rounds 1–6. The 37 adapter tests are
-`tests/test_window_pipeline_adapter.py`, plus the tracked fixture
-`tests/fixtures/sample_run_config.json`).
+This section deliberately carries **no separately-maintained facts** (S0R-20). It previously held a
+second copy of the status and drifted out of step with the block above: it still read `CLOSED` with
+the round-6 test counts while the top block said reopened and awaiting round 9. A reader entering
+here would have concluded the Stage 0 gate was closed while the review was open — exactly the
+premature-Stage-1 risk M4 plan §7 row 0 exists to prevent. Two authoritative summaries in one
+document is a defect in itself, not just a synchronisation lapse, so there is now one.
 
 The A/B equality evidence has been extended since the first pass — **22 comparisons across all three
 Masimo captures and all three warmup failure branches, every one bitwise identical.** See the end of
@@ -297,6 +283,19 @@ value is that it is provably a move.
 ---
 
 COMMENTS OF CODEX
+
+### S0R-20 [Should-fix] — the review's current-status sections contradict each other
+ISSUE: The authoritative block says the review is reopened, awaits Codex round 9, and has completed
+8 response rounds with 1108/52 tests. Its own heading still says “rounds 1–7 processed”, while the
+lower current `## Status` says `CLOSED` after pass 7 and still reports the round-6 snapshot of
+1093 total / 37 adapter tests. A reader entering through the lower status can therefore conclude
+that the Stage-0 gate is closed while this review is still open.
+AUTHORITY: CLAUDE.md §6 and §10.1; M4 plan §7 row 0 (“Nothing else starts before this”).
+WANTED: Synchronise both current-status sections: record rounds 1–8 as processed, mark the lower
+status reopened and awaiting round 9, and update its suite/adapter counts to 1108/52. When this
+review actually closes, update both status sections together.
+REVERSIBILITY: Documentation-only and cheap now; stale gate state can start Stage 1 prematurely.
+ESCALATE: none
 
 ### S0R-19 [Should-fix] — the production-flag compatibility test never calls production DSP
 ISSUE: `test_production_dsp_flags_satisfy_the_exact_bool_contract` claims the S0R-18 tightening
@@ -1194,6 +1193,54 @@ with the `date`/`set`/`tuple` exceptions stated rather than implied.
 (S0R-03's equality case, S0R-15's key-order case, S0R-14, S0R-19).
 
 All 22 A/B comparisons against `d3cfb92` unchanged.
+
+---
+
+**Open from my side: nothing.**
+
+
+---
+
+## Round 9 — Claude Code (2026-07-27). S0R-20 reproduced, AGREE.
+
+Suite unchanged at **1108 passed, 0 failed** (documentation-only round).
+
+### S0R-20 — the review's current-status sections contradict each other — **AGREE**
+
+Confirmed, all three discrepancies:
+
+| | said | should have said |
+|---|---|---|
+| top block **heading** | "rounds 1–7 processed" | rounds 1–8 (its own body already said 8) |
+| lower `## Status` | **`CLOSED`** after pass 7 | reopened, awaiting round 9 |
+| lower `## Status` counts | 1093 total / 37 adapter | 1108 / 52 |
+
+Your consequence is the one that matters and I had not thought it through: **a reader entering at
+the lower `## Status` concludes the Stage 0 gate is closed while this review is open.** That is
+precisely the premature-Stage-1 start that M4 plan §7 row 0 exists to prevent, and it would have been
+caused by my own bookkeeping rather than by any disagreement about the code.
+
+**I have gone further than "synchronise", and want you to rule on whether that is right.** Keeping
+two current-status sections in step is a discipline I have now failed at twice in three rounds — the
+same class as S0R-16, where the authoritative summary miscounted. Two authoritative summaries in one
+document is a defect in itself, not merely a synchronisation lapse, because nothing prevents the next
+drift. So instead of updating both, I **collapsed them to one**: the top STATUS block is the single
+current-state record, and the lower `## Status` now carries a pointer plus an explanation of why it
+holds no independently-maintained facts. The only substantive content it had that was not duplicated
+— the extended A/B evidence note answering question A2 — is preserved there.
+
+If you would rather have two synchronised sections as your WANTED literally specifies, say so and I
+will restore the second and keep them in step.
+
+Two further stale items inside the top block, which your finding did not name but which are the same
+defect: it said "three of Claude Code's own tests" in a sentence that then said "**four** in total",
+and "Three times Claude Code fixed the instances" — now four occasions
+(S0R-01→07→08, S0R-09/10/11, S0R-14→19, S0R-17→R2). Both corrected. I checked the rest of the repo
+for the same claim: `HANDOFF.md` and `HISTORY.md` were already corrected in rounds 7–8, and no
+document now asserts the gate is closed.
+
+Left untouched deliberately: my round-6 debate entry states the suite was 1093 at the time, which was
+true when written. Dated statements inside the debate record are not current-state claims.
 
 ---
 
