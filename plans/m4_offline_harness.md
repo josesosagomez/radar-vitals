@@ -1,9 +1,12 @@
 # M4 — Offline evaluation harness (HR + BR): implementation plan
 
-> **Status: REVISION 2, under cross-model review** (`plans/m4_plan_cross_review.md`).
-> Revision 1 drew **9 Blocking findings (M4R-01…09), all agreed, none disputed** — including two
-> architecture errors. This revision rewrites §§2–8 against them. Written 2026-07-26.
-> Both M4 gates (M3, linalg review) are cleared. **No M4 code exists yet.**
+> **Status: REVISION 3, under cross-model review** (`plans/m4_plan_cross_review.md`).
+> Revision 1 drew 9 Blocking findings; revision 2 resolved M4R-01/03/08/09 and drew four PARTIALs
+> plus **M4R-10 (Blocking)** and **M4R-11**. **All 11 findings agreed, none disputed.**
+> Revision 3 adds: the §5.1 shared-callable refactor (the equality test in revision 2 was circular),
+> the complete §6.4 equations including the previously-undefined `SSB`, the §6.5 intra-category
+> priority, testable §6.6 definitions, the rebuilt §7.1 fixture 2, and §2.4's usable-sample rule.
+> Written 2026-07-26. Both M4 gates (M3, linalg review) are cleared. **No M4 code exists yet.**
 
 ---
 
@@ -77,6 +80,20 @@ explicitly at every call site** — never left to a library default — in stati
 sensitivity tables and bootstrap CI endpoints. A boundary fixture on which ≥ 2 standard methods
 differ is mandatory (§6.2).
 
+### 2.4 The usable HR reference sample — **finite PR ∧ finite PI ∧ PI ≥ 0.5** (user, 2026-07-26)
+
+*(New, per M4R-11.)* The HR comparator said "PI-gated PR samples" and "≥ 80 % … surviving the PI
+gate", which did not settle whether a row with acceptable PI but **non-finite `pr_bpm`** counts
+toward the 24. Reachable: `src/masimo.py` parses with `pd.to_numeric(..., errors="coerce")`.
+
+**Resolved:** a row is usable **iff** `pr_bpm` finite **∧** `pi` finite **∧** `pi ≥ 0.5`. **One set
+for median, stationarity quantiles and coverage** — exactly one denominator. Finite-PR and
+PI-qualified counts are reported **separately** per window, so "missing data" and "low perfusion" stay
+distinguishable in the ledger. Makes HR symmetric with BR's explicit finite-RRp counting.
+
+**Effect on existing data: none** — all three CSVs have zero non-finite PR/PI/RR and zero PI < 0.5
+(n = 247 / 272 / 574). Recorded as a pre-deposit clarification in `notes/comparator_prespec.md` §2.1.
+
 ---
 
 ## 3. Inputs — raw ADC, bound by a manifest
@@ -143,13 +160,43 @@ src/m4/scoring.py      NEW. Pure, no I/O. Subject/arm structures (NOT generic pa
                          subject-weighted MAE/RMSE/bias/coverage, ANOVA LoA, cluster bootstrap
 scripts/run_m4_harness.py  NEW. Entry point: manifest -> results/<experiment>/<timestamp>/
 src/masimo.py          REUSE unchanged.
-src/vitals.py, src/respiration.py  REUSE — the SAME DSP the live path calls. M4 must not fork it.
+src/window_pipeline.py NEW (STAGE 0 REFACTOR — see below). The one window-level composition
+                       callable, extracted from live_demo.py's private `_run_dsp`.
+src/warmup_select.py   NEW (STAGE 0 REFACTOR). The one warmup/bin-selection callable, extracted
+                       from live_demo.py's private `_run_warmup_selection`.
+src/vitals.py, src/respiration.py  REUSE — the primitives, called only via the two callables above.
 src/compare.py         SUPERSEDED, not imported. Implements the old PI-gated-*mean* comparator.
 scripts/plot_bland_altman.py  PLOTTING ONLY. Its statistics are invalid for repeated measures.
 ```
 
 **Determinism:** no RNG except the cluster bootstrap at its frozen seed. Same manifest + config +
 seed → byte-identical output.
+
+### 5.1 Stage 0 — the shared-callable refactor (M4R-10), a prerequisite of everything else
+
+Revision 2 claimed M4 and the live path "use the same DSP". They would not have. The window-level
+composition (`_run_dsp`) and warmup policy (`_run_warmup_selection`) are **private functions in
+`scripts/live_demo.py`** — `tests/test_live_demo_warmup_helpers.py:22` imports the latter from there.
+Reusing only `src/vitals.py` and `src/respiration.py` still forces M4 to duplicate the config wiring,
+respiration fusion/validity semantics, ECA inputs, fallback handling and warmup policy.
+
+**The consequence that condemns revision 2's design:** its "direct shared-DSP equality" test would
+have compared M4 against *whichever duplicate the test author chose*. Two copies that silently drift
+apart **both pass**. The assertion was load-bearing and hollow simultaneously.
+
+**Before any M4 code:**
+1. Extract `_run_dsp`'s orchestration into a **pure `src/window_pipeline.py` callable**; extract
+   `_run_warmup_selection` into **`src/warmup_select.py`**. `scripts/live_demo.py` and M4 both
+   **import** them — neither reimplements.
+2. M4 owns **only** raw slicing, validity dispositions and evidence persistence *around* that call.
+3. Define a **normalised estimator adapter / result record carrying estimator ID + config hash**, so
+   M8/M9/M10 estimators enter the same grid and scoring path without copying the comparator.
+   Revision 2 hard-wired the harness to ECA+AHET, contradicting §1's "every later milestone reports
+   through it".
+4. The stage-3 equality test calls **that one production callable** — not a duplicate.
+
+**The extraction is a behaviour-preserving refactor of reviewed DSP code and takes its own
+CLAUDE.md §6 correctness review**, with the existing 1056-test suite as the regression guard.
 
 ---
 
@@ -185,11 +232,31 @@ with", never "validated against".
 *(Rewritten per M4R-02. Revision 1 said "μ ± 1.96·SD point estimate is primary" — that HANDOFF
 sentence is about not switching to MOVER post-hoc, and is not the estimator.)*
 
-Per **arm**, over subjects `s` with `n_s` windows, `N_a = Σ n_s`, `S_a` subjects:
-- `MSW = SSW/(N_a − S_a)` where `SSW = Σ_s Σ_k (d_sk − d̄_s)²`; **`σ²_w = MSW`**
-- `MSB = SSB/(S_a − 1)`; **`n0 = (N_a − Σ_s n_s²/N_a)/(S_a − 1)`**;
-  **`σ²_b = max((MSB − MSW)/n0, 0)`** (truncated)
-- **bias `μ_a = d̄` subject-weighted**; **`LoA_a = μ_a ± 1.96·√(σ²_b + σ²_w)`**
+Per **arm**, over subjects `s` with `n_s` evaluable windows, `N_a = Σ_s n_s`, `S_a` contributing
+subjects (≥ 1 evaluable window). **Every equation is restated verbatim rather than pointed at** —
+M4R-02 was a transcription error at exactly this boundary, so a source pointer is not sufficient.
+
+**Two different means appear here and they are not interchangeable** (M4R-02 — revision 2 omitted
+`SSB` entirely, which would have led an implementer to reuse the subject-weighted mean and silently
+change `σ²_b` on every unequal-`n_s` arm):
+
+- `d̄_s` = subject `s` mean difference
+- **`d̄_grand = (Σ_s Σ_k d_sk)/N_a`** — **window-weighted**, used **only** inside `SSB`
+- **`d̄ = mean_s(d̄_s)`** — **subject-weighted**, and this is the reported **bias**
+
+Variance components:
+- `SSW = Σ_s Σ_k (d_sk − d̄_s)²`; `MSW = SSW/(N_a − S_a)`; **`σ²_w = MSW`**
+- **`SSB = Σ_s n_s (d̄_s − d̄_grand)²`**; `MSB = SSB/(S_a − 1)`
+- **`n0 = (N_a − Σ_s n_s²/N_a)/(S_a − 1)`**
+- **`σ²_b = max((MSB − MSW)/n0, 0)`** (truncated)
+- **bias `μ_a = d̄` (subject-weighted)**; **`LoA_a = μ_a ± 1.96·√(σ²_b + σ²_w)`**
+
+Headline accuracy and coverage (`analysis_prespec.md` §3.2, verbatim):
+- per-subject `MAE_s = mean_k |d_sk|`; `MSE_s = mean_k d_sk²` (both over subjects with `n_s ≥ 1`)
+- **`MAE = mean_{s∈S_a}(MAE_s)`**; **`RMSE = √( mean_{s∈S_a}(MSE_s) )`** — the root of the *mean of
+  per-subject MSEs*, not a pooled RMSE
+- **`coverage = mean_s(n_s/N_s)` over ALL admitted subjects, including those with `n_s = 0`** — the
+  accuracy set and the coverage set are **different subject sets**; `S_a` is reported alongside
 - **Estimable iff `S_a ≥ 2` AND `N_a > S_a`.** If either fails, the arm reports **descriptive-only:
   observed bias and observed SD, with the population LoA *and* its CI both suppressed.** *(At one
   subject this suppresses the point estimate too — revision 1 wrongly kept it.)*
@@ -215,19 +282,40 @@ total_complete_windows = reference_failures
 ```
 Reference gates are applied **first**; radar-NaN is the disposition **only** for a
 reference-admissible window. Overlapping views (e.g. inadmissible-reference **and** radar-NaN) are
-retained in a **separate diagnostic cross-tab**, never in the primary ledger. **BR:** one
-`excluded_by_availability`. **HR:** a deterministic split between missing-finite-PR coverage and
-PI-induced insufficiency, with underlying sample counts also reported. Every cross-product tested.
+retained in a **separate diagnostic cross-tab**, never in the primary ledger.
+
+**Deterministic priority WITHIN `reference_failures`** (M4R-05 — the top-level identity fixes the
+three-way split but not which subcategory a multi-gate failure lands in; without a fixed order a
+window can move between ledger rows depending on implementation order while `final n` stays put):
+
+| vital | priority, first match wins |
+|---|---|
+| **HR** | 1. missing-finite-PR coverage → 2. PI-induced insufficiency → 3. non-stationarity |
+| **BR** | 1. availability → 2. non-stationarity |
+
+**BR has one `excluded_by_availability` category, not availability plus coverage** (revision 2
+duplicated its single gate). **HR** reports the underlying finite-PR and PI-qualified counts
+alongside the categorical verdict, per §2.4. Windows failing **two and three gates simultaneously**
+are tested explicitly.
 
 ### 6.6 Required outputs (M4R-06 — gates are not the whole comparator)
 - HR stationarity sensitivity at **3 / 5 / 8** bpm; **BR at 2 / 3 / 5** bpm.
 - **HR severe-error counts > 5 bpm**; **BR error tails > 2 / > 3 / > 5 bpm** vs RRp and, when paced,
   vs the commanded target.
-- HR **evidence-floor** and **LoA-CI precision** dispositions — reported **without deleting otherwise
-  usable subjects**.
+- **HR evidence-floor rules, stated testably** (M4R-06 — names without definitions are not testable):
+  **per-session ≥ 1** evaluable window, **per-subject ≥ 4** evaluable windows across the 2 sessions,
+  **study-wide ≥ 8/10** subjects meeting the per-subject floor. **No automatic whole-subject
+  exclusion** — a subject below the floor is reported with counts, never deleted; the ≥ 8/10 rule,
+  not deletion, carries the consequence. The ≥ 8/10 is **study-wide, not per-arm**.
+- **LoA-CI precision disposition:** half-width **≤ 5 bpm**, using the frozen operational definition
+  for **asymmetric** CIs, evaluated as the **four-distance** test. Reported without deleting subjects.
 - Per-arm LoA diagnostics: **proportional-bias / heteroscedasticity, residual skew / QQ,
   within-session lag-1 autocorrelation**, and the **subject-clustered regression-LoA descriptive
-  sensitivity** (not optional; only MOVER is out of scope).
+  sensitivity** computed as
+  **`fitted_bias(mean) ± 1.96·√(σ²_b,reg + σ²_e,reg)`** — **both** components from the **same
+  subject-random-intercept model**. A stage-7 fixture **must fail if only the residual SD is used**:
+  that is the already-reviewed **M3R-30 defect**, and it produces plausible-looking output.
+  (Not optional; only MOVER is out of scope.)
 - Coverage alongside accuracy, always; per-session and subject-weighted coverage from the **frozen
   denominator** (§3.2).
 - Data-role labels (§3.1) enforced on every table.
@@ -253,7 +341,8 @@ bare commit + dirty flag identifies nothing.
 
 | # | Stage | Done when |
 |---|---|---|
-| 1 | **Manifest schema + validation** (§4) | Scoring mode rejects every missing required field with a named error; development mode is separately labelled and cannot emit scoring output. |
+| 0 | **Shared-callable refactor** (§5.1) — extract `window_pipeline` + `warmup_select` into `src/`; define the estimator adapter. | `live_demo.py` imports both; the 1056-test suite passes unchanged; the diff has passed its own CLAUDE.md §6 review. **Nothing else starts before this.** |
+| 1 | **Manifest schema + validation** (§4) | Scoring mode rejects every missing required field with a named error. **M4 recomputes the objective admission disposition** from the primitive fields — ±1 s clock offset at both ends, checksum/truncation, intended-duration vs abort, packet-loss flag, retry/replacement, validity-map consistency — and **fails loudly if it disagrees with the operator-supplied verdict**, with a named negative test per rule (M4R-04). Development mode is separately labelled and cannot emit scoring output. |
 | 2 | **Window grid.** `[k·600,(k+1)·600)`, fractional-`frame0_epoch` endpoint inclusion, incomplete-tail rejection. | Yields 6/6/16/20 by hand; both boundary seconds land in exactly one window under a fractional origin. |
 | 3 | **Raw-ADC exact-grid reprocessing** (§6.1). | M4's per-window DSP output **equals a direct shared-DSP call on the same saved 600-frame slice at full precision**; a forced DSP failure yields a *recorded* radar-NaN, not a missing window; `k=0` reproduces the warmup semantics. |
 | 4 | **Reference aggregation + gates**, on **raw-format** Masimo CSVs (not clean DataFrames). | Every gate fires exactly at its boundary (PI 0.5, coverage 24/30, 5.0 / 2.0 bpm) tested **at equality**; `linear` named explicitly; the ≥2-method boundary fixture pins it. |
@@ -276,8 +365,14 @@ scorer code** (this constraint is what defeats the shared-bug problem):
 1. **Raw-format Masimo CSV** with a duplicate epoch, a missing second, NaN PR/RRp, PI **below and
    exactly at** 0.5, skewed values, and samples exactly on **both** boundaries under a **fractional**
    `frame0_epoch`.
-2. **Exact-grid estimator stub** whose 600-frame windows carry sentinel outputs while **neighbouring
-   3 s hop positions carry deliberate distractors**, plus a failed estimate and an incomplete tail.
+2. **Synthetic frame stream with frame-ID sentinels + an injected, call-recording estimator.**
+   The estimator **records every slice it is asked for** and the fixture asserts the calls occur
+   **exactly** on `[0,600)`, `[600,1200)`, … — **failing if any overlapping or greedy slice is
+   requested**. A forced estimator failure and an incomplete tail are folded into this same fixture.
+   *(Replaces revision 2's "neighbouring 3 s hop distractors", which was a leftover from the
+   discarded CSV architecture — M4R-07. Under the raw pipeline the estimator is only ever called on
+   exact slices, so there are no hop rows to distract with: that fixture would have tested nothing
+   while appearing to test greedy selection.)*
 3. **Unequal-count multi-subject natural/paced fixture** with a zero-evaluable subject, an 18 bpm
    subject and cross-failure windows, with hand-derived subject-weighted metrics, ledger, ANOVA LoA
    and pooling answers.

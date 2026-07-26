@@ -51,7 +51,8 @@ For a radar window ending at time `t`, the span is the **half-open** interval `[
 > and remain exploratory design evidence, not frozen scores.
 
 ### 2.1 Reference value
-**`PR_ref = median` of the PI-gated Masimo PR samples inside the half-open `[t − 30 s, t)`.**
+**`PR_ref = median` of the *usable* Masimo PR samples inside the half-open `[t − 30 s, t)`**, where
+**usable** is defined immediately below.
 
 - Median, not mean: robust to single-sample glitches. Under the stationarity gate (§2.2) the
   median and mean coincide anyway, which is precisely the point — **once the window is stationary,
@@ -59,12 +60,42 @@ For a radar window ending at time `t`, the span is the **half-open** interval `[
 - Alignment uses the integer `Timestamp` (Unix epoch, UTC) column **only** — never the `Date`/`Time`
   strings (CLAUDE.md §9).
 
+> **PRE-DEPOSIT CLARIFICATION — the usable-sample set (user decision 2026-07-26, M4 plan review
+> M4R-11).** This specification said "PI-gated PR samples" and "≥ 80 % of the 30 expected samples
+> surviving the PI gate", which did **not** settle whether a row with an acceptable PI but a
+> **non-finite `pr_bpm`** counts toward the coverage floor. The case is reachable: `src/masimo.py`
+> parses with `pd.to_numeric(..., errors="coerce")`, so any missing or malformed marker becomes NaN.
+> Leaving it open permits two silent failures — admitting a window whose median rests on fewer than
+> 24 actual PR values, or using **two different denominators** for aggregation and for coverage.
+> The BR comparator never had this ambiguity because it counts *finite* RRp explicitly (§2.2 there).
+>
+> **Resolved — one set, used everywhere.** A Masimo row is a **usable HR reference sample iff**:
+>
+> 1. `pr_bpm` is **finite**, **and**
+> 2. `pi` is **finite**, **and**
+> 3. `pi ≥ 0.5`.
+>
+> **The same usable set is used for the median (§2.1), the stationarity quantiles (§2.2) and the
+> coverage count (§2.2).** There is exactly one denominator. **Finite-PR** and **PI-qualified**
+> counts are additionally **reported separately** per window, so a coverage failure caused by missing
+> data is distinguishable from one caused by low perfusion (they are different physical stories and
+> the disposition ledger separates them).
+>
+> **Effect on existing data: none.** All three exploratory captures have **zero** non-finite PR, PI
+> or RR values and **zero** samples with `PI < 0.5` (`demo_massimo1.csv` n=247, `demo_massimo2.csv`
+> n=272, `demo_sweep.csv` n=574). This clarification therefore changes no existing number; it
+> forecloses a silent divergence that would first appear in M5/M6.
+>
+> **Status:** pre-deposit clarification (no public DOI yet), same class as the M3R-40 half-open
+> harmonisation and the M4R-09 quantile method. It resolves an ambiguity; the `PI ≥ 0.5` threshold
+> and the 80 % coverage floor are unchanged.
+
 ### 2.2 Window admissibility — ALL of these, or the window is excluded
 
 | gate | rule | rationale |
 |---|---|---|
-| **PI** | drop samples with `Perfusion Index < 0.5` | CLAUDE.md §4 — low PI means the reference itself is untrustworthy. Never chase it. |
-| **Coverage** | require ≥ **80 %** of the 30 expected samples surviving the PI gate | a window scored on a handful of samples is not scored |
+| **PI** | drop samples with `Perfusion Index < 0.5` (and any sample with non-finite `pi` or non-finite `pr_bpm` — see the usable-sample definition in §2.1) | CLAUDE.md §4 — low PI means the reference itself is untrustworthy. Never chase it. |
+| **Coverage** | require ≥ **80 %** of the 30 expected samples to be **usable** per §2.1 (i.e. ≥ 24) | a window scored on a handful of samples is not scored |
 | **Stationarity** | exclude if **`p90 − p10` of the PI-gated PR inside the window > 5.0 bpm**, quantiles computed with the **`linear`** method (see below) | see §2.3 |
 
 > **PRE-DEPOSIT CLARIFICATION — quantile method (user decision 2026-07-26, M4 plan review M4R-09).**
