@@ -8,7 +8,7 @@
 > cross-reviewed to closure.** No user decision is outstanding.
 >
 > **The active job is to BUILD M4. Stage 0 is built; its CLAUDE.md §6 review signed off and was
-> then REOPENED with three further findings (all fixed) — Stage 1 waits on a renewed sign-off.**
+> then REOPENED TWICE with further findings (all fixed) — Stage 1 waits on a renewed sign-off.**
 > Read `plans/m4_offline_harness.md` (revision 6, the build authority) before anything else, then
 > §3 below. The window DSP and warmup policy now live in `src/window_pipeline.py` and
 > `src/warmup_select.py`, imported by both the live path and M4 — they are no longer private to
@@ -36,7 +36,7 @@ survived a full cross-model review on 2026-07-24 and is the scope authority for 
 
 ## 2. Current state
 
-**Branch `vital_signs_v9c`.** Test suite **1106 passed, 0 failed, 0 xfailed**
+**Branch `vital_signs_v9c`.** Test suite **1108 passed, 0 failed, 0 xfailed**
 (`conda run -n radar-vitals python -m pytest tests/ -q`, 2026-07-27; independently re-run by Codex).
 There is **no longer an xfail** — the ECA/AHET decoy case now passes (see §2 "partly closed" below).
 v9 UI work remains parked in `git stash@{0}`; relocking/display-holdover stay reverted.
@@ -161,19 +161,19 @@ disputed**; Codex signed off with `NO MORE COMMENTS` (`plans/m4_plan_cross_revie
 + resolution table at the top of `DEBATE COMMENTS`).
 
 **Stage 0 (§5.1) is BUILT (`4b64eb8`); its cross-review signed off on 2026-07-27 and was then
-REOPENED the same day with S0R-16/17/18 — all three fixed, awaiting a renewed sign-off.** The
+REOPENED twice the same day with S0R-16/17/18/19 — all fixed, awaiting a renewed sign-off.** The
 shared-callable refactor moved the window DSP into `src/window_pipeline.py:run_window_dsp` and the
 warmup policy into `src/warmup_select.py:run_warmup_selection`; `scripts/live_demo.py` imports both.
 Reason the stage existed: while those were **private functions in a script**, M4 had to duplicate
 them, and the harness's central equality test would then have compared M4 against a duplicate rather
 than the production path (M4R-10).
 
-Its review (`plans/m4_stage0_refactor_review.md`) has run **8 Codex passes / 7 response rounds, 18
+Its review (`plans/m4_stage0_refactor_review.md`) has run **9 Codex passes / 8 response rounds, 19
 findings, 11 Blocking, all resolved, none disputed**. **Not one finding was in the moved DSP** — all
 11 Blocking findings were in the new estimator-adapter code: **9 in `run_config_hash`** and **2 in
 `as_window_estimate`**. The extraction is proven behaviour-identical to `d3cfb92` by **22
 bitwise-identical comparisons** (all three Masimo captures × four windows each, plus all three warmup
-failure branches); locked bins 27/26/26 unchanged. Suite **1106 passed**.
+failure branches); locked bins 27/26/26 unchanged. Suite **1108 passed**.
 
 **The next action is to close the review loop**, then Stage 1 — the manifest schema + validation
 (plan §4, build-order row 1). Do not start Stage 1 while the loop is open (plan §7 row 0).
@@ -240,8 +240,11 @@ first time**, closing **M2 done-when #5**.
   and `src/warmup_select.py`, imported by both the live path and M4. Without it, M4's equality test
   compares M4 to a duplicate of itself. **Never re-add a private DSP or warmup copy to
   `scripts/live_demo.py`** — `tests/test_window_pipeline_adapter.py` fails if anyone does.
-- **`run_config_hash` accepts ONLY what YAML/JSON produce** — `None, bool, int, float, str, list,
-  tuple, dict` — dispatched on `type(obj)` with **no `isinstance` in any encoding path**. NumPy and
+- **`run_config_hash` takes an exact `dict` root** and accepts, by exact type, `None, bool, int,
+  float, str, list, tuple, dict` — dispatched on `type(obj)` with **no `isinstance` in any encoding
+  path**. That covers *this project's* JSON/YAML-derived configs; it is **not** everything those
+  formats can express (`yaml.safe_load` also yields `date` and `set`, both rejected, and `tuple` is
+  accepted although neither format produces one — S0R-17). NumPy and
   `pathlib` support were both tried and **removed after review** (S0R-07…12): six Blocking findings
   between them, every one a different way for a value to carry state the encoder could not see. Do
   not "helpfully" re-add either. It is an **exact-run provenance key only** — never an

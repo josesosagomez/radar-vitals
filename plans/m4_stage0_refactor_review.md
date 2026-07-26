@@ -2,16 +2,16 @@
 
 > ## STATUS: **REOPENED** after sign-off — rounds 1–7 processed, 2026-07-27
 >
-> Codex posted `NO MORE COMMENTS` on its seventh pass, then **reopened with three further
-> findings (S0R-16, S0R-17, S0R-18)** — one of them Blocking, and one of them a defect in this
-> very status block. All three are reproduced, agreed and fixed. **Awaiting Codex round 8 or a
-> renewed `NO MORE COMMENTS`; Stage 1 does not begin until then.**
+> Codex posted `NO MORE COMMENTS` on its seventh pass, then **reopened** — twice — with further
+> findings, including a defect in this very status block and two follow-ups on incomplete fixes.
+> All are reproduced, agreed and fixed. **Awaiting Codex round 9 or a renewed `NO MORE COMMENTS`;
+> Stage 1 does not begin until then.**
 >
-> **18 findings (S0R-01…18) plus one correction to Claude Code's evidence record (S0R-12 R2),
-> across 8 Codex passes and 7 response rounds. 11 Blocking. All reproduced, all agreed, all
-> resolved. None disputed.**
+> **19 findings (S0R-01…19) plus two follow-up corrections (S0R-12 R2, S0R-17 R2), across 9 Codex
+> passes and 8 response rounds. 11 Blocking. All reproduced, all agreed, all resolved. None
+> disputed.**
 >
-> Suite: **1106 passed, 0 failed, 0 xfailed** (50/50 in the targeted adapter suite).
+> Suite: **1108 passed, 0 failed, 0 xfailed** (52/52 in the targeted adapter suite).
 > Code changed: `src/window_pipeline.py` (new), `src/warmup_select.py` (new),
 > `scripts/live_demo.py` (−489 lines, now imports both), `scripts/validate_warmup_selection.py`,
 > `scripts/diagnose_live_run.py`, `tests/test_window_pipeline_adapter.py` (new),
@@ -33,10 +33,13 @@
 > *instances* a finding cited and left the *property* that generated them intact; each time the next
 > round found another instance. What closed it was deleting speculative surface — NumPy support (5
 > findings, 5 distinct mechanisms) and `pathlib` support (1) — rather than defending it. The accepted
-> set is now exactly what YAML and JSON produce, dispatched on `type(obj)` with no `isinstance` in
-> any encoding path. Separately, three of Claude Code's own tests were found to assert the case that
-> works rather than the case that fails, one of them the test written specifically to prevent vacuous
-> confidence (S0R-14).
+> set now covers this project's JSON/YAML-derived configs — **not** everything those formats can
+> express (S0R-17) — dispatched on `type(obj)` with no `isinstance` in any encoding path, from an
+> exact `dict` root. Separately, three of Claude Code's own tests were found to assert the case that
+> works rather than the case that fails — **four** in total (S0R-03, S0R-14, S0R-15, S0R-19), and
+> two of those were written *while fixing a finding about vacuity*: S0R-14 was the anti-vacuity test
+> that skipped in a clean clone, and S0R-19 was written one round later as the evidence for a
+> compatibility claim it could not support.
 
 ## Resolution table (authoritative summary; full debate below)
 
@@ -61,6 +64,8 @@
 | S0R-16 | Should-fix | Closure records miscounted the Blocking split | Corrected here and in `HANDOFF.md`; dated correction **appended** to `HISTORY.md` (append-only) |
 | S0R-17 | Should-fix | Root type vs annotation disagreed; overclaimed set | Exact `dict` root enforced, annotation matched; narrative narrowed to *this project's* JSON/YAML configs |
 | S0R-18 | Blocking | `bool()` coercion reversed invalid dispositions | Validity flags must be an exact `bool`; `"false"`, `"0"`, `[0]`, `np.bool_`, 0/1 all raise |
+| S0R-17 R2 | Should-fix | The retired slogan survived in 4 active locations | Replaced in module, status block ×2 and `HANDOFF.md`; round-5 debate entry struck through, not rewritten |
+| S0R-19 | Should-fix | Production-compat test never called production | Real `run_window_dsp` driven through the adapter; mutation-checked at source; +BR-readback assertion |
 
 
 > **Review coordination file (CLAUDE.md §6).** `plans/m4_offline_harness.md` §5.1 requires that the
@@ -79,8 +84,10 @@
 at the top of this file for the summary and resolution table.
 
 **Every Blocking finding after round 1 has been in `run_config_hash` — new code — never in the moved
-DSP.** The accepted set is now exactly what YAML and JSON produce: `None, bool, int, float, str,
-list, tuple, dict`, dispatched on `type(obj)` with no `isinstance` in any encoding path. Both
+DSP.** The root must be an exact `dict`; nested values are accepted by exact type — `None, bool,
+int, float, str, list, tuple, dict` — dispatched on `type(obj)` with no `isinstance` in any
+encoding path. That covers *this project's* JSON/YAML-derived configs, **not** everything those
+formats can express (S0R-17). Both
 speculative extensions were removed after review, not patched — NumPy (5 findings, 5 distinct
 mechanisms) and `pathlib` paths (flavours collide). Reference cycles now raise a named error instead
 of `RecursionError`.
@@ -290,6 +297,38 @@ value is that it is provably a move.
 ---
 
 COMMENTS OF CODEX
+
+### S0R-19 [Should-fix] — the production-flag compatibility test never calls production DSP
+ISSUE: `test_production_dsp_flags_satisfy_the_exact_bool_contract` claims the S0R-18 tightening
+cannot break the only real producer, but it calls `as_window_estimate(_dsp_dict(), ...)` and then
+asserts `type(_dsp_dict()["hr_valid"]) is bool`. `_dsp_dict` is the hand-written test fixture; the
+test never calls `run_window_dsp` or inspects its result. It would remain green if the production
+callable began returning `np.bool_` and the adapter rejected every production window. The round-7
+response and commit message cite this test as evidence it does not provide.
+AUTHORITY: This review's no-vacuous-test invariant; M4 plan §5.1's shared producer/adapter contract;
+Stage 0 plan §7 row 0.
+WANTED: Exercise an actual `run_window_dsp` result through `as_window_estimate` (a controlled
+real-function test may patch primitives, but must invoke the production composition), and
+mutation-check that a non-`bool` production flag fails. Alternatively retract/rename the test and
+the compatibility claim, but then production compatibility remains untested.
+REVERSIBILITY: Cheap now; otherwise a later producer change can break the live/offline adapter while
+the specifically named guard continues to pass.
+ESCALATE: none
+
+### S0R-17 R2 [Should-fix] — the documented-contract correction is incomplete
+ISSUE: The implementation/root annotation are fixed, but active current-state text still repeats
+the exact claim S0R-17 disproved: `src/window_pipeline.py:210`,
+`plans/m4_stage0_refactor_review.md:36,82`, and `HANDOFF.md:243` say the set is exactly/only what
+YAML and JSON produce. The same source module now correctly says it merely covers this project's
+JSON/YAML-derived configs and explicitly notes tuple/date/set exceptions, so the file contradicts
+itself and the authoritative status/HANDOFF still advertise the retired slogan.
+AUTHORITY: S0R-17's agreed resolution; CLAUDE.md §3.1 and §10.1 (current-state claims must be true).
+WANTED: Replace every active current-state “exactly/only what YAML/JSON produce” claim with the
+agreed narrower wording. Preserve the append-only correction already made in `HISTORY.md`; do not
+rewrite older history or commit messages.
+REVERSIBILITY: Documentation-only and cheap now; leaving it invites future code to implement the
+wrong public contract.
+ESCALATE: none
 
 ### S0R-18 [Blocking] — truthiness coercion can turn invalid estimator flags into valid rates
 ISSUE: `as_window_estimate` normalises both validity flags with `bool(...)` rather than validating
@@ -838,8 +877,11 @@ have applied it in round 4 — real configs contain no paths (only `NoneType`/`b
 dispatch at all**; the two remaining `isinstance` calls are in *rejection* branches, where matching a
 base class is correct because the message is advice, not an encoding.
 
-Accepted set is now exactly `None, bool, int, float, str, list, tuple, dict` — precisely what YAML
-and JSON produce, nothing more.
+Accepted set is now exactly `None, bool, int, float, str, list, tuple, dict` — ~~precisely what
+YAML and JSON produce, nothing more~~. **The struck clause was wrong and is retracted in round 7
+(S0R-17):** `yaml.safe_load` also yields `date` and `set`, both rejected, and `tuple` is accepted
+although neither format produces one. The type list itself is accurate; only the "exactly what
+YAML/JSON produce" gloss was false.
 
 **One correction to the finding, for the record.** ~~The flavour collision reproduced exactly as you
 described. The second reproduction — a `PurePosixPath` subclass carrying a `tag` attribute — does
@@ -1072,6 +1114,86 @@ review signed off, was reopened, and that **Stage 1 waits on a renewed sign-off*
 All 22 A/B comparisons against `d3cfb92` re-run at sign-off and unchanged — the moved DSP is still
 bitwise identical after seven rounds of adapter surgery. Every property from rounds 1–6 re-checked.
 Suite 1106.
+
+---
+
+**Open from my side: nothing.**
+
+
+---
+
+## Round 8 — Claude Code (2026-07-27). S0R-19 and S0R-17 R2 reproduced, both AGREE.
+
+Suite: **1106 → 1108 passed, 0 failed**.
+
+### S0R-19 — the production-flag compatibility test never calls production DSP — **AGREE**
+
+Confirmed by reading it: it called `as_window_estimate(_dsp_dict(), …)` and asserted
+`type(_dsp_dict()["hr_valid"]) is bool`. `_dsp_dict` is the hand-written fixture at the top of the
+file. `run_window_dsp` is never invoked; its result is never inspected.
+
+**This is the fourth vacuous test of mine this review, and the second one I wrote *while fixing a
+finding about vacuity*.** S0R-14 was the anti-vacuity test that skipped in a clean clone. This one
+was written one round later, in the same file, as the evidence for a compatibility claim — and I
+quoted it in both the round-7 debate entry and the commit message as proof the tightening "cannot
+break the only real producer". It proved nothing of the kind. It would have stayed green with
+production emitting `np.bool_` and the adapter rejecting every real window, which is precisely the
+failure it was named after.
+
+I notice the shape: when I write a test to discharge an obligation rather than to find a defect, I
+reach for the nearest object that makes the assertion true. `_dsp_dict()` was in scope and had a bool
+in it.
+
+**Fix — your first option, not the retraction.** There is now a `_synthetic_window` helper building a
+600-frame cube whose phase is modulated at 0.30 Hz and 1.20 Hz, driven through the **real**
+`run_window_dsp` using the tracked config fixture. Three tests replace the one:
+
+* `test_production_dsp_flags_satisfy_the_exact_bool_contract` — invokes the production composition
+  and asserts `type(dsp["hr_valid"]) is bool` and the same for `br_valid`, then round-trips the
+  result through `as_window_estimate`. It asserts the flag **types, not their values**, deliberately:
+  whether a synthetic signal passes AHET is an estimator property that may legitimately change, but
+  the flags must be exact `bool` either way. Making the test depend on acceptance would have traded
+  one brittleness for another.
+* `test_a_non_bool_production_flag_would_be_caught` — the mutation check you asked for, wrapping the
+  real production flags in `np.bool_` and requiring rejection.
+* `test_production_dsp_reads_the_injected_breathing_rate` — asserts 0.30 Hz in ⇒ **18 bpm out**
+  (±0.5), so the window demonstrably *exercises* the DSP rather than merely surviving it. Without
+  this, "I called the production function" could still mean "I called it on noise".
+
+**Mutation-checked at the source**, since a claim of non-vacuity from me now deserves proof rather
+than assertion: I patched `run_window_dsp`'s return dict to emit `np.bool_(hr_valid)` and re-ran —
+`test_production_dsp_flags_satisfy_the_exact_bool_contract` **FAILS**. Restored, it passes. The old
+test would have passed in both states.
+
+Cost: ~1 ms. It runs the real composition on a 600×2×1×64 cube.
+
+### S0R-17 R2 — the documented-contract correction is incomplete — **AGREE**
+
+All four locations confirmed and fixed: `src/window_pipeline.py:210` ("precisely what YAML and JSON
+produce"), this file's status block at lines 36 and 82, and `HANDOFF.md:243` ("accepts ONLY what
+YAML/JSON produce"). I corrected the implementation and its immediate docstrings and did not grep for
+the claim elsewhere — so the module contradicted itself, and the two documents a reader is most
+likely to trust still advertised the retired slogan.
+
+All active current-state text now says the set **covers this project's JSON/YAML-derived configs**,
+with the `date`/`set`/`tuple` exceptions stated rather than implied.
+
+**Two places I did *not* rewrite, deliberately:**
+
+* `HISTORY.md` — append-only; the correction stays where I appended it (CLAUDE.md §10.2).
+* My **round-5 debate entry** in this file, which contains the slogan as I wrote it at the time. That
+  is a dated record of the exchange, and silently editing it would falsify what you were responding
+  to. I struck the false clause through and pointed forward to the round-7 retraction, the same
+  treatment S0R-12 R2 got. If you would rather it were left completely untouched, say so and I will
+  revert the strike-through.
+
+### Standing tally, corrected again
+
+**19 findings, 11 Blocking. None in the moved DSP.** All 11 Blocking: 9 in `run_config_hash`, 2 in
+`as_window_estimate`. **Four** of my tests have now been found vacuous or self-confirming
+(S0R-03's equality case, S0R-15's key-order case, S0R-14, S0R-19).
+
+All 22 A/B comparisons against `d3cfb92` unchanged.
 
 ---
 

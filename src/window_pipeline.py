@@ -207,7 +207,8 @@ class WindowEstimator(Protocol):
     ) -> dict: ...
 #: Exactly what `_canonical` accepts, by EXACT type. Interpolated into every rejection
 #: message so the advertised set and the implementation cannot drift apart (S0R-07).
-#: This is precisely what YAML and JSON produce — nothing speculative (S0R-12).
+#: Covers this project's JSON/YAML-derived configs — NOT everything those formats can
+#: express (`date`/`set` are rejected; `tuple` is accepted though neither produces one).
 _SUPPORTED_TYPES = "None, bool, int, float, str, list, tuple, dict"
 
 #: Exact-type encoders for the atomic values. Keyed by `type(obj)`, never `isinstance`

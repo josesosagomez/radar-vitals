@@ -11,6 +11,7 @@ tests fail the moment that happens.
 from __future__ import annotations
 
 import inspect
+import json
 import sys
 import types
 from pathlib import Path
@@ -382,12 +383,69 @@ def test_absent_validity_flags_still_default_to_false():
     assert np.isnan(est.hr_bpm) and np.isnan(est.br_bpm)
 
 
+def _synthetic_window(n_frames: int = 600, adc: int = 64, bin_idx: int = 10):
+    """A frame cube carrying a known breathing + cardiac phase modulation at `bin_idx`.
+
+    Small enough to run in milliseconds, real enough to drive the production composition:
+    a tone at the target range bin whose phase is modulated at 0.30 Hz (18 bpm breathing)
+    and 1.20 Hz (72 bpm cardiac).
+    """
+    cfg = json.loads(
+        (Path(__file__).resolve().parent / "fixtures" / "sample_run_config.json")
+        .read_text(encoding="utf-8")
+    )
+    fs = float(cfg["session"]["frame_rate_hz"])
+    t = np.arange(n_frames) / fs
+    phi = 0.5 * np.sin(2 * np.pi * 0.30 * t) + 0.06 * np.sin(2 * np.pi * 1.20 * t)
+    carrier = np.exp(1j * 2 * np.pi * bin_idx * np.arange(adc) / adc).astype(np.complex64)
+    cube = (carrier[None, None, None, :]
+            * np.exp(1j * phi)[:, None, None, None]).astype(np.complex64)
+    return np.repeat(cube, 2, axis=1), bin_idx, fs, cfg
+
+
 def test_production_dsp_flags_satisfy_the_exact_bool_contract():
-    """`run_window_dsp` must keep producing flags the adapter accepts — otherwise this
-    tightening would break the only real producer."""
-    est = as_window_estimate(_dsp_dict(), run_config_hash="h")
-    assert est.hr_valid is True and est.br_valid is True
-    assert type(_dsp_dict()["hr_valid"]) is bool
+    """S0R-19. The previous version of this test called `as_window_estimate(_dsp_dict())`
+    and asserted `type(_dsp_dict()["hr_valid"]) is bool` — it never invoked
+    `run_window_dsp` at all, so it would have stayed green while the production callable
+    returned `np.bool_` and the adapter rejected every real window. It was cited as
+    evidence for a compatibility claim it could not support.
+
+    This drives the **actual production composition** and feeds its result to the adapter.
+    It asserts the flag TYPES rather than their values on purpose: whether a synthetic
+    signal passes AHET is a property of the estimator that may legitimately change, but
+    the flags must be exact `bool` either way — that is the contract the adapter enforces.
+    """
+    cube, bin_idx, fs, cfg = _synthetic_window()
+    dsp = run_window_dsp(cube, bin_idx, fs, cfg)
+
+    assert type(dsp["hr_valid"]) is bool, f"hr_valid is {type(dsp['hr_valid']).__name__}"
+    assert type(dsp["br_valid"]) is bool, f"br_valid is {type(dsp['br_valid']).__name__}"
+
+    est = as_window_estimate(dsp, run_config_hash="h")      # must not raise
+    assert est.hr_valid is dsp["hr_valid"]
+    assert est.br_valid is dsp["br_valid"]
+
+
+def test_a_non_bool_production_flag_would_be_caught():
+    """The mutation check that makes the test above load-bearing: if `run_window_dsp` ever
+    started emitting `np.bool_`, the adapter must reject it rather than accept it."""
+    cube, bin_idx, fs, cfg = _synthetic_window()
+    dsp = run_window_dsp(cube, bin_idx, fs, cfg)
+
+    for key in ("hr_valid", "br_valid"):
+        mutated = dict(dsp)
+        mutated[key] = np.bool_(dsp[key])
+        with pytest.raises(TypeError, match="must be an exact bool"):
+            as_window_estimate(mutated, run_config_hash="h")
+
+
+def test_production_dsp_reads_the_injected_breathing_rate():
+    """Not strictly required by S0R-19, but it proves the synthetic window actually
+    exercises the DSP rather than merely surviving it: 0.30 Hz in, 18 bpm out."""
+    cube, bin_idx, fs, cfg = _synthetic_window()
+    dsp = run_window_dsp(cube, bin_idx, fs, cfg)
+    assert dsp["br_valid"] is True
+    assert dsp["br_bpm"] == pytest.approx(18.0, abs=0.5)
 
 
 def test_valid_flag_with_a_missing_rate_raises():
