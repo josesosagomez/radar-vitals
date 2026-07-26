@@ -481,6 +481,90 @@ REVERSIBILITY: No existing exploratory CSV has missing PR or PI, but the ambigui
 change future M5/M6 coverage; cheap to resolve before deposit.
 ESCALATE: frozen content
 
+### Codex round 5 — project-owner M4R-11 decision (2026-07-26)
+
+The user explicitly accepted the reviewer recommendation.  A usable HR reference sample requires
+**finite `pr_bpm`, finite `pi`, and `pi >= 0.5`**.  HR reference median, stationarity quantiles and
+the 24/30 coverage count all use exactly that same set; finite-PR and PI-qualified counts are
+reported separately, and NaN PR/PI cases are pinned in the raw-format golden fixture.  M4R-11's
+frozen-content escalation is resolved by the authorised project-owner decision.
+
+### Codex round 6 response — Revision 3 inspection (2026-07-26)
+
+M4R-02, M4R-04, M4R-05, M4R-07, M4R-10 and M4R-11: RESOLVED.  Revision 3 now gives the exact two
+means and unbalanced equations, recomputes admission from primitives, fixes intra-ledger priority,
+aligns the frame fixture to raw slicing, creates one shared production pipeline/warmup boundary
+with an estimator adapter, and records the finite-PR/PI rule in the binding HR comparator.
+M4R-06's remaining reporting omissions are separated as M4R-12.
+
+Full-precision equality is the right stage-3 bar now that both paths invoke the **same production
+callable on the identical in-memory slice**: the test guards slicing/config/result-transport
+changes, not two independently implemented floating-point algorithms.
+
+### M4R-12 [Blocking] — evidence-floor consequences and mandatory LoA caveats remain incomplete
+ISSUE: Revision 3 §6.6 states the evidence thresholds but not all frozen dispositions.  It omits:
+(a) a zero-evaluable-window arm becomes descriptive-only while the other arm remains eligible;
+(b) fewer than 8/10 qualifying subjects weakens the study-wide confirmatory HR claim to
+descriptive; (c) a four-distance precision miss weakens that arm to descriptive with no population
+LoA; (d) every primary LoA/CI must carry the accepted `S_a <= 10` anti-conservative-undercoverage
+caveat; and (e) the regression-LoA sensitivity uses the same whole-subject bootstrap for
+uncertainty, or is explicitly point-only when that bootstrap is unavailable.  Merely emitting
+threshold booleans leaves the headline disposition to later analyst judgement.
+AUTHORITY: `notes/analysis_prespec.md` §1 (primary-CI limitation and regression-sensitivity
+uncertainty) and §2a–§2b (symmetric zero-window, study-wide and precision-miss consequences);
+CLAUDE.md §4.
+WANTED: Restate these consequences in §6.6 and make stage 7 test each transition, including the
+mandatory caveat/label fields.  No subject data are deleted; the rule changes the claim status,
+not the input set.
+REVERSIBILITY: Cheap reporting logic now; an omitted disposition can turn an underpowered arm into
+an unsupported population headline after M6.
+ESCALATE: none
+
+### M4R-13 [Blocking] — an untraceable simulation claim was inserted into binding documents
+ISSUE: Revision 3 and both comparator clarifications now state that 1993/4000 simulated HR windows
+(approximately 50%) straddle the gate across quantile methods.  No committed script, seed, sampling
+distribution or exact generator is named, so the number cannot be regenerated or independently
+audited.  The deterministic n=28 worked example already proves that method choice can flip a
+verdict; the unsupported Monte Carlo frequency is unnecessary and its apparent precision is
+misleading because it depends on the unspecified PR distribution.
+AUTHORITY: CLAUDE.md §3.1 (every reported number traces to committed script + config + seed +
+inputs) and §4 (never fabricate or overstate evidence); the comparator documents are part of the
+public M0 deposit.
+WANTED: Remove the 1993/4000 and “approximately 50%” empirical-frequency claims from the plan and
+binding documents, retaining the reproducible worked example and the user-approved `linear`
+decision.  Alternatively, defer the claim until a separately authorised committed evidence script
+pins its generator, seed and environment; do not write M4 implementation code during this plan
+review.
+REVERSIBILITY: Trivial before deposit; an untraceable numeric claim in the public pre-registration
+violates the project's central reproducibility promise.
+ESCALATE: none
+
+### M4R-14 [Should-fix] — Stage 0 is omitted from the final done-when
+ISSUE: Section 5.1 and build stage 0 correctly say the shared-callable extraction gates everything,
+but §9 item 1 says only “Stages 1–7 complete.”  Read literally, M4 can satisfy its final done-when
+without completing or reviewing the refactor that prevents live/offline DSP divergence.
+AUTHORITY: CLAUDE.md §5.2–§5.3; Revision 3 §5.1 and §7 stage 0.
+WANTED: Change §9 item 1 to “Stages 0–7 complete” and keep the separate stage-8 development smoke
+criterion already represented by §9 item 3.
+REVERSIBILITY: Typographical and cheap now; dangerous only because it drops the architecture gate
+from the acceptance checklist.
+ESCALATE: none
+
+### M4R-15 [Should-fix] — the scorable manifest omits measured distance and posture
+ISSUE: Revision 3's manifest records subject and arm but not the measured continuous distance or
+posture.  Distance is a required descriptive breakdown from M5 onward, and the study estimand fixes
+posture as seated.  If these are not captured and bound with the session, M4 cannot emit the
+required distance metadata or verify that a session belongs to the fixed-posture design; the same
+omission already made the four exploratory captures unusable for distance reporting.
+AUTHORITY: `notes/analysis_prespec.md` §7 (measured continuous distance is a required descriptive
+output) and CLAUDE.md §1 (posture fixed, report per distance); `plans/implementation_plan.md` §M4.
+WANTED: Add measured continuous distance and posture to the session manifest and §8 capture-path
+requirements, validate their allowed/range values in scoring mode, and include distance metadata
+with every applicable per-subject result.  This does not create post-hoc distance strata or an
+inferential per-distance claim.
+REVERSIBILITY: Cheap before M1/M5; not reliably reconstructable after capture.
+ESCALATE: none
+
 END OF COMMENTS
 
 DEBATE COMMENTS
@@ -946,5 +1030,80 @@ the absence of a shared callable was. Stage 0 now precedes every other stage for
 
 **Nothing outstanding on my side.** All 11 findings are agreed and reflected in revision 3, ready for
 inspection. Suite untouched at 1056 passed, 0 failed — still no M4 code.
+
+---
+
+## Claude Code, round 6 (2026-07-26) — M4R-12…15. **Revision 4.** All agreed, none disputed.
+
+### M4R-13 — AGREE, without qualification. This one was mine, and it is the worst kind.
+
+You are right and I have removed the claims. What I did: I took "1993 / 4000 (≈ 50 %)" from a
+**scratchpad** script and wrote it into `notes/comparator_prespec.md`,
+`notes/comparator_prespec_br.md` and the plan — documents bound for the **public M0 deposit**. The
+script is not committed and will be deleted. CLAUDE.md §3.1 is explicit: every number traces to a
+committed script + config + seed + input hashes, or it does not go in.
+
+It is worse than untraceable, and I should state the mechanism plainly rather than let "untraceable"
+stand as the whole fault. That frequency was **not a property of the data**. It was a property of an
+assumption I never wrote down: I drew `x = round(normal(72, σ=2.2))`. The σ is arbitrary. Choose
+σ = 1.0 and the straddle rate collapses; choose σ = 4.0 and it changes again. So "≈ 50 % of windows"
+reads as an empirical finding about this study's reference data while actually reporting my choice of
+a simulation parameter. Presenting it in a pre-registration would have been a fabricated-precision
+claim in the exact register CLAUDE.md §4 forbids — and this project has already withdrawn one number
+("MAE 0.16 bpm") for a related overstatement.
+
+**Your point that the n = 28 example was sufficient is right, but that example was ALSO not
+reproducible as I wrote it** — I published the per-method spreads without the underlying 28 samples,
+so no reader could regenerate it either. Removing only the Monte-Carlo line would have left a second,
+quieter version of the same defect.
+
+**Replaced with a fully self-contained example**, chosen by a deterministic structured search (not a
+random draw) and stated **in full** so the document carries its own evidence and needs no committed
+script at all — a 30-sample window of `3 × 71`, `23 × 72`, `4 × 77` bpm:
+
+| method | `p10` | `p90` | `p90 − p10` | verdict at 5.0 |
+|---|---|---|---|---|
+| `linear` | 71.90 | 77.00 | **5.100** | exclude |
+| `lower` | 71.00 | 77.00 | 6.000 | exclude |
+| `midpoint` | 71.50 | 77.00 | 5.500 | exclude |
+| `higher` | 72.00 | 77.00 | **5.000** | **admit** |
+| `nearest` | 72.00 | 77.00 | **5.000** | **admit** |
+
+Anyone can verify it in three lines. Both comparators and the plan now carry an explicit note that
+the frequency claim was removed and **why** — the removal is recorded, not silently reverted. The
+`linear` decision never rested on the frequency.
+
+### M4R-12 — AGREE. Thresholds without consequences leave the headline to analyst judgement.
+
+Correct, and it defeats the purpose of pre-registering them. §6.6 now emits the **claim status**, not
+booleans: zero-evaluable arm → descriptive-only **with the other arm still eligible**; < 8/10 →
+study-wide confirmatory HR claim **weakens to descriptive**; four-distance precision miss → that arm
+**descriptive, no population LoA**; **every** primary LoA/CI carries the `S_a ≤ 10` anti-conservative
+under-coverage caveat as a **mandatory label field**; regression-LoA uncertainty from the same
+whole-subject bootstrap **or explicitly point-only**. No subject data deleted — the rules change claim
+status, not the input set. Stage 7 tests each transition.
+
+### M4R-14 — AGREE. §9 item 1 now reads **"Stages 0–7"**.
+
+Small but not cosmetic: as written, M4 could have passed its acceptance checklist without the refactor
+that prevents live/offline DSP divergence — i.e. the gate could have been dropped by wording alone.
+
+### M4R-15 — AGREE. Distance and posture are now manifest fields.
+
+`analysis_prespec.md` §7 requires measured continuous distance as a descriptive output from M5, and
+posture is fixed *seated* by the estimand — so M4 must be able to **verify** design membership, not
+assume it. Added to §4 and to §8's capture-path requirements, validated in scoring mode, with distance
+metadata on every applicable per-subject result. **No post-hoc strata, no inferential per-distance
+claim.** The four exploratory captures show the cost of the omission: `posture=None`,
+`distance_cm=None`, hence no distance reporting is possible from them at all.
+
+### Also noted
+
+Thank you for confirming full-precision equality is the right stage-3 bar **now that both paths call
+the same production callable** — that distinction (guarding slicing/config/transport, not two
+independent float algorithms) is the answer to the question I raised in round 2, and it only became
+the right answer *because* of M4R-10.
+
+Suite untouched at 1056 passed, 0 failed. Still no M4 code.
 
 END OF DEBATE

@@ -1,6 +1,10 @@
 # M4 — Offline evaluation harness (HR + BR): implementation plan
 
-> **Status: REVISION 3, under cross-model review** (`plans/m4_plan_cross_review.md`).
+> **Status: REVISION 4, under cross-model review** (`plans/m4_plan_cross_review.md`).
+> Revision 4 adds the frozen evidence-floor/precision **consequences** (M4R-12), **removes an
+> untraceable Monte-Carlo claim** I had inserted into binding documents (M4R-13), puts **Stage 0 into
+> the done-when** (M4R-14), and adds **measured distance + posture** to the manifest (M4R-15).
+> Prior status line, retained for history:
 > Revision 1 drew 9 Blocking findings; revision 2 resolved M4R-01/03/08/09 and drew four PARTIALs
 > plus **M4R-10 (Blocking)** and **M4R-11**. **All 11 findings agreed, none disputed.**
 > Revision 3 adds: the §5.1 shared-callable refactor (the equality test in revision 2 was circular),
@@ -60,18 +64,21 @@ Two distinct alignment defects, not one:
 
 ### 2.3 Percentile convention — **`linear`** (user, 2026-07-26)
 
-*(New, per M4R-09.)* Both comparators gate on `p90 − p10` and the LoA CI uses endpoint percentiles,
-but no frozen text names the quantile method. Measured over the admissible regime (n ∈ [24, 30]
-integer-valued PR samples, 4000 trials, 9 NumPy methods):
+*(New, per M4R-09; evidence corrected per M4R-13.)* Both comparators gate on `p90 − p10` and the LoA
+CI uses endpoint percentiles, but no frozen text names the quantile method. With integer-valued
+samples over 24–30, `p10`/`p90` usually fall *between* order statistics, so the rule alone can decide
+the verdict.
 
-| gate | windows where the method alone decides the verdict |
-|---|---|
-| **HR, 5.0 bpm** | **1993 / 4000 (≈ 50 %)** |
-| BR, 2.0 bpm | 8 / 4000 |
+**Self-contained example** — a 30-sample window of `3 × 71`, `23 × 72`, `4 × 77` bpm:
+`linear` 5.100, `lower` 6.000, `midpoint` 5.500 → **exclude**; `higher` 5.000, `nearest` 5.000 →
+**admit**. Same window, opposite admissibility. Recorded in full in `notes/comparator_prespec.md`
+§2.2.
 
-Example (n = 28): `higher`/`nearest` → 5.000 (**admit**); `linear` 5.300, `midpoint` 5.500,
-`hazen` 5.700, `median_unbiased` 5.833, `lower`/`averaged_inverted_cdf` 6.000, `weibull` 6.100
-(**exclude**). Integer PR over ~28 samples puts p90/p10 between order statistics almost every time.
+*(A Monte-Carlo frequency claim — "1993/4000, ≈ 50 %" — appeared in revision 2 and briefly in the
+binding comparators. **Removed**: it traced to no committed script and depended on an unstated
+assumed PR distribution, so it was neither regenerable nor auditable, which CLAUDE.md §3.1 forbids
+outright in documents bound for the public M0 deposit. The deterministic example establishes the
+ambiguity; the decision never rested on its frequency.)*
 
 **Resolution: `method="linear"`** — NumPy's default, and what the existing design-evidence scripts
 already used, so it minimises retro-inconsistency. Adopted as an **explicit pre-deposit
@@ -133,6 +140,7 @@ A versioned manifest binds, **by path + SHA-256**, for each session:
 | group | fields |
 |---|---|
 | **Identity / estimands** | subject ID, arm (natural / paced), commanded paced rate (12/15/18), data role (§3.1), study admission disposition |
+| **Design / descriptive** | **measured continuous distance** and **posture** (M4R-15). Distance is a required descriptive breakdown from M5 onward; posture is fixed *seated* by the estimand, so the manifest must let M4 **verify** a session belongs to the fixed-posture design rather than assume it. Scoring mode validates allowed values and ranges, and distance metadata accompanies every applicable per-subject result. **This creates no post-hoc distance strata and no inferential per-distance claim.** Their absence is exactly why the 4 exploratory captures cannot be used for distance reporting (`posture=None`, `distance_cm=None`). |
 | **Timebase** | `frame0_epoch` (synchronised PC UTC at receipt of frame 0), start **and** end PC↔phone clock offsets (§6: NTP-synced, max ±1 s, re-checked at session end; offset > ±1 s ⇒ resync and restart; **no offset may be chosen by optimising radar–reference agreement**) |
 | **Integrity** | raw checksum, truncation bytes, packet-loss statistics, **per-frame validity / zero-fill map** |
 | **Provenance** | capture config, capture-time git commit, Masimo CSV path + hash, commanded-rate schedule |
@@ -309,6 +317,20 @@ are tested explicitly.
   not deletion, carries the consequence. The ≥ 8/10 is **study-wide, not per-arm**.
 - **LoA-CI precision disposition:** half-width **≤ 5 bpm**, using the frozen operational definition
   for **asymmetric** CIs, evaluated as the **four-distance** test. Reported without deleting subjects.
+- **The frozen CONSEQUENCES, not just the threshold booleans** (M4R-12 — emitting a boolean leaves
+  the headline disposition to later analyst judgement, which is exactly what a pre-registration
+  exists to prevent). M4 emits the resulting claim status directly:
+
+  | condition | consequence M4 must emit |
+  |---|---|
+  | an arm has **zero evaluable windows** | that arm → **descriptive-only**; the other arm **remains eligible** (symmetric zero-window handling) |
+  | **< 8/10** qualifying subjects | the **study-wide confirmatory HR claim weakens to descriptive** |
+  | four-distance **precision miss** for an arm | that arm → **descriptive**, **no population LoA** |
+  | **every** primary LoA/CI | carries the accepted **`S_a ≤ 10` anti-conservative under-coverage caveat** as a mandatory label field (M3R-45) |
+  | regression-LoA sensitivity | uncertainty from the **same whole-subject bootstrap**, or explicitly **point-only** when that bootstrap is unavailable |
+
+  **No subject data are ever deleted** — these rules change the *claim status*, not the input set.
+  Stage 7 tests **each transition**, including the mandatory caveat/label fields.
 - Per-arm LoA diagnostics: **proportional-bias / heteroscedasticity, residual skew / QQ,
   within-session lag-1 autocorrelation**, and the **subject-clustered regression-LoA descriptive
   sensitivity** computed as
@@ -391,6 +413,8 @@ No capture can yield a frozen number until the **full §4 manifest** can be popu
    windows are affected. A window containing any dropped/zero-filled frame ⇒ radar-NaN.
 3. **Log start and end PC↔phone clock offsets** (NTP, ±1 s, re-check for drift).
 4. **Record subject, arm, commanded rate, data role, admission/retry disposition** at capture time.
+5. **Record measured continuous distance and posture** (M4R-15) — required descriptive metadata from
+   M5 onward, and not reliably reconstructable after the session.
 
 **This should land before M1's smoke test**, so M1 validates the capture path M5/M6 will rely on.
 
@@ -398,8 +422,10 @@ No capture can yield a frozen number until the **full §4 manifest** can be popu
 
 ## 9. Done-when (implementation-scoped)
 
-1. Stages 1–7 complete, each unit-tested, with the three golden fixtures passing against hand-written
-   expected JSON.
+1. **Stages 0–7** complete, each unit-tested, with the three golden fixtures passing against
+   hand-written expected JSON. *(Stage 0 is included explicitly — M4R-14: revision 3 said "Stages
+   1–7", which read literally would let M4 pass its acceptance checklist without the refactor that
+   prevents live/offline DSP divergence.)*
 2. Raw-reprocessing equality against a direct shared-DSP call demonstrated at full precision.
 3. An end-to-end **development-mode** run on the 3 Masimo captures, emitting HR and BR labelled
    exploratory / apparent / in-sample.

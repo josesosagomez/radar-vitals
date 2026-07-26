@@ -100,13 +100,26 @@ For a radar window ending at time `t`, the span is the **half-open** interval `[
 
 > **PRE-DEPOSIT CLARIFICATION — quantile method (user decision 2026-07-26, M4 plan review M4R-09).**
 > This specification did not name a quantile interpolation method, and the omission is **not**
-> cosmetic. Over the admissible regime (24–30 integer-valued PR samples), NumPy's nine quantile
-> methods disagree about `p90 − p10` often enough that **the method alone decides this gate's verdict
-> on ≈ 50 % of windows** (measured: 1993 / 4000 simulated windows straddle the 5.0 bpm threshold).
-> Worked example at n = 28: `higher`/`nearest` give 5.000 (**admit**) while `linear` 5.300,
-> `midpoint` 5.500, `hazen` 5.700, `median_unbiased` 5.833, `lower`/`averaged_inverted_cdf` 6.000 and
-> `weibull` 6.100 all give **exclude**. Discretisation is the cause: integer PR over ~28 samples puts
-> p90/p10 between order statistics almost every time.
+> cosmetic: with integer-valued PR over 24–30 samples, `p10` and `p90` usually fall *between* order
+> statistics, so the interpolation rule alone can decide the verdict.
+>
+> **Self-contained worked example** — a 30-sample window of `3 × 71`, `23 × 72`, `4 × 77` bpm
+> (stated in full so it needs no script to reproduce; verify with
+> `np.percentile(x, 90, method=m) - np.percentile(x, 10, method=m)`):
+>
+> | method | `p10` | `p90` | `p90 − p10` | verdict at the 5.0 bpm gate |
+> |---|---|---|---|---|
+> | `linear` | 71.90 | 77.00 | **5.100** | exclude |
+> | `lower` | 71.00 | 77.00 | 6.000 | exclude |
+> | `midpoint` | 71.50 | 77.00 | 5.500 | exclude |
+> | `higher` | 72.00 | 77.00 | **5.000** | **admit** |
+> | `nearest` | 72.00 | 77.00 | **5.000** | **admit** |
+>
+> Same window, same data, opposite admissibility. *(An earlier draft of this clarification also
+> quoted a Monte-Carlo frequency for how often this occurs. It was removed: it traced to no committed
+> script and depended on an unstated assumed PR distribution, so it could not be regenerated or
+> audited — CLAUDE.md §3.1. The deterministic example above is sufficient to establish the
+> ambiguity, and nothing here rests on how often it arises.)*
 >
 > **Resolved: `method="linear"`** — NumPy's default, and the method the existing design-evidence
 > scripts already used, so it minimises retro-inconsistency. It must be **named and passed explicitly

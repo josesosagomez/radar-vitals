@@ -82,11 +82,17 @@ behaviour, exactly as M3 requires. **PI is deliberately NOT a primary BR admissi
 | **Stationarity** | exclude if **`p90 − p10` of the finite RRp inside the window > 2.0 bpm**, quantiles computed with the **`linear`** method (see below) | see §2.3. |
 
 > **PRE-DEPOSIT CLARIFICATION — quantile method (user decision 2026-07-26, M4 plan review M4R-09).**
-> Neither comparator named a quantile interpolation method. Measured over the admissible regime
-> (24–30 samples, nine NumPy methods), the method alone decides the **HR** 5.0 bpm gate on ≈ 50 % of
-> windows; **BR is far less affected** (8 / 4000 simulated windows straddle the 2.0 bpm threshold)
-> because RRp varies less within a window — but the ambiguity is **identical in kind**, and RRp's
-> coarse integer resolution means it can still land exactly on the threshold.
+> Neither comparator named a quantile interpolation method. With integer-valued samples over a 24–30
+> sample window, `p10` and `p90` usually fall *between* order statistics, so the interpolation rule
+> alone can decide the verdict — see the **self-contained worked example** in
+> `notes/comparator_prespec.md` §2.2, where one explicit 30-sample window is admitted by
+> `higher`/`nearest` and excluded by `linear`/`lower`/`midpoint`.
+>
+> The mechanism is **identical in kind** for BR. It is expected to arise less often here, because
+> RRp varies less within a window than PR does — but that is a qualitative expectation, **not a
+> measured rate**, and nothing in this clarification depends on it. *(An earlier draft quoted a
+> Monte-Carlo frequency for both vitals; it was removed as untraceable to a committed script and
+> dependent on an unstated assumed distribution — CLAUDE.md §3.1.)*
 >
 > **Resolved: `method="linear"`** — NumPy's default and the one already used by
 > `scripts/derive_br_comparator_evidence.py`, applied **identically to HR and BR** so the two
