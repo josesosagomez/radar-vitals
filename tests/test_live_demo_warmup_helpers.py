@@ -1,4 +1,7 @@
-"""Goal 1 tests for live-demo warmup bin helper contracts."""
+"""Goal 1 tests for the warmup bin-selection contracts in src/warmup_select.py.
+
+Extracted from scripts/live_demo.py by the M4 Stage 0 refactor; the assertions are
+unchanged from when they guarded the private live_demo helpers."""
 from __future__ import annotations
 
 import sys
@@ -15,11 +18,11 @@ except ModuleNotFoundError:
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from scripts.live_demo import (  # noqa: E402
-    _derive_candidate_bins,
-    _range_energy_by_bin,
-    _resolve_locked_bin,
-    _run_warmup_selection,
+from src.warmup_select import (  # noqa: E402
+    derive_candidate_bins,
+    range_energy_by_bin,
+    resolve_locked_bin,
+    run_warmup_selection,
 )
 
 
@@ -53,14 +56,14 @@ def test_live_demo_config_has_minimal_bin_selection_section():
 
 
 def test_derive_candidate_bins_from_protocol_distance_and_resolution():
-    assert _derive_candidate_bins(_base_cfg()) == list(range(23, 33))
+    assert derive_candidate_bins(_base_cfg()) == list(range(23, 33))
 
 
 def test_derive_candidate_bins_uses_explicit_override():
     cfg = _base_cfg()
     cfg["bin_selection"]["candidate_bins"] = ["24", 27, 31]
 
-    assert _derive_candidate_bins(cfg) == [24, 27, 31]
+    assert derive_candidate_bins(cfg) == [24, 27, 31]
 
 
 def test_derive_candidate_bins_clamps_to_adc_bounds():
@@ -70,7 +73,7 @@ def test_derive_candidate_bins_clamps_to_adc_bounds():
         "bin_selection": {"candidate_bins": None},
     }
 
-    assert _derive_candidate_bins(cfg) == [0, 1, 2, 3]
+    assert derive_candidate_bins(cfg) == [0, 1, 2, 3]
 
 
 def test_range_energy_by_bin_uses_range_fft_energy_ranking():
@@ -80,23 +83,23 @@ def test_range_energy_by_bin_uses_range_fft_energy_ranking():
     cube += 0.5 * np.exp(1j * 2 * np.pi * 5 * samples / n_adc).astype(np.complex64)
     cube += 3.0 * np.exp(1j * 2 * np.pi * 9 * samples / n_adc).astype(np.complex64)
 
-    energy = _range_energy_by_bin(cube, [5, 9, 12])
+    energy = range_energy_by_bin(cube, [5, 9, 12])
 
     assert set(energy) == {5, 9, 12}
     assert energy[9] > energy[5] > energy[12]
 
 
 def test_resolve_locked_bin_prefers_manual_then_manifest():
-    assert _resolve_locked_bin(25, 27, True) == (25, "manual", False)
-    assert _resolve_locked_bin(None, 27, True) == (27, "manifest", False)
+    assert resolve_locked_bin(25, 27, True) == (25, "manual", False)
+    assert resolve_locked_bin(None, 27, True) == (27, "manifest", False)
 
 
 def test_resolve_locked_bin_returns_warmup_pending_when_enabled():
-    assert _resolve_locked_bin(None, None, True) == (None, "warmup_auto", True)
+    assert resolve_locked_bin(None, None, True) == (None, "warmup_auto", True)
 
 
 def test_resolve_locked_bin_is_pure_error_sentinel_when_disabled():
-    assert _resolve_locked_bin(None, None, False) == (None, None, False)
+    assert resolve_locked_bin(None, None, False) == (None, None, False)
 
 
 def _tone_cube(bin_amplitudes: dict[int, float], n_adc: int = 32) -> np.ndarray:
@@ -157,7 +160,7 @@ def test_run_warmup_selection_scans_all_bins_and_selects_hr_valid_winner():
         calls.append(locked_bin)
         return dsp_by_bin[locked_bin]
 
-    selected_bin, winning_dsp, evidence = _run_warmup_selection(
+    selected_bin, winning_dsp, evidence = run_warmup_selection(
         cube, [1, 2, 3], cfg, fs=20.0, dsp_fn=fake_dsp
     )
 
@@ -190,7 +193,7 @@ def test_run_warmup_selection_tie_breaks_by_energy_rank():
     def fake_dsp(_cube, locked_bin, _fs, _cfg):
         return dict(common, hr_raw=70.0 + locked_bin)
 
-    selected_bin, winning_dsp, evidence = _run_warmup_selection(
+    selected_bin, winning_dsp, evidence = run_warmup_selection(
         cube, [1, 3], cfg, fs=20.0, dsp_fn=fake_dsp
     )
 
@@ -214,7 +217,7 @@ def test_run_warmup_selection_continues_after_partial_dsp_failures():
             raise RuntimeError(f"bad bin {locked_bin}")
         return _dsp(br_confidence="low", br_valid=False, fallback_hr_bpm=68.0)
 
-    selected_bin, winning_dsp, evidence = _run_warmup_selection(
+    selected_bin, winning_dsp, evidence = run_warmup_selection(
         cube, [1, 2, 3], cfg, fs=20.0, dsp_fn=fake_dsp
     )
 
@@ -244,7 +247,7 @@ def test_hr_bonus_vetoed_for_low_settled_energy_bin():
         12: _dsp(hr_valid=True, hr_raw=66.0, br_confidence="high", br_valid=True),
     }
 
-    selected_bin, winning_dsp, evidence = _run_warmup_selection(
+    selected_bin, winning_dsp, evidence = run_warmup_selection(
         cube, [4, 12], cfg, fs=20.0,
         dsp_fn=lambda _c, b, _f, _g: dsp_by_bin[b],
     )
@@ -280,7 +283,7 @@ def test_hr_bonus_veto_uses_settled_not_full_window_energy():
         12: _dsp(hr_valid=True, hr_raw=110.0),   # bogus pass rides the transient
     }
 
-    selected_bin, _, evidence = _run_warmup_selection(
+    selected_bin, _, evidence = run_warmup_selection(
         cube, [4, 12], cfg, fs=20.0,
         dsp_fn=lambda _c, b, _f, _g: dsp_by_bin[b],
     )
@@ -304,7 +307,7 @@ def test_hr_bonus_veto_threshold_comes_from_config():
         12: _dsp(hr_valid=True, hr_raw=66.0, br_confidence="high", br_valid=True),
     }
 
-    selected_bin, _, evidence = _run_warmup_selection(
+    selected_bin, _, evidence = run_warmup_selection(
         cube, [4, 12], cfg, fs=20.0,
         dsp_fn=lambda _c, b, _f, _g: dsp_by_bin[b],
     )
@@ -332,7 +335,7 @@ def test_ineligible_bin_cannot_outvote_eligible_bin_on_breathing_evidence():
         12: _dsp(br_confidence="high", br_valid=True, br_bpm=13.0),    # ineligible
     }
 
-    selected_bin, winning_dsp, evidence = _run_warmup_selection(
+    selected_bin, winning_dsp, evidence = run_warmup_selection(
         cube, [4, 12], cfg, fs=20.0,
         dsp_fn=lambda _c, b, _f, _g: dsp_by_bin[b],
     )
@@ -363,7 +366,7 @@ def test_ineligible_bin_wins_only_when_no_eligible_dsp_succeeds(capsys):
             raise RuntimeError("DSP blew up on the eligible bin")
         return _dsp(hr_valid=True, hr_raw=66.0, br_confidence="high", br_valid=True)
 
-    selected_bin, winning_dsp, evidence = _run_warmup_selection(
+    selected_bin, winning_dsp, evidence = run_warmup_selection(
         cube, [4, 12], cfg, fs=20.0, dsp_fn=fake_dsp
     )
 
@@ -390,7 +393,7 @@ def test_settle_skip_exceeding_window_falls_back_to_full_window(capsys):
     cfg["profile"]["range_resolution_m"] = 1.0
     cfg["protocol"]["subject_distance_m"] = [1.0, 3.0]
 
-    _, _, evidence = _run_warmup_selection(
+    _, _, evidence = run_warmup_selection(
         cube, [4], cfg, fs=20.0, dsp_fn=lambda *_a: _dsp(),
     )
 
@@ -405,7 +408,7 @@ def test_negative_settle_skip_s_raises():
     cube = _tone_cube({4: 10.0})
 
     with pytest.raises(ValueError, match="settle_skip_s"):
-        _run_warmup_selection(cube, [4], cfg, fs=20.0, dsp_fn=lambda *_a: _dsp())
+        run_warmup_selection(cube, [4], cfg, fs=20.0, dsp_fn=lambda *_a: _dsp())
 
 
 def test_nan_settle_skip_s_raises():
@@ -414,7 +417,7 @@ def test_nan_settle_skip_s_raises():
     cube = _tone_cube({4: 10.0})
 
     with pytest.raises(ValueError, match="settle_skip_s"):
-        _run_warmup_selection(cube, [4], cfg, fs=20.0, dsp_fn=lambda *_a: _dsp())
+        run_warmup_selection(cube, [4], cfg, fs=20.0, dsp_fn=lambda *_a: _dsp())
 
 
 def test_positive_energy_eligibility_threshold_raises():
@@ -423,7 +426,7 @@ def test_positive_energy_eligibility_threshold_raises():
     cube = _tone_cube({4: 10.0})
 
     with pytest.raises(ValueError, match="energy_eligibility_min_settled_db"):
-        _run_warmup_selection(cube, [4], cfg, fs=20.0, dsp_fn=lambda *_a: _dsp())
+        run_warmup_selection(cube, [4], cfg, fs=20.0, dsp_fn=lambda *_a: _dsp())
 
 
 def test_infinite_energy_eligibility_threshold_raises():
@@ -432,7 +435,7 @@ def test_infinite_energy_eligibility_threshold_raises():
     cube = _tone_cube({4: 10.0})
 
     with pytest.raises(ValueError, match="energy_eligibility_min_settled_db"):
-        _run_warmup_selection(cube, [4], cfg, fs=20.0, dsp_fn=lambda *_a: _dsp())
+        run_warmup_selection(cube, [4], cfg, fs=20.0, dsp_fn=lambda *_a: _dsp())
 
 
 def test_energy_eligibility_threshold_boundary(monkeypatch):
@@ -448,14 +451,14 @@ def test_energy_eligibility_threshold_boundary(monkeypatch):
     def fake_energy_by_bin(_cube, candidate_bins):
         return {b: fixed_energies[b] for b in candidate_bins}
 
-    monkeypatch.setattr("scripts.live_demo._range_energy_by_bin", fake_energy_by_bin)
+    monkeypatch.setattr("src.warmup_select.range_energy_by_bin", fake_energy_by_bin)
 
     cfg = _base_cfg()
     cfg["profile"]["range_resolution_m"] = 1.0
     cfg["protocol"]["subject_distance_m"] = [1.0, 3.0]
     cube = np.zeros((10, 1, 1, 4), dtype=np.complex64)  # content unused by the fake
 
-    _, _, evidence = _run_warmup_selection(
+    _, _, evidence = run_warmup_selection(
         cube, [100, 101, 102], cfg, fs=20.0, dsp_fn=lambda *_a: _dsp(),
     )
 
@@ -471,7 +474,7 @@ def test_empty_candidate_bins_raises():
     cfg = _base_cfg()
 
     with pytest.raises(ValueError, match="candidate_bins"):
-        _run_warmup_selection(cube, [], cfg, fs=20.0, dsp_fn=lambda *_a: _dsp())
+        run_warmup_selection(cube, [], cfg, fs=20.0, dsp_fn=lambda *_a: _dsp())
 
 
 def test_dominant_non_chest_reflector_is_surfaced_not_silently_dropped(capsys):
@@ -491,7 +494,7 @@ def test_dominant_non_chest_reflector_is_surfaced_not_silently_dropped(capsys):
         12: _dsp(hr_valid=True, hr_raw=66.0, br_confidence="high", br_valid=True),
     }
 
-    selected_bin, winning_dsp, evidence = _run_warmup_selection(
+    selected_bin, winning_dsp, evidence = run_warmup_selection(
         cube, [4, 12], cfg, fs=20.0,
         dsp_fn=lambda _c, b, _f, _g: dsp_by_bin[b],
     )
@@ -518,7 +521,7 @@ def test_energy_eligible_recorded_for_dsp_failed_candidates():
             raise RuntimeError("boom")
         return _dsp(br_confidence="high", br_valid=True)
 
-    _, _, evidence = _run_warmup_selection(
+    _, _, evidence = run_warmup_selection(
         cube, [4, 12], cfg, fs=20.0, dsp_fn=fake_dsp
     )
 
@@ -543,7 +546,7 @@ def test_fallback_used_true_for_all_zero_energy_and_all_dsp_failed():
     def fake_dsp(_cube, _b, _fs, _cfg):
         raise RuntimeError("boom")
 
-    _, winning_dsp, evidence = _run_warmup_selection(
+    _, winning_dsp, evidence = run_warmup_selection(
         cube, [1, 2, 3], cfg, fs=20.0, dsp_fn=fake_dsp
     )
 
@@ -564,7 +567,7 @@ def test_run_warmup_selection_all_fail_falls_back_to_highest_energy_bin():
     def fake_dsp(_cube, locked_bin, _fs, _cfg):
         raise ValueError(f"no dsp for {locked_bin}")
 
-    selected_bin, winning_dsp, evidence = _run_warmup_selection(
+    selected_bin, winning_dsp, evidence = run_warmup_selection(
         cube, [1, 2, 3], cfg, fs=20.0, dsp_fn=fake_dsp
     )
 

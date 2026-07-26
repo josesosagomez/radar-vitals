@@ -51,7 +51,6 @@ from pathlib import Path
 
 import numpy as np
 import yaml
-from scipy.fft import fft as sp_fft
 
 # ── sys.path so src/ imports work regardless of cwd ──────────────────────────
 _ROOT = Path(__file__).resolve().parents[1]
@@ -59,14 +58,14 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 from src.radar_io import ChirpConfig, read_adc_bin
-from src.respiration import (
-    extract_chest_phase,
-    fft_estimate_rr,
-    fuse_estimates,
-    ha_estimate_rr,
-    stft_stability,
+# The window-level DSP composition and the warmup bin-selection policy live in src/
+# so the M4 offline harness runs the SAME code, not a copy of it (M4 plan §5.1).
+from src.warmup_select import (
+    derive_candidate_bins,
+    resolve_locked_bin,
+    run_warmup_selection,
 )
-from src.vitals import estimate_rate_from_phase, remove_impulse_noise
+from src.window_pipeline import run_window_dsp
 
 PAYLOAD_BYTES_PER_PKT = 1456   # DCA1000 ADC payload bytes per UDP packet
 
@@ -426,472 +425,6 @@ def _save_intermediates(path: Path, records: list[dict]) -> None:
     np.savez_compressed(str(path), **arrays)
 
 
-# ── Per-hop DSP ───────────────────────────────────────────────────────────────
-
-_REJ_CODE_NAMES = {
-    -1: "", 0: "passed",
-    1: "no_second_harmonic_region", 2: "ratio_db_low",
-    3: "prominence_low", 4: "low_candidate_competitor",
-    5: "not_attempted", 6: "peak_to_floor_db_low",
-    7: "low_candidate_floor_db_low",
-}
-
-
-def _run_dsp(ring_buffer: collections.deque, locked_bin: int, fs: float, cfg: dict) -> dict:
-    cube = np.stack(list(ring_buffer))   # (window_frames, chirps, rx, adc)
-
-    phase_raw = extract_chest_phase(
-        cube,
-        locked_bin=locked_bin,
-        method=cfg["phase"]["method"],
-    )
-    phase_clean = remove_impulse_noise(
-        phase_raw,
-        thresh=float(cfg["phase"]["impulse_clip_rad"]),
-    )
-
-    resp_cfg = cfg["respiration"]
-    band_hz = tuple(resp_cfg["band_hz"])
-
-    fft_r = fft_estimate_rr(
-        phase_clean, fs, band_hz,
-        detrend_type=resp_cfg["detrend"],
-    )
-    ha_r = ha_estimate_rr(
-        phase_clean, fs, band_hz,
-        max_harmonics=resp_cfg["max_harmonics"],
-        harmonic_max_hz=resp_cfg["harmonic_max_hz"],
-        detrend_type=resp_cfg["detrend"],
-    )
-    stft_r = stft_stability(
-        phase_clean, fs, band_hz,
-        subwindow_s=float(resp_cfg["stft_subwindow_s"]),
-        overlap=float(resp_cfg["stft_overlap"]),
-        detrend_type=resp_cfg["detrend"],
-    )
-    br_result = fuse_estimates(fft_r, ha_r, stft_r, resp_cfg)
-
-    # Low-confidence BR invalidated before ECA — do not feed a bad f_r to AHET
-    if br_result.get("resp_confidence") == "low":
-        br_result = dict(br_result)
-        br_result["resp_valid"] = False
-    f_r_hz: float | None = (
-        float(br_result["resp_peak_hz"]) if br_result["resp_valid"] else None
-    )
-
-    hcfg = cfg["heart"]
-    hr_result = estimate_rate_from_phase(
-        phase_clean,
-        fs,
-        tuple(hcfg["band_hz"]),
-        f_r_hz=f_r_hz,
-        k_max=int(hcfg["k_max"]),
-        ahet_deviation_hz=float(hcfg["ahet_deviation_hz"]),
-        eca_mode=hcfg["eca_mode"],
-        ahet_gate_mode=hcfg["ahet_gate_mode"],
-        eca_forbidden_guard_hz=float(hcfg["eca_forbidden_guard_hz"]),
-        eca_cardiac_guard_hz=float(hcfg.get("eca_cardiac_guard_hz", 0.10)),
-        k_max_cap=int(hcfg.get("k_max_cap", 10)),
-        candidate_min_second_harmonic_ratio_db=float(
-            hcfg["candidate_min_second_harmonic_ratio_db"]
-        ),
-        candidate_min_prominence=float(hcfg["candidate_min_prominence"]),
-        low_candidate_hz=float(hcfg["low_candidate_hz"]),
-        high_candidate_preference_hz=float(hcfg["high_candidate_preference_hz"]),
-        high_competitor_min_mag_ratio=float(hcfg["high_competitor_min_mag_ratio"]),
-        candidate_min_peak_to_floor_db=float(hcfg["candidate_min_peak_to_floor_db"]),
-        low_candidate_min_peak_to_floor_db=float(
-            hcfg["low_candidate_min_peak_to_floor_db"]
-        ),
-    )
-
-    # Diagnostic-only no-ECA baseline — never shown as a confident estimate
-    baseline = estimate_rate_from_phase(
-        phase_clean, fs, tuple(hcfg["band_hz"])
-    )
-    fallback_hr_bpm = float(baseline.get("rate_bpm", np.nan))
-    baseline_spectrum = baseline.get("spectrum", np.array([]))
-    baseline_freqs_hz = baseline.get("freqs_hz", np.array([]))
-
-    hr_valid = bool(hr_result.get("ahet_verified", False))
-    hr_raw = float(hr_result["rate_bpm"]) if hr_valid else np.nan
-
-    rej_codes = hr_result.get("candidate_rejection_code", np.array([-1, -1, -1]))
-    # Fixed reporting length — k_max_eff varies per window but the artifact shape must not,
-    # or the NPZ stack breaks / silently hides k > k_max (plan S8.1b).
-    _skip_len = max(int(hcfg.get("k_max_cap", 10)), int(hcfg["k_max"]))
-    eca_skip = np.asarray(
-        hr_result.get("eca_skipped_harmonics", np.zeros(_skip_len, dtype=bool)), dtype=bool
-    )
-
-    accepted_rank = int(hr_result.get("accepted_candidate_rank", -1))
-    if hr_valid and 0 <= accepted_rank < len(rej_codes):
-        summary_code = int(rej_codes[accepted_rank])
-    else:
-        summary_code = int(rej_codes[0]) if len(rej_codes) > 0 else -1
-    rej_reason = _REJ_CODE_NAMES.get(summary_code, str(summary_code))
-
-    return {
-        "hr_valid": hr_valid,
-        "hr_raw": hr_raw,
-        "fallback_hr_bpm": fallback_hr_bpm,
-        "baseline_spectrum": baseline_spectrum,
-        "baseline_freqs_hz": baseline_freqs_hz,
-        "hr_result": hr_result,
-        "br_result": br_result,
-        "br_bpm": float(br_result.get("radar_rr_bpm", np.nan)),
-        "br_confidence": br_result.get("resp_confidence", "low"),
-        "br_valid": bool(br_result.get("resp_valid", False)),
-        "f_r_hz": f_r_hz,
-        "spectrum_stage": int(hr_result.get("spectrum_stage", 0)),
-        "rej_reason": rej_reason,
-        "n_eca_skipped": int(np.sum(eca_skip)),
-        # WHICH harmonics were spared, not just how many — the plan's predictions (S6.5)
-        # depend on the identity of k, and the count alone cannot express it.
-        "eca_skipped_harmonics": eca_skip,
-        "k_max_eff": int(hr_result.get("k_max_eff", 0)),
-        "n_eca_projected": int(hr_result.get("n_eca_projected", 0)),
-        # Basis diagnostics: how many sin/cos columns SURVIVED Gram-Schmidt, not merely how
-        # many harmonic orders were selected (cross-review 20.6). Without this a run can report
-        # full harmonic coverage while the projection actually used fewer columns.
-        "n_eca_cols_retained": int(hr_result.get("n_eca_cols_retained", 0)),
-        "n_eca_cols_dropped": int(hr_result.get("n_eca_cols_dropped", 0)),
-        # Intermediates for NPZ
-        "phase_raw": phase_raw,
-        "phase_clean": phase_clean,
-        "fft_r": fft_r,
-        "ha_r": ha_r,
-        "stft_r": stft_r,
-    }
-
-
-# ── Warmup bin-selection helpers ──────────────────────────────────────────────
-
-def _derive_candidate_bins(cfg: dict) -> list[int]:
-    """Candidate range bins from protocol distance + range resolution, or explicit list."""
-    bsel = cfg.get("bin_selection", {})
-    explicit = bsel.get("candidate_bins")
-    if explicit is not None:
-        return [int(b) for b in explicit]
-    dist_range = cfg["protocol"]["subject_distance_m"]
-    res = float(cfg["profile"]["range_resolution_m"])
-    n_adc = int(cfg["profile"]["num_adc_samples"])
-    lo = int(np.ceil(float(dist_range[0]) / res))
-    hi = int(np.floor(float(dist_range[1]) / res))
-    return list(range(max(0, lo), min(n_adc - 1, hi) + 1))
-
-
-def _range_energy_by_bin(
-    cube: np.ndarray, candidate_bins: list[int]
-) -> dict[int, float]:
-    """Mean power per range bin — Hann window + sp_fft, same as extract_chest_phase."""
-    n_adc = cube.shape[3]
-    hann_win = np.hanning(n_adc).astype(np.float32)
-    windowed = cube * hann_win                  # broadcast over last dim
-    range_fft = sp_fft(windowed, axis=3)
-    return {
-        b: float(np.mean(np.abs(range_fft[:, :, :, b]) ** 2))
-        for b in candidate_bins
-    }
-
-
-def _resolve_locked_bin(
-    args_locked_bin: int | None,
-    manifest_bin: int | None,
-    bin_selection_enabled: bool,
-) -> tuple[int | None, str | None, bool]:
-    """Return (locked_bin_or_none, source_or_none, warmup_pending).
-
-    (None, None, False) is the error sentinel — caller must call sys.exit().
-    """
-    if args_locked_bin is not None:
-        return args_locked_bin, "manual", False
-    if manifest_bin is not None:
-        return manifest_bin, "manifest", False
-    if bin_selection_enabled:
-        return None, "warmup_auto", True
-    return None, None, False
-
-
-def _run_warmup_selection(
-    cube: np.ndarray,
-    candidate_bins: list[int],
-    cfg: dict,
-    fs: float,
-    dsp_fn=_run_dsp,
-) -> tuple[int, dict | None, dict]:
-    """Scan candidate bins, score by radar evidence, return the best bin.
-
-    Returns (selected_bin, winning_dsp_dict_or_none, evidence_for_json).
-    winning_dsp_dict is None when every candidate's DSP call raised (all-fail
-    case); the caller should skip first-row emission and let the next hop call
-    _run_dsp normally on the fallback bin.
-
-    Energy-eligibility prior: a bin's settled-window energy (energy_eligibility_
-    min_settled_db below the strongest candidate) gates whether an hr_valid pass
-    can even be CONSIDERED. This is an eligibility partition, not just a score
-    bonus: an energy-ineligible bin can never outvote an energy-eligible one
-    (via breathing evidence or anything else), it can only win if no
-    energy-eligible candidate's DSP call succeeded (see winner_pool below).
-    Empirical basis: 4 recorded sessions / 1 subject (2026-07-14/15) — a lone
-    AHET pass at a skirt bin, or genuine cardiac leakage into a low-energy skirt
-    bin, both otherwise outvoted the true chest bin. Assumes the protocol scene
-    (single seated subject is the dominant reflector inside the distance gate);
-    not yet validated across subjects/postures/competing reflectors — see
-    notes/approach.md and re-check against the 10-subject study.
-    """
-    if not candidate_bins:
-        raise ValueError(
-            "warmup bin selection got an empty candidate_bins list — check "
-            "protocol.subject_distance_m / bin_selection.candidate_bins against "
-            "profile.range_resolution_m / profile.num_adc_samples (the derived "
-            "gate may be empty or entirely out of ADC bounds)."
-        )
-
-    res = float(cfg["profile"]["range_resolution_m"])
-    dist_range = cfg["protocol"]["subject_distance_m"]
-    center_m = (float(dist_range[0]) + float(dist_range[1])) / 2.0
-
-    t0 = time.monotonic()
-
-    energies = _range_energy_by_bin(cube, candidate_bins)
-    sorted_by_energy = sorted(candidate_bins, key=lambda b: energies[b], reverse=True)
-    energy_rank = {b: i + 1 for i, b in enumerate(sorted_by_energy)}
-
-    bcfg = cfg.get("bin_selection", {}) or {}
-
-    threshold_db = float(bcfg.get("energy_eligibility_min_settled_db", -12.0))
-    if not np.isfinite(threshold_db) or threshold_db > 0:
-        raise ValueError(
-            "bin_selection.energy_eligibility_min_settled_db must be finite and "
-            f"<= 0 (it is a dB deficit below the strongest candidate), got {threshold_db!r}"
-        )
-
-    requested_settle_skip_s = float(bcfg.get("settle_skip_s", 5.0))
-    if not np.isfinite(requested_settle_skip_s) or requested_settle_skip_s < 0:
-        raise ValueError(
-            "bin_selection.settle_skip_s must be finite and >= 0, got "
-            f"{requested_settle_skip_s!r}"
-        )
-
-    # Settled-window energy for the eligibility prior. Measured AFTER the settling
-    # transient so the same transient cannot both fake an AHET pass and inflate
-    # the bin's energy past the gate (the 20260714 sweep failure had 1 dB of
-    # margin on full-window energy vs 18 dB on settled energy).
-    skip_frames_requested = int(round(requested_settle_skip_s * fs))
-    settle_skip_applied = 0 < skip_frames_requested < cube.shape[0]
-    settle_skip_fallback_full_window = skip_frames_requested > 0 and not settle_skip_applied
-    settle_skip_frames_applied = skip_frames_requested if settle_skip_applied else 0
-    if settle_skip_fallback_full_window:
-        print(
-            f"  WARNING: settle_skip_s={requested_settle_skip_s:.2f}s "
-            f"({skip_frames_requested} frames) is >= the {cube.shape[0]}-frame warmup "
-            "window; using the FULL window for the energy-eligibility prior "
-            "(settling transient included).",
-            file=sys.stderr,
-        )
-    settled_cube = cube[settle_skip_frames_applied:] if settle_skip_applied else cube
-    settled_energies = _range_energy_by_bin(settled_cube, candidate_bins)
-    e_ref = max(settled_energies.values())
-    settled_db = {
-        b: float(10.0 * np.log10(e / e_ref)) if (e > 0 and e_ref > 0) else float("-inf")
-        for b, e in settled_energies.items()
-    }
-    # Eligibility depends only on settled energy — computed for every candidate,
-    # including ones whose DSP call later raises, so a mixed-fallback session
-    # (eligible bins fail DSP, only an ineligible bin succeeds) is diagnosable.
-    energy_eligible = {b: settled_db[b] >= threshold_db for b in candidate_bins}
-    all_candidates_energy_ineligible = not any(energy_eligible.values())
-
-    results: list[dict] = []
-    for b in candidate_bins:
-        try:
-            dsp = dsp_fn(cube, b, fs, cfg)
-            results.append({
-                "bin": b, "dsp": dsp,
-                "energy": energies[b], "energy_rank": energy_rank[b],
-                "failed": False, "error": None,
-            })
-        except Exception as exc:
-            print(f"  WARNING: warmup DSP failed for bin {b}: {exc}", file=sys.stderr)
-            results.append({
-                "bin": b, "dsp": None,
-                "energy": energies[b], "energy_rank": energy_rank[b],
-                "failed": True, "error": str(exc),
-            })
-
-    t_scan_ms = (time.monotonic() - t0) * 1000.0
-    good = [r for r in results if not r["failed"]]
-    eligible_dsp_success_count = 0
-    fallback_used = False
-
-    if not good:
-        fallback = min(results, key=lambda r: r["energy_rank"])
-        selected_bin = fallback["bin"]
-        winning_dsp = None
-        selection_confidence = "low"
-        selection_reason = "all_dsp_failed_energy_fallback"
-        # Not drawn from a normal energy-eligible + DSP-succeeded pool either —
-        # fallback_used must stay a single reliable "don't trust this pick without
-        # checking selection_reason" signal across BOTH failure axes (all DSP
-        # failed vs. no energy-eligible DSP success), not just the latter.
-        fallback_used = True
-        print(
-            f"  WARNING: warmup DSP failed for every candidate. "
-            f"Falling back to highest-energy bin {selected_bin}; no HR for first window.",
-            file=sys.stderr,
-        )
-    else:
-        def _br_conf_order(conf: str) -> int:
-            return {"high": 0, "medium": 1, "low": 2}.get(conf, 3)
-
-        for r in good:
-            dsp = r["dsp"]
-            eligible = energy_eligible[r["bin"]]
-            # hr_valid only counts if the bin's settled energy is plausibly the
-            # chest: a lone AHET pass at a skirt bin >12 dB below the strongest
-            # candidate must not outvote the body's dominant return.
-            granted = bool(dsp["hr_valid"]) and eligible
-            r["hr_bonus_granted"] = granted
-            r["hr_bonus_vetoed"] = bool(dsp["hr_valid"]) and not granted
-            score = 0
-            if granted:
-                score += 1000
-            br_conf = dsp["br_confidence"]
-            if br_conf == "high":
-                score += 250
-            elif br_conf == "medium":
-                score += 100
-            else:
-                score -= 100
-            if dsp["br_valid"]:
-                score += 50
-            score -= 5 * r["energy_rank"]
-            r["score"] = score
-
-        vetoed_hr_candidates = [r for r in good if r["hr_bonus_vetoed"]]
-        if vetoed_hr_candidates:
-            listing = ", ".join(
-                f"bin {r['bin']} ({settled_db[r['bin']]:.1f} dB)"
-                for r in vetoed_hr_candidates
-            )
-            print(
-                f"  WARNING: hr_valid candidate(s) energy-ineligible "
-                f"(< {threshold_db:.1f} dB rel strongest settled candidate) and "
-                f"excluded from the primary energy-eligible pool: {listing}. "
-                f"(May still be selected as a low-confidence fallback if no "
-                f"eligible candidate's DSP succeeds.)",
-                file=sys.stderr,
-            )
-
-        # Eligibility partition: an energy-ineligible bin can win ONLY if no
-        # energy-eligible candidate's DSP call succeeded — never by outranking
-        # an eligible bin on breathing evidence or anything else in the sort key.
-        eligible_good = [r for r in good if energy_eligible[r["bin"]]]
-        eligible_dsp_success_count = len(eligible_good)
-        fallback_used = eligible_dsp_success_count == 0
-        winner_pool = eligible_good if eligible_good else good
-
-        winner_pool.sort(key=lambda r: (
-            -r["score"],
-            int(not r["hr_bonus_granted"]),
-            _br_conf_order(r["dsp"]["br_confidence"]),
-            int(not r["dsp"]["br_valid"]),
-            r["energy_rank"],
-            abs(r["bin"] * res - center_m),
-            r["bin"],
-        ))
-        winner = winner_pool[0]
-        selected_bin = winner["bin"]
-        winning_dsp = winner["dsp"]
-
-        if fallback_used:
-            selection_confidence = "low"
-        elif winner["hr_bonus_granted"] and winning_dsp["br_valid"]:
-            selection_confidence = "high"
-        elif winning_dsp["br_valid"] and winning_dsp["br_confidence"] in ("high", "medium"):
-            selection_confidence = "medium"
-        else:
-            selection_confidence = "low"
-
-        selection_reason = (
-            f"score={winner['score']}"
-            f"_hr={int(winner['hr_bonus_granted'])}"
-            f"_br={winning_dsp['br_confidence']}"
-        )
-        if winner["hr_bonus_vetoed"]:
-            selection_reason += "_hr_bonus_vetoed"
-        if fallback_used:
-            selection_reason += "_no_energy_eligible_dsp_success"
-
-    if selection_confidence == "low":
-        print(
-            f"  WARNING: warmup selection confidence is low for bin {selected_bin} "
-            f"(~{selected_bin * res:.2f} m). Check warmup_bin_selection.json.",
-            file=sys.stderr,
-        )
-
-    evidence: dict = {
-        "selected_bin": int(selected_bin),
-        "selected_range_m": round(selected_bin * res, 4),
-        "selected_confidence": selection_confidence,
-        "selection_reason": selection_reason,
-        "t_warmup_scan_ms": round(t_scan_ms, 1),
-        "energy_eligibility_min_settled_db": threshold_db,
-        "settle_skip_s": requested_settle_skip_s,
-        "settle_skip_frames_applied": settle_skip_frames_applied,
-        "settle_skip_fallback_full_window": bool(settle_skip_fallback_full_window),
-        "all_candidates_energy_ineligible": bool(all_candidates_energy_ineligible),
-        "eligible_dsp_success_count": int(eligible_dsp_success_count),
-        "fallback_used": bool(fallback_used),
-        "candidates": [],
-    }
-    for r in results:
-        _sdb = settled_db[r["bin"]]
-        cand: dict = {
-            "bin": r["bin"],
-            "range_m": round(r["bin"] * res, 4),
-            "energy": r["energy"],
-            "energy_rank": r["energy_rank"],
-            "settled_energy_db": round(_sdb, 1) if np.isfinite(_sdb) else None,
-            "energy_eligible": bool(energy_eligible[r["bin"]]),
-            "failed": r["failed"],
-            "error": r["error"],
-        }
-        if not r["failed"]:
-            dsp = r["dsp"]
-            cand.update({
-                "score": r.get("score"),
-                "hr_bonus_vetoed": bool(r.get("hr_bonus_vetoed", False)),
-                "hr_valid": bool(dsp["hr_valid"]),
-                "hr_raw": (
-                    float(dsp["hr_raw"]) if np.isfinite(dsp["hr_raw"]) else None
-                ),
-                "fallback_hr_bpm": (
-                    float(dsp["fallback_hr_bpm"])
-                    if np.isfinite(dsp["fallback_hr_bpm"])
-                    else None
-                ),
-                "br_bpm": (
-                    float(dsp["br_bpm"]) if np.isfinite(dsp["br_bpm"]) else None
-                ),
-                "br_confidence": dsp["br_confidence"],
-                "resp_valid": bool(dsp["br_valid"]),
-                "f_r_hz": (
-                    None if dsp.get("f_r_hz") is None else float(dsp["f_r_hz"])
-                ),
-                "spectrum_stage": int(dsp["spectrum_stage"]),
-                "rej_reason": dsp["rej_reason"],
-                "n_eca_skipped": int(dsp["n_eca_skipped"]),
-                "accepted_candidate_rank": int(
-                    dsp["hr_result"].get("accepted_candidate_rank", -1)
-                ),
-            })
-        evidence["candidates"].append(cand)
-
-    return selected_bin, winning_dsp, evidence
-
-
 # ── Display ───────────────────────────────────────────────────────────────────
 
 class _LiveDisplay:
@@ -1167,7 +700,7 @@ def main() -> None:
 
     # --locked-bin wins over manifest; otherwise warmup may choose the bin.
     bin_selection_enabled = bool(cfg.get("bin_selection", {}).get("enabled", False))
-    locked_bin, locked_bin_source, warmup_pending = _resolve_locked_bin(
+    locked_bin, locked_bin_source, warmup_pending = resolve_locked_bin(
         args.locked_bin, manifest_locked_bin, bin_selection_enabled
     )
     if locked_bin is None and not warmup_pending:
@@ -1413,7 +946,7 @@ def main() -> None:
             dsp = (
                 dsp_override
                 if dsp_override is not None
-                else _run_dsp(ring_buffer, int(_state["locked_bin"]), fs, cfg)
+                else run_window_dsp(ring_buffer, int(_state["locked_bin"]), fs, cfg)
             )
         except Exception as exc:
             print(f"DSP error (window skipped): {exc}", file=sys.stderr)
@@ -1596,8 +1129,8 @@ def main() -> None:
                 dsp_override = None
                 if _state["warmup_pending"]:
                     first_window = np.stack(list(ring_buffer))
-                    candidate_bins = _derive_candidate_bins(cfg)
-                    selected_bin, dsp_override, evidence = _run_warmup_selection(
+                    candidate_bins = derive_candidate_bins(cfg)
+                    selected_bin, dsp_override, evidence = run_warmup_selection(
                         first_window, candidate_bins, cfg, fs
                     )
 

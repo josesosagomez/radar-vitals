@@ -38,9 +38,10 @@ import pandas as pd
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
-# Mirror of scripts/live_demo.py:_REJ_CODE_NAMES (AHET candidate rejection
+# Mirror of src/window_pipeline.py:REJECTION_CODE_NAMES (AHET candidate rejection
 # codes). Kept in sync deliberately rather than imported, so this diagnostic
-# has no heavy import-time coupling to the live demo module.
+# has no heavy import-time coupling to the DSP module.
+# tests/test_window_pipeline_adapter.py pins the source table in full.
 REJ_CODE_NAMES = {
     -1: "(none)", 0: "passed",
     1: "no_second_harmonic_region", 2: "ratio_db_low",
@@ -58,7 +59,7 @@ GATE_REJECTIONS = {
 
 # ── Heuristic thresholds (documented, not magic) ────────────────────────────
 # Warmup score gap (winner minus runner-up) below which the lock is "thin".
-# Scoring in live_demo._run_warmup_selection weights hr_valid at +1000 and a
+# Scoring in src/warmup_select.py:run_warmup_selection weights hr_valid at +1000 and a
 # medium-vs-low BR swing at ~200, so a gap under this means the runner-up was
 # essentially as good on the DSP evidence.
 THIN_MARGIN_SCORE = 200.0

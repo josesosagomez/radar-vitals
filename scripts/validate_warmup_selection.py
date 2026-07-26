@@ -26,8 +26,9 @@ _ROOT = Path(__file__).resolve().parents[1]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from scripts.live_demo import _derive_candidate_bins, _run_warmup_selection, _sha256_file
+from scripts.live_demo import _sha256_file
 from src.radar_io import ChirpConfig, read_adc_bin
+from src.warmup_select import derive_candidate_bins, run_warmup_selection
 
 WARMUP_FRAMES = 600
 
@@ -63,9 +64,9 @@ def _validate_one(run_dir: Path, expected_bin: int, note: str) -> bool:
         iq_swap=bool(prof["iq_swap"]),
     )
     cube = read_adc_bin(adc_path, cc)[:WARMUP_FRAMES]
-    candidate_bins = _derive_candidate_bins(cfg)
+    candidate_bins = derive_candidate_bins(cfg)
 
-    selected_bin, _, evidence = _run_warmup_selection(cube, candidate_bins, cfg, fs=fs)
+    selected_bin, _, evidence = run_warmup_selection(cube, candidate_bins, cfg, fs=fs)
 
     ineligible_hr = [
         (c["bin"], c["settled_energy_db"])
