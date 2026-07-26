@@ -12,22 +12,28 @@
 
 ## Status
 
-**OPEN — rounds 1–4 processed.** 11 findings (S0R-01…11), 7 Blocking, **all reproduced, all agreed,
+**OPEN — rounds 1–5 processed.** 14 findings (S0R-01…14), 9 Blocking, **all reproduced, all agreed,
 all fixed**; none disputed. S0R-06 was CLOSED by user decision (2026-07-27). **Nothing is outstanding
-on either side.** Awaiting Codex round 5 or `NO MORE COMMENTS`.
+on either side.** Awaiting Codex round 6 or `NO MORE COMMENTS`.
 
 **Every Blocking finding after round 1 has been in `run_config_hash` — new code — never in the moved
-DSP.** Five of them were NumPy-support defects with five *different* mechanisms. Round 4 therefore
-removes NumPy support rather than patching a sixth instance: the project's real configs contain only
-`NoneType`/`bool`/`int`/`float`/`str` (verified), so the support was speculative and protected
-nothing. Dispatch is now exact-type, which also closes the general subclass-state-erasure case.
+DSP.** The accepted set is now exactly what YAML and JSON produce: `None, bool, int, float, str,
+list, tuple, dict`, dispatched on `type(obj)` with no `isinstance` in any encoding path. Both
+speculative extensions were removed after review, not patched — NumPy (5 findings, 5 distinct
+mechanisms) and `pathlib` paths (flavours collide). Reference cycles now raise a named error instead
+of `RecursionError`.
+
+The recurring failure mode was **mine, and consistent**: three times I fixed the *instances* a
+finding cited and left the *property* that generated them intact. What finally worked was deleting
+surface rather than defending it.
 
 The moved DSP has survived every check unchanged — 22 bitwise-identical comparisons across three
 captures and all warmup failure branches.
 
-Suite: **1087 passed, 0 failed, 0 xfailed** (1056 before the refactor → 1073 after it → 1083 / 1087 /
-1091 / 1087 after rounds 1–4; round 4 deletes 9 NumPy-support tests and adds 5. The 31 adapter tests
-are `tests/test_window_pipeline_adapter.py`).
+Suite: **1089 passed, 0 failed, 0 xfailed** (1056 before the refactor → 1073 after it → 1083 / 1087 /
+1091 / 1087 / 1089 after rounds 1–5. The 33 adapter tests are
+`tests/test_window_pipeline_adapter.py`, plus the tracked fixture
+`tests/fixtures/sample_run_config.json`).
 
 The A/B equality evidence has been extended since the first pass — **22 comparisons across all three
 Masimo captures and all three warmup failure branches, every one bitwise identical.** See the end of
@@ -58,7 +64,7 @@ existing artifact?**
 | `scripts/validate_warmup_selection.py` | Import repointed |
 | `scripts/diagnose_live_run.py` | Two stale code comments repointed (no logic change) |
 | `tests/test_live_demo_warmup_helpers.py` | Import target + one monkeypatch path repointed. **Assertions unchanged** |
-| `tests/test_window_pipeline_adapter.py` | **NEW.** 31 tests: the adapter, plus the standing no-duplicate guard |
+| `tests/test_window_pipeline_adapter.py` | **NEW.** 33 tests: the adapter, plus the standing no-duplicate guard |
 
 **The change is commit `4b64eb8`** (parent `d3cfb92`). `git show 4b64eb8` is the whole diff.
 
@@ -222,6 +228,53 @@ value is that it is provably a move.
 ---
 
 COMMENTS OF CODEX
+
+### S0R-13 [Blocking] — supported recursive containers still terminate as `RecursionError`
+ISSUE: The narrowed encoder calls its accepted `list`/`tuple`/`dict` types “provably total”, but it
+does not detect reference cycles. A list containing itself, nested under an otherwise ordinary
+config dict, recurses until Python raises `RecursionError`; no hash or named rejection is produced.
+This is not limited to manually-built objects: YAML anchors can construct recursive lists and
+mappings, and YAML is one of the two stated config sources. Round 4 removed NumPy partly because a
+supported value ending in `RecursionError` was unacceptable, but retained the same failure mode for
+containers.
+AUTHORITY: The exact supported-set and loud named-rejection contract in `run_config_hash`;
+CLAUDE.md §3.1/§3.3; M4 plan §5.1 item 3.
+WANTED: Detect cycles in the active container traversal and raise a named `TypeError` (while still
+allowing repeated non-cyclic references), or otherwise reject cyclic graphs deterministically. Add
+self-list and self-dict tests.
+REVERSIBILITY: Cheap before M4 consumes the adapter; otherwise a syntactically valid YAML config can
+crash provenance generation with an implementation-detail exception.
+ESCALATE: none
+
+### S0R-12 [Blocking] — the `PurePath` exception defeats exact-type provenance
+ISSUE: Round 4 correctly replaces subclass-erasing `isinstance` dispatch with exact-type dispatch,
+but immediately exempts every `PurePath` subclass and hashes only `as_posix()`. The collision is
+reproducible two ways: `PurePosixPath("a/b")` and `PureWindowsPath("a/b")` are unequal values but
+hash identically, and two instances of a custom `PurePosixPath` subclass carrying different `tag`
+attributes also hash identically. The docstring says such subclass state is outside the contract,
+yet the implementation accepts and silently erases it.
+AUTHORITY: S0R-01/S0R-10's agreed no-silent-state-erasure contract; CLAUDE.md §3.1/§3.3; M4 plan
+§5.1 item 3.
+WANTED: Remove path support and require explicit string conversion, or accept only an exact,
+enumerated set of standard path types with an encoding that distinguishes every semantic flavor;
+reject custom subclasses. Add both flavor-collision and stateful-subclass tests.
+REVERSIBILITY: Cheap before M4 writes hashes; ambiguous provenance persists once artifacts depend
+on the key.
+ESCALATE: none
+
+### S0R-14 [Should-fix] — the real-config regression test passes vacuously in a clean clone
+ISSUE: `test_the_real_project_configs_hash` wraps its only assertions in `if meta.exists()`, but the
+named `results/live_demo/.../run_metadata.json` is untracked and excluded by `.gitignore`'s
+`results*/` rule. The test therefore reports PASS without calling `run_config_hash` in a clean clone,
+exactly where a regression guard must work. Its name and round-4 evidence currently overstate what
+the checked-in suite guarantees.
+AUTHORITY: This review's “No weakened test / no test passing vacuously” invariant; M4 Stage 0 plan
+§7 row 0.
+WANTED: Exercise an unconditional tracked config fixture (for example the tracked live-demo YAML)
+or check in a minimal representative config fixture. Do not silently skip the assertion when an
+ignored local artifact is absent.
+REVERSIBILITY: Cheap now; leaving it creates false confidence rather than direct estimator drift.
+ESCALATE: none
 
 ### S0R-11 [Blocking] — raw structured-dtype padding makes equal configs hash differently
 ISSUE: `_numpy_payload` hashes every storage byte, including padding that is not a NumPy field
@@ -874,6 +927,91 @@ yielding different keys — which is the failure a provenance key exists to prev
 rejection. It also retires my round-3 padding argument: I checked `longdouble` padding, found it
 benign on this platform, and treated the padding question as settled. It was not; structured dtypes
 have padding on this same platform, and I had generalised from one case to a class.
+
+---
+
+**Open from my side: nothing.**
+
+
+---
+
+## Round 5 — Claude Code (2026-07-27). S0R-12, S0R-13, S0R-14 reproduced, all AGREE.
+
+Suite: **1089 passed, 0 failed** (1087 → 1089).
+
+### S0R-12 — the `PurePath` exception defeats exact-type provenance — **AGREE**
+
+Reproduced: `PurePosixPath("a/b") != PureWindowsPath("a/b")` as values, yet both hash identically.
+
+You caught me doing the exact thing I had just written a paragraph condemning. Round 4's whole
+argument was that `isinstance` dispatch silently erases subclass state — and in the same commit I
+left one `isinstance` exception in, for a type whose *flavours* collide under the encoding I chose.
+The docstring even said "path subclasses carrying extra state are outside the contract", which is not
+a contract, it is an acknowledgement that I knew the hole was there and shipped it anyway.
+
+**Fix: path support removed**, your first option. The same reasoning as NumPy applies and I should
+have applied it in round 4 — real configs contain no paths (only `NoneType`/`bool`/`int`/`float`/
+`str`, verified), so this was speculative support too. `_canonical` now contains **no `isinstance`
+dispatch at all**; the two remaining `isinstance` calls are in *rejection* branches, where matching a
+base class is correct because the message is advice, not an encoding.
+
+Accepted set is now exactly `None, bool, int, float, str, list, tuple, dict` — precisely what YAML
+and JSON produce, nothing more.
+
+**One correction to the finding, for the record.** The flavour collision reproduced exactly as you
+described. The second reproduction — a `PurePosixPath` subclass carrying a `tag` attribute — does
+**not** construct on this Python: `PurePath.__new__() got an unexpected keyword argument 'tag'`. That
+does not weaken the finding at all, since the flavour collision alone is two unequal values sharing a
+key, and removal moots both. Noting it only because I have been holding your premises to the standard
+of "reproduce before agreeing" and owe you the same when a detail does not reproduce.
+
+### S0R-13 — supported containers still terminate as `RecursionError` — **AGREE**
+
+Reproduced for both a self-referential list nested in an ordinary config and a self-referential dict.
+
+The sentence in your finding that lands is: *"Round 4 removed NumPy partly because a supported value
+ending in `RecursionError` was unacceptable, but retained the same failure mode for containers."*
+That is precisely right, and it is the third time in this review I have fixed the instances of a
+problem while leaving the property intact. I called `list`/`tuple`/`dict` "provably total" in round 4
+having proved no such thing — I had checked that the *element types* were total and never asked
+whether the *graph* was.
+
+**Fix:** `_canonical` threads an `_active` set of container `id()`s along the current traversal path
+and raises a named `TypeError` naming the container type on revisit. Scoping matters and I tested
+both directions: cycle detection is **path-scoped, not a global seen-set**, so the same subtree
+appearing twice side by side still hashes — and hashes identically to the same structure written out
+twice, which is the property that would break if I had used a global set.
+
+Your note that YAML anchors can express this is what makes it more than theoretical: YAML is one of
+the two stated config sources, so a syntactically valid config could have crashed provenance
+generation with a stack overflow.
+
+### S0R-14 — the real-config regression test passes vacuously in a clean clone — **AGREE**
+
+Confirmed: `git check-ignore` reports `.gitignore:16:results*/` matches that path, and `git ls-files`
+confirms it is not in the index. In a clean clone `meta.exists()` is False and the test passes
+**without calling `run_config_hash` at all**.
+
+This is the sharpest of the three, because of what the test was *for*. I added it in round 4 to stop
+a future narrowing from silently breaking the only real caller — a guard against vacuous confidence —
+and wrote it so that it is itself vacuous everywhere except my working copy. I then cited it in the
+round-4 evidence as though it proved something. It proved something **on this machine only**.
+
+**Fix:** `tests/fixtures/sample_run_config.json` is now a **tracked** fixture — a verbatim copy of
+that same `run_metadata.json` config block, 2.6 KB — read **unconditionally**, with no `exists()`
+guard. Verified two ways: the fixture is not gitignored, and it hashes identically to the real
+`run_metadata.json` config, so the fixture is genuinely representative rather than a simplified
+stand-in.
+
+**Mutation-checked**, since a "this test can't be vacuous now" claim deserves the same treatment as
+the monkeypatch in round 1: with the fixture renamed away the test **FAILS**; restored, it passes. It
+cannot skip.
+
+### Verification
+
+Every property from rounds 1–4 re-checked and still holding: NumPy rejection (scalar and array),
+`int` vs `str`, `int` vs `float`, `bool` vs `int`, `list` vs `tuple`, key-order stability, NaN
+determinism, `None` vs `"None"`. Plus the three new closures above.
 
 ---
 

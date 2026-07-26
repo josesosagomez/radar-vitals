@@ -70,11 +70,11 @@ def test_run_config_hash_changes_when_any_value_changes():
 
 
 def test_run_config_hash_does_not_collide_across_types():
-    """S0R-01. The first version stringified non-JSON values, so a Path hashed
-    identically to its string. A provenance key that cannot tell those apart silently
-    misattributes a run. (The NumPy half of S0R-01 is now covered by rejection instead —
-    see `test_numpy_values_are_rejected_with_actionable_guidance`.)"""
-    assert run_config_hash({"x": Path("a")}) != run_config_hash({"x": "a"})
+    """S0R-01. The first version stringified non-JSON values, so distinct values shared
+    a hash. A provenance key that cannot tell them apart silently misattributes a run.
+    (S0R-01's Path and NumPy cases are now covered by *rejection* instead — see
+    `test_pathlib_paths_are_rejected_because_flavours_collide` and
+    `test_numpy_values_are_rejected_with_actionable_guidance`.)"""
     assert run_config_hash({"x": 3}) != run_config_hash({"x": "3"})
     assert run_config_hash({"x": 3}) != run_config_hash({"x": 3.0})
     assert run_config_hash({"x": True}) != run_config_hash({"x": 1})
@@ -96,12 +96,6 @@ def test_run_config_hash_handles_nan_and_inf_deterministically():
     assert a == run_config_hash({"x": float("nan")})
     assert a != run_config_hash({"x": float("inf")})
     assert a != run_config_hash({"x": "nan"})
-
-
-def test_paths_are_supported_and_distinct_from_their_string_form():
-    h = run_config_hash({"out": Path("results/x")})
-    assert isinstance(h, str) and len(h) == 64
-    assert h != run_config_hash({"out": "results/x"})
 
 
 def test_numpy_values_are_rejected_with_actionable_guidance():
@@ -145,16 +139,64 @@ def test_dispatch_is_by_exact_type_so_subclasses_are_rejected():
             run_config_hash({"x": value})
 
 
-def test_the_real_project_configs_hash():
+def test_a_real_project_config_hashes():
     """The contract must actually cover what this project feeds it. Guards against a
-    future narrowing that looks principled and breaks the only real caller."""
+    future narrowing that looks principled and breaks the only real caller.
+
+    S0R-14: the first version of this test read `run_metadata.json` from
+    `results/live_demo/…` under `if meta.exists()`. That path is gitignored (`results*/`)
+    and not in the index, so in a clean clone the test passed **without calling
+    `run_config_hash` at all** — a vacuous pass in the one test written to prevent
+    vacuous coverage. It now reads a TRACKED fixture unconditionally: a verbatim copy of
+    that same config block, checked in at `tests/fixtures/sample_run_config.json`."""
     import json as _json
 
-    root = Path(__file__).resolve().parents[1]
-    meta = root / "results/live_demo/20260713_172042_live_demo_massimo1/run_metadata.json"
-    if meta.exists():
-        cfg = _json.loads(meta.read_text(encoding="utf-8"))["config"]
-        assert len(run_config_hash(cfg)) == 64
+    fixture = Path(__file__).resolve().parent / "fixtures" / "sample_run_config.json"
+    cfg = _json.loads(fixture.read_text(encoding="utf-8"))   # no exists() guard, on purpose
+    assert len(run_config_hash(cfg)) == 64
+    assert run_config_hash(cfg) == run_config_hash(cfg)
+
+
+def test_reference_cycles_raise_instead_of_exhausting_the_stack():
+    """S0R-13. A self-referential container has no finite canonical form. It used to
+    recurse to RecursionError — an implementation-detail crash, not the named rejection
+    the contract promises — and YAML anchors can express exactly this."""
+    cyclic_list = [1, 2]
+    cyclic_list.append(cyclic_list)
+    with pytest.raises(TypeError, match="self-referential list"):
+        run_config_hash({"heart": {"k_max": 4}, "x": cyclic_list})
+
+    cyclic_dict: dict = {"a": 1}
+    cyclic_dict["self"] = cyclic_dict
+    with pytest.raises(TypeError, match="self-referential dict"):
+        run_config_hash(cyclic_dict)
+
+    nested: dict = {"outer": {}}
+    nested["outer"]["back"] = nested
+    with pytest.raises(TypeError, match="self-referential"):
+        run_config_hash(nested)
+
+
+def test_repeated_non_cyclic_references_still_hash():
+    """Cycle detection must be scoped to the ACTIVE traversal path, not a global seen-set:
+    the same subtree appearing twice side by side is ordinary, not a cycle."""
+    shared = {"band_hz": [0.8, 2.0]}
+    assert len(run_config_hash({"a": shared, "b": shared})) == 64
+    row = [1, 2]
+    assert run_config_hash({"x": [row, row]}) == run_config_hash({"x": [[1, 2], [1, 2]]})
+
+
+def test_pathlib_paths_are_rejected_because_flavours_collide():
+    """S0R-12. Paths were the single `isinstance` exception left after round 4, and they
+    reintroduced the exact flaw exact-type dispatch had just removed: the two flavours
+    compare UNEQUAL as values but share one POSIX string, so encoding by `as_posix()`
+    gave distinct values the same provenance key."""
+    from pathlib import PurePosixPath, PureWindowsPath
+
+    assert PurePosixPath("a/b") != PureWindowsPath("a/b")        # the mechanism
+    for value in (Path("results/x"), PurePosixPath("a/b"), PureWindowsPath("a/b")):
+        with pytest.raises(TypeError, match="does not accept pathlib paths"):
+            run_config_hash({"x": value})
 
 
 # ── as_window_estimate ────────────────────────────────────────────────────────

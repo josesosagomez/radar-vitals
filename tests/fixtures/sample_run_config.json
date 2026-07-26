@@ -1,0 +1,113 @@
+{
+  "bin_selection": {
+    "candidate_bins": null,
+    "enabled": true
+  },
+  "capture": {
+    "continuous_num_frames": 0,
+    "intermediates_checkpoint_windows": 20,
+    "max_live_duration_s": null,
+    "raw_stream_format": "adc_bytes_no_packet_headers",
+    "record_raw_stream": true,
+    "replay_shard_limit": 20
+  },
+  "display": {
+    "backend_fallbacks": [
+      "TkAgg"
+    ],
+    "matplotlib_backend": "QtAgg"
+  },
+  "heart": {
+    "ahet_deviation_hz": 0.1,
+    "ahet_gate_mode": "strict_v1",
+    "band_hz": [
+      0.8,
+      2.0
+    ],
+    "candidate_min_peak_to_floor_db": 2.0,
+    "candidate_min_prominence": 3.0,
+    "candidate_min_second_harmonic_ratio_db": 1.0,
+    "eca_forbidden_guard_hz": 0.0,
+    "eca_mode": "skip_forbidden_harmonics_v1",
+    "high_candidate_preference_hz": 1.25,
+    "high_competitor_min_mag_ratio": 0.8,
+    "k_max": 6,
+    "low_candidate_hz": 1.2,
+    "low_candidate_min_peak_to_floor_db": 4.0,
+    "online_smoother_n": 5
+  },
+  "hw_frame": {
+    "num_loops": 32,
+    "period_ms": 50.0
+  },
+  "hw_profile": {
+    "adc_start_time_us": 5.0,
+    "dig_out_sample_rate": 5209,
+    "freq_slope_mhz_us": 70.006,
+    "idle_time_us": 7.0,
+    "num_adc_samples": 256,
+    "num_rx": 4,
+    "ramp_end_time_us": 57.0,
+    "rx_channel_en": 15,
+    "rx_gain_db": 30,
+    "start_freq_ghz": 77.0,
+    "tx_channel_en": 1
+  },
+  "network": {
+    "cmd_port": 4096,
+    "data_port": 4098,
+    "dca1000_ip": "192.168.33.180",
+    "host_ip": "192.168.33.30"
+  },
+  "paths": {
+    "manifest": "data/manifest.local.csv",
+    "results_dir": "results/live_demo"
+  },
+  "phase": {
+    "impulse_clip_rad": 1.5,
+    "method": "delta_before_mean"
+  },
+  "profile": {
+    "iq_swap": true,
+    "num_adc_samples": 256,
+    "num_chirps_per_frame": 32,
+    "num_rx": 4,
+    "range_resolution_m": 0.0436
+  },
+  "protocol": {
+    "subject_distance_m": [
+      0.8,
+      1.4
+    ]
+  },
+  "respiration": {
+    "band_hz": [
+      0.1,
+      0.5
+    ],
+    "detrend": "linear",
+    "emit_low_confidence": false,
+    "fft_fallback_snr_db": 6.0,
+    "fft_ha_agree_bpm_high": 2.0,
+    "fft_ha_agree_bpm_medium": 4.0,
+    "harmonic_max_hz": null,
+    "max_harmonics": 3,
+    "stft_overlap": 0.5,
+    "stft_std_high_bpm": 2.0,
+    "stft_std_medium_bpm": 4.0,
+    "stft_subwindow_s": 10
+  },
+  "seed": 42,
+  "session": {
+    "default_session_id": "test3",
+    "display_history_s": 120,
+    "frame_rate_hz": 20.0,
+    "hop_s": 3.0,
+    "locked_bin": null,
+    "window_s": 30.0
+  },
+  "uart": {
+    "baud": 115200,
+    "port": "COM7"
+  }
+}

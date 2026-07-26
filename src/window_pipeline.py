@@ -204,10 +204,10 @@ class WindowEstimator(Protocol):
         fs: float,
         cfg: dict,
     ) -> dict: ...
-
 #: Exactly what `_canonical` accepts, by EXACT type. Interpolated into every rejection
 #: message so the advertised set and the implementation cannot drift apart (S0R-07).
-_SUPPORTED_TYPES = "None, bool, int, float, str, list, tuple, dict, and pathlib paths"
+#: This is precisely what YAML and JSON produce — nothing speculative (S0R-12).
+_SUPPORTED_TYPES = "None, bool, int, float, str, list, tuple, dict"
 
 #: Exact-type encoders for the atomic values. Keyed by `type(obj)`, never `isinstance`
 #: — see `_canonical` for why.
@@ -220,53 +220,68 @@ _ATOMIC: dict = {
 }
 
 
-def _canonical(obj: Any) -> list:
+def _canonical(obj: Any, _active: set | None = None) -> list:
     """Encode a config value as an unambiguous `[type_tag, payload]` pair.
 
     **Every** node is tagged, including plain strings, so no value can collide with
     another value's encoding (S0R-01).
 
-    **Dispatch is on `type(obj)`, not `isinstance`.** A subclass may carry state this
-    encoder cannot see, and encoding it as its base type silently discards that state
-    while assigning it the base type's provenance key. That is not hypothetical: it is
-    what made `np.ma.MaskedArray` hash identically to a plain array with a different
-    mask (S0R-10), and what made NumPy scalars that subclass `float`/`str` lose their
-    dtype (S0R-07). Exact-type dispatch makes the accepted set *provable* rather than
-    empirically patched, which four rounds of findings showed the isinstance-based
-    version could not be.
+    **Dispatch is on `type(obj)` exactly — there are no `isinstance` checks at all.**
+    A subclass may carry state this encoder cannot see, and encoding it as its base type
+    silently discards that state while assigning it the base type's key. Not
+    hypothetical: it made `np.ma.MaskedArray` hash identically to a plain array with a
+    different mask (S0R-10), and made NumPy scalars subclassing `float`/`str` lose their
+    dtype (S0R-07).
 
-    **NumPy is deliberately NOT supported.** It was added speculatively and produced
-    five Blocking review findings in three rounds — subclass collisions (S0R-07),
-    non-terminating `.item()` recursion and structured-`void` collisions (S0R-08),
-    dropped `dtype.metadata` (S0R-09), erased mask state (S0R-10), and hashed
-    uninitialised alignment padding, so equal configs could hash differently (S0R-11).
-    Every one was a *different* way for a NumPy value to carry state that a byte- or
-    descriptor-level encoding misses. Meanwhile the project's real configs
-    (`scripts/live_demo_config.yaml`, the `config` block of `run_metadata.json`) contain
-    only `NoneType`, `bool`, `int`, `float` and `str` — verified, not assumed. Supporting
-    NumPy bought nothing and cost correctness, so a NumPy value is now a loud, named
-    error telling the caller to convert it.
+    **The accepted set is exactly what YAML and JSON produce.** Two speculative
+    extensions were tried and both failed review:
 
-    The single `isinstance` exception is `PurePath`, because `Path()` instantiates a
-    platform subclass; it is encoded by its POSIX string form, and path subclasses
-    carrying extra state are outside the contract.
+    * *NumPy* — five Blocking findings across three rounds, five different mechanisms:
+      subclass dispatch (S0R-07), non-terminating `.item()` recursion and
+      class-name-vs-dtype (S0R-08), dropped `dtype.metadata` (S0R-09), erased mask state
+      (S0R-10), and hashed alignment padding that made *equal* configs hash differently
+      (S0R-11).
+    * *`pathlib` paths* — the one `isinstance` exception left after round 4, and it
+      reintroduced exactly the flaw exact-type dispatch had just removed:
+      `PurePosixPath("a/b") != PureWindowsPath("a/b")` as values, yet both encode to
+      `as_posix() == "a/b"` and collided (S0R-12).
+
+    Neither appears in this project's real configs (`scripts/live_demo_config.yaml` and
+    the `config` block of `run_metadata.json` contain only `NoneType`, `bool`, `int`,
+    `float` and `str` — verified, not assumed). Both are now loud, named errors naming
+    the conversion.
+
+    **Cycles are rejected, not crashed into** (S0R-13). `_active` tracks the containers
+    on the *current* traversal path, so a self-referential list or dict — which YAML
+    anchors can express — raises a named `TypeError` rather than `RecursionError`, while
+    the same subtree referenced twice side-by-side still hashes normally.
     """
     encode = _ATOMIC.get(type(obj))
     if encode is not None:
         return encode(obj)
 
     t = type(obj)
-    if t is list:
-        return ["list", [_canonical(v) for v in obj]]
-    if t is tuple:
-        return ["tuple", [_canonical(v) for v in obj]]
-    if t is dict:
-        return ["dict", sorted(
-            ([_canonical(k), _canonical(v)] for k, v in obj.items()),
-            key=lambda kv: json.dumps(kv[0], separators=(",", ":")),
-        )]
-    if isinstance(obj, PurePath):          # Path() returns a platform subclass
-        return ["path", obj.as_posix()]
+    if t is list or t is tuple or t is dict:
+        if _active is None:
+            _active = set()
+        if id(obj) in _active:
+            raise TypeError(
+                f"run_config_hash cannot canonicalise a self-referential {t.__name__} "
+                "(the config contains a reference cycle, which YAML anchors can create). "
+                "A cycle has no finite canonical form. Break the cycle before hashing. "
+                "Note repeated NON-cyclic references to the same object are fine."
+            )
+        _active.add(id(obj))
+        try:
+            if t is dict:
+                return ["dict", sorted(
+                    ([_canonical(k, _active), _canonical(v, _active)]
+                     for k, v in obj.items()),
+                    key=lambda kv: json.dumps(kv[0], separators=(",", ":")),
+                )]
+            return [t.__name__, [_canonical(v, _active) for v in obj]]
+        finally:
+            _active.discard(id(obj))   # path-scoped, not global: siblings may repeat
 
     if isinstance(obj, (np.generic, np.ndarray)):
         raise TypeError(
@@ -276,6 +291,14 @@ def _canonical(obj: Any) -> list:
             "padding — so hashing them risks either colliding distinct configs or "
             "giving the same config different keys. Convert first: float(x) / int(x) / "
             "bool(x) / str(x) for scalars, x.tolist() for arrays."
+        )
+    if isinstance(obj, PurePath):
+        raise TypeError(
+            f"run_config_hash does not accept pathlib paths (got {t.__name__!r}). "
+            "Path flavours compare unequal but share one POSIX string — "
+            'PurePosixPath("a/b") != PureWindowsPath("a/b") — so encoding by string '
+            "collides distinct values. Convert explicitly: str(p) or p.as_posix(), "
+            "whichever the config actually means."
         )
     raise TypeError(
         f"run_config_hash cannot canonicalise {t.__name__!r} deterministically "
@@ -300,12 +323,13 @@ def run_config_hash(cfg: Mapping[str, Any]) -> str:
     separate, explicitly scoped hash — not a quiet redefinition of this one.
 
     Accepts, **by exact type**: `None`, `bool`, `int`, `float`, `str`, `list`, `tuple`,
-    `dict`, plus `pathlib` paths. That is the shape a YAML/JSON config actually has —
-    verified against `scripts/live_demo_config.yaml` and the `config` block of a real
-    `run_metadata.json`, both of which contain only `NoneType`/`bool`/`int`/`float`/`str`.
-    Everything else, **including all NumPy values**, raises `TypeError` with guidance
-    rather than being coerced. See `_canonical` for why that set is exact and why NumPy
-    support was removed.
+    `dict` — exactly what YAML and JSON produce, verified against
+    `scripts/live_demo_config.yaml` and the `config` block of a real `run_metadata.json`,
+    both of which contain only `NoneType`/`bool`/`int`/`float`/`str`. Everything else —
+    **including all NumPy values and all `pathlib` paths** — raises `TypeError` naming
+    the conversion, rather than being coerced. Reference cycles raise too, rather than
+    exhausting the stack. See `_canonical` for why the set is exact and why the two
+    speculative extensions were removed.
     """
     canonical = json.dumps(_canonical(cfg), separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
