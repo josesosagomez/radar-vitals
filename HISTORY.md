@@ -5921,3 +5921,39 @@ subharmonic wins); unconditional STFT-stability blessing in fusion.
 
 **Next:** freeze the BR comparator (M3), then score reprocessed BR under it (M2 done-when #5 via
 M4); decide whether live protocol adopts warmup bin 27 for natural sessions; update `HANDOFF.md`.
+
+## 2026-07-26 — M3 cross-review: batch M3R-29…M3R-41 processed + both escalations resolved (rounds 10–12)
+
+**Set out to do:** Close the M3 BR-comparator + analysis-prespec cross-review. On resume, found it
+had NOT closed — Codex had posted a fresh 13-finding batch (M3R-29…M3R-41), not NO MORE COMMENTS.
+
+**Worked (with evidence):** Processed all 13 across DEBATE rounds 10–12 (plans/m3_prespec_cross_review.md).
+Codex closed 8 as CONVINCED (M3R-30/32/33-BR/35/36/37/38/39). Round-11 fixes applied and awaiting
+Codex's confirmation: M3R-29 (MOVER now the PRIMARY CI, specified as a pinned M4-harness function with
+run-time verification that its components equal the frozen closed-form values; deleted an incorrect
+claim that σ²_b models within-subject serial correlation — now stated as an independence assumption
+with lag-1 as a diagnostic), M3R-31 (paced LoA reframed as a marginal design-weighted mixture over a
+frozen 4/3/3 enrolment-order allocation), M3R-41 (§5 M5-adequacy trigger built only from steady-rate
+pilot quantities). Evidence script now pins+asserts all six input SHA-256; re-ran it, assertions pass,
+§1 numbers reproduce (natural 17 % >2 bpm; paced/sweep 0 %).
+
+Two escalations RESOLVED by user decision 2026-07-26:
+- M3R-40 — HR comparator harmonised to half-open [t−30 s, t) (notes/comparator_prespec.md §2.1), a
+  pre-deposit clarification (no DOI existed); HR and BR now share one endpoint rule.
+- M3R-34 — intended-use (spot-check) disposition recorded device-wide (labelling = battery endurance
+  + no unattended alarms, not 10-min accuracy; healthy adults, attended, verified battery — checklist
+  item added); ethics 10-min collection confirmed covered. Masimo document number pinned to LAB-10168A
+  (user corrected a lab-10169a filename typo); path fixed in both comparators, protocol, and
+  m0_preregistration.md.
+
+**Failed / did not work, and why:** Loop did not reach NO MORE COMMENTS — Codex went silent across two
+~29-min poll windows after the round-11/12 posts. One spurious watcher wake from CRLF churn (fixed by
+normalizing line endings before hashing).
+
+**Retired / no longer used:** bootstrap-primary CI (superseded by MOVER-primary, M3R-29); the
+"σ²_b handles within-subject serial dependence" claim (statistically wrong); the closed-interval HR
+window convention (harmonised to half-open, M3R-40).
+
+**Next:** Get Codex's round-3 verdict on M3R-29/31/41 (esp. the MOVER math sign-off). Then the docs are
+ready for the M0 freeze (user's irreversible act — not done here). M2 done-when #5: score the post-fix
+replay BR (2026-07-25 NPZs) under the frozen comparator.

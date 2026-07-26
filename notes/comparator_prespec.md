@@ -37,10 +37,21 @@ pick a cleverer average — it is to **detect that case and exclude it**.
 
 ## 2. The specification
 
-For a radar window ending at time `t` (span `[t − 30 s, t]`):
+For a radar window ending at time `t`, the span is the **half-open** interval `[t − 30 s, t)`:
+
+> **Endpoint convention harmonised to half-open (user decision 2026-07-26, M3R-40).** This span was
+> originally written closed, `[t − 30 s, t]`. For integer-second Masimo samples a closed span can
+> hold 31 samples and **double-count the boundary second** shared by adjacent non-overlapping
+> windows. It is corrected here to the **half-open** `[t − 30 s, t)` so that (a) each integer second
+> belongs to exactly one window and (b) HR and BR use the **identical** endpoint rule — the exact
+> frame-index grid `[E(k·600), E((k+1)·600))` with integer-`epoch_utc` inclusion frozen in
+> `notes/analysis_prespec.md` §7, which is binding for both comparators. This is a **pre-deposit
+> clarification** (no public DOI existed at the time — `plans/m0_preregistration.md`), not a
+> post-deposit amendment. The illustrative exclusion percentages in §2.3 predate this clarification
+> and remain exploratory design evidence, not frozen scores.
 
 ### 2.1 Reference value
-**`PR_ref = median` of the PI-gated Masimo PR samples inside `[t − 30 s, t]`.**
+**`PR_ref = median` of the PI-gated Masimo PR samples inside the half-open `[t − 30 s, t)`.**
 
 - Median, not mean: robust to single-sample glitches. Under the stationarity gate (§2.2) the
   median and mean coincide anyway, which is precisely the point — **once the window is stationary,
@@ -55,6 +66,21 @@ For a radar window ending at time `t` (span `[t − 30 s, t]`):
 | **PI** | drop samples with `Perfusion Index < 0.5` | CLAUDE.md §4 — low PI means the reference itself is untrustworthy. Never chase it. |
 | **Coverage** | require ≥ **80 %** of the 30 expected samples surviving the PI gate | a window scored on a handful of samples is not scored |
 | **Stationarity** | exclude if **`p90 − p10` of the PI-gated PR inside the window > 5.0 bpm** | see §2.3 |
+
+**Reference intended-use disposition (device-wide; user decision 2026-07-26, M3R-34).** The Masimo
+MightySat™ Rx *Home Care Manual* (`literature/ref_papers/lab-10168a_master.pdf`, p. 10) states the
+device is *"intended for spot-check use only… Do not use… for continuous monitoring. No alarms are
+provided."* The protocol logs **PR continuously for 10 min** as the HR reference — nominally outside
+that spot-check labelling. **Recorded disposition (study assumption, M3R-43):** the manual gives the
+warning but no rationale for it and does not address short-session accuracy. **The study *assumes***
+this labelling is **principally** about (i) **battery endurance** for multi-hour/day use and (ii) the
+**absence of safety alarms** for unattended monitoring, and **assumes** per-sample PR accuracy over a
+**10-min attended session with healthy subjects and verified battery state** (added to the
+`notes/protocol.md` equipment checklist) is unaffected; the alarm limitation is irrelevant to an
+attended research capture, not patient monitoring. **The manufacturer does not certify this
+inference** — it is the study's recorded engineering/clinical judgment, flagged as an assumption
+(CLAUDE.md §4); it applies **identically** to the RRp reference in
+`notes/comparator_prespec_br.md` §2.2.
 
 ### 2.3 The stationarity gate, and why 5 bpm
 

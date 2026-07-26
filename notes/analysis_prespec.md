@@ -4,11 +4,12 @@
 > that the study cannot be re-run to fix (`plans/implementation_plan.md` §M0). It is **binding once
 > deposited**; changes after freeze go through the amendment mechanism (§4). Companion frozen
 > documents in the same deposit: `notes/comparator_prespec.md` (HR scoring),
-> `notes/comparator_prespec_br.md` (BR scoring — **drafted 2026-07-25 (M3), awaiting cross-review**),
-> `notes/protocol.md` (capture protocol), `notes/capture_inventory.md`.
+> `notes/comparator_prespec_br.md` (BR scoring — **M3, cross-reviewed 2026-07-25/26; all findings
+> resolved**), `notes/protocol.md` (capture protocol), `notes/capture_inventory.md`.
 >
-> **Open items that MUST close before freeze** are marked **[OPEN]**. A deposit with any [OPEN]
-> item is not frozen.
+> **Cross-review COMPLETE:** all M3 findings (M3R-01…48) are **resolved** across 17 rounds (see
+> `plans/m3_prespec_cross_review.md`); this pre-spec is **ready for the M0 freeze — NOT yet frozen**
+> (the freeze is the user's irreversible act).
 
 ---
 
@@ -36,11 +37,37 @@ between-session-within-subject term is **not identifiable** — it is confounded
 The earlier draft's `σ²_s` is therefore dropped; the model has **two** levels only: subject
 (`σ²_b`) and within-subject-arm window residual (`σ²_w`).
 
-**No single combined LoA (M3R-27).** Because arm and paced-rate are fixed effects, a pooled
-"marginal" LoA would surround a covariate-specific mean whose value depends on arbitrary
-centering/weights — not one well-defined estimand — and §3.2 already forbids a combined headline.
-So **only arm-conditional** (and, within paced, **commanded-rate-conditional**) limits are reported;
-there is **no** single natural+paced LoA.
+**No single combined LoA (M3R-27).** Because arm is a fixed effect, a pooled "marginal" LoA would
+surround a covariate-specific mean whose value depends on arbitrary centering/weights — not one
+well-defined estimand — and §3.2 already forbids a combined headline. So **only arm-conditional**
+limits are reported; there is **no** single natural+paced LoA.
+
+**Paced commanded-rate estimand — FROZEN (M3R-31).** Per `notes/protocol.md`, each subject is paced
+at a **single steady commanded rate** (12, 15, *or* 18 bpm), so commanded rate is a **between-subject**
+attribute, **not** a within-subject factor. The **only inferential paced estimand is the arm-level
+paced LoA** `μ_paced ± 1.96·√(σ²_b + σ²_w)` from the arm model `d_ik = μ_paced + b_i + e_ik`.
+**This is explicitly a MARGINAL LoA over the study's commanded-rate allocation — a design-weighted
+mixture across the 12/15/18 subgroups (M3R-31 r2)**, whose bias `μ_paced` and between-subject variance
+`σ²_b` **depend on the realized allocation weights**. It is **not** a "rate effect absorbed by `b_i`":
+a zero-mean intercept cannot absorb a systematic between-group shift — instead, between-group rate
+differences enter `σ²_b` as genuine between-subject spread and any rate mean-shift enters `μ_paced` as
+the mixture mean. **No separate commanded-rate fixed-effect term, rate-specific variance rule, or
+per-rate CI is added or reported.** **The allocation is fixed prospectively and reported, never an
+analyst choice:** the 10 subjects are assigned rates by the protocol's **enrolment-order rotation**
+(12 → 15 → 18 repeating), which for `N = 10` yields **counts 4 / 3 / 3** — rate 12 takes the extra
+(tenth) subject — fixed **before any data is collected or scored**. Every paced LoA is reported
+**with its realized per-rate subject counts** (the mixture weights), so the weighting is transparent.
+*(This enrolment-order start is a study-design default reconciled into `notes/protocol.md`; the user
+may re-fix the allocation, but it must be frozen pre-collection, never chosen post-hoc.)* **Which
+subjects enter the paced estimand differs by vital sign, by design (§3.2):** the **HR** paced LoA is
+the mixture over **12 and 15 bpm subjects only** (7 subjects, counts 4/3; the 18 bpm subjects sit in
+the 4·f_r≈HR collision zone and are reported **separately / descriptively**, never pooled — §3.2); the
+**BR** paced LoA is the mixture over **all paced subjects (12/15/18; 10 subjects, counts 4/3/3)** (the
+collision is an HR-cancellation mechanism, not a BR one — `notes/comparator_prespec_br.md` §2.5).
+**Commanded-rate-stratified summaries (per 12/15/18) are DESCRIPTIVE only** — per-rate bias and
+observed SD, **no population LoA and no CI** — because 3–4 subjects per rate cannot support a
+between-subject population LoA. There is no post-data discretion over pooling or rate adjustment:
+this rule is frozen here.
 
 **Variance components — closed-form unbalanced one-way ANOVA (M3R-23).** For arm `a`, let its
 **contributing subjects** be the `S_a` subjects with ≥ 1 evaluable window, subject `s` having `n_s`
@@ -62,17 +89,53 @@ subject with ≥ 2 windows, so `MSW` has ≥ 1 df). **If either fails, that arm 
 descriptive-only** — observed bias and observed SD of the pooled differences, **no population LoA
 and no CI** — declared as a limitation. This is a prospective, count-based rule (agreement-blind).
 
-**CI on the LoA — frozen recipe.** Primary = **subject-level nonparametric cluster bootstrap over
-the `S_a` contributing subjects** (not a hard-coded 10): resample `S_a` subjects with replacement (a
-subject drawn twice enters as two distinct clusters with all its windows), recompute the **same
-closed-form components**, **B = 10 000** replicates, fixed **seed = 20260725**, **two-sided 95 %**
-percentile interval (2.5 / 97.5). A replicate whose resample **fails the estimability conditions
-above** (e.g. < 2 distinct subjects drawn, or no subject with ≥ 2 windows) is **recorded and
-excluded** from the percentile; **if > 5 % of replicates fail, the arm reports descriptive-only** (no
-population-LoA CI). The small-sample (`S_a ≤ 10`) limitation is stated. Sensitivity = **MOVER
-(Zou 2013), arm-specific, two-sided 95 %**, changing-true-value — a sensitivity, never a rescue.
-**Executed by the committed, hash-pinned M4 harness**, which logs package versions, seed, config,
-git commit, and input SHA-256 at run (CLAUDE.md §3.1).
+**CI on the LoA — frozen recipe (M3R-29, user decision 2026-07-26: Option A).** Primary =
+**subject-level nonparametric cluster bootstrap over the `S_a` contributing subjects** (not a
+hard-coded 10). It is primary because it is **fully specified and executable today** and
+**estimand-matched by construction**: each replicate recomputes the **exact frozen closed-form
+components above**, so the CI targets the identical LoA estimand and subject-weighting as the point
+estimate — with no external formula to transcribe and no not-yet-existing implementation to freeze.
+**Recipe:** resample `S_a` subjects with replacement (a subject drawn twice enters as two distinct
+clusters with all its windows); on each resample recompute `μ_a`, `σ²_w = MSW`,
+`σ²_b = max((MSB − MSW)/n0, 0)` and `LoA_a = μ_a ± 1.96·√(σ²_b + σ²_w)`; **B = 10 000** replicates;
+fixed **seed = 20260725**; **two-sided 95 %** percentile interval (2.5 / 97.5), taken per endpoint. A
+replicate whose resample **fails the estimability conditions above** (< 2 distinct subjects, or no
+subject with ≥ 2 windows) is **recorded and excluded**; if **> 5 % of replicates fail**, the arm
+reports **descriptive-only** (no population-LoA CI). The primary is subject to the **same estimability
+conditions** (`S_a ≥ 2`, `N_a > S_a`).
+
+**Declared limitation of the primary — it is ANTI-CONSERVATIVE for the precision gate (stated
+plainly, M3R-45).** A percentile cluster bootstrap over `S_a ≤ 10` clusters has **no coverage
+guarantee** and is known to **under-cover** at this sample size, so the deposited CIs may be
+**optimistically narrow**. For the ≤ 5 bpm CI-half-width precision gate (§2a/§2b) this is
+**anti-conservative, not conservative**: an over-narrow CI can turn a *true* half-width **above** 5 bpm
+into an *observed* half-width **≤ 5**, letting an arm **falsely retain its confirmatory headline** when
+a better-calibrated interval would have sent it to descriptive-only. The gate can therefore be
+**passed too easily** at small `S_a`. This is a **declared limitation**, reported with every LoA
+alongside the `S_a ≤ 10` caveat; it is **not** self-correcting and is **not** claimed to be.
+**ACCEPTED (user decision 2026-07-26, M3R-45):** the user **knowingly accepts this anti-conservative
+precision gate** as the cost of the Option A executable-now choice — a gate-pass at small `S_a` is
+therefore **not** a guarantee of adequate precision, and is read together with the reported CI and the
+`S_a ≤ 10` caveat. Any future conservative adjustment (e.g. a small-sample CI widening, or treating a
+gate-pass at `S_a ≤ 10` as provisional) would be a **prospective amendment**, never a post-hoc
+reinterpretation of the gate's direction.
+
+**Sensitivity CIs (reported alongside; never a gate on the primary):**
+- **MOVER (Zou 2013), arm-specific, changing-true-value** — a **pre-named candidate sensitivity**
+  (M3R-46). *(Zou's MOVER is coverage-validated in Zou's own simulations, but **not** yet validated
+  for **this** estimator/recipe — so it is a candidate, not "the validated procedure", until proven.)*
+  It becomes a **reported, validated sensitivity only if ALL three conditions hold**: the M4 harness
+  **implements** it, a **statistician math-reviews** that implementation, **and** it **passes a named,
+  tolerance-pinned published benchmark** (Zou 2013's worked example or an equivalent) — implementation
+  alone is **not** the validation gate — with its committed code incorporated **by reference at the
+  freeze commit** (Option B layering, M3R-29). Until all three are met MOVER is **not** reported and
+  **no** claim is made that it is validated for this estimator; when reported it is a sensitivity, and
+  if it and the primary diverge materially at `S_a ≤ 10` that divergence is itself reported.
+- The **subject-clustered regression-based LoA** in the diagnostics paragraph below (M3R-30) is the
+  other pre-named descriptive sensitivity.
+
+**Executed by the committed, hash-pinned M4 harness**, which logs package versions, seed, config, git
+commit, and input SHA-256 at run (CLAUDE.md §3.1).
 
 **Handling of design features.** Unequal window counts per subject are handled by the unbalanced
 one-way ANOVA via the effective group-size coefficient `n0` above (no per-subject pre-averaging).
@@ -85,14 +148,33 @@ the **primary, pre-registered** estimand and is **never** switched post-hoc. For
 three items are **always computed and reported** (no "if breached" trigger): (i) proportional-bias /
 heteroscedasticity — the slope of difference-vs-mean and residual-spread-vs-magnitude; (ii)
 difference-tail normality — residual skew and a QQ summary; (iii) a **serial-correlation summary =
-the residual lag-1 autocorrelation** within session (the whole-subject cluster bootstrap already
-propagates within-subject dependence into the CI). A **single, fully-specified descriptive
+the residual lag-1 autocorrelation** within session (**M3R-29/45/47** — two separate things:
+**(a) the POINT LoA and its ANOVA variance components** (`σ²_w = MSW`, `σ²_b`, and the width
+`1.96·√(σ²_b + σ²_w)` from the model `d_ik = μ_a + b_i + e_ik`) **assume conditionally independent,
+homoscedastic within-subject residuals.** Positive **serial correlation** changes the expectation of
+the within-subject mean square and can therefore **bias `σ²_w`, `σ²_b`, and the point LoA width
+itself** (Bland–Altman 2007) — a **declared limitation**, not something the model corrects.
+**(b) The primary cluster bootstrap** resamples **whole subjects**, so it preserves each subject's
+observed within-session sequence when estimating the **sampling distribution** of the LoA (its
+interval does not *additionally* assume residual independence), **but it does NOT repair a biased or
+misspecified point estimator**, and its own validity still needs independent subjects and
+large-cluster asymptotics that `S_a ≤ 10` does not guarantee (the anti-conservative limitation above).
+**So cluster resampling does NOT make the primary LoA robust to serial correlation.** The residual
+**lag-1 autocorrelation is a mandatory diagnostic and a reported limitation**; the homoscedasticity
+assumption is separately probed by the regression sensitivity below). A **single, fully-specified descriptive
 sensitivity** is **always** reported alongside: a **subject-clustered regression-based LoA** —
 the difference regressed on the mean with a **subject random intercept** (mixed model, same
-clustering as the primary), limits `= fitted bias(mean) ± 1.96·(residual SD)`, labelled descriptive.
-**Scope of this sensitivity, stated honestly:** it addresses **proportional bias only**; it uses a
-**constant residual SD**, so it does **not** correct heteroscedasticity — a heteroscedastic constant
-LoA therefore **remains a declared limitation**, not something this sensitivity removes. Choosing a
+clustering as the primary), **population** limits `= fitted bias(mean) ± 1.96·√(σ²_b,reg + σ²_e,reg)`,
+where `σ²_b,reg` is the fitted between-subject random-intercept variance and `σ²_e,reg` the residual
+variance **from that same mixed model** (M3R-30). Both components are included — a
+residual-only `± 1.96·(residual SD)` interval would be a subject-*conditional* band, not a population
+LoA, and would be systematically too narrow whenever between-subject heterogeneity is nonzero; this
+sensitivity is a population LoA comparable to the primary, labelled descriptive. Its uncertainty is
+obtained by the same whole-subject cluster bootstrap that provides the §1 sensitivity CI (or, where
+that is unavailable, reported as a point sensitivity without a CI). **Scope of this sensitivity,
+stated honestly:** it addresses **proportional bias only**; it uses a **constant residual SD**
+`σ²_e,reg`, so it does **not** correct heteroscedasticity — a heteroscedastic constant LoA therefore
+**remains a declared limitation**, not something this sensitivity removes. Choosing a
 transform *as the new primary* after M6 is **forbidden**.
 
 - **References (verified 2026-07-25):**
@@ -131,8 +213,8 @@ This is exactly the user's 2026-07-24/25 selection — no more.
 
 **Operational definition of "CI half-width ≤ 5 bpm"** (the LoA CIs from §1 can be asymmetric):
 the target is met iff **the maximum of the four distances** from each LoA point estimate (upper and
-lower) to each of its two CI endpoints is ≤ 5 bpm — evaluated **per arm** on the primary
-(bootstrap) CI. The **consequence of missing it** is frozen in §2b.
+lower) to each of its two CI endpoints is ≤ 5 bpm — evaluated **per arm** on the **primary
+(cluster-bootstrap) CI** (§1, M3R-29 Option A). The **consequence of missing it** is frozen in §2b.
 
 ### 2b. Extensions — FROZEN (user decision 2026-07-25, adopting the cross-review recommendation)
 The following complete the HR evidence floor and are now binding:
@@ -150,6 +232,25 @@ The following complete the HR evidence floor and are now binding:
 - **Precision-miss consequence:** if the ≤ 5 bpm CI-half-width target (§2a) is not met for an arm,
   that arm's **headline weakens to descriptive** (bias and observed spread; no population LoA),
   stated as a limitation — never renegotiated.
+- **Denominator of the ≥ 8/10 floor, and its relation to the arm-specific LoAs (M3R-42 clarification
+  — no frozen threshold changed).** The ≥ 8/10 is a **study-wide, per-subject coverage**
+  prerequisite: a subject **qualifies** if it meets the per-subject floor (≥ 4 **evaluable** windows
+  across its 2 sessions), where *evaluable* is fixed **before** any pooling rule (radar-accepted +
+  comparator-admissible; §2 head). The §3.2 HR **18 bpm exclusion is a *pooling* rule applied *after***
+  evaluability, so an 18 bpm subject's paced windows still count toward **its own** per-subject floor
+  and toward the ≥ 8/10 study-wide count. **The ≥ 8/10 is NOT a per-arm requirement.** Each
+  arm-specific LoA is reported over its **own** contributing subjects `S_a` (§1); consistent with the
+  no-double-standard rule, a subject **barred from an arm's estimand does not count toward that arm's
+  `S_a`** — the subjects paced at 18 bpm are **excluded from the paced-HR arm's `S_a`** (so that arm's
+  `S_a ≤ 7` under the 4/3/3 allocation), while they still contribute to the study-wide ≥ 8/10, to the
+  **natural** arm, to the descriptive per-rate 18 bpm summary, and to the BR paced pool (they are
+  **not** barred from *all* estimands). **Design consequence — CONFIRMED (user decision 2026-07-26):**
+  because the 18 bpm collision arm is run **deliberately** (`notes/protocol.md`), the **paced-HR
+  arm-specific LoA rests on ≤ 7 subjects by design** and cannot by itself reach an 8-subject bar; the
+  ≥ 8/10 governs the study's **overall** subject coverage (the natural arm can reach 10), **not** the
+  paced-HR arm count. The user confirmed this study-wide (not per-arm) reading is the intended meaning
+  of the frozen §2b, and that the paced-HR headline resting on ≤ 7 subjects is acceptable by design —
+  the 4/3/3 allocation and the paced-HR claim are unchanged.
 
 ### 2c. Reconciliation with §6 (no outcome-based exclusion)
 The floor thresholds **evaluable-window count only** — never the agreement value — and is applied
@@ -181,13 +282,18 @@ declared, prospective outcome, not a post-hoc rescue.
   phase-based FMCW signal chain (§III, pp. 54961–54962) exactly** — its range-FFT, DC-offset /
   constellation compensation, phase extraction and unwrapping, and the second-FFT
   vibration/range-spectrum estimation with Gaussian peak interpolation (**no** harmonic
-  cancellation) — **except the two steps that consult the reference**, which are replaced so the
-  arm never touches the study reference:
+  cancellation) — **except two steps, which are replaced to keep the arm reference-blind and
+  reproducible** (the two are replaced for **different** reasons — one is a reference leak, the other
+  is unreproducible — M3R-36):
   - Alizadeh selects the range bin whose rate estimate is **closest to the reference sensor**
-    (pp. 54961–54962) — a reference leak. **Replaced** with this project's outcome-independent
+    (pp. 54961–54962) — a **reference leak**. **Replaced** with this project's outcome-independent
     warmup bin-lock (the same bin ECA+AHET uses), which consults no reference.
-  - Alizadeh removes unspecified outliers. **Replaced** with **no reference-based outlier removal**
-    (any post-hoc pruning against the reference would leak it).
+  - Alizadeh removes outliers by a criterion that is **left unspecified in the paper** (attributed to
+    measurement noise, with **no** reproducible rule, and **not** stated to consult the reference).
+    Because that step is **not reproducible** — not because it is a reference leak — it is
+    **replaced with no outlier removal** at all (and any reference-based pruning is separately
+    forbidden as it would leak the reference). We do **not** claim the paper made outlier removal
+    reference-dependent.
 
   **This is an *adaptation*, not a faithful reproduction, and is labelled so.** The exact retained
   stages are taken from the paper at implementation, not paraphrased authoritatively here; only the
@@ -214,13 +320,28 @@ declared, prospective outcome, not a post-hoc rescue.
   `notes/protocol.md`). **For BR this exclusion does NOT apply** (the collision is an HR-cancellation
   mechanism, not a BR one): the 18 bpm paced session **is included in the BR paced summary**
   (`notes/comparator_prespec_br.md` §2.5). The two vitals use different pooling here by design.
-- **Headline MAE/RMSE/coverage weighting — exact equations (per arm `a`, over its `n_s` evaluable
-  windows for subject `s`, `S` subjects):**
-  - per-subject: `MAE_s = mean_k |d_sk|`;  `MSE_s = mean_k d_sk²`;  `cov_s = n_s / N_s`
-    (evaluable ÷ total windows in that session).
+- **Paced commanded rate is between-subject; only the arm-level paced LoA is inferential (M3R-31).**
+  Per the frozen §1 paced estimand: the **HR** paced LoA pools **12/15 bpm** subjects only (18 bpm
+  separate/descriptive, as above); the **BR** paced LoA pools **12/15/18**. **Per-rate (12/15/18)
+  breakdowns are descriptive-only** (bias + observed SD, no population LoA/CI) — ~3–4 subjects per
+  rate cannot support a between-subject LoA. No separate rate fixed-effect term is fitted (§1).
+- **Two explicit subject sets (M3R-32).** Because zero-window arms are an **expected** outcome under
+  the §2b evidence-floor rules, the accuracy and coverage denominators are **defined over different
+  subject sets** and must not be conflated:
+  - **Accuracy set** = the `S_a` **contributing subjects with ≥ 1 evaluable window** (the same `S_a`
+    as §1). `MAE_s`, `MSE_s` are computed only over these subjects (they are undefined for a subject
+    with `n_s = 0`), and the **contributing count `S_a` is reported alongside** every accuracy number.
+  - **Coverage set** = **every admitted subject/session in the arm**, including any with `n_s = 0`,
+    for which `cov_s = 0/N_s = 0` is **defined and retained** (dropping it would inflate coverage —
+    exactly the hardest, zero-output subjects must stay in the denominator).
+- **Headline MAE/RMSE/coverage weighting — exact equations (per arm `a`, subject `s` with `n_s`
+  evaluable of `N_s` total windows):**
+  - per-subject: `MAE_s = mean_k |d_sk|`;  `MSE_s = mean_k d_sk²` (both over subjects with `n_s ≥ 1`);
+    `cov_s = n_s / N_s` (evaluable ÷ total windows in that session; defined for `n_s ≥ 0`).
   - **subject-weighted headline (each subject equal, regardless of `n_s`):**
-    `MAE = mean_s(MAE_s)`;  **`RMSE = sqrt( mean_s(MSE_s) )`** (the root of the mean of subject
-    MSEs — **not** `mean_s(RMSE_s)`, which differs);  `coverage = mean_s(cov_s)`.
+    `MAE = mean_{s∈S_a}(MAE_s)`;  **`RMSE = sqrt( mean_{s∈S_a}(MSE_s) )`** (the root of the mean of
+    subject MSEs — **not** `mean_s(RMSE_s)`, which differs), both over the **accuracy set**;
+    `coverage = mean_s(cov_s)` over the **coverage set** (all admitted subjects, `n_s = 0` included).
 - **Arms are reported separately** (natural, paced) — these are the primary summaries. A **combined
   natural+paced headline is NOT reported** as a single pooled number, because after the HR-only
   18 bpm exclusion (§3.2 above) subjects contribute unequal arm sets, so a pooled figure is not one
@@ -269,13 +390,20 @@ bias/error.
    is *not* a licence to drop the session).
 
 **Session level (decided before scoring, from capture/reference integrity — never from agreement):**
-3. **Protocol abort** — settle criterion not met, or recording stopped mid-session
-   (`notes/protocol.md`): session not admitted; logged.
+3. **Protocol abort (intentional early termination)** — the settle criterion is not met, or the
+   protocol run is **deliberately halted before its intended 10-min end** (operator stop, subject
+   withdrawal, equipment intervention; `notes/protocol.md`): session **not admitted**; logged. **The
+   discriminator vs item 4 (M3R-37):** item 3 covers a run that **did not reach its intended
+   duration**; item 4 covers a run that **did** reach its intended end but whose *stored file* has an
+   incomplete trailing window. An intentional early stop is item 3 (not admitted); a
+   completed-length run with only a trailing file/transport fragment is item 4 (retained). A run
+   cannot be both, because "reached its intended duration" is either true or false.
 4. **Unusable / corrupt raw capture (objective test).** From `run_metadata.json`: a session is
    **corrupt and not admitted** iff the raw mirror is truncated so that a **non-final** window is
    incomplete (`mirror_truncated_bytes` cuts into a mid-recording window) **or** a stored file
-   checksum fails. A session with all complete windows plus an **incomplete trailing partial
-   window is RETAINED** — that tail window is simply unscored (§7). **Packet loss** above a frozen
+   checksum fails. A session that **reached its intended duration** (not an item-3 early stop) with all complete
+   windows plus an **incomplete trailing partial window is RETAINED** — that tail window is simply
+   unscored (§7). **Packet loss** above a frozen
    tolerance (`n_dropped / n_received > 5 %`) **flags** the session (reported) but does not by
    itself exclude it; the per-frame validity map (§7) decides which windows are radar-NaN.
 5. **Epoch-sync failure (objective, agreement-blind).** Before each session the PC and Masimo-phone
@@ -327,8 +455,16 @@ evidence-floor rule, **not** by discretionary exclusion.
 - **Frame-0 epoch origin — FROZEN rule, with a forward requirement.** The reference window for
   frame window `k` is the **half-open integer-second epoch interval** `[E(k·600), E((k+1)·600))`,
   where `E(i) = frame0_epoch + i/20` (20 Hz) and a Masimo sample at integer `epoch_utc = e` belongs
-  to the window iff `E(k·600) ≤ e < E((k+1)·600)` — the same alignment rule as the HR comparator
-  (`notes/comparator_prespec.md` §2.1; align on integer `epoch_utc`). **`frame0_epoch` is bound to a
+  to the window iff `E(k·600) ≤ e < E((k+1)·600)`. This aligns on the integer `epoch_utc` column as
+  the HR comparator does (`notes/comparator_prespec.md` §2.1).
+  > **RESOLVED — HR comparator harmonised (user decision 2026-07-26, M3R-40).** The HR comparator
+  > previously wrote this span as the **closed** `[t − 30 s, t]`, which for integer-second samples
+  > differs from this half-open grid by one endpoint (a closed span can double-count the boundary
+  > second across adjacent windows). The user authorised **harmonising the HR comparator to the
+  > half-open `[t − 30 s, t)`** — a pre-deposit clarification (no public DOI existed yet), applied in
+  > `notes/comparator_prespec.md` §2.1. **HR and BR now use the identical half-open endpoint rule**,
+  > this frame-index grid being binding for both.
+  **`frame0_epoch` is bound to a
   single named event: the synchronised-clock UTC time recorded at receipt/assembly of frame index
   0** — **not** `run_metadata.json`'s `start_wall_utc`, which is written *before* DCA/IWR
   configuration and capture startup (`live_demo.py:1213` vs `1300`+) and is therefore **not** a
@@ -371,8 +507,11 @@ of them uses only design/tuning data (§3.1) and, where noted, an amendment:
 
 ### Open-items checklist (all must close before the deposit is frozen)
 - [x] §1 statistical citations verified 2026-07-25 (BA 1986/2007, Carstensen 2008, Zou 2013)
-- [x] §1 agreement model corrected (2-level per-arm; bootstrap primary; MOVER arm-specific) after
-      cross-review M3R-01/M3R-02 — still requires the math/claims sign-off below
+- [x] §1 agreement model corrected (2-level per-arm; **cluster-bootstrap primary CI** — M3R-29
+      Option A, user 2026-07-26 — with its **anti-conservative-precision-gate** limitation declared
+      and **accepted** (M3R-45, user 2026-07-26); **MOVER a pre-named *candidate* sensitivity**, validated only after
+      implementation + statistician review + benchmark (M3R-46); regression-LoA sensitivity uses both
+      variance components after M3R-30) — still requires the math/claims sign-off below
 - [x] §2a Option A core frozen (2026-07-25) — per-session ≥1, per-subject ≥4, ≤5 bpm CI, natural-drop miss rule
 - [x] §2b extensions FROZEN (user decision 2026-07-25): study-wide ≥8/10, symmetric zero-window
       handling, **no** whole-subject exclusion, precision-miss → descriptive
@@ -380,4 +519,6 @@ of them uses only design/tuning data (§3.1) and, where noted, an amendment:
 - [x] §5 BR endpoints imported from M3's comparator; §3.2 18 bpm pooling made HR-only (M3R-08)
 - [x] §6 exclusion/disposition hierarchy enumerated (M3R-10)
 - [x] §7 non-overlapping-window grid frozen exactly (frame-index, first window included) (M3R-09)
-- [ ] math/claims cross-model review of §1 passed, and the M3 BR-comparator cross-review closed
+- [x] math/claims cross-model review of §1 **passed** and all M3 findings (M3R-01…48) **resolved**
+      across 17 rounds (Codex, 2026-07-25/26; `plans/m3_prespec_cross_review.md`) — **cross-review
+      COMPLETE**; this pre-spec is ready for the M0 freeze.

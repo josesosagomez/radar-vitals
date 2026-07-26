@@ -62,15 +62,21 @@ Phase A preparation started. **Done (draft, uncommitted — freeze-commit happen
   **0/6**, paced16 3/6, sweep 3/16 windows accepted, *before* Masimo gates. Per-hop counts
   reproduce HANDOFF's 5/23/30 exactly.
 - **A3** capture inventory — `notes/capture_inventory.md` (hashes, durations, bins, A6 schema).
-- **A4** analysis prespec — `notes/analysis_prespec.md` (8 decisions; [OPEN] items marked).
+- **A4** analysis prespec — `notes/analysis_prespec.md` (8 decisions; **cross-reviewed, all findings
+  resolved — no `[OPEN]` items remain**).
 - **A5/A6** ethics + privacy — recorded from the user's 2026-07-25 decisions (protocol `24IBEC051`,
   issuing board **IBEC, KAUST**, metadata schema) into A5/A6, the inventory, and the prespec.
 - **B1** evidence-floor memo (3 options) → `plans/m0_b1_evidence_floor_memo.md`; the user chose
   **Option A**, now frozen in `notes/analysis_prespec.md` §2.
 - **M3** BR comparator (`notes/comparator_prespec_br.md`) + the analysis prespec
-  (`notes/analysis_prespec.md`) — **drafted AND cross-model reviewed** (Codex, 2026-07-25):
-  **28 findings, all resolved.** Major corrections: agreement model rewritten to a 2-level
-  arm-specific unbalanced-ANOVA LoA with frozen bootstrap recipe; Alizadeh baseline redeclared a
+  (`notes/analysis_prespec.md`) — **drafted AND cross-model reviewed** (Codex, 2026-07-25/26):
+  **48 findings across 17 rounds, all resolved — cross-review COMPLETE.** The user decisions are
+  decided (M3R-29 primary-CI → **Option A, cluster-bootstrap primary**; M3R-42 → **≥8/10 read
+  study-wide, not per-arm**; M3R-40 endpoint half-open; M3R-34/45 dispositions — all 2026-07-26). Major
+  corrections: agreement model rewritten to a 2-level arm-specific unbalanced-ANOVA LoA
+  (**cluster-bootstrap primary CI**, with its anti-conservative-precision-gate limitation declared —
+  M3R-45; MOVER a pre-named *candidate* sensitivity, validated only after implementation + statistician
+  review + benchmark — M3R-46); Alizadeh baseline redeclared a
   reference-blind adaptation (it leaked the reference); BR PI-gate removed (availability/variance
   only); frame-0 epoch origin + clock-sync + corruption/retry rules frozen; BR made secondary with
   no confirmatory floor. Evidence-floor §2b **frozen by user decision** (≥8/10 study-wide, symmetric
@@ -79,13 +85,17 @@ Phase A preparation started. **Done (draft, uncommitted — freeze-commit happen
 - **Prespec §3 baseline — NAMED**: Alizadeh et al. 2019 (IEEE Access), reference-blind adaptation.
 - **Prespec §1 citations — VERIFIED**: Bland & Altman 1986/2007, Carstensen 2008, Zou 2013.
 
-**Still open before freeze:** the Masimo eIFU citation is now **verified directly against the PDF**
-(`literature/ref_papers/lab-10169a_master.pdf`, 2026-07-25): *MightySat Rx Home Care Manual*, © 2019
+**Masimo eIFU citation — VERIFIED and RESOLVED** (verified directly against the PDF
+`literature/ref_papers/lab-10168a_master.pdf`, 2026-07-26): *MightySat Rx Home Care Manual*, © 2019
 rev. 0119, p. 10 RRp/low-perfusion warning — this **corrected** Codex's pasted metadata (it was not
-"Operator's Manual", not rev. 2019-02-18). One residual: the back cover prints **LAB-10168A** while
-the file is `lab-10169a` — the user confirms the citable number at the deposit gate. Then the
-**cross-model review of the fully assembled deposit** (C2). **User-only, irreversible:** C1/C2
-assembly then D1/D2 publish.
+"Operator's Manual", not rev. 2019-02-18). **Document number `LAB-10168A`** (printed on the back
+cover) is the citable identifier, **confirmed by the user 2026-07-26**; the earlier local filename
+`lab-10169a` was a typo, corrected. **The M3R-34 intended-use (spot-check) disposition and the
+M3R-40 HR-comparator endpoint harmonisation are also resolved** (user decisions 2026-07-26; see the
+comparators and `plans/m3_prespec_cross_review.md`).
+
+**Still open before freeze:** the **cross-model review of the fully assembled deposit** (C2).
+**User-only, irreversible:** C1/C2 assembly then D1/D2 publish.
 
 ---
 
@@ -133,17 +143,19 @@ published.
 The four decisions required by `plans/implementation_plan.md` §M0, plus the endpoint,
 exclusion, and reporting rules that make them enforceable:
 
-1. **Agreement model.** Repeated-measures Bland–Altman clustered by **subject**, sessions
-   nested within subject. Variance components: between-subject, between-session-within-subject,
-   within-session residual; limits of agreement = bias ± 1.96·√(σ²_b + σ²_s + σ²_w), estimated
-   via a variance-components / mixed model (Bland & Altman — citation **must be verified
-   against the source papers before freeze**; no `[CITATION NEEDED]` may survive into the
-   normative deposit). CI on the LoA via MOVER or a subject-level cluster bootstrap
-   (name one as primary, the other as a sensitivity check). Unequal accepted-window counts per
-   subject are handled natively by the variance-component estimator — no per-subject
-   pre-averaging. **Requires math/claims cross-review (CLAUDE.md §6).** The pooled statistics
-   already produced by `scripts/plot_bland_altman.py` are declared descriptive-only in the
-   deposit, never a limit of agreement.
+1. **Agreement model.** **The binding specification is `notes/analysis_prespec.md` §1 — assemble the
+   deposit by reference to it, do NOT restate its equations here** (a divergent copy could reintroduce
+   a model this cross-review already rejected — M3R-44). In brief, and superseding the earlier draft
+   of this item: the model is **arm-specific and two-level** (subject + within-subject-arm residual);
+   there is **no** session-within-subject variance component (unidentifiable with one session per arm,
+   so the old `√(σ²_b + σ²_s + σ²_w)` three-level LoA is retired), estimated by **closed-form
+   unbalanced one-way ANOVA**; the CI method, estimability conditions, precision gate, and diagnostics
+   are exactly as frozen in §1 (its citations — BA 1986/2007, Carstensen 2008, Zou 2013 — are already
+   verified there). **The primary-CI method is resolved (M3R-29 Option A: cluster-bootstrap primary,
+   its anti-conservative-precision-gate limitation declared; MOVER a pre-named *candidate* sensitivity
+   validated only after implementation + statistician review + benchmark) — take it from §1 at
+   assembly; do not restate its equations here.** **Requires math/claims cross-review (CLAUDE.md §6).** The pooled statistics already produced by `scripts/plot_bland_altman.py` are
+   declared descriptive-only in the deposit, never a limit of agreement.
 2. **Evidence floor + precision target.** Written as a decision gate (Phase B) rather than
    pre-decided here: the frozen rule must name a per-session floor, a per-subject floor, a
    study-wide floor, the precision the study claims (e.g. max CI half-width on the LoA), and a

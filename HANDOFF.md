@@ -1,10 +1,10 @@
 # Handoff — radar-vitals
 
-> **Read this + `CLAUDE.md` and you can resume the project.** State **as of 2026-07-25**.
+> **Read this + `CLAUDE.md` and you can resume the project.** State **as of 2026-07-26**.
 > Rewritten, not appended (CLAUDE.md §10). For *what happened and why*, read `HISTORY.md`.
 > Every claim below was re-verified against the repo at the time of writing.
 >
-> **The next chat's job is to cross-review and freeze the BR comparator (M3)** — see §3.
+> **The M3 cross-review has substantively converged; the next job is to close it, then M0** — see §3.
 > Read `plans/implementation_plan.md` first.
 
 ---
@@ -16,10 +16,14 @@ Estimate **heart rate and — co-equally — breathing rate** from a 77 GHz FMCW
 radar. Ground truth is a Masimo MightySat pulse oximeter (1 Hz CSV: `Beats / min` = PR for heart,
 `Breaths / min` = RR for respiration). HR agreement is scored under a **pre-registered comparator**
 (`notes/comparator_prespec.md`) — binding on every HR number in the paper. **The BR comparator
-exists** (`notes/comparator_prespec_br.md`) and its **M3 cross-review is 9 rounds deep with all 28
-findings (M3R-01…28) resolved** — see `plans/m3_prespec_cross_review.md` `DEBATE COMMENTS` for the
-authoritative state. It is **not yet formally closed** (awaiting Codex's `NO MORE COMMENTS`) and
-**not frozen** — closing it is the only thing M0 waits on. The DSP extracts chest-wall phase from an
+exists** (`notes/comparator_prespec_br.md`) and its **M3 cross-review is COMPLETE — 48 findings
+(M3R-01…48) across 19 rounds, all resolved; Codex posted `NO MORE COMMENTS` on 2026-07-26** (see
+`plans/m3_prespec_cross_review.md` `COMMENTS OF CODEX` for the closing note, `DEBATE COMMENTS` for the
+authoritative per-finding record). The user decisions are all recorded (M3R-34 intended-use, M3R-40
+endpoint half-open, **M3R-29 CI method → Option A cluster-bootstrap primary**, **M3R-42 → ≥8/10 read
+study-wide, not per-arm**, M3R-45 anti-conservative-gate accepted). Both documents declare themselves
+**cross-review COMPLETE, ready for the M0 freeze — but NOT yet frozen** (the freeze is the user's
+irreversible Zenodo act). Closing the review was the last thing M0 waited on for the comparator. The DSP extracts chest-wall phase from an
 auto-locked range bin, cancels respiration harmonics (ECA) and verifies the cardiac peak via a
 second-harmonic check (AHET). Output: journal paper + thesis chapter.
 
@@ -32,11 +36,14 @@ authority for every milestone.
 
 ## 2. Current state
 
-**Branch `vital_signs_v9c`.** Test suite **821 passed, 1 xfailed, 0 failed**
-(`conda run -n radar-vitals python -m pytest tests/ -q`, verified 2026-07-25). The xfail is a known
-design hole in the ECA/AHET decoy case. v9 UI work remains parked in `git stash@{0}`;
-relocking/display-holdover stay reverted. The working tree is committed as of this rewrite
-(M0/M3 prep docs + the M2 fix, both pushed).
+**Branch `vital_signs_v9c`.** Test suite last verified **821 passed, 1 xfailed, 0 failed**
+(`conda run -n radar-vitals python -m pytest tests/ -q`, 2026-07-25; **no source code has changed
+since** — the M3 work touched only pre-registration docs + the reference-only evidence script). The
+xfail is a known design hole in the ECA/AHET decoy case. v9 UI work remains parked in `git stash@{0}`;
+relocking/display-holdover stay reverted. **Uncommitted as of this rewrite:** the M3 rounds-10→12
+edits (`notes/comparator_prespec_br.md`, `notes/analysis_prespec.md`, `notes/comparator_prespec.md`,
+`notes/protocol.md`, `scripts/derive_br_comparator_evidence.py`, `plans/m3_prespec_cross_review.md`,
+`plans/m0_preregistration.md`) plus this `HISTORY.md`/`HANDOFF.md` update — **pending a commit**.
 
 **Ethics approval is IN HAND and now fully recorded** (user-confirmed 2026-07-25): approval
 **`24IBEC051`**, issuing board **IBEC, KAUST**, covers collection **and** publication, permits
@@ -128,19 +135,24 @@ nothing was changed in the warmup code.
 
 ---
 
-## 3. Active task / next steps — **CLOSE the M3 cross-review (not start it)**
+## 3. Active task / next steps — **CLOSE the M3 cross-review, then M0**
 
 **M3 blocks the most:** the M0 deposit needs the frozen BR comparator, and M2's last done-when
 item (#5) is BR scored under it.
 
-1. **M3 close-out** — the review of `notes/comparator_prespec_br.md` + `notes/analysis_prespec.md`
-   already ran (2026-07-25, 9 rounds, 28/28 findings resolved incl. the user's §2b evidence-floor
-   decision in round 8). Remaining: Codex's final confirmation + `NO MORE COMMENTS`, inbox tidy-up,
-   status-header updates. **Resume prompt: `plans/m3_claude_review_loop_prompt.md`** (Codex side:
-   `plans/m3_codex_review_prompt.md`). Note the comparator's own header still says "awaiting
-   cross-review" — stale; the coordination file's debate log is authoritative.
-2. **Score reprocessed BR under the frozen comparator** (closes M2). The post-fix NPZs are ready;
-   the reference-only evidence script is `scripts/derive_br_comparator_evidence.py`.
+1. **M3 — COMPLETE.** The cross-review of `notes/comparator_prespec_br.md` + `notes/analysis_prespec.md`
+   is closed: **48 findings (M3R-01…48) across 19 rounds, all resolved; Codex posted `NO MORE COMMENTS`
+   2026-07-26** (`plans/m3_prespec_cross_review.md` is authoritative). The user decisions are recorded —
+   **M3R-34** (intended-use disposition), **M3R-40** (HR endpoint half-open), **M3R-29** (CI method →
+   **Option A**, cluster-bootstrap primary; MOVER a pre-named *candidate* sensitivity, validated only
+   after M4 implements + statistician-reviews + benchmarks it), **M3R-42** (≥8/10 read study-wide, not
+   per-arm; paced-HR headline rests on ≤7 subjects by design), **M3R-45** (anti-conservative precision
+   gate knowingly accepted). Both documents' headers say cross-review COMPLETE / ready for the M0
+   freeze. **Optional remaining tidy:** compact the coordination file's `DEBATE COMMENTS` to a
+   resolution table (verbatim is preserved in transcripts + git) — offered to the user, not yet done.
+2. **Score reprocessed BR under the frozen comparator** (closes M2 done-when #5). Post-fix NPZs are
+   ready; the reference-only evidence script `scripts/derive_br_comparator_evidence.py` now
+   **pins+asserts all six input SHA-256** (3 CSV + 3 `run_metadata.json`).
 3. **M0** — the pre-registration freeze and deposit (hard gate before any study capture). Its one
    blocking decision is the **evidence floor** (deferred by the user 2026-07-24 — see
    `plans/m0_b1_evidence_floor_memo.md`; a floor chosen after seeing the pilot yield is not a
@@ -180,7 +192,33 @@ Also start early: the **linalg-free DSP cross-model review** (gates M4, hence M5
 - **The BR comparator is designed from the reference alone.** Using radar agreement to sanity-check
   reference eligibility is the mirror image of the tuning CLAUDE.md §4 forbids.
 - **BR reference = Masimo `rr_bpm`, cross-checked against the paced metronome rate.** Masimo RRp is
-  pleth-derived, smoothed and laggy — a weaker reference than PR. Say so.
+  pleth-derived (documented); it **appears** smoothed and laggy — an **inference** from displayed
+  within-window variability, not a measured device fact (M3R-38). Report it as a weaker,
+  non-gold-standard reference than PR.
+- **HR and BR windows are the half-open `[t − 30 s, t)`** (M3R-40, user decision 2026-07-26). The HR
+  comparator was harmonised from a closed span to match the frozen `notes/analysis_prespec.md` §7
+  frame-index grid; both vitals now use one endpoint rule (a pre-deposit clarification — no DOI yet).
+- **Agreement CI: the whole-subject cluster bootstrap is PRIMARY** (M3R-29 **Option A**, user
+  2026-07-26) — fully specified, executable now, estimand-matched by construction (recomputes the
+  frozen closed-form each resample). Its `S_a ≤ 10` **under-coverage is a declared limitation and is
+  ANTI-conservative for the ≤5 bpm precision gate** (an over-narrow CI can falsely retain a
+  confirmatory headline — M3R-45; **user accepted 2026-07-26** as a declared risk; a conservative
+  adjustment would be a future amendment). **MOVER (Zou 2013) is a pre-named *candidate* sensitivity** — validated (and reported)
+  only after M4 implements + statistician math-reviews + benchmarks it (M3R-46), not on
+  implementation alone. The constant `μ ± 1.96·SD` LoA **point estimate** is primary and never
+  switched post-hoc; the primary bootstrap CI resamples whole subjects (preserving each subject's
+  within-session dependence, though validity still needs independent-subject asymptotics `S_a ≤ 10`
+  doesn't guarantee); lag-1 autocorrelation is a diagnostic; heteroscedasticity is a
+  separately-declared limitation.
+- **The paced-arm LoA is a marginal design-weighted mixture over a FROZEN rate allocation** (M3R-31):
+  enrolment-order rotation 12→15→18 ⇒ counts **4/3/3** (rate 12 takes the 10th subject), fixed
+  pre-collection. **HR paced pools 12/15 only** (18 bpm separate/descriptive); **BR paced pools
+  12/15/18**. Per-rate breakdowns are descriptive-only.
+- **Masimo intended-use disposition (M3R-34, user 2026-07-26):** the device's "spot-check only / no
+  alarms / not for continuous monitoring" labelling concerns battery endurance and unattended-safety
+  alarms, **not** 10-min accuracy — recorded as covered for attended 10-min healthy-subject sessions
+  with a **verified battery** (protocol checklist). Cite the manual as **`LAB-10168A`**
+  (`literature/ref_papers/lab-10168a_master.pdf`; an earlier `lab-10169a` filename was a typo).
 - **Both `literature/ref_papers/` methods are an OFFLINE COMPARISON ARM**, not production
   replacements. No promotion without a separate documented decision + cross-model review.
 - **Paper 2 (Kotte) needs a paper-faithful control first.** See §6 — the "4-RX SIMO" premise was
@@ -282,10 +320,10 @@ Also start early: the **linalg-free DSP cross-model review** (gates M4, hence M5
 | Journal paper planning | `JOURNAL_PAPER.md` |
 | Method, literature, algorithm spec | `notes/approach.md` |
 | **Pre-registered HR comparator (binding)** | `notes/comparator_prespec.md` |
-| **BR comparator (M3 — review at final gate, 28/28 resolved, not frozen)** | `notes/comparator_prespec_br.md` |
+| **BR comparator (M3 — cross-review COMPLETE, 48 findings resolved; ready for M0 freeze; not frozen)** | `notes/comparator_prespec_br.md` |
 | M3 close-out prompt (Claude side) | `plans/m3_claude_review_loop_prompt.md` |
 | BR-comparator design evidence (reference-only) | `scripts/derive_br_comparator_evidence.py` |
-| Frozen analysis pre-spec (scoring grid §7) | `notes/analysis_prespec.md` |
+| Analysis pre-spec (draft for M0; agreement model §1, scoring grid §7) | `notes/analysis_prespec.md` |
 | Capture inventory (hashes) | `notes/capture_inventory.md` |
 | Capture protocol / SOP (10-min; ethics `24IBEC051`, IBEC KAUST) | `notes/protocol.md` |
 | **M2 fix plan (as reviewed)** | `plans/m2_respiration_fix.md` |

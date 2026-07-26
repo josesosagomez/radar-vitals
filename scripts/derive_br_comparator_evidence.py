@@ -10,13 +10,21 @@ metronome command, and FFT-resolution arithmetic.
 
 Determinism: fully deterministic, no RNG, no seed.
 
+Input pinning (CLAUDE.md §3.1): all six consumed inputs — the three Masimo CSVs and the three
+`run_metadata.json` files — have their exact SHA-256 pinned in EXPECTED_SHA256 below, and the script
+**asserts** each against the file on disk before use, aborting on any mismatch. This binds the
+displayed numbers to the exact inputs that produced them. The three CSV digests also match
+`notes/capture_inventory.md`; the three metadata digests are pinned here (the inventory does not
+carry them).
+
 Window grid: non-overlapping 30 s windows anchored at `run_metadata.json`'s `start_wall_utc`,
 `[start + k·30, start + (k+1)·30)` half-open, `k = 0, 1, …`. NOTE this origin is **approximate**:
 `start_wall_utc` is written *before* capture startup (`live_demo.py:1213` vs `1300–1318`), so it is
 not the frame-0 epoch — the exact scoring grid needs a persisted post-start `frame0_epoch`
-(`notes/analysis_prespec.md` §7), which the exploratory captures do not have. This is adequate here
-because the script produces only reference-characterization design evidence (within-window RRp
-spread), which is robust to a few-second origin offset — not any frozen scoring number.
+(`notes/analysis_prespec.md` §7), which the exploratory captures do not have. The script therefore
+produces only reference-characterization design evidence (within-window RRp spread) as an
+**origin-specific exploratory illustration** at this one origin — **not** any frozen scoring number,
+and **no** robustness across origins is claimed.
 
 Gates: availability = >= 24 finite rr_bpm in the window; stationarity thresholds 2/3/5 bpm.
 
@@ -52,6 +60,21 @@ CSV_NAME = {"20260713_172042_live_demo_massimo1": "demo_massimo1.csv",
             "20260713_182002_live_demo_massimo2": "demo_massimo2.csv",
             "20260714_180523_live_demo_sweep":    "demo_sweep.csv"}
 
+# Pinned SHA-256 of every consumed input (M3R-35). The three CSV digests match
+# `notes/capture_inventory.md`; the three run_metadata.json digests are pinned here. main() asserts
+# each file against this map and aborts on mismatch, so the printed numbers are bound to these inputs.
+EXPECTED_SHA256 = {
+    "20260713_172042_live_demo_massimo1": {
+        "csv":  "960af7f5038a8fe9233b38dfcb583872f3dba8c89082c72cf8e05ed371732bf9",
+        "meta": "d0b92f3be1fa1d214f3c72035ffc82799ae92b1b0c48f63f91356b67e43a7a6f"},
+    "20260713_182002_live_demo_massimo2": {
+        "csv":  "d1cb91a43691cb10907425b15c2f0f1d02da09d12825d399225c8b16e89d32ff",
+        "meta": "f6a922dd85ce093c943fba4791a96a507edf9aa4e12d202fb0d5041cfb6d8f01"},
+    "20260714_180523_live_demo_sweep": {
+        "csv":  "5974a9f303f79729c254fb4dc904d1c85c4bea006fafc202d12e0267de93de04",
+        "meta": "828b972c18736ac7e46d6a893bbf9e2ca486edea7e666cebdd6a22be171ff89c"},
+}
+
 
 def sha256(path: Path) -> str:
     h = hashlib.sha256()
@@ -59,6 +82,20 @@ def sha256(path: Path) -> str:
         for chunk in iter(lambda: f.read(1 << 20), b""):
             h.update(chunk)
     return h.hexdigest()
+
+
+def verify_inputs() -> None:
+    """Abort unless every consumed input matches its pinned SHA-256 (M3R-35)."""
+    mismatches = []
+    for folder, expected in EXPECTED_SHA256.items():
+        d = BASE / folder
+        for key, path in (("csv", d / CSV_NAME[folder]), ("meta", d / "run_metadata.json")):
+            got = sha256(path)
+            if got != expected[key]:
+                mismatches.append(f"  {path}\n    expected {expected[key]}\n    got      {got}")
+    if mismatches:
+        raise SystemExit("ABORT: consumed-input SHA-256 mismatch (M3R-35) — inputs changed:\n"
+                         + "\n".join(mismatches))
 
 
 def start_epoch(folder: Path) -> float:
@@ -79,6 +116,7 @@ def windows(df, t0: float):
 
 
 def main() -> None:
+    verify_inputs()  # M3R-35: abort if any consumed input drifts from its pinned digest
     hdr = (f"{'session':18s} {'n_win':>5s} {'rrFin%':>6s} {'PImed':>6s} "
            f"{'sprMed':>6s} {'sprMax':>6s} "
            + " ".join(f'>{t:g}%' for t in STATIONARITY_BPM)
@@ -111,7 +149,8 @@ def main() -> None:
               f"{np.median(spreads):>6.1f} {spreads.max():>6.1f} "
               + " ".join(f'{e:>3.0f}' for e in excl)
               + f" {100*avail_excl/n_win:>6.0f}% {moff:>7s} {rng:>9s}")
-    print("\nConsumed-input SHA-256 (CSV = reference; run_metadata.json = window origin):")
+    print("\nConsumed-input SHA-256 — VERIFIED against pinned EXPECTED_SHA256 (M3R-35)"
+          " (CSV = reference; run_metadata.json = window origin):")
     for label, folder, _ in SESSIONS:
         d = BASE / folder
         print(f"  {label:18s} csv  {sha256(d / CSV_NAME[folder])}  {CSV_NAME[folder]}")

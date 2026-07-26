@@ -13,8 +13,12 @@
 - **10 subjects, 2 sessions each** (20 sessions total).
 - **Session 1: natural breathing.** Subject breathes normally; no pacing.
 - **Session 2: paced breathing** with a metronome at a fixed target rate.
-  - Rates: **12, 15, 18 breaths/min**, one steady rate per subject, rotated
-    across the 10 subjects (~3-4 per rate). Rationale:
+  - Rates: **12, 15, 18 breaths/min**, one steady rate per subject, assigned by
+    **enrolment-order rotation** (12 → 15 → 18 repeating), which for 10 subjects
+    fixes the allocation at **4 / 3 / 3** (rate 12 takes the extra, tenth, subject).
+    This allocation is **frozen before any data is collected** — it defines the
+    mixture weights of the paced arm-level LoA (`notes/analysis_prespec.md` §1,
+    M3R-31) and must never be chosen post-hoc. Rationale:
     12 bpm harmonics sit clear of the cardiac band (easy case); 18 bpm (0.30 Hz)
     puts the 4th harmonic at ~1.2 Hz = 72 bpm, inside the resting-HR band.
   - Metronome = **2x the target rate** (each beat = one inhale or one exhale).
@@ -55,6 +59,19 @@
   radar-to-chest distance in the session notes regardless.
 - **Reference:** Masimo MightySat on a finger. The subject's hands stay still on
   the legs throughout — do not move the sensored hand during recording.
+  > **Intended-use limitation (declared; DISPOSITIONED — user decision 2026-07-26, M3R-34).** The
+  > MightySat Rx manual (`literature/ref_papers/lab-10168a_master.pdf`, p. 10) states *"Do not use
+  > MightySat Rx for continuous monitoring. It is intended for spot-check use only. No alarms are
+  > provided."*, and (p. 7) indicates PR/RRp for **spot checking**. This protocol logs the device
+  > **continuously for 10 min** (PR for HR, RRp for BR). **Disposition (study assumption, M3R-43):**
+  > the manual gives no rationale for the warning; **the study assumes** the labelling is principally
+  > about **battery endurance** (multi-hour/day use) and the **absence of safety alarms** (unattended
+  > monitoring) — **not** per-sample accuracy within a short session — and assumes accuracy over a
+  > **10-min attended session with healthy adults and a verified battery** (checklist below) is
+  > unaffected; the no-alarms point is irrelevant to an attended research capture (not patient
+  > monitoring). The manufacturer does not certify this inference. Approval `24IBEC051` permits the
+  > 10-min collection (user-confirmed 2026-07-24), and reference logging is intrinsic to it. See `notes/comparator_prespec_br.md` §2.2
+  > and `notes/comparator_prespec.md` §2.2 (recorded identically, device-wide).
 - **Environment:** quiet room, no one walking around, no fan/HVAC airflow at the
   subject.
 - **Recording duration:** **10 minutes** (600 s) per session, yielding **exactly 20
@@ -117,6 +134,8 @@
 - [ ] Measure and record radar-to-chest distance (must be within 0.8–1.4 m)
 
 ### Masimo MightySat
+- [ ] **Battery charged / in good state** — it is a spot-check device; confirm it will run the full
+      10-min session without dropout (M3R-34 disposition)
 - [ ] Clipped to finger; PR (Beats/min) and Perfusion Index stable and updating
 - [ ] Logging/CSV export active
 - [ ] Sensored hand resting on the leg — will not move during recording

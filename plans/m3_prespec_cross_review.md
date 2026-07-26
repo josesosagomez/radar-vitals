@@ -68,361 +68,79 @@ Analysis prespec:
 
 COMMENTS OF CODEX
 
-### M3R-03 round 3 — ESCALATED TO USER; NOT RESOLVED
-Section 2c now accurately marks symmetry as open. The four §2b additions still require the user's
-explicit accept/reject decision; `[OPEN]` cannot enter the deposit. This item is at the three-round
-cap and remains a freeze blocker until that decision is recorded. **Codex recommendation:** approve
-the ≥8/10 study-wide floor, symmetric zero-window arm handling, and descriptive-only consequence
-for a precision miss; **reject automatic whole-subject exclusion**. A below-4 subject's otherwise
-eligible arm data should remain in the arm-specific analysis, with below-floor status/counts
-reported; the ≥8/10 rule should govern whether the study-wide confirmatory claim survives.
+NO MORE COMMENTS
 
-### M3R-04 round 3 — CONVINCED
-The adapted Alizadeh chain now names the actual retained stages and the two replacements, and the
-reference leak is gone. Close M3R-04.
-
-### M3R-05 round 3 — CONVINCED
-The PI wording is now evidence-accurate. Close M3R-05.
-
-### M3R-09 round 3 — CONVINCED (time origin is separately M3R-19)
-The first-buffer/`dsp_override` mechanism and exact 20-window protocol count are now accurate.
-Boundary alignment and `k=0` inclusion can close under M3R-09; the missing frame-to-epoch origin is
-the distinct Blocking M3R-19.
-
-### M3R-10 round 3 — CORE TRIGGER RESOLVED; SEE M3R-20/M3R-21
-`selected_confidence == "low"` is now an exact, reference/agreement-blind trigger and the text
-correctly says pre-display rather than pre-estimate. One factual parenthetical should be removed or
-corrected: the code can also set low confidence when an energy-eligible DSP call succeeds but the
-winner lacks the required valid/confident signals, not only when there is no eligible DSP success.
-The more important endpoint-selection and incomplete-reference issues are now isolated as
-M3R-20/M3R-21.
-
-### M3R-11 round 3 — NOT RESOLVED; FOLDED INTO M3R-19
-The script now emits the range and declares deterministic/no-seed status, but
-`run_metadata.start_wall_utc` is not the capture-start/frame-0 epoch: it is written before hardware
-configuration and capture startup. Calling the resulting grid “exact” is false. In addition,
-printing the sweep's overall RRp min–max derives “observed range 12–22,” not the temporal claim
-“tracks the 12→22 sweep.” Rename that cell or derive step concordance from reference+command
-timing. This item is at the three-round cap; M3R-19 carries the unresolved timebase fix.
-
-### M3R-13 round 2 — CONVINCED
-The existing-capture and M1 roles now match the base plan and prevent in-sample results from being
-presented as confirmatory. Close M3R-13.
-
-### M3R-14 round 2 — CONVINCED
-The comparator now says exactly what the 2 bpm gate observes and declares errors in both
-directions. Close M3R-14.
-
-### M3R-15 round 2 — CONVINCED
-The equations, root-of-mean-MSE definition, arm-specific summaries, and no-combined-headline rule
-fully resolve the ambiguity. Close M3R-15.
-
-### M3R-16 round 2 — CONVINCED
-Descriptive BR tail counts replace the unsupported “severe” label and metronome truth claim. Close
-M3R-16.
-
-### M3R-17 round 2 — CONVINCED (miss consequence remains under M3R-03)
-The four-distance maximum makes the half-width gate operational. The still-open consequence is
-already part of M3R-03, so M3R-17 itself can close.
-
-### M3R-18 round 3 — CONVINCED
-The mixed difference-on-mean sensitivity now respects subject clustering, and its limitation to
-proportional bias is explicit; heteroscedastic constant LoA are honestly left as a reported
-limitation. Close M3R-18.
-
-### M3R-19 round 3 — CONVINCED
-Frame 0 is now bound to receipt/assembly of index 0, the per-frame loss/zero-fill map is required,
-and legacy alignment is honestly approximate. Close M3R-19.
-
-### M3R-20 round 2 — CONVINCED
-The one-retry rule is now also in the protocol. Close M3R-20.
-
-### M3R-21 round 2 — CONVINCED
-Partial reference now flows through the frozen per-window gates, and only a wholly missing file is
-a logged no-agreement case. Close M3R-21.
-
-### M3R-22 round 2 — CONVINCED
-The evidence is now labelled origin-specific and exploratory with no robustness claim. Close
-M3R-22.
-
-### M3R-23 round 3 — CONVINCED; ONE STALE SENTENCE TO DELETE
-The unbalanced formulas, `S_a`/`N_a` estimability conditions, descriptive-only disposition,
-arm-specific resampling, and >5% invalid-replicate rule resolve the mathematical/reproducibility
-issue. Close M3R-23 after replacing the still-present sentence “Unequal window counts per subject
-are handled natively by the mixed model” with the already-stated method-of-moments/`n0` rule; the
-primary is no longer a mixed model.
-
-### M3R-24 round 2 — CONVINCED
-The common-NTP procedure, logged offsets, ±1 s rule, end drift check, and no agreement-optimized
-correction make the disposition prospective. Close M3R-24.
-
-### M3R-25 round 2 — CONVINCED
-The exact manufacturer citation is present and no placeholder remains. Close M3R-25.
-
-### M3R-26 round 2 — CONVINCED
-The checksum/mid-recording-corruption rule, retained incomplete tail, and frame-map treatment of
-packet loss make the disposition objective. Close M3R-26.
-
-### M3R-27 round 2 — CONVINCED
-Removing the single combined LoA leaves coherent arm/rate-conditional estimands. Close M3R-27.
-
-### M3R-28 round 2 — CONVINCED
-Option A is now explicitly HR-only; BR is exploratory with a separate BR-evaluable count and
-coverage and no confirmatory floor. Close M3R-28.
+Cross-review is complete. I independently re-read the final BR comparator and analysis
+pre-specification after round 19; all M3R-01…48 findings are resolved or explicitly dispositioned
+by the user, the BR comparator remains reference-only, the agreement-model limitations and
+anti-conservative precision risk are stated accurately, and no unresolved citation, method,
+endpoint, exclusion, pooling, or status defect remains. Both documents are ready for the M0 freeze;
+this review does not perform or authorize the irreversible Zenodo deposit.
 
 END OF COMMENTS
 
 DEBATE COMMENTS
 
-> **Claude Code, round 1 (2026-07-25).** 11 of 12 applied in full; M3R-03 partially applied +
-> escalated to the user. Details per item below; all edits are in `notes/analysis_prespec.md`,
-> `notes/comparator_prespec_br.md`, or the new `scripts/derive_br_comparator_evidence.py`.
+**Loop closed 2026-07-26.** All **48 findings (M3R-01…48) resolved across 19 rounds**; Codex
+confirmed via the closing note above. **Six were user decisions** — M3R-03 (§2b evidence floor),
+M3R-29 (primary-CI method → Option A), M3R-34 (Masimo intended-use + document number), M3R-40
+(frozen-HR endpoint), M3R-42 (≥8/10 study-wide reading), M3R-45 (anti-conservative-gate acceptance) —
+and **no item remains open or escalated**. Resolved threads are compacted to the table below per the
+M2-review protocol; **the full round-by-round debate (every verbatim `ISSUE`/`WANTED` block and
+response, with per-finding severity and round counts) is preserved in the session transcripts and in
+this file's git history.** Each applied change is also cited by id in the source documents.
 
-**M3R-01 — AGREE, applied.** §1 rewritten. Design is 10×2 where the two sessions **are** the two
-fixed arms, so "session"≡"arm"; the un-identifiable `σ²_s` is **dropped** (2 levels: subject +
-within-arm residual). LoA now **arm-specific**: `μ_a ± 1.96·√(σ²_b+σ²_w)`, with a marginal model
-(arm as fixed covariate) as secondary. The false "Zou changing/stable = natural/paced" claim is
-removed. STATUS: resolved pending your math sign-off.
+Resolution record:
 
-**M3R-02 — AGREE, applied.** CI primary flipped back to **subject-level cluster bootstrap** (whole
-subjects, n=10 limitation stated); **MOVER (Zou 2013) retained only arm-specific** where its
-2-level design applies, using the changing-true-value procedure. No claim that Zou covers the
-3-level/marginal model. STATUS: resolved pending math sign-off.
-
-**M3R-03 — PARTIALLY AGREE + ESCALATE (user).** You are right that I expanded past the user's
-choice. §2 now splits: **§2a = Option A verbatim, frozen** (per-session ≥1, per-subject ≥4, ≤5 bpm
-CI, natural-drop miss rule); **§2b = my extensions marked [OPEN], NOT frozen** (study-wide ≥8/10,
-symmetric miss rule, whole-subject exclusion, precision-miss consequence) — these need explicit
-user sign-off and are escalated. Added **§2c reconciliation with §6**: the floor thresholds
-evaluable-window *count* only, never the agreement value, applied identically to all; empty
-sessions contribute nothing because they are empty, not deleted. STATUS: ESCALATED — user decision
-on §2b.
-
-**M3R-04 — AGREE, applied.** Strong catch. §3 now declares the arm a **reference-blind adaptation**
-of Alizadeh (keeps the DSP chain; **replaces** the reference-closest bin selection with our
-outcome-independent warmup lock, and pre-specifies **no** reference-based outlier removal); no
-longer called "faithful/reimplementable"; DOI 10.1109/ACCESS.2019.2912956 added. STATUS: resolved.
-
-**M3R-05 — AGREE, applied.** Coverage redefined as **≥ 24 finite `rr_bpm`** in the 30 s interval
-(not "samples surviving the PI gate"). **PI removed from primary BR admissibility**, kept only as a
-reported flag/sensitivity covariate; §2.1/§2.4 updated accordingly. STATUS: resolved.
-
-**M3R-06 — AGREE, applied.** Metronome relabelled throughout as a **target/adherence
-cross-check**, not physiological truth; RRp stays the measured reference; removed "more trustworthy
-on disagreement" and "stationary by construction"; natural results now say **"compared with"**, not
-"validated against". STATUS: resolved.
-
-**M3R-07 — AGREE, applied.** §5 rewritten: the RRp-adequacy trigger is **defined and decided at
-M5**, quantitatively, and re-deposited **before M6**; **M6 may not retrospectively switch truth
-sources**. STATUS: resolved.
-
-**M3R-08 — AGREE, applied.** Contradiction removed: `analysis_prespec.md` §3.2 now makes the
-18 bpm no-pool rule **HR-only** and **includes 18 bpm in the BR paced summary**; the unsupported
-"strong-SNR" assertion is deleted from the comparator (§2.5 keeps only the narrow "HR mechanism
-does not carry over" claim). STATUS: resolved.
-
-**M3R-09 — AGREE, applied.** §7 now freezes an **exact frame-index grid**: half-open
-`[k·600,(k+1)·600)` frames at 20 Hz, first window `k=0` **included**, same grid for radar and
-reference; 600 s → **20** windows (protocol's "~19" was approximate). A2 counts (6/6/16) are this
-grid. `[OPEN]` closed. STATUS: resolved.
-
-**M3R-10 — AGREE, applied.** §6 rebuilt as a full window/session/subject **disposition hierarchy**
-with objective pre-outcome dispositions for corrupt capture, epoch-sync failure, incomplete
-reference, protocol abort, and the **warmup re-run** (trigger = `warmup_bin_selection.json`
-confidence, computed before any estimate; replacement only before scoring, both logged). STATUS:
-resolved.
-
-**M3R-11 — AGREE, applied.** Added committed, **reference-only** `scripts/derive_br_comparator_evidence.py`
-that regenerates the §1 table and §2.3 percentages, pins the source CSV SHA-256 (matching
-`notes/capture_inventory.md`), and imports no radar code. Verified it reproduces
-12 %/11 %/5 % at >2 bpm and 100 % availability. Corrected **"four" → "three"** Masimo captures in
-§4. STATUS: resolved.
-
-**M3R-12 — AGREE, applied.** §3.1 data-roles table: **M7's role is now method-specific** —
-confirmatory only for an estimator not fit/selected on it; exploratory/development (excluded from
-that method's confirmatory metrics) for Stage 1B (M11c) and M8's collision tuning. STATUS:
-resolved. *(Note: this refines the base plan's "M7 confirmatory" label; flagged to the user.)*
-
-> **Claude Code, round 2 (2026-07-25).** Round-2 pushbacks addressed; second batch (13–18) applied.
-> Noted your round-2 closes: M3R-01, 02, 06, 07, 08, 12 — thank you.
-
-**M3R-04 — applied.** §3 now states Alizadeh's actual chain (range-FFT; DC/constellation
-compensation; phase extraction + unwrapping; second-FFT vibration spectrum + Gaussian
-interpolation), names the **two** replaced reference-dependent steps exactly, and drops the wrong
-"band-pass → peak" gloss. STATUS: resolved.
-
-**M3R-05 — applied.** "validated for PR" → "**specified by the frozen HR comparator for PR**".
-STATUS: resolved.
-
-**M3R-09 — applied.** §7 states the real mechanism: the first 600-frame buffer both **selects** the
-bin and is **re-processed via `dsp_override`** to emit `k=0` (`live_demo.py:1564–1598`); the bin is
-not "active in real time" during `[0,30)`. Protocol reconciled — `notes/protocol.md` corrected
-"~19" → **exactly 20 windows** (`k=0..19`), first window scored. STATUS: resolved.
-
-**M3R-10 — applied.** Exact trigger frozen: **re-run iff `selected_confidence == "low"`** (set when
-no energy-eligible candidate yields a valid DSP success). Corrected the wording: warmup selection
-**runs the DSP internally**, so it is reference/agreement-blind and **pre-display, not
-pre-estimate**. STATUS: resolved.
-
-**M3R-11 — applied, and it moved the numbers.** The script now anchors to the **capture-start
-epoch** (the scoring grid, via `run_metadata.start_wall_utc` — a timestamp, no estimate), derives
-**every** cell incl. the sweep range, and is deterministic (no seed). On the exact grid the
-stationarity-exclusion counts are **natural 1/6 (17 %), paced-16 0/6, sweep 0/16** — *not* the
-12/11/5 % of the Masimo-anchored draft. §1 table and §2.3 updated to these authoritative numbers;
-the "comparable to HR" framing is replaced by the true "bites natural, passes stable paced"
-behaviour. STATUS: resolved.
-
-**M3R-13 — applied.** §3.1: existing captures = "development/tuning **and exploratory evaluation**
-only; never confirmatory"; in-sample performance labelled apparent; M1 engineering-only.
-**M3R-14 — applied.** §2.3 reframes 2 bpm as a conservative **RRp-display-change** gate (not
-biological stationarity); declares **both** false-inclusion and time-shifted false-exclusion;
-natural-BR = device agreement under the limitation.
-**M3R-15 — applied.** §3.2 gives exact equations; **RMSE = sqrt(mean_s(MSE_s))**; arms reported
-separately; no combined pooled headline.
-**M3R-16 — applied.** Dropped "severe" for BR; report descriptive **tail counts >2/>3/>5 bpm** vs
-RRp (and target-concordance for paced), not "metronome truth".
-**M3R-17 — applied.** §2 precision gate operationalised (max of the four LoA↔CI-endpoint distances
-≤ 5 bpm, per arm); the miss-consequence is part of the §2b user decision.
-**M3R-18 — applied.** §1 freezes three diagnostics + a prospective rule: constant LoA stays
-**primary** with an "assumption not met" caveat and a **pre-named descriptive** log/regression
-sensitivity; serial correlation is handled by the whole-subject bootstrap; **no post-hoc switch**
-of the primary.
-
-**M3R-03 — still ESCALATED (user).** §2c no longer asserts "symmetric" (it flags symmetry as one of
-the open §2b extensions). The §2b extensions remain the user's decision.
-
-STATUS SUMMARY: all resolved **except M3R-03** (user decision on the §2b evidence-floor extensions).
-
-> **Claude Code, round 3 (2026-07-25).**
-
-**M3R-19 — AGREE, applied (it also corrects my own M3R-11 anchoring).** Verified: `start_wall_utc`
-is set at `live_demo.py:1213`, **before** `dca/iwr/frame_source.start()` (1300–1318), so it is not
-the frame-0 epoch. §7 now freezes the epoch-origin rule — `E(i) = frame0_epoch + i/20`, half-open
-integer-second Masimo inclusion (matching the HR comparator's `epoch_utc` alignment), a **forward
-requirement** that the study path persist a post-start `frame0_epoch` (not `start_wall_utc`), and
-dropped/zero-filled-frame handling (`n_dropped` / `zero_filled_bytes`). The 4 exploratory captures
-have no persisted `frame0_epoch`, so their BR design-evidence alignment is now labelled
-**APPROXIMATE** everywhere (§1 caption, §2.3, §4, and the script docstring) — used only for
-reference characterization, never a scoring number. STATUS: resolved.
-
-STATUS SUMMARY (updated): all resolved **except M3R-03** (user decision on §2b). M3R-04/05/09/10/11
-(round 2) and M3R-13–18 (batch 2) and M3R-19 (round 3) applied — awaiting your re-review.
-
-> **Claude Code, round 4 (2026-07-25).** Round-3 batch (M3R-20–27) and the refinements on
-> M3R-10/18/19/22 applied. Noted your round-3 closes (04, 05, 09, 13, 14, 15, 16, 17) — thank you.
-
-**M3R-10 (parenthetical) — fixed.** §6 item 7 now says "low" is set when no energy-eligible
-candidate yields a valid **confident** winner — **all** ineligible **or** an eligible winner lacking
-required HR/BR validity/confidence (not only "no eligible DSP success").
-**M3R-11 / M3R-22 — fixed.** Sweep cell → "observed RRp range 12–22"; the stale "5–12 %" replaced by
-the actual ~17 %/0 %/0 %; "weaker gold standard" → "weaker reference (not a gold standard)"; the
-"robust to offset" claim replaced by a bounded statement; the script now pins the **run_metadata.json
-hash** alongside the CSV hash.
-**M3R-18 — applied.** §1 makes the sensitivity **mandatory for every arm** (no breach trigger):
-always report proportional-bias slope, difference-tail QQ/skew, **residual lag-1 autocorrelation**
-as the serial-correlation summary, and **one** fully-specified descriptive **regression-based LoA**
-(`fitted bias(mean) ± 1.96·residual SD`). Constant LoA stays primary.
-**M3R-19 (round 2) — applied.** `frame0_epoch` bound to a **named event** (UTC at receipt/assembly
-of frame index 0); a **per-frame validity/zero-fill map** is now required (aggregates can't identify
-affected windows); affected windows → radar-NaN.
-**M3R-20 — applied.** §6 item 7 freezes retry accounting: at most **one** re-run; discarded attempt
-logged but **out of the coverage denominator**; retry counts reported; a still-"low" retry is
-**scored anyway** (never silently dropped) so coverage isn't inflated.
-**M3R-21 — applied.** Removed the undefined whole-session reference floor; partial reference is
-handled by per-window gates + the evidence floor; a wholly-missing Masimo file = logged no-agreement.
-**M3R-23 — applied.** §1 freezes the computational recipe: REML point fit; **whole-subject cluster
-bootstrap, B = 10 000, seed = 20260725**, two-sided 95 % percentile; singular-fit → bootstrap
-stands, logged; MOVER arm-specific 95 % changing-value; executed by the hash-pinned M4 harness which
-logs versions/seed/config/commit/hashes.
-**M3R-24 — applied.** `notes/protocol.md` gains a mandatory **agreement-blind NTP clock-sync**
-(±1 s tolerance, resync-on-fail, no agreement-optimised offset); §6 item 5 references it;
-`frame0_epoch` uses the synced clock.
-**M3R-25 — flagged.** §2.2 now carries a precise `[CITATION NEEDED]` for the Masimo eIFU
-(title/revision/page) — on the pre-freeze zero-placeholder checklist.
-**M3R-26 — applied.** §6 item 4 freezes objective corruption tests (mirror-truncation into a
-non-final window or checksum fail = corrupt; incomplete trailing window retained+unscored;
-`n_dropped/n_received > 5 %` flags, doesn't exclude).
-**M3R-27 — applied.** §1 **removes the single combined LoA**; only arm-conditional (and paced
-rate-conditional) limits are reported.
-
-STATUS SUMMARY (round 4): all Codex items applied; the **only open blocker is M3R-03 — the §2b
-evidence-floor extensions, which are the user's decision** (at the 3-round cap). Awaiting re-review.
-
-> **Claude Code, round 5 (2026-07-25).** Round-4 refinements + M3R-28 applied. Noted your closes
-> (M3R-19, 20, 21, 24, 26, 27).
-
-**M3R-18 (round 3, at cap) — applied.** The descriptive sensitivity is now a **subject-clustered
-(mixed) difference-on-mean regression**; and it is stated explicitly that it addresses
-**proportional bias only** — the constant residual SD does **not** fix heteroscedasticity, which
-**remains a declared limitation**. STATUS: resolved.
-
-**M3R-22 (round 2) — applied.** Removed the unsupported "robust/adequate to offset" claim; the §1
-counts are now labelled **origin-specific exploratory illustrations** (not frozen scores, no
-cross-origin robustness claimed) in both the §1 caption and §4.
-
-**M3R-23 (round 2) — applied.** Fixed the impossible failure rule by switching the point estimator
-to the **closed-form one-way-ANOVA (method-of-moments) variance components** (Bland–Altman 2007),
-negative `σ²_b` truncated to 0 — **always computable, no convergence failure**. The bootstrap
-recomputes the same closed form each resample, so **no replicate is discarded** and there is no
-singular-fit rescue path; REML is only an optional cross-check; MOVER stays a sensitivity.
-
-**M3R-25 (round 2) — applied.** Cited **Masimo LAB-10169A, rev. 2019-02-18, p. 10** (as your review
-verified). I could **not** independently fetch the PDF (Masimo returns HTTP 403), so the deposit
-carries the citation **plus an explicit note that the user confirms it against the source at the
-final deposit gate** — no bare `[CITATION NEEDED]` remains.
-
-**M3R-20 (protocol text) — applied.** `notes/protocol.md`'s warmup bullet now says at-most-one
-retry, record-anyway-if-still-low, and points to §6.
-
-**M3R-28 — applied.** §2 now states the vital-sign scope: **Option A is the HR (primary) floor**;
-**BR is secondary/exploratory with NO confirmatory floor** — reported descriptively wherever
-BR-evaluable windows exist, with a BR-evaluable count computed separately from HR; the ≤ 5 bpm
-target and miss rule are HR-only; no joint HR+BR window set.
-
-STATUS SUMMARY (round 5): every technical item resolved. **The sole remaining freeze blocker is
-M3R-03 — the §2b evidence-floor extensions, a user decision** (study-wide floor, symmetric miss
-rule, whole-subject exclusion, precision-miss consequence). Awaiting your final pass.
-
-> **Claude Code, round 6 (2026-07-25).** Noted your round-5 closes (M3R-18, 20, 21, 22, 25, 28).
-
-**M3R-23 (round 3, at cap) — applied in full.** §1 now gives the **exact unbalanced one-way
-random-effects formulas**: `σ²_w = MSW`, `σ²_b = max((MSB−MSW)/n0, 0)` with the effective group-size
-coefficient `n0 = (N_a − Σ n_s²/N_a)/(S_a−1)`, subject-weighted bias, `LoA = μ_a ± 1.96·√(σ²_b+σ²_w)`.
-**Estimability conditions frozen:** an arm needs `S_a ≥ 2` **and** `N_a > S_a`; if either fails it
-reports **descriptive-only (bias + observed SD, no population LoA/CI)** — a prospective, count-based
-disposition. The **bootstrap resamples the `S_a` contributing subjects** (not a hard-coded 10);
-replicates that fail the estimability conditions are excluded, and **> 5 % failures → arm reports
-descriptive-only**. Removed the stale "mixed model handles unequal counts" wording (the primary is
-now method-of-moments; `n0` carries the imbalance). STATUS: resolved.
-
-STATUS SUMMARY (round 6): **all technical items resolved.** The only remaining freeze blocker is
-**M3R-03 — the §2b evidence-floor extensions (user decision)**. Ready for `NO MORE COMMENTS` once
-you confirm the round-6 close of M3R-23.
-
-> **Claude Code, round 7 (2026-07-25).** M3R-23 final nit applied — deleted the stale "handled
-> natively by the mixed model" sentence; §1 now consistently attributes unequal-count handling to
-> the unbalanced-ANOVA `n0` coefficient. **All 28 technical items are resolved.** The review is
-> paused here at its only remaining gate: **M3R-03 is a user decision.** Noted Codex's recommendation
-> (approve the ≥8/10 study-wide floor, symmetric zero-window arm handling, and descriptive-only
-> precision-miss; reject automatic whole-subject exclusion — keep a below-4 subject's eligible arm
-> data in the arm-specific analysis, report below-floor status, and let ≥8/10 govern the study-wide
-> claim). This is being surfaced to the user now; the loop will close once their §2b decision is
-> recorded.
-
-> **Claude Code, round 8 (2026-07-25) — M3R-03 RESOLVED by user decision.** The user adopted the
-> cross-review recommendation. §2b is now **FROZEN**: **study-wide floor ≥ 8/10** subjects (else the
-> study-wide claim weakens to descriptive); **symmetric zero-window handling** (either arm < 1
-> window → that arm descriptive); **no automatic whole-subject exclusion** (a below-4 subject keeps
-> its eligible arm data, flagged below-floor; the ≥8/10 rule governs the study-wide claim);
-> **precision-miss → arm headline weakens to descriptive**. §2c updated to match; the §2b checklist
-> item is closed. **All 28 findings are now resolved — no open items remain.**
-
-> **Claude Code, round 9 (2026-07-25) — M3R-25 citation verified against the actual source.** The
-> user provided the PDF (`literature/ref_papers/lab-10169a_master.pdf`). Verified directly: the p. 10
-> RRp low-perfusion/motion warning is real, and the manual is © 2019. This **corrected** the pasted
-> metadata: the title is *Home Care Manual* (not "Operator's Manual"), the revision code is **0119
-> (Jan 2019)** (not "2019-02-18"), and the **back cover prints `LAB-10168A`** while the file is
-> `lab-10169a` — a document-number discrepancy now flagged in the comparator for the user to resolve
-> at the deposit gate. Citation in `comparator_prespec_br.md` §2.2 updated to the verified form.
+| id | resolution |
+|---|---|
+| M3R-01 | RESOLVED — agreement model → **2-level arm-specific** `μ_a ± 1.96·√(σ²_b+σ²_w)`; unidentifiable `σ²_s` dropped; false "Zou changing/stable = natural/paced" claim removed |
+| M3R-02 | RESOLVED — CI-method thread; final form frozen at M3R-29 (Option A cluster-bootstrap primary, MOVER a candidate sensitivity) |
+| M3R-03 | RESOLVED (**escalated → user, r8**) — §2 split: §2a Option A frozen verbatim; §2b user-frozen extensions (≥8/10 study-wide, symmetric zero-window, no whole-subject exclusion, precision-miss→descriptive); §2c reconciliation with §6 |
+| M3R-04 | RESOLVED — §3 fourth arm = **reference-blind adaptation of Alizadeh 2019**; actual DSP chain named; the two replaced reference-dependent steps specified; DOI added |
+| M3R-05 | RESOLVED — BR coverage = **≥24 finite `rr_bpm`**; PI removed from primary admissibility (flag/sensitivity only); "specified by the frozen HR comparator for PR" |
+| M3R-06 | RESOLVED — metronome relabelled a **target/adherence cross-check**; RRp stays the measured reference; "compared with" not "validated against" |
+| M3R-07 | RESOLVED — §5 RRp-adequacy trigger defined + decided at **M5**, re-deposited before M6; M6 may not switch truth sources |
+| M3R-08 | RESOLVED — 18 bpm no-pool made **HR-only**; 18 bpm **included** in the BR paced summary; unsupported strong-SNR claim deleted |
+| M3R-09 | RESOLVED — §7 **exact frame-index grid** `[k·600,(k+1)·600)` @20 Hz; `k=0` scored; 600 s → **20** windows; protocol "~19" corrected |
+| M3R-10 | RESOLVED — §6 full window/session/subject **disposition hierarchy**; warmup re-run trigger = `selected_confidence=="low"`, pre-display, agreement-blind |
+| M3R-11 | RESOLVED — committed **reference-only** `scripts/derive_br_comparator_evidence.py` regenerates §1/§2.3, pins input hashes, imports no radar code; numbers corrected |
+| M3R-12 | RESOLVED — §3.1 M7 role made **method-specific** (confirmatory only for a method not fit/selected on M7) |
+| M3R-13 | RESOLVED — 4 existing captures = development/exploratory-only, never confirmatory; in-sample labelled apparent; M1 engineering-only |
+| M3R-14 | RESOLVED — §2.3 2 bpm reframed as a conservative **RRp-display-change** gate; both false-inclusion and time-shift false-exclusion declared |
+| M3R-15 | RESOLVED — §3.2 exact weighting equations; **RMSE = √(mean_s(MSE_s))**; arms reported separately; no combined pooled headline |
+| M3R-16 | RESOLVED — BR "severe" label dropped; descriptive **tail counts >2/>3/>5 bpm** vs RRp (+ target-concordance for paced) |
+| M3R-17 | RESOLVED — precision gate operationalised (max of four LoA↔CI-endpoint distances ≤5 bpm, per arm) |
+| M3R-18 | RESOLVED — §1 mandatory diagnostics (proportional-bias slope, tail QQ/skew, lag-1 autocorrelation) + a regression-LoA sensitivity; constant LoA stays primary, no post-hoc switch; heteroscedasticity a declared limitation |
+| M3R-19 | RESOLVED — §7 frame-0 epoch rule frozen (`E(i)=frame0_epoch+i/20`); forward requirement to persist `frame0_epoch` + per-frame validity map; 4 exploratory captures' alignment labelled APPROXIMATE |
+| M3R-20 | RESOLVED — §6 warmup retry accounting: at most one re-run, discarded attempt out of the coverage denominator, still-low session scored anyway; protocol reconciled |
+| M3R-21 | RESOLVED — undefined whole-session reference floor removed; partial reference via per-window gates + evidence floor; wholly-missing Masimo = logged no-agreement |
+| M3R-22 | RESOLVED — removed unsupported cross-origin robustness claim; §1 counts labelled origin-specific exploratory illustrations |
+| M3R-23 | RESOLVED — §1 **exact unbalanced one-way-ANOVA** components (`σ²_w=MSW`, `σ²_b=max((MSB−MSW)/n0,0)`, `n0`); estimability conditions `S_a≥2`, `N_a>S_a` → else descriptive-only |
+| M3R-24 | RESOLVED — protocol gains mandatory **agreement-blind NTP clock-sync** (±1 s, resync-on-fail); `frame0_epoch` uses the synced clock |
+| M3R-25 | RESOLVED — Masimo citation verified against the PDF; corrected to *Home Care Manual*, rev. 0119 (document number resolved to `LAB-10168A` at M3R-34) |
+| M3R-26 | RESOLVED — §6 objective corruption tests (mid-recording truncation/checksum fail = corrupt; trailing partial window retained+unscored; >5% packet loss flags, not excludes) |
+| M3R-27 | RESOLVED — §1 removes the single combined LoA; only arm-conditional limits reported |
+| M3R-28 | RESOLVED — vital-sign scope: Option A is the HR floor; **BR secondary/exploratory, no confirmatory floor**; ≤5 bpm target + miss rule HR-only |
+| M3R-29 | RESOLVED (**escalated → user, r14**) — primary CI = **Option A cluster-bootstrap** (fully specified, estimand-matched by construction; anti-conservative under-coverage declared + accepted, M3R-45); MOVER demoted to a candidate sensitivity (M3R-46) |
+| M3R-30 | RESOLVED — regression-LoA sensitivity uses **both** variance components `± 1.96·√(σ²_b,reg+σ²_e,reg)` (population LoA) |
+| M3R-31 | RESOLVED — paced LoA = **marginal design-weighted mixture** over a frozen **4/3/3** enrolment-order allocation; per-rate summaries descriptive-only; HR pools 12/15, BR pools 12/15/18 |
+| M3R-32 | RESOLVED — §3.2 **accuracy set** (`S_a`, ≥1 window) vs **coverage set** (all admitted, `n_s=0` retained) defined explicitly |
+| M3R-33 | RESOLVED — BR interval → **half-open `[t−30 s, t)`**, deferring to the §7 grid (spawned M3R-40 for the frozen HR comparator) |
+| M3R-34 | RESOLVED (**escalated → user**) — Masimo spot-check intended-use dispositioned (battery/alarms, not 10-min accuracy; battery check added to protocol); document number pinned to **`LAB-10168A`** |
+| M3R-35 | RESOLVED — evidence script **pins + asserts all six input SHA-256**; unsupported origin-robustness claim removed (verified by re-running) |
+| M3R-36 | RESOLVED — §3 Alizadeh: bin-selection is the reference leak, outlier removal **unspecified/unreproducible** (not reference-based); no overclaim |
+| M3R-37 | RESOLVED — §6 abort (item 3) vs trailing-file-fragment (item 4) separated by a binary "reached intended duration?" discriminator |
+| M3R-38 | RESOLVED — RRp smoothing/lag reframed from asserted fact to an **inference** ("pleth-derived" kept as a documented fact) |
+| M3R-39 | RESOLVED — §2.3 prose aligned to the **strict** inequality (>1 bin; exactly 2.0 bpm retained) |
+| M3R-40 | RESOLVED (**escalated → user; frozen comparator**) — HR comparator **harmonised to half-open `[t−30 s, t)`** (pre-deposit clarification, no DOI existed); HR & BR now share one endpoint rule |
+| M3R-41 | RESOLVED — §5 M5-adequacy trigger built **only** from steady-rate-pilot quantities; no stepped maneuver without separate authorization |
+| M3R-42 | RESOLVED (**escalated → user**) — ≥8/10 defined as a **study-wide (not per-arm)** per-subject coverage gate; paced-HR arm `S_a ≤ 7` by design, accepted; denominators / 18-bpm roles stated |
+| M3R-43 | RESOLVED — spot-check rationale reframed as an explicit **study assumption** (manufacturer does not certify the inference) |
+| M3R-44 | RESOLVED — `m0_preregistration.md` A4 **defers to §1**; the rejected three-level model / open MOVER-vs-bootstrap wording removed |
+| M3R-45 | RESOLVED (**escalated → user**) — corrected: bootstrap under-coverage is **anti-conservative** for the precision gate (not conservative); user knowingly **accepted** it as a declared risk |
+| M3R-46 | RESOLVED — MOVER labelled a **pre-named candidate sensitivity**, validated/reported only after implementation + statistician review + benchmark pass |
+| M3R-47 | RESOLVED — §1 separates the point-LoA/ANOVA conditional-independence + homoscedasticity assumption (biasable by serial correlation) from the bootstrap (fixes the sampling distribution, not a biased point estimator); lag-1 kept mandatory |
+| M3R-48 | RESOLVED — final deposit-status labels updated (**cross-review COMPLETE**); stale finding counts corrected across both documents + the M0 plan |
 
 END OF DEBATE

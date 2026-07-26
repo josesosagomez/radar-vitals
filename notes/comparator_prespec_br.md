@@ -9,8 +9,10 @@
 > `notes/comparator_prespec.md` (HR). No BR MAE / RMSE / Bland–Altman may be cited unless produced
 > under this specification, or a documented amendment made *before* the data it scores.
 >
-> **Requires cross-model review before it is frozen into M0** (CLAUDE.md §6 — it touches
-> peak-picking / reference handling). Status: **awaiting cross-review.**
+> **Cross-model review COMPLETE** (CLAUDE.md §6 — it touches peak-picking / reference handling):
+> **all M3 findings (M3R-01…48) resolved across 17 rounds — see `plans/m3_prespec_cross_review.md`.**
+> Status: **cross-reviewed; READY FOR THE M0 FREEZE — NOT yet frozen** (the freeze is the user's
+> irreversible act).
 
 ---
 
@@ -20,9 +22,14 @@ The radar produces one BR estimate per **30 s window** (an FFT peak in the respi
 Masimo produces a **Breaths / min (RRp)** value once per second. As with HR, how you bridge them
 must be fixed in advance. But RRp carries an extra caveat that PR does not:
 
-**Masimo RRp is pleth-derived, heavily smoothed, and laggy** — a **weaker reference** than PR (and
-not a gold standard; see §2.6).
-Evidence, from the reference alone (the three exploratory captures; radar never consulted):
+**Masimo RRp is pleth-derived** (the device documentation names it *Pleth Respiration Rate, RRp* —
+§2.2 citation) and **appears smoothed and laggy** — either way a **weaker reference** than PR (and
+not a gold standard; see §2.6). *"Appears" is deliberate (M3R-38):* the smoothing/lag is an
+**inference** from the low **displayed** within-window variability shown below, **not** an
+independently measured device property — we cite **no** external RRp algorithm and have **no**
+reference-only lag measurement, and low displayed variability alone cannot by itself distinguish
+device smoothing from genuinely stable breathing. Evidence of the *displayed* behaviour, from the
+reference alone (the three exploratory captures; radar never consulted):
 
 | session | windows | RRp present | within-window spread p90−p10 (bpm) | RRp range | PI median | median RRp vs commanded target |
 |---|---|---|---|---|---|---|
@@ -37,17 +44,25 @@ scoring grid (`notes/analysis_prespec.md` §7). The counts are illustrative of R
 within-window variability at this origin; they are **not** frozen scores and no robustness across
 origins is claimed. SHA-256 hashes in §4.)*
 
-The within-window RRp spread is **far smaller than the ~3 bpm** the PR reference showed for HR
-(`notes/comparator_prespec.md` §2.3). That is not superior stationarity — it is **smoothing**: RRp
-changes slowly and lags true breathing-rate changes. The consequence is stated plainly in §2.3 and
-§3: a stationarity gate on RRp is **weaker protection** than the same gate on PR, because RRp can
-look stationary inside a window where the subject's actual breathing was not.
+The displayed within-window RRp spread is **far smaller than the ~3 bpm** the PR reference showed for
+HR (`notes/comparator_prespec.md` §2.3). The **most plausible** reading is smoothing (RRp changing
+slowly and lagging true breathing-rate changes) **rather than** superior stationarity — but, as
+above, that is an inference from the *displayed* trace, not a measured device property. The
+consequence is stated plainly in §2.3 and §3: **if** RRp is smoothed, a stationarity gate on it is
+**weaker protection** than the same gate on PR, because RRp can look stationary inside a window where
+the subject's actual breathing was not.
 
 ---
 
 ## 2. The specification
 
-For a radar window ending at time `t` (span `[t − 30 s, t]`):
+For a radar window ending at time `t`, the span is the **half-open** interval `[t − 30 s, t)`
+(M3R-33) — the same convention as the frozen scoring grid, where the window for frame index `k` is
+`[E(k·600), E((k+1)·600))` and a Masimo sample at integer `epoch_utc = e` belongs to it iff
+`E(k·600) ≤ e < E((k+1)·600)` (`notes/analysis_prespec.md` §7; that frame-index grid, not this
+generic `t`, is binding). Half-open is required: with integer-second RRp, a closed `[t − 30 s, t]`
+could hold 31 samples and double-count an endpoint shared with the adjacent window. §2.1 and §2.2
+below use this half-open interval throughout.
 
 ### 2.1 Reference value
 **`RR_ref = median` of the finite Masimo RRp samples inside the window** (the availability gate of
@@ -70,10 +85,10 @@ behaviour, exactly as M3 requires. **PI is deliberately NOT a primary BR admissi
 Oximeter — Home Care Manual*, © 2019 (revision code **0119**, i.e. January 2019), **p. 10**, states:
 *"Inaccurate respiration rate (RRp) measurements may be caused by: low arterial perfusion; motion."*
 It supplies **no numeric PI threshold for RRp.** *(Verified directly against the PDF at
-`literature/ref_papers/lab-10169a_master.pdf`, 2026-07-25. **Document-number note for the user:**
-the manual's back cover prints `300162/LAB-10168A-0119` while the distributed file is
-`lab-10169a` — confirm the citable document number against the official source at the deposit
-gate.)* No source supplies a numeric PI threshold validated **for RRp**
+`literature/ref_papers/lab-10168a_master.pdf`, 2026-07-26. **Document number: `LAB-10168A`** — the
+identifier printed on the manual's back cover (`300162/LAB-10168A-0119`); this is the correct citable
+number, confirmed by the user 2026-07-26. An earlier local filename `lab-10169a` was a typo and has
+been corrected.)* No source supplies a numeric PI threshold validated **for RRp**
 (the `PI ≥ 0.5` value is the one **specified by the frozen HR comparator for PR**, not a
 manufacturer-validated RRp cutoff). Transferring it would
 be an unsupported new BR exclusion, and M3 explicitly asked for an availability/variance gate, not a
@@ -81,6 +96,33 @@ borrowed PI gate. **PI is therefore reported only as a per-window quality flag /
 covariate, and never removes a window from primary BR admissibility.** (Measured: no window in the
 three captures had PI < 0.5, so this changes none of them; the point is to avoid freezing an
 unsupported gate.)
+
+**Intended-use limitation — spot-check only (M3R-34): declared, and DISPOSITIONED (user decision
+2026-07-26).** The same manual states two further limits, **verified directly against the PDF**
+(`literature/ref_papers/lab-10168a_master.pdf`, 2026-07-26):
+- **p. 10 (Performance Warnings):** *"Do not use MightySat Rx for continuous monitoring. It is
+  intended for spot-check use only. No alarms are provided."*
+- **p. 7 (Indications for Use):** the device is *"indicated for the noninvasive **spot checking** of
+  respiration rate (RRp) for adult patients."*
+
+The protocol logs the 1 Hz RRp trace **continuously for 10 minutes** as the measured reference,
+nominally outside that spot-check labelling. **Recorded disposition (study assumption, M3R-43):** the
+manual supplies the spot-check-only / no-alarms / not-for-continuous-monitoring warning but gives no
+rationale for it and does not address short-session accuracy. **The study *assumes*** that this
+labelling is **principally** about (i) **battery endurance** for multi-hour/day use and (ii) the
+**absence of safety alarms** for unattended monitoring, and **assumes** that per-sample RRp accuracy
+over a **10-min attended session with healthy subjects and verified battery state** (added to the
+`notes/protocol.md` equipment checklist) is unaffected — the alarm limitation being irrelevant to an
+attended research capture (not patient monitoring) of healthy adults recorded for 10 minutes only.
+**The manufacturer does not certify this inference**; it is the study's recorded engineering/clinical
+judgment, flagged as an assumption (CLAUDE.md §4). *(This does **not** disturb the §1 finding
+that RRp is a weaker, non-gold-standard reference for a different reason — its smoothing/lag
+**inference**; the two limitations are independent.)*
+> **Ethics scope:** the approval `24IBEC051` **permits the 10-min collection** (user-confirmed
+> 2026-07-24; `notes/protocol.md`), and the reference logging is intrinsic to that approved
+> collection. **Device-wide note:** this same disposition applies to the Masimo **PR** reference in
+> the (now harmonised) HR comparator `notes/comparator_prespec.md` §2.2, where it is recorded
+> identically.
 
 ### 2.3 The stationarity gate, and why 2 bpm (HR used 5)
 
@@ -90,15 +132,17 @@ reason is the reference's measured behaviour:
 
 - HR set 5.0 bpm (= 2.5 bins) because genuine HRV of ~3 bpm is real physiology that must **not** be
   excluded — a 1-bin gate there would reject 60–70 % of windows.
-- RRp's measured within-window (displayed) spread is **median 0–1.0 bpm** — smoothing has already
-  suppressed sub-window variation. On the (approximate-origin) exploratory windows the
+- RRp's measured within-window (displayed) spread is **median 0–1.0 bpm** — its displayed sub-window
+  variation is already small (**consistent with**, though not proof of, smoothing). On the (approximate-origin) exploratory windows the
   **1-bin (2.0 bpm)** gate excludes **1 of 6 natural windows (~17 %) and 0 of the paced-16 (0/6) and
   sweep (0/16) windows**; a looser 2.5-bin gate (5 bpm) excludes **nothing anywhere** and is
   toothless. The gate therefore **bites where the displayed breathing rate varies (natural) and
   passes the stable paced sessions** — the desired behaviour, though on a very small, exploratory,
   single-subject `n` with approximate window alignment (§4).
 - **What the gate actually observes.** 2.0 bpm = one FFT bin, so the gate flags a **displayed RRp
-  transition of ≥ ~1 bin** inside the window. It is a **conservative RRp-display-change gate**, not
+  transition of more than one bin** inside the window. The inequality is **strict** — the frozen gate
+  excludes iff `p90 − p10 > 2.0 bpm`, so a spread of **exactly** one bin (2.0 bpm) is **retained**,
+  not excluded (M3R-39). It is a **conservative RRp-display-change gate**, not
   a detector of biological breathing stationarity — smoothing does **not** "validate" a tighter
   physiological threshold. The 1-bin value is chosen because RRp's displayed spread is small
   (median 0–1 bpm), so a 1-bin gate has teeth (excludes ~17 % of natural, 0 % of paced/sweep
@@ -107,8 +151,8 @@ reason is the reference's measured behaviour:
 
 **Sensitivity must be reported** (exclusion fraction at 2 / 3 / 5 bpm), so the choice is auditable.
 
-**Limitation, declared (both directions).** Because RRp is smoothed and laggy, the gate errs **both
-ways**: (i) *false inclusion* — a real within-window transition may be hidden and passed; (ii)
+**Limitation, declared (both directions).** **To the extent RRp is smoothed and laggy** (the working
+inference of §1, not a measured fact), the gate errs **both ways**: (i) *false inclusion* — a real within-window transition may be hidden and passed; (ii)
 *false exclusion / time-shift* — a real transition may surface in a **later, physiologically stable
 window** and exclude it. So the gate cannot certify stationarity in either direction. For **paced**
 sessions the metronome target-concordance (§2.5) is a **stronger check** on whether the commanded
@@ -143,7 +187,10 @@ In **paced** sessions the commanded metronome rate is a second, **target-concord
   an **HR-cancellation** mechanism and **does not itself mandate a BR exclusion**. The 18 bpm paced
   session is therefore **included in the BR paced summary** (`notes/analysis_prespec.md` §3.2);
   report each paced rate (12/15/18) on its own terms. *(No claim is made here about BR SNR at
-  18 bpm — only that the HR-specific mechanism does not carry over.)*
+  18 bpm — only that the HR-specific mechanism does not carry over.)* **Estimand (M3R-31):** the
+  per-rate breakdowns are **descriptive only** (bias + observed SD; each rate has ~3–4 subjects); the
+  **inferential** paced-BR LoA is the **arm-level** LoA pooling **all** paced subjects (12/15/18),
+  per `notes/analysis_prespec.md` §1/§3.2. (For HR the paced LoA pools 12/15 only — 18 bpm separate.)
 
 ### 2.6 Natural vs paced reference strength (report separately)
 - **Natural sessions:** radar BR is **compared with RRp only** — the weak case: smoothing hides
@@ -156,7 +203,8 @@ In **paced** sessions the commanded metronome rate is a second, **target-concord
 ---
 
 ## 3. What this specification does NOT fix
-- It does not correct RRp's smoothing/lag — those are **declared**, not removed.
+- It does not correct RRp's **apparent** smoothing/lag — that limitation is **declared** (as an
+  inference, §1), not removed.
 - It does not make a **non-stationary natural** window scorable, and — unlike HR — it cannot fully
   detect one, because RRp may lag the change (§2.3 limitation). Such windows may slip the gate; this
   is a known weakness of the natural-BR reference, reported as a study limitation.
@@ -172,19 +220,28 @@ In **paced** sessions the commanded metronome rate is a second, **target-concord
   `run_metadata.json`'s `start_wall_utc`, an **approximate** origin (that field is written *before*
   capture startup, so it is not the frame-0 epoch — `notes/analysis_prespec.md` §7); the resulting
   counts are **origin-specific exploratory illustrations**, not frozen scores, and no cross-origin
-  robustness is claimed. The script pins the thresholds and both consumed-input SHA-256 (the source
-  CSV and `run_metadata.json`; cross-check `notes/capture_inventory.md`), and
-  **imports no radar-pipeline code and reads no radar estimate** (it reads `run_metadata.json` only
-  for the `start_wall_utc` timestamp).
+  robustness is claimed. The script pins the thresholds and the exact SHA-256 of **all six** consumed
+  inputs — the three source CSVs **and** the three `run_metadata.json` files — in an
+  `EXPECTED_SHA256` map and **asserts each against the file on disk, aborting on any mismatch**
+  (M3R-35), so the printed numbers are bound to those exact inputs. (The three CSV digests also match
+  `notes/capture_inventory.md`; the three metadata digests, which the inventory does not carry, are
+  pinned in the script.) It **imports no radar-pipeline code and reads no radar estimate** (it reads
+  `run_metadata.json` only for the `start_wall_utc` timestamp).
 - **All existing radar/RRp pairs are EXPLORATORY** (single subject; the sessions informed the
   method's design). No confirmatory BR number may come from them.
 
 ## 5. Risk and adequacy rule — decided at M5, prospectively
 Whether RRp is an adequate BR reference is decided at the **M5 pilot**, not retrospectively on M6:
-- **M5 defines the trigger**, before M6: a pre-specified, quantitative RRp-adequacy criterion
-  (e.g. a bound on the median |RRp − metronome| offset and on the RRp lag across paced steps,
-  measured on the pilot). "Systematically diverging" is made numeric there — it is not a usable
-  trigger while undefined.
+- **M5 defines the trigger**, before M6: a pre-specified, quantitative RRp-adequacy criterion built
+  **only from quantities the approved steady-rate pilot actually records** (M3R-41). The M5 protocol
+  paces each subject at **one steady rate** — it has **no** paced steps or transitions, so an "RRp lag
+  across paced steps" measure is **not available** and is **not** used. Admissible pilot quantities
+  include: a bound on the **median |RRp − commanded-rate| offset** (bias vs the target), the
+  **within-session RRp dispersion / stability** at the steady rate, and **RRp availability/coverage**
+  under §2.2. "Systematically diverging" is made numeric from these — it is not a usable trigger while
+  undefined. *(A step-response/lag measure would require a stepped maneuver, which is **not** in the
+  approved study protocol and must not be added without separate protocol/ethics authorization — the
+  existing stepped "sweep" capture is a method-development arm, not an M5 study session.)*
 - If the M5 pilot fails that criterion, the plan **amends before M6** to
   **metronome-target-concordance for paced sessions and natural-BR exploratory-only**, and that
   amendment is **re-deposited before the confirmatory data it governs** (`analysis_prespec.md` §4,
