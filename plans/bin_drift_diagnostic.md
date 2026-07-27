@@ -1,8 +1,13 @@
 # Plan: Range-bin drift measurement (`scripts/diagnose_bin_drift.py`)
 
-> **Review CLOSED** (`plans/bin_drift_diagnostic_cross_review.md`, BDR-01…10 + R2/R3
-> reopenings, `NO MORE COMMENTS` from Codex). **Both escalations decided by the user
-> (2026-07-27): BDR-04 Option A and BDR-07 Option A** — see **§8**. Implementation may proceed.
+> **Implemented, run on all 4 real captures, and committed** (`scripts/diagnose_bin_drift.py`,
+> `scripts/diagnose_bin_drift_config.yaml`, `tests/test_diagnose_bin_drift.py`). **Review
+> reopened after implementation** (`plans/bin_drift_diagnostic_cross_review.md`, BDR-11…13):
+> Codex re-reviewed after the user's Option A/Option A decisions were written into §8 and found
+> a real gap in the shipped code — the decided centroid-drift grid was never operationalized
+> (BDR-11, fixed below) — plus a stale plan table and a scope-text inconsistency (BDR-12/13,
+> also fixed). Both prior escalations (**BDR-04 Option A, BDR-07 Option A**) remain decided —
+> see **§8**.
 
 ## Context
 
@@ -30,9 +35,11 @@ Specific hook: in the post-filter-fix massimo1 replay, 66 candidate slots across
 explanation. §3 defines drift relative to a declared energy baseline, never relative to the
 composite-scored lock.
 
-**Read-only diagnostic. No production code, no config, no `src/` changes. No Masimo data
-touched anywhere** — drift is a radar-side property; using the reference here would be the
-CLAUDE.md §4 trap.
+**Read-only diagnostic. No *existing/production* code, config, or `src/` changes** — one new
+diagnostic-only config is in scope (`scripts/diagnose_bin_drift_config.yaml`, BDR-05 R3/BDR-13;
+see §1's note on why it lives beside its script rather than under `experiments/<name>/config.yaml`).
+**No Masimo data touched anywhere** — drift is a radar-side property; using the reference here
+would be the CLAUDE.md §4 trap.
 
 ## 1. Inputs (all existing, read-only) + the diagnostic's own bound configuration
 
@@ -49,18 +56,35 @@ CLAUDE.md §4 trap.
 script happened to do — it is read at the start of every run and its own content is hashed into
 `summary.json` (§5), never reconstructed from the run's own output. It fixes: the calibration
 stratum (`[0, 599]` frames), block size (20 frames), the episode gap rule (`no_bridging`), the
-10 offset phases (`[0..9]`), the trailing-block policy (`discard`, §7.1/BDR-08 R2), and the
-frozen sensitivity grid (§8/BDR-04, decided Option A): duration `{2, 5, 10} s` × centroid-drift
-`{0.3, 0.5, 1.0} bin`.
+10 offset phases (`[0..9]`), the trailing-block policy (`discard`, §7.1/BDR-08 R2), and the two
+**independent** sensitivity-grid axes (§8/BDR-04, decided Option A; BDR-11 fixed their
+operational definitions): duration `{2, 5, 10} s`, applied **per-window** to episode/outcome
+association (§4), and centroid-drift `{0.3, 0.5, 1.0} bin`, applied to the **session-level**
+robust centroid statistic only (§3.1/§4) — the two are reported separately, never as a
+per-window Cartesian joint classifier, since no per-window centroid-displacement statistic is
+defined.
 
-Verified session window counts (**do not use an approximate "n≈51/session" figure anywhere**):
+**Placement exception (BDR-13):** CLAUDE.md §2 names `experiments/<name>/config.yaml` as the
+one-config-per-experiment convention, but this repo already has a precedent for a read-only
+diagnostic tool's own config living beside its script rather than under `experiments/` —
+`scripts/live_demo_config.yaml` next to `scripts/live_demo.py`. `scripts/diagnose_bin_drift_config.yaml`
+follows that existing precedent rather than the `experiments/` convention, which is written for
+DSP/algorithm parameter sweeps, not diagnostic tooling. Documented here rather than moved.
 
-| session | replay used | n windows | frame span | `covered` |
+Verified session window counts (**do not use an approximate "n≈51/session" figure anywhere**).
+**`live_test1` is deliberately `N/A`/0 here, not the 30-window/1-covered count its raw original
+NPZ contains** — BDR-07 Option A means the diagnostic never loads that NPZ's outcome arrays at
+all (verified in the implementation and in the real run: `n_windows=0`,
+`correlation_available=False`, `npz_path=None` for `live_test1`). The 30/1 figures describe the
+*raw artifact on disk*, not anything this diagnostic consumes (BDR-12 — the table below
+previously conflated the two):
+
+| session | replay used | n windows (consumed) | frame span | `covered` |
 |---|---|---:|---|---:|
 | massimo1 | `20260726_173434_replay_unknown` | 51 | [599, 3599] | 9 |
 | massimo2 | `20260726_173653_replay_unknown` | 51 | [599, 3599] | 28 |
 | sweep | `20260726_173914_replay_unknown` | 151 | [599, 9599] | 35 |
-| live_test1 | its own original run (§8, BDR-07 — legacy schema) | 30 | [599, 2339] | 1 |
+| live_test1 | none — its own original run supplies baseline evidence only (§8, BDR-07 Option A) | 0 (N/A) | N/A | N/A |
 
 Verified: NPZ `frame_idx` is the window's **end frame** (599, 659, … ) → window *i* spans frames
 `[frame_idx[i] - 599, frame_idx[i]]`. Verified: `settle_skip_frames_applied = 100` (5.0 s ×
@@ -201,24 +225,31 @@ directory already exists; `summary.json` records its own `run_id`.
   - baseline-centroid drift (§3.1): trailing-10s vs. first-post-calibration-10s medians
   - **window-outcome classifier** — mutually exclusive: `covered`, `gate_not_run`,
     `other_rejected` (as before).
-  - **Primary report — full-exposure windows only (BDR-03 R3):** per-window continuous features
-    (off-baseline duration, longest excursion) **stratified by outcome class**, computed **only
-    over windows with `post_calibration_observed_s == 30`** (index ≥ 10). Windows 1–9 (partial
-    exposure) are reported in a **separate transitional stratum**, using a
-    **normalized off-baseline fraction** (`off_baseline_duration_s / post_calibration_observed_s`)
-    instead of raw seconds, so they are never mixed with the 30 s-exposure windows in one
-    distribution. Window 0 remains excluded entirely (§3.4).
-  - **No single binary off-baseline/on-baseline cross-tab is produced** (§8/BDR-04, decided
-    Option A). Instead, the outcome-stratified association is reported **at every point of the
-    frozen sensitivity grid** (duration `{2,5,10}s` × displacement `{0.3,0.5,1.0} bin`, on
-    full-exposure windows only), so a reader can see whether the association is robust across
-    threshold choices or an artifact of one arbitrary value.
-  - **Independence-aware reporting:** full hop-resolution counts, explicitly labeled
-    non-independent (90 % frame overlap between neighbouring windows); **all 10 disjoint
-    non-overlapping hop-offset phases** (`{k, k+10, k+20, …}` for `k = 0..9`) reported
-    separately, **each split into its own full-exposure vs. transitional stratum** — the
-    exposure-time correction applies identically within every phase, not only to the pooled
-    hop-resolution report.
+  - **Primary report — full-exposure windows only (BDR-03 R3), computed and persisted, not just
+    derivable from `window_audit.csv` (BDR-11 — this was the missing piece):**
+    `outcome_stratified_report.full_exposure` — for each of the three mutually exclusive outcome
+    classes (`covered`, `gate_not_run`, `other_rejected`), the count and mean off-baseline
+    duration / longest excursion among windows with `post_calibration_observed_s == 30`
+    (index ≥ 10). Windows 1–9 (partial exposure) get the identical grouping in
+    `outcome_stratified_report.transitional`, over a **normalized off-baseline fraction**
+    (`off_baseline_duration_s / post_calibration_observed_s`) rather than raw seconds, so they
+    are never pooled with the 30 s-exposure windows. Window 0 remains excluded entirely (§3.4).
+  - **The two sensitivity-grid axes are reported independently, never as a per-window Cartesian
+    joint classifier (BDR-11, decided):** duration `{2,5,10}s` governs **per-window episode
+    detection** (`episode_count_at_grid` — how many detected excursions reach each duration, a
+    radar-only, outcome-blind count); centroid-drift `{0.3,0.5,1.0} bin` governs a **single
+    session-level statistic** (`centroid_drift_at_grid` — whether the trailing-vs-leading robust
+    centroid displacement meets each grid value). No per-window centroid-displacement statistic
+    is defined, so the two axes are never crossed into one joint table — a Cartesian "did this
+    window pass both the duration AND centroid grid point" classifier would have had to invent
+    that per-window statistic post hoc, which is exactly what BDR-11 flagged.
+  - **Independence-aware reporting, persisted per phase (BDR-11 — `offset_phase_subsets` was
+    computed but never written to output until this fix):** full hop-resolution counts,
+    explicitly labeled non-independent (90 % frame overlap between neighbouring windows);
+    `offset_phase_report` holds **all 10 disjoint non-overlapping hop-offset phases**
+    (`{k, k+10, k+20, …}` for `k = 0..9`), **each independently split into its own
+    full-exposure/transitional `outcome_stratified_report`** — the exposure-time correction
+    applies identically within every phase, not only to the pooled hop-resolution report.
   - **No pooled multi-session aggregate.** Each session's counts/proportions are reported
     separately; there is no merged cross-session statistic (n = 1 subject).
   - No use of the word "concentrated" without a stated number attached; the output is described
@@ -351,6 +382,17 @@ Nothing else is touched. `data/raw/` not involved (empty); originals opened read
   every governing parameter (calibration stratum, block size, gap rule, offset phases, trailing
   policy) and hashes that exact file into `summary.json` — no governing constant is hardcoded
   outside it.
+- **Centroid-grid sensitivity test (BDR-11):** below-, at-, and above-threshold displacement
+  cases at all three grid values (`{0.3,0.5,1.0}` bin), plus direction-independence (a negative
+  drift of the same magnitude gives the same grid result) and a non-finite-input case.
+- **Outcome-stratification test (BDR-11):** a synthetic set of windows across all three outcome
+  classes confirms per-class counts and mean durations group correctly, and that an empty class
+  reports zero/`None` rather than crashing.
+- **Replay-less leak-proof test (BDR-12), run through the real `run_session`/
+  `load_session_inputs` path end to end, not a reimplementation of the guarantee:** a synthetic
+  capture with no matched replay produces `n_windows == 0`, `correlation_available == False`,
+  `npz_path is None`, every outcome class's count is 0 in both `outcome_stratified_report` strata
+  and in every offset-phase entry, and `window_audit.csv` has a header row only.
 - Packet-layout helper reused from `tests/test_radar_io_layout.py`.
 
 ## 8. Design decisions (both escalations resolved by the user, 2026-07-27)

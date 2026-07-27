@@ -378,6 +378,21 @@ def episodes_at_grid(episodes: list[Episode], duration_grid_s: tuple[float, ...]
     }
 
 
+def centroid_drift_at_grid(trailing_median: float, leading_median: float,
+                            centroid_grid_bins: tuple[float, ...]) -> dict[float, bool]:
+    """Whether the session-level robust centroid drift (plan §3.1: trailing-10s
+    vs. first-post-calibration-10s median) meets or exceeds each grid
+    displacement value (plan §8, Option A). This is a SEPARATE, session-level
+    statistic from the per-window duration grid (`episodes_at_grid`) -- the two
+    grid axes are reported independently, never as a per-window Cartesian
+    joint classifier (BDR-11: no per-window centroid-displacement statistic is
+    defined, so a joint grid would be invented post hoc)."""
+    if not (np.isfinite(trailing_median) and np.isfinite(leading_median)):
+        return {b: False for b in centroid_grid_bins}
+    displacement = abs(trailing_median - leading_median)
+    return {b: bool(displacement >= b) for b in centroid_grid_bins}
+
+
 # ── Window audit (NPZ hop grid) ─────────────────────────────────────────────
 
 REJECTION_CODE_NOT_ATTEMPTED = -1
@@ -489,6 +504,30 @@ def offset_phase_subsets(rows: list[WindowRow], phases: tuple[int, ...]) -> dict
     """All 10 disjoint non-overlapping hop-offset phases {k, k+10, k+20, ...}
     (plan §4)."""
     return {k: [r for r in rows if r.window_index % 10 == k] for k in phases}
+
+
+OUTCOME_CLASSES = ("covered", "gate_not_run", "other_rejected")
+
+
+def stratify_by_outcome(windows: list[WindowRow]) -> dict[str, dict]:
+    """The primary report (plan §4): per-window off-baseline duration and
+    longest excursion, stratified by outcome class, computed only over the
+    windows passed in (the caller restricts to full-exposure windows). Not a
+    per-window Cartesian join with the centroid grid (BDR-11) -- outcome
+    class comes only from the DSP rejection-code classifier."""
+    report: dict[str, dict] = {}
+    for cls in OUTCOME_CLASSES:
+        subset = [r for r in windows if r.outcome_class == cls]
+        if not subset:
+            report[cls] = {"n": 0, "mean_off_baseline_duration_s": None,
+                            "mean_longest_excursion_s": None}
+            continue
+        report[cls] = {
+            "n": len(subset),
+            "mean_off_baseline_duration_s": float(np.mean([r.off_baseline_duration_s for r in subset])),
+            "mean_longest_excursion_s": float(np.mean([r.longest_excursion_s for r in subset])),
+        }
+    return report
 
 
 # ── Motion energy (channel-preserving) ──────────────────────────────────────
@@ -618,6 +657,8 @@ def run_session(session: SessionInputs, live_cfg: dict, diag_cfg: DiagnosticConf
     leading_mask = blocks.block_start_frame < leading_10s_end_frame
     trailing_centroid_median = float(np.median(blocks.centroid[trailing_mask])) if trailing_mask.any() else float("nan")
     leading_centroid_median = float(np.median(blocks.centroid[leading_mask])) if leading_mask.any() else float("nan")
+    centroid_grid = centroid_drift_at_grid(trailing_centroid_median, leading_centroid_median,
+                                            diag_cfg.centroid_grid_bins)
 
     motion_energy = compute_motion_energy(cube, candidate_bins)
 
@@ -634,7 +675,22 @@ def run_session(session: SessionInputs, live_cfg: dict, diag_cfg: DiagnosticConf
         )
 
     full_exposure, transitional = stratify_windows(window_rows)
+    outcome_stratified_report = stratify_by_outcome(full_exposure)
+    outcome_stratified_transitional = stratify_by_outcome(transitional)
+
+    # All 10 disjoint non-overlapping hop-offset phases, each independently
+    # split into its own full-exposure/transitional stratum (plan §4) --
+    # computed and PERSISTED, not just derivable from window_audit.csv.
     phase_subsets = offset_phase_subsets(window_rows, diag_cfg.offset_phases)
+    offset_phase_report = {}
+    for k, subset in phase_subsets.items():
+        phase_full, phase_transitional = stratify_windows(subset)
+        offset_phase_report[str(k)] = {
+            "n_full_exposure_windows": len(phase_full),
+            "n_transitional_windows": len(phase_transitional),
+            "full_exposure": stratify_by_outcome(phase_full),
+            "transitional": stratify_by_outcome(phase_transitional),
+        }
 
     del cube  # free the decoded cube before writing output artifacts
 
@@ -666,10 +722,16 @@ def run_session(session: SessionInputs, live_cfg: dict, diag_cfg: DiagnosticConf
             for e in episodes
         ],
         "episode_count_at_grid": {str(d): n for d, n in episode_grid.items()},
+        "centroid_drift_at_grid": {str(b): met for b, met in centroid_grid.items()},
         "motion_energy_by_bin": motion_energy,
         "n_windows": len(window_rows),
         "n_full_exposure_windows": len(full_exposure),
         "n_transitional_windows": len(transitional),
+        "outcome_stratified_report": {
+            "full_exposure": outcome_stratified_report,
+            "transitional": outcome_stratified_transitional,
+        },
+        "offset_phase_report": offset_phase_report,
         "reproducible": reproducible,
         "mem_peak_working_set_before_decode": mem_before,
         "mem_peak_working_set_after_decode": mem_after,
@@ -801,6 +863,7 @@ def main() -> None:
               f"locked_bin={result['locked_bin']} "
               f"n_episodes={len(result['episodes'])} "
               f"episode_count_at_grid={result['episode_count_at_grid']} "
+              f"centroid_drift_at_grid={result['centroid_drift_at_grid']} "
               f"correlation_available={result['correlation_available']}")
 
     with (out_dir / "run_summary.json").open("w", encoding="utf-8") as fh:

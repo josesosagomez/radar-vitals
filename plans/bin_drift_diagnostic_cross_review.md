@@ -14,20 +14,111 @@ No code is implemented until this loop closes `NO MORE COMMENTS` with every deba
 resolved or escalated.
 
 ## COMMENTS OF CODEX
-NO MORE COMMENTS
-
-Closing assessment: The revised plan now measures the quantity it claims to measure, keeps
-the composite lock distinct from the settled energy baseline, excludes calibration and
-unequal-exposure windows appropriately, binds every analysis decision and input, handles the
-legacy live_test1 schema without inventing evidence, and treats the DSP association as
-descriptive rather than causal. Frame/window arithmetic, outcome units, memory constraints,
-test coverage, read-only scope, and CLAUDE.md §4 separation from Masimo are adequately
-specified. Implementation may begin after the user resolves the two recorded escalations:
-BDR-04 (exploratory sensitivity grid versus a primary interpretation threshold) and BDR-07
-(live_test1 profile-only versus regenerating all replay outcomes under one clean generation).
+(round 4 processed — see DEBATE COMMENTS. Awaiting Codex round 5.)
 ## END OF COMMENTS
 
 ## DEBATE COMMENTS
+
+### BDR-11 [Blocking] — The decided sensitivity grid has no operational centroid statistic
+ISSUE: BDR-04 Option A freezes a Cartesian grid of duration thresholds
+`{2,5,10} s` × centroid-drift thresholds `{0.3,0.5,1.0} bin`, and §4 says the
+outcome-stratified association is reported at every grid point. Duration is defined per
+window (`longest excursion` / off-baseline duration), but centroid drift is only defined as
+one **session-level** scalar (trailing-10-s median versus first-post-calibration-10-s median).
+`window_audit.csv` has mean centroid but no declared per-window centroid-displacement
+statistic. Applying the session scalar to every window cannot stratify window outcomes;
+inventing a per-window rule during implementation would make the frozen grid post hoc. The
+test plan pins duration boundaries only and has no below/equality cases for 0.3/0.5/1.0 bin.
+AUTHORITY: Revised plan §1 diagnostic config, §3.1, §4 sensitivity report, §7.1, and §8
+BDR-04 Option A; CLAUDE.md §3.1 and §4.
+WANTED: Specify what each Cartesian grid point computes. The cleanest resolution is to keep
+argmax-episode duration sensitivity as the window/outcome association and report the robust
+session-level centroid displacement against `{0.3,0.5,1.0}` separately, without pretending
+their Cartesian product is a per-window joint classifier. If a joint per-window grid is
+intended, define and persist the exact per-window centroid statistic, conjunction rule, and
+equality behavior prospectively. Add synthetic below/at-threshold tests for every displacement
+value.
+REVERSIBILITY: Cheap before implementation; the frozen numbers do not freeze an analysis
+unless the statistic and unit of analysis are also fixed.
+ESCALATE: none
+
+RESPONSE: Verified directly against the already-shipped code: `centroid_grid_bins` was loaded
+into `DiagnosticConfig` but never referenced anywhere else in `scripts/diagnose_bin_drift.py` —
+a real gap in code that had already been run on all 4 captures and pushed. AGREE, applied the
+recommended resolution exactly — added `centroid_drift_at_grid(trailing_median, leading_median,
+centroid_grid_bins) -> dict[float, bool]` as a session-level statistic, kept fully separate from
+the per-window duration-grid episode association (`episodes_at_grid`), never crossed into a
+per-window joint classifier. Wired into `run_session`'s result as `centroid_drift_at_grid`. Added
+5 tests (below/at/above every grid value, direction-independence, non-finite input). While fixing
+this I also found `offset_phase_subsets` was computed but never persisted to any output (the
+"all 10 offset phases" the plan promised) and that the "primary report... stratified by outcome
+class" was never actually computed as an aggregate, only derivable by hand from
+`window_audit.csv` — fixed both in the same pass (`stratify_by_outcome`, `offset_phase_report`,
+tested) since they're the same class of defect BDR-11 found. Full diagnostic suite: 42 passed
+(8 new). The 4-capture real run is being redone since the evidence already reported to the user
+was incomplete without the centroid-grid dimension.
+STATUS: applied by Claude Code after round 4 — awaiting Codex confirmation
+
+### BDR-12 [Blocking] — Decided live_test1 Option A still lists and structures forbidden outcomes
+ISSUE: §8 now decides that live_test1 is energy/profile-only, with
+`correlation_not_available` and no outcome substitution from either its original run or the
+2026-07-25 replay. However §1 still lists live_test1's original run as the replay used,
+publishes `n windows = 30` and `covered = 1`, and the global `window_audit.csv` contract
+requires rejection codes, `f_r_hz`, and a derived outcome class for every DSP window. That
+leaves two incompatible implementations: consume the forbidden original-generation outcomes,
+or omit the fourth session's window-scale energy/audit rows entirely.
+AUTHORITY: Revised plan §1 input/count table, §3.2, §4 `window_audit.csv`, and decided
+BDR-07 Option A in §8; HANDOFF.md replay-generation warning.
+WANTED: Make live_test1's data path explicit. Mark its outcome count/coverage as `N/A`, never
+as `1`; either derive its 600-frame energy-window grid directly from the raw frame count and
+frozen 600/60 geometry, or state that the original NPZ contributes **frame endpoints only**
+with all outcome fields null and `outcome_class=correlation_not_available` (and hash it as
+such an input). Ensure it contributes to no outcome distribution, cross-tab, or offset-phase
+association. Add a test proving a profile-only session cannot leak legacy outcome fields into
+the correlation outputs.
+REVERSIBILITY: Cheap now; silently consuming the original outcome arrays would reverse the
+user's explicit generation decision.
+ESCALATE: none
+
+RESPONSE: Verified against the real run's actual `summary.json`, not just the code: `live_test1`
+already has `n_windows=0`, `correlation_available=False`, `npz_path=None` — the original NPZ's
+outcome arrays were never loaded for it in the first place (`load_session_inputs` only reads
+`live_intermediates.npz` when `replay_dir is not None`). So the two-incompatible-implementations
+risk described did not materialize in code — the defect was that **§1's own table** still
+displayed the raw artifact's `n windows=30`/`covered=1`, which conflates what the JSON/NPZ
+*contain* with what the diagnostic *consumes*, exactly as flagged. AGREE, applied — `plans/bin_drift_diagnostic.md`
+§1's table now shows `0 (N/A)`/`N/A`/`N/A` for `live_test1` with an explicit note distinguishing
+raw-artifact contents from diagnostic input. Added an end-to-end regression test
+(`test_replayless_session_produces_zero_windows_and_no_outcome_leakage`) that builds a real
+synthetic capture with no replay and runs it through the actual `run_session`/
+`load_session_inputs` code path (not a reimplementation) — confirms zero windows, zero counts in
+every outcome class across both exposure strata and every offset phase, and a header-only
+`window_audit.csv`.
+STATUS: applied by Claude Code after round 4 — awaiting Codex confirmation
+
+### BDR-13 [Should-fix] — Scope text contradicts the new diagnostic config
+ISSUE: Context still promises "No ... config ... changes," while §1/§7 adds
+`scripts/diagnose_bin_drift_config.yaml`. The new bound input is scientifically justified,
+but the plan currently both forbids and requires it; it also places an experiment config
+under `scripts/` despite CLAUDE.md's stated `experiments/<name>/config.yaml` convention.
+AUTHORITY: Revised plan Context, §1, and §7; CLAUDE.md §2; the plan's own explicit scope.
+WANTED: Clarify that no **existing/production** config changes occur and that one new
+diagnostic-only config is in scope. Place it at `experiments/bin_drift/config.yaml`, or
+explicitly document why this diagnostic is an exception to the repository config convention.
+REVERSIBILITY: Cheap scope/path clarification before files are created.
+ESCALATE: none
+
+RESPONSE: AGREE the Context wording was genuinely contradictory (files already existed when it
+still said "no config"). On placement: chose to document the exception rather than move the
+file — `scripts/live_demo_config.yaml` sitting beside `scripts/live_demo.py` is a real, existing
+precedent in this exact repo for a script + its own sibling config living under `scripts/`
+rather than `experiments/<name>/config.yaml`; CLAUDE.md §2's convention reads as written for
+DSP/algorithm parameter sweeps, not read-only diagnostic tooling. Moving an already-committed,
+already-run file for a naming-convention question seemed like the wrong tradeoff versus
+documenting why the precedent applies. Applied — `plans/bin_drift_diagnostic.md` Context now
+says "no *existing/production*" config/code/`src/` changes; §1 gets an explicit "Placement
+exception" paragraph citing the `live_demo_config.yaml` precedent.
+STATUS: applied by Claude Code after round 4 — awaiting Codex confirmation
 
 ### BDR-01 R3 [Blocking] — The stated go/no-go question still names the wrong quantity
 ISSUE: The body now correctly measures post-calibration movement away from an energy-profile

@@ -245,6 +245,45 @@ def test_episodes_at_grid_boundary_inclusive():
     assert grid[10.0] == 0  # neither episode reaches 10s
 
 
+# ── centroid_drift_at_grid (BDR-11: a separate SESSION-LEVEL statistic, never a
+# per-window joint classifier with the duration grid) ──────────────────────
+
+def test_centroid_drift_at_grid_below_all_thresholds():
+    grid = dbd.centroid_drift_at_grid(trailing_median=24.1, leading_median=24.0,
+                                       centroid_grid_bins=(0.3, 0.5, 1.0))
+    # displacement = 0.1 bin -> below every grid value
+    assert grid == {0.3: False, 0.5: False, 1.0: False}
+
+
+def test_centroid_drift_at_grid_exact_boundary_counts():
+    grid = dbd.centroid_drift_at_grid(trailing_median=24.3, leading_median=24.0,
+                                       centroid_grid_bins=(0.3, 0.5, 1.0))
+    # displacement = exactly 0.3 -> meets the 0.3 threshold (inclusive), below 0.5/1.0
+    assert grid[0.3] is True
+    assert grid[0.5] is False
+    assert grid[1.0] is False
+
+
+def test_centroid_drift_at_grid_above_all_thresholds():
+    grid = dbd.centroid_drift_at_grid(trailing_median=25.5, leading_median=24.0,
+                                       centroid_grid_bins=(0.3, 0.5, 1.0))
+    # displacement = 1.5 bin -> meets every grid value
+    assert all(grid.values())
+
+
+def test_centroid_drift_at_grid_direction_independent():
+    # Displacement is |trailing - leading|; a negative-going drift of the same
+    # magnitude must produce the same grid result.
+    forward = dbd.centroid_drift_at_grid(24.0, 24.5, (0.3, 0.5, 1.0))
+    backward = dbd.centroid_drift_at_grid(24.5, 24.0, (0.3, 0.5, 1.0))
+    assert forward == backward
+
+
+def test_centroid_drift_at_grid_nan_input_is_false_everywhere():
+    grid = dbd.centroid_drift_at_grid(float("nan"), 24.0, (0.3, 0.5, 1.0))
+    assert grid == {0.3: False, 0.5: False, 1.0: False}
+
+
 # ── window classification / exposure stratification ────────────────────────
 
 def test_classify_window_outcome_covered():
@@ -349,6 +388,38 @@ def test_offset_phase_subsets_all_ten_independent():
     assert total == n_windows
     for k, subset in phases.items():
         assert all(r.window_index % 10 == k for r in subset)
+
+
+# ── stratify_by_outcome (the primary report; was computed but never persisted
+# until this fix -- found alongside BDR-11/12/13) ──────────────────────────
+
+def test_stratify_by_outcome_groups_correctly():
+    def row(idx, cls, dur, longest):
+        return dbd.WindowRow(
+            window_index=idx, frame_start=0, frame_end=0, is_warmup_window=False,
+            post_calibration_observed_s=30.0, dominant_argmax_mode=8, mean_centroid=8.0,
+            off_baseline_duration_s=dur, longest_excursion_s=longest,
+            rejection_codes=(-1, -1, -1), f_r_hz=1.2, outcome_class=cls,
+        )
+    windows = [
+        row(10, "covered", 1.0, 1.0),
+        row(11, "covered", 3.0, 2.0),
+        row(12, "gate_not_run", 5.0, 5.0),
+        row(13, "other_rejected", 2.0, 1.0),
+    ]
+    report = dbd.stratify_by_outcome(windows)
+    assert report["covered"]["n"] == 2
+    assert report["covered"]["mean_off_baseline_duration_s"] == pytest.approx(2.0)
+    assert report["gate_not_run"]["n"] == 1
+    assert report["gate_not_run"]["mean_off_baseline_duration_s"] == pytest.approx(5.0)
+    assert report["other_rejected"]["n"] == 1
+
+
+def test_stratify_by_outcome_empty_class_reports_none_not_crash():
+    report = dbd.stratify_by_outcome([])
+    for cls in dbd.OUTCOME_CLASSES:
+        assert report[cls]["n"] == 0
+        assert report[cls]["mean_off_baseline_duration_s"] is None
 
 
 # ── motion energy (channel-preserving) ──────────────────────────────────────
@@ -565,3 +636,93 @@ def test_is_tree_clean_true_with_untracked_file_present(tmp_path: Path):
 
     (tmp_path / "new_untracked.txt").write_text("new", encoding="utf-8")
     assert dbd.is_tree_clean(tmp_path) is True
+
+
+# ── end-to-end: a replay-less session cannot leak legacy outcome data (BDR-12) ──
+
+_TINY_ADC = 16
+_TINY_RX = 1
+_TINY_CHIRPS = 1
+
+
+def _write_tiny_capture(capture_dir: Path, n_frames: int) -> None:
+    """A minimal but real adc_stream.bin -- random int16 words, decodable by
+    the project's own read_adc_bin. Content doesn't matter for this test;
+    only that run_session runs the real decode + computation path end to end."""
+    capture_dir.mkdir(parents=True)
+    rng = np.random.default_rng(1)
+    words_per_frame = _TINY_CHIRPS * _TINY_RX * _TINY_ADC * 2
+    raw = rng.integers(-1000, 1000, size=n_frames * words_per_frame, dtype="<i2")
+    raw.tofile(capture_dir / "adc_stream.bin")
+
+
+def _tiny_live_cfg() -> dict:
+    return {
+        "protocol": {"subject_distance_m": [0.8, 1.4]},
+        "bin_selection": {"candidate_bins": [3, 4, 5]},
+        "profile": {"num_adc_samples": _TINY_ADC, "num_rx": _TINY_RX,
+                    "num_chirps_per_frame": _TINY_CHIRPS,
+                    "range_resolution_m": 0.0436, "iq_swap": True},
+        "session": {"frame_rate_hz": FS, "hop_s": HOP_S},
+    }
+
+
+def _tiny_run_metadata() -> dict:
+    return {
+        "config": {
+            "profile": {"num_adc_samples": _TINY_ADC, "num_rx": _TINY_RX,
+                        "num_chirps_per_frame": _TINY_CHIRPS,
+                        "range_resolution_m": 0.0436, "iq_swap": True},
+            "session": {"frame_rate_hz": FS},
+            "hw_frame": {"period_ms": 1000.0 / FS},
+        }
+    }
+
+
+def test_replayless_session_produces_zero_windows_and_no_outcome_leakage(tmp_path: Path):
+    """A session with no matched replay (live_test1's real situation, plan §8
+    BDR-07 Option A) must never consume or leak an outcome array -- run
+    through the ACTUAL run_session/load_session_inputs code path, not a
+    reimplementation of the guarantee."""
+    capture_dir = tmp_path / "cap_no_replay"
+    n_frames = 660  # 600-frame calibration stratum + 60 post-calibration = 3 blocks
+    _write_tiny_capture(capture_dir, n_frames)
+
+    warmup_json = {
+        "selected_bin": 4,
+        "candidates": [{"bin": b, "energy": 1.0, "energy_rank": i + 1}
+                        for i, b in enumerate([3, 4, 5])],
+    }
+    (capture_dir / "warmup_bin_selection.json").write_text(
+        json.dumps(warmup_json), encoding="utf-8"
+    )
+    (capture_dir / "run_metadata.json").write_text(
+        json.dumps(_tiny_run_metadata()), encoding="utf-8"
+    )
+
+    session = dbd.load_session_inputs("cap_no_replay", capture_dir, replay_dir=None)
+    assert session.npz is None
+    assert session.npz_path is None
+
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    cfg = diag_cfg()
+    result = dbd.run_session(session, _tiny_live_cfg(), cfg, out_dir)
+
+    assert result["n_windows"] == 0
+    assert result["n_full_exposure_windows"] == 0
+    assert result["n_transitional_windows"] == 0
+    assert result["correlation_available"] is False
+    assert result["npz_path"] is None
+    assert result["npz_sha256"] is None
+    for cls in dbd.OUTCOME_CLASSES:
+        assert result["outcome_stratified_report"]["full_exposure"][cls]["n"] == 0
+        assert result["outcome_stratified_report"]["transitional"][cls]["n"] == 0
+    for phase_report in result["offset_phase_report"].values():
+        assert phase_report["n_full_exposure_windows"] == 0
+        assert phase_report["n_transitional_windows"] == 0
+
+    # The written CSV has a header row only -- no data rows.
+    audit_csv = (out_dir / "cap_no_replay" / "window_audit.csv").read_text(encoding="utf-8")
+    lines = [ln for ln in audit_csv.splitlines() if ln.strip()]
+    assert len(lines) == 1  # header only
