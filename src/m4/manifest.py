@@ -125,6 +125,20 @@ PACKET_LOSS_FLAG_RATIO = 0.05
 #: Commanded paced rates, frozen by the M3R-31 rotation (12 -> 15 -> 18).
 PACED_RATES_BPM = (12, 15, 18)
 
+#: `notes/protocol.md` SETTLE CRITERION — "mandatory, every arm, no exceptions", transcribed
+#: verbatim (S12R-04). Capture must not start until **BOTH** hold, measured on the live Masimo:
+#:
+#:   1. **PR spread <= 5 bpm** (max - min) over a **continuous 60 s**; and
+#:   2. **no monotonic drift** — PR in the last 20 s differs from the first 20 s by **<= 3 bpm**.
+#:
+#: Both limbs are `<=`, so **5.0 and 3.0 exactly are PASSES** — the comparison below is `>`,
+#: and the equality boundary is tested on both sides. A bare operator-supplied
+#: `settle_criterion_met` boolean would have been the `checksum_ok` defect again (S12R-04 R2):
+#: the criterion is numerical, so M4 derives it from the measured primitives.
+SETTLE_MAX_PR_SPREAD_BPM = 5.0
+SETTLE_MAX_PR_DRIFT_BPM = 3.0
+SETTLE_WINDOW_S = 60.0
+
 #: Plan §4 calls for a **versioned** manifest (S12R-09). The version is a property of the
 #: manifest document, not of a session, so `load_manifest` enforces it. Bump only with a
 #: migration: this is the root provenance record for every session.
@@ -237,6 +251,7 @@ def _sha256(fields: dict, key: str, session_id: str) -> str:
 #: Required in SCORING mode, by §4 group. Development mode may omit these — that is the
 #: whole reason it exists (the 4 captures have no `frame0_epoch`, distance or posture).
 _REQUIRED_SCORING_FIELDS: tuple[tuple[str, str], ...] = (
+    ("record_kind", "Identity"),
     ("session_id", "Identity"),
     ("subject_id", "Identity"),
     ("arm", "Identity"),
@@ -268,6 +283,47 @@ _REQUIRED_SCORING_FIELDS: tuple[tuple[str, str], ...] = (
     ("actual_duration_s", "Disposition"),
     ("early_stop", "Disposition"),
     ("retry_status", "Disposition"),
+    # Authority is §6 item 3 + `notes/protocol.md` SETTLE CRITERION, not §4's table (S12R-04).
+    ("settle_pr_spread_bpm", "Settle"),
+    ("settle_pr_drift_bpm", "Settle"),
+    ("settle_evidence_path", "Settle"),
+    ("settle_evidence_sha256", "Settle"),
+)
+
+#: A **pre-capture attempt** (S12R-12): a settle abort (§6 item 3) or a clock-resync restart
+#: (§6 item 5), both detected *before* recording begins. It has identity, design, a timestamp
+#: and the objective gate evidence — and nothing else, because nothing else exists yet.
+_REQUIRED_PRE_CAPTURE_FIELDS: tuple[tuple[str, str], ...] = (
+    ("record_kind", "Identity"),
+    ("session_id", "Identity"),
+    ("subject_id", "Identity"),
+    ("arm", "Identity"),
+    ("data_role", "Identity"),
+    ("disposition", "Identity"),
+    ("distance_m", "Design"),
+    ("posture", "Design"),
+    ("attempt_utc", "Timebase"),
+    ("clock_offset_start_s", "Timebase"),
+    ("settle_pr_spread_bpm", "Settle"),
+    ("settle_pr_drift_bpm", "Settle"),
+    ("settle_evidence_path", "Settle"),
+    ("settle_evidence_sha256", "Settle"),
+)
+
+#: Capture-only fields, which a pre-capture attempt must **not** carry. Absence is enforced,
+#: not merely permitted: the whole point of discriminating the record kinds is that "every
+#: field optional on one class" would trade one contradiction for a space of loadable-but-
+#: invalid rows, and that space is where a fabricated-provenance record would live
+#: (CLAUDE.md §4). A value here means either the capture did happen — in which case this is
+#: the wrong record kind — or someone invented one.
+_FORBIDDEN_ON_PRE_CAPTURE: tuple[str, ...] = (
+    "frame0_epoch", "clock_offset_end_s",
+    "raw_path", "raw_sha256", "truncation_bytes",
+    "packets_received", "packets_dropped", "n_frames", "n_invalid_frames",
+    "frame_validity_map_path", "frame_validity_map_sha256",
+    "capture_config_path", "capture_config_sha256", "capture_git_commit",
+    "masimo_path", "masimo_sha256",
+    "intended_duration_s", "actual_duration_s", "early_stop",
 )
 
 
@@ -277,6 +333,9 @@ class SessionManifest:
 
     mode: Mode
     session_id: str
+
+    #: Which contract this row was validated against (S12R-12).
+    record_kind: RecordKind = RecordKind.CAPTURED_SESSION
 
     # Identity / estimands
     subject_id: str | None = None
@@ -296,6 +355,14 @@ class SessionManifest:
     frame0_epoch: float | None = None
     clock_offset_start_s: float | None = None
     clock_offset_end_s: float | None = None
+    #: Pre-capture attempts only: when the attempt was made. There is no frame 0 to date it by.
+    attempt_utc: float | None = None
+
+    # Settle evidence (§6 item 3 / `notes/protocol.md`)
+    settle_pr_spread_bpm: float | None = None
+    settle_pr_drift_bpm: float | None = None
+    settle_evidence_path: str | None = None
+    settle_evidence_sha256: str | None = None
 
     # Integrity
     raw_path: str | None = None
@@ -338,6 +405,31 @@ class SessionManifest:
         §3.1's "never scored" is too load-bearing to rest on one check.
         """
         return self.mode is Mode.SCORING and self.data_role in _SCORING_ALLOWED_ROLES
+
+
+# ── Settle criterion (S12R-04) ────────────────────────────────────────────────
+
+
+def derive_settle_result(fields: dict, session_id: str) -> tuple[bool, tuple[str, ...]]:
+    """Derive the SETTLE CRITERION pass/fail from the measured primitives.
+
+    `notes/protocol.md` states both limbs numerically, so M4 recomputes them rather than
+    accepting a declared verdict — a `settle_criterion_met` boolean would let the operator
+    supply both the fact and the disposition it justifies, which is exactly the defect
+    S12R-03 removed from `checksum_ok`.
+
+    Returns `(met, failure_reasons)`. Both thresholds are **inclusive** (`<=` in the source),
+    so the comparisons here are strict `>` and the boundary values pass.
+    """
+    spread = _finite_number(fields, "settle_pr_spread_bpm", session_id, minimum=0.0)
+    drift = _finite_number(fields, "settle_pr_drift_bpm", session_id, minimum=0.0)
+
+    reasons: list[str] = []
+    if spread > SETTLE_MAX_PR_SPREAD_BPM:
+        reasons.append(f"settle_pr_spread_exceeds_{SETTLE_MAX_PR_SPREAD_BPM:g}bpm")
+    if drift > SETTLE_MAX_PR_DRIFT_BPM:
+        reasons.append(f"settle_pr_drift_exceeds_{SETTLE_MAX_PR_DRIFT_BPM:g}bpm")
+    return not reasons, tuple(reasons)
 
 
 # ── Disposition recomputation (M4R-04) ────────────────────────────────────────
@@ -460,6 +552,14 @@ def recompute_disposition(
     if not reached_intended:
         reasons.append("protocol_abort_did_not_reach_intended_duration")
 
+    # §6 item 3's OTHER limb, absent until S12R-04: "the settle criterion is **not met**, or
+    # the protocol run is deliberately halted…". Both are item-3 protocol aborts. A recorded
+    # session whose settle evidence fails should not exist — the gate is pre-capture — so if
+    # one does, it is an abort that was recorded anyway, and §6 makes it not admitted.
+    settle_met, settle_reasons = derive_settle_result(fields, session_id)
+    if not settle_met:
+        reasons.extend(settle_reasons)
+
     # ── §6 item 4: corrupt raw — checksum limb only (truncation limb: see docstring) ──
     if not checksum_ok:
         reasons.append("stored_checksum_failed")
@@ -532,6 +632,45 @@ def _validate_posture(value, session_id: str) -> str:
             f"{CANONICAL_POSTURE!r}. A differing session is not a member of this design."
         )
     return value
+
+
+def recompute_pre_capture_disposition(
+    fields: dict, session_id: str
+) -> tuple[SessionDisposition, tuple[str, ...]]:
+    """Derive a pre-capture attempt's disposition from its gate evidence alone (S12R-12).
+
+    A pre-capture attempt exists precisely *because* a mandatory pre-recording gate failed:
+    `notes/protocol.md` step 3 (settle) or step 3a (clock sync, "resync and restart before
+    recording"). Both map to a §6 session-level not-admitted disposition — item 3 and item 5
+    respectively.
+
+    The capture-limb rules (duration, checksum, packet loss, truncation, retry) cannot run
+    here: their fields are forbidden on this record kind because the artifacts do not exist.
+
+    **An attempt where both gates pass raises**, rather than being admitted. If both had
+    passed, recording would have started and this would be a captured session — so such a
+    record is self-contradictory, and inventing a disposition for it would put a cause that
+    never happened into the study's reason counts.
+    """
+    reasons: list[str] = []
+
+    settle_met, settle_reasons = derive_settle_result(fields, session_id)
+    if not settle_met:
+        reasons.extend(settle_reasons)
+
+    offset = _finite_number(fields, "clock_offset_start_s", session_id)
+    if abs(offset) > MAX_CLOCK_OFFSET_S:
+        reasons.append(f"clock_offset_start_s_exceeds_{MAX_CLOCK_OFFSET_S:g}s")
+
+    if not reasons:
+        raise ManifestError(
+            f"session {session_id!r}: record_kind is 'pre_capture_attempt' but both "
+            "pre-recording gates pass — settle criterion met and the clock offset within "
+            f"+/-{MAX_CLOCK_OFFSET_S:g} s. Recording would have started, so this is a "
+            "captured session, not an attempt. §6 has no disposition for an attempt that "
+            "did not fail."
+        )
+    return SessionDisposition.EXCLUDED, tuple(reasons)
 
 
 def _validate_rate_schedule(
@@ -643,7 +782,28 @@ def parse_session(fields: dict, mode: Mode) -> SessionManifest:
             f"every session needs a non-empty string session_id; got {session_id!r}"
         )
 
-    if mode is Mode.SCORING:
+    # ── S12R-12: which contract applies? ─────────────────────────────────────
+    #
+    # Absent, this is a captured session: every existing capture is one, and the pre-capture
+    # attempt kind is new with this schema version. Scoring mode requires it explicitly (it
+    # is in the required list) so a study manifest never relies on that default.
+    kind = (_as_enum(fields["record_kind"], RecordKind, "record_kind", session_id)
+            if ("record_kind" in fields and fields["record_kind"] is not None)
+            else RecordKind.CAPTURED_SESSION)
+
+    if kind is RecordKind.PRE_CAPTURE_ATTEMPT:
+        for key, group in _REQUIRED_PRE_CAPTURE_FIELDS:
+            _require(fields, key, session_id, group)
+        present_but_forbidden = [k for k in _FORBIDDEN_ON_PRE_CAPTURE if fields.get(k) is not None]
+        if present_but_forbidden:
+            raise ManifestError(
+                f"session {session_id!r}: record_kind is 'pre_capture_attempt', but these "
+                f"capture-only fields are present: {', '.join(sorted(present_but_forbidden))}. "
+                "The gate that produced this record fires before recording starts, so these "
+                "artifacts cannot exist. Either the capture did happen — in which case this "
+                "is a captured_session — or the values were invented (CLAUDE.md §4)."
+            )
+    elif mode is Mode.SCORING:
         for key, group in _REQUIRED_SCORING_FIELDS:
             _require(fields, key, session_id, group)
 
@@ -658,7 +818,12 @@ def parse_session(fields: dict, mode: Mode) -> SessionManifest:
 
     # The commanded rate is required by, and only meaningful for, the paced arm.
     rate = fields.get("commanded_rate_bpm")
-    if arm is Arm.PACED:
+    if arm is Arm.PACED and kind is RecordKind.PRE_CAPTURE_ATTEMPT:
+        # An attempt that never recorded has no schedule to bind; the rate may be declared
+        # (the arm was planned) but is not required, because nothing was played.
+        if rate is not None:
+            rate = _exact_int(fields, "commanded_rate_bpm", session_id, minimum=1)
+    elif arm is Arm.PACED:
         if rate is None:
             raise ManifestError(
                 f"session {session_id!r}: arm is 'paced' but commanded_rate_bpm is missing; "
@@ -685,7 +850,10 @@ def parse_session(fields: dict, mode: Mode) -> SessionManifest:
             "set. A natural session has no commanded rate."
         )
 
-    schedule = _validate_rate_schedule(fields, arm, session_id, mode)
+    schedule = (
+        () if kind is RecordKind.PRE_CAPTURE_ATTEMPT
+        else _validate_rate_schedule(fields, arm, session_id, mode)
+    )
 
     distance = _validate_distance(fields["distance_m"], session_id) if present("distance_m") else None
     posture = _validate_posture(fields["posture"], session_id) if present("posture") else None
@@ -713,13 +881,21 @@ def parse_session(fields: dict, mode: Mode) -> SessionManifest:
             "labelled exploratory / apparent / in-sample."
         )
 
-    # ── Provenance and disposition strings, strictly typed in scoring mode ───
-    if mode is Mode.SCORING:
+    # ── Provenance strings, strictly typed — per record kind (S12R-12) ───────
+    if kind is RecordKind.PRE_CAPTURE_ATTEMPT:
+        # The capture bindings are forbidden here; the settle evidence is what this record
+        # exists to carry, so it is bound by path + SHA-256 in **both** modes.
+        _non_empty_str(fields, "subject_id", session_id)
+        _non_empty_str(fields, "settle_evidence_path", session_id)
+        _sha256(fields, "settle_evidence_sha256", session_id)
+        _finite_number(fields, "attempt_utc", session_id)
+    elif mode is Mode.SCORING:
         for key in ("raw_path", "frame_validity_map_path", "capture_config_path",
-                    "masimo_path", "capture_git_commit", "subject_id"):
+                    "masimo_path", "capture_git_commit", "subject_id",
+                    "settle_evidence_path"):
             _non_empty_str(fields, key, session_id)
         for key in ("raw_sha256", "frame_validity_map_sha256", "capture_config_sha256",
-                    "masimo_sha256"):
+                    "masimo_sha256", "settle_evidence_sha256"):
             _sha256(fields, key, session_id)
 
     # Plan §4 Disposition binds retry/replacement status **and reason** (S12R-09). A reason
@@ -737,7 +913,18 @@ def parse_session(fields: dict, mode: Mode) -> SessionManifest:
                    if present("disposition") else None)
     reasons: tuple[str, ...] = ()
     flags: tuple[str, ...] = ()
-    if mode is Mode.SCORING:
+    if kind is RecordKind.PRE_CAPTURE_ATTEMPT:
+        # Always recomputed, in both modes: this record kind's entire required field set is
+        # the gate evidence, so there is never a mode in which it cannot be derived.
+        recomputed, reasons = recompute_pre_capture_disposition(fields, session_id)
+        if recomputed is not disposition:
+            raise ManifestError(
+                f"session {session_id!r}: operator recorded disposition="
+                f"{disposition.value if disposition else None!r} but M4 recomputes "
+                f"{recomputed.value!r} from the gate evidence (reasons: "
+                f"{', '.join(reasons)}). A logged pre-capture attempt is not admitted."
+            )
+    elif mode is Mode.SCORING:
         recomputed, reasons, flags = recompute_disposition(fields, session_id)
         if recomputed is not disposition:
             raise ManifestError(
@@ -752,6 +939,12 @@ def parse_session(fields: dict, mode: Mode) -> SessionManifest:
     return SessionManifest(
         mode=mode,
         session_id=session_id,
+        record_kind=kind,
+        attempt_utc=fields.get("attempt_utc"),
+        settle_pr_spread_bpm=fields.get("settle_pr_spread_bpm"),
+        settle_pr_drift_bpm=fields.get("settle_pr_drift_bpm"),
+        settle_evidence_path=fields.get("settle_evidence_path"),
+        settle_evidence_sha256=fields.get("settle_evidence_sha256"),
         subject_id=fields.get("subject_id"),
         arm=arm,
         commanded_rate_bpm=rate,

@@ -27,7 +27,9 @@ from src.m4.manifest import (  # noqa: E402
     DataRole,
     ManifestError,
     Mode,
+    RecordKind,
     RetryStatus,
+    _REQUIRED_PRE_CAPTURE_FIELDS,
     load_manifest,
     parse_session,
     recompute_disposition,
@@ -35,7 +37,7 @@ from src.m4.manifest import (  # noqa: E402
 )
 
 _REQUIRED_KEYS = [
-    "session_id", "subject_id", "arm", "data_role", "disposition",
+    "record_kind", "session_id", "subject_id", "arm", "data_role", "disposition",
     "distance_m", "posture",
     "frame0_epoch", "clock_offset_start_s", "clock_offset_end_s",
     "raw_path", "raw_sha256", "truncation_bytes", "checksum_ok",
@@ -44,12 +46,15 @@ _REQUIRED_KEYS = [
     "capture_config_path", "capture_config_sha256",
     "capture_git_commit", "masimo_path", "masimo_sha256",
     "intended_duration_s", "actual_duration_s", "early_stop", "retry_status",
+    "settle_pr_spread_bpm", "settle_pr_drift_bpm",
+    "settle_evidence_path", "settle_evidence_sha256",
 ]
 
 
 def admissible(**over) -> dict:
     """A session that M4 recomputes as ADMITTED. Every exclusion test perturbs one field."""
     base = {
+        "record_kind": "captured_session",
         "session_id": "S01_natural",
         "subject_id": "S01",
         "arm": "natural",
@@ -79,6 +84,33 @@ def admissible(**over) -> dict:
         "actual_duration_s": 600.0,
         "early_stop": False,
         "retry_status": "original",
+        # Settle evidence comfortably inside both limbs (5 bpm spread, 3 bpm drift).
+        "settle_pr_spread_bpm": 2.0,
+        "settle_pr_drift_bpm": 1.0,
+        "settle_evidence_path": "data/raw/S01_natural.settle.csv",
+        "settle_evidence_sha256": "e" * 64,
+    }
+    base.update(over)
+    return base
+
+
+def pre_capture(**over) -> dict:
+    """A logged pre-capture attempt (S12R-12): the settle gate failed, so no capture exists."""
+    base = {
+        "record_kind": "pre_capture_attempt",
+        "session_id": "S01_natural_attempt1",
+        "subject_id": "S01",
+        "arm": "natural",
+        "data_role": "evaluation",
+        "disposition": "excluded",
+        "distance_m": 1.0,
+        "posture": "seated",
+        "attempt_utc": 1785000000.0,
+        "clock_offset_start_s": 0.2,
+        "settle_pr_spread_bpm": 9.0,      # fails limb 1 (> 5 bpm)
+        "settle_pr_drift_bpm": 1.0,
+        "settle_evidence_path": "data/raw/S01_attempt1.settle.csv",
+        "settle_evidence_sha256": "f" * 64,
     }
     base.update(over)
     return base
@@ -186,15 +218,37 @@ def test_every_section_4_field_is_required_in_scoring_mode(group, field):
     assert field in str(exc.value)
 
 
-def test_the_schema_requires_nothing_beyond_the_section_4_contract():
+#: Required fields whose authority is **not** §4's table. Each must name its source, because
+#: "a rule that is reasonable but unsourced is a finding" — the invariant this review opened
+#: with. Anything required by the schema and absent from both this map and `_SECTION_4_CONTRACT`
+#: is an invented requirement.
+_NON_SECTION_4_AUTHORITY: dict[str, str] = {
+    "session_id": "the record key itself, not a §4 table row",
+    "record_kind": "S12R-12: discriminates the captured-session and pre-capture-attempt contracts",
+    "settle_pr_spread_bpm": "§6 item 3 + notes/protocol.md SETTLE CRITERION limb 1 (S12R-04)",
+    "settle_pr_drift_bpm": "§6 item 3 + notes/protocol.md SETTLE CRITERION limb 2 (S12R-04)",
+    "settle_evidence_path": "S12R-04 R2: the criterion must be derived from auditable evidence",
+    "settle_evidence_sha256": "S12R-04 R2: auditable evidence is bound by path + SHA-256",
+}
+
+
+def test_the_schema_requires_nothing_beyond_a_named_authority():
     """The other direction: an invented required field is also a defect — it would reject a
-    manifest that §4 says is complete."""
+    manifest the binding documents say is complete."""
     from src.m4.manifest import _REQUIRED_SCORING_FIELDS
 
     contract = {f for fields in _SECTION_4_CONTRACT.values() for f in fields}
-    # `session_id` is the record key rather than a §4 table row.
-    extra = {k for k, _ in _REQUIRED_SCORING_FIELDS} - contract - {"session_id"}
-    assert extra == set(), f"required fields with no §4 authority: {sorted(extra)}"
+    extra = {k for k, _ in _REQUIRED_SCORING_FIELDS} - contract - set(_NON_SECTION_4_AUTHORITY)
+    assert extra == set(), f"required fields with no named authority: {sorted(extra)}"
+
+
+def test_every_pre_capture_required_field_has_a_named_authority():
+    from src.m4.manifest import _REQUIRED_PRE_CAPTURE_FIELDS
+
+    contract = {f for fields in _SECTION_4_CONTRACT.values() for f in fields}
+    extra = {k for k, _ in _REQUIRED_PRE_CAPTURE_FIELDS} - contract - set(_NON_SECTION_4_AUTHORITY)
+    # `attempt_utc` is the one field unique to this record kind.
+    assert extra == {"attempt_utc"}, f"unexpected pre-capture requirements: {sorted(extra)}"
 
 
 def test_conditionally_required_section_4_fields_are_enforced_when_applicable():
@@ -790,7 +844,8 @@ def test_the_stepped_sweep_still_loads_in_development_mode():
 
 @pytest.mark.parametrize(
     "key",
-    ["raw_sha256", "frame_validity_map_sha256", "capture_config_sha256", "masimo_sha256"],
+    ["raw_sha256", "frame_validity_map_sha256", "capture_config_sha256", "masimo_sha256",
+     "settle_evidence_sha256"],
 )
 @pytest.mark.parametrize("bad", ["", "abc", "A" * 64, "g" * 64, "a" * 63, "a" * 65, 12345])
 def test_every_bound_hash_must_look_like_a_sha256(key, bad):
@@ -802,7 +857,7 @@ def test_every_bound_hash_must_look_like_a_sha256(key, bad):
 
 @pytest.mark.parametrize(
     "key", ["raw_path", "frame_validity_map_path", "capture_config_path", "masimo_path",
-            "capture_git_commit", "subject_id"],
+            "capture_git_commit", "subject_id", "settle_evidence_path"],
 )
 @pytest.mark.parametrize("bad", ["", "   ", 17, ["a"]])
 def test_every_bound_path_must_be_a_non_empty_string(key, bad):
@@ -900,3 +955,120 @@ def test_session_id_must_be_a_non_empty_string(tmp_path):
     for bad in ("", None, 17):
         with pytest.raises(ManifestError, match="session_id"):
             parse_session({"session_id": bad}, Mode.DEVELOPMENT)
+
+
+# ── S12R-04: the SETTLE CRITERION, derived not declared ───────────────────────
+
+def test_settle_thresholds_pass_AT_their_equality_boundaries():
+    """`notes/protocol.md`: "PR spread <= 5 bpm ... differs ... by <= 3 bpm". Both limbs are
+    inclusive, so 5.0 and 3.0 exactly are PASSES. Tested on both sides of each boundary."""
+    m = parse_session(
+        admissible(settle_pr_spread_bpm=5.0, settle_pr_drift_bpm=3.0), Mode.SCORING
+    )
+    assert m.disposition is SessionDisposition.ADMITTED
+
+
+@pytest.mark.parametrize(
+    "over, reason",
+    [
+        ({"settle_pr_spread_bpm": 5.0001}, "settle_pr_spread_exceeds_5bpm"),
+        ({"settle_pr_spread_bpm": 9.0}, "settle_pr_spread_exceeds_5bpm"),
+        ({"settle_pr_drift_bpm": 3.0001}, "settle_pr_drift_exceeds_3bpm"),
+        ({"settle_pr_drift_bpm": 7.5}, "settle_pr_drift_exceeds_3bpm"),
+    ],
+)
+def test_a_failed_settle_criterion_is_an_item_3_protocol_abort(over, reason):
+    """§6 item 3's other limb: "the settle criterion is **not met**, or the protocol run is
+    deliberately halted". Only the second was implemented before S12R-04."""
+    verdict, reasons, _ = recompute_disposition(admissible(**over), "S")
+    assert verdict is SessionDisposition.EXCLUDED
+    assert reason in reasons
+
+
+def test_both_settle_limbs_are_reported_when_both_fail():
+    _, reasons, _ = recompute_disposition(
+        admissible(settle_pr_spread_bpm=9.0, settle_pr_drift_bpm=7.5), "S"
+    )
+    assert {"settle_pr_spread_exceeds_5bpm", "settle_pr_drift_exceeds_3bpm"} <= set(reasons)
+
+
+@pytest.mark.parametrize(
+    "over",
+    [{"settle_pr_spread_bpm": "2.0"}, {"settle_pr_drift_bpm": True},
+     {"settle_pr_spread_bpm": -1.0}, {"settle_pr_drift_bpm": float("nan")}],
+)
+def test_malformed_settle_evidence_is_an_ERROR_not_a_disposition(over):
+    with pytest.raises(ManifestError, match="settle_pr_"):
+        recompute_disposition(admissible(**over), "S")
+
+
+# ── S12R-12: discriminated record kinds ───────────────────────────────────────
+
+def test_a_pre_capture_attempt_loads_and_is_excluded_with_its_derived_reason():
+    """§6 items 3 and 5 require these to be logged, but they happen before recording, so they
+    have no capture artifacts. The old schema could log one only by fabricating provenance."""
+    m = parse_session(pre_capture(), Mode.SCORING)
+    assert m.record_kind is RecordKind.PRE_CAPTURE_ATTEMPT
+    assert m.disposition is SessionDisposition.EXCLUDED
+    assert "settle_pr_spread_exceeds_5bpm" in m.disposition_reasons
+    assert m.frame0_epoch is None and m.raw_path is None
+
+
+def test_a_clock_resync_attempt_is_an_item_5_disposition():
+    """§6 item 5: offset > +/-1 s -> "resync and restart before recording"."""
+    m = parse_session(
+        pre_capture(settle_pr_spread_bpm=2.0, clock_offset_start_s=3.0), Mode.SCORING
+    )
+    assert m.disposition is SessionDisposition.EXCLUDED
+    assert "clock_offset_start_s_exceeds_1s" in m.disposition_reasons
+
+
+@pytest.mark.parametrize(
+    "field, value",
+    [("raw_path", "data/raw/x.bin"), ("frame0_epoch", 1785000000.0), ("n_frames", 12000),
+     ("masimo_path", "data/raw/x.csv"), ("intended_duration_s", 600.0),
+     ("early_stop", True), ("clock_offset_end_s", 0.1), ("capture_git_commit", "abc123")],
+)
+def test_a_pre_capture_attempt_must_not_carry_capture_only_fields(field, value):
+    """Absence is ENFORCED, not merely permitted. Making every capture field optional on one
+    class would trade the old contradiction for a space of loadable-but-invalid rows — which
+    is where a fabricated-provenance record would live (CLAUDE.md §4)."""
+    with pytest.raises(ManifestError, match="capture-only fields are present"):
+        parse_session(pre_capture(**{field: value}), Mode.SCORING)
+
+
+def test_an_attempt_where_BOTH_gates_pass_is_a_contradiction():
+    """If both gates passed, recording would have started and this would be a captured
+    session. §6 has no disposition for an attempt that did not fail."""
+    with pytest.raises(ManifestError, match="both\\s+pre-recording gates pass"):
+        parse_session(
+            pre_capture(settle_pr_spread_bpm=2.0, settle_pr_drift_bpm=1.0,
+                        clock_offset_start_s=0.2),
+            Mode.SCORING,
+        )
+
+
+def test_an_attempt_cannot_be_recorded_as_admitted():
+    with pytest.raises(ManifestError, match="recomputes"):
+        parse_session(pre_capture(disposition="admitted"), Mode.SCORING)
+
+
+@pytest.mark.parametrize("missing", [k for k, _ in _REQUIRED_PRE_CAPTURE_FIELDS])
+def test_a_pre_capture_attempt_rejects_every_missing_required_field(missing):
+    fields = pre_capture()
+    del fields[missing]
+    with pytest.raises(ManifestError) as exc:
+        parse_session(fields, Mode.SCORING)
+    assert missing in str(exc.value)
+
+
+def test_record_kind_defaults_to_captured_session_when_absent():
+    """Every existing capture is one, and the attempt kind is new with schema v2. Scoring mode
+    still requires it explicitly, so a study manifest never leans on this default."""
+    m = parse_session({"session_id": "d1", "arm": "natural"}, Mode.DEVELOPMENT)
+    assert m.record_kind is RecordKind.CAPTURED_SESSION
+
+
+def test_an_unknown_record_kind_is_rejected():
+    with pytest.raises(ManifestError, match="record_kind"):
+        parse_session(admissible(record_kind="aborted"), Mode.SCORING)
