@@ -44,7 +44,8 @@ _REQUIRED_KEYS = [
     "packets_received", "packets_dropped", "n_frames", "n_invalid_frames",
     "frame_validity_map_path", "frame_validity_map_sha256",
     "capture_config_path", "capture_config_sha256",
-    "capture_git_commit", "masimo_path", "masimo_sha256",
+    "capture_git_commit",
+    "reference_expected_path", "reference_acquisition_path", "reference_acquisition_sha256",
     "intended_duration_s", "actual_duration_s", "early_stop", "retry_status",
     "settle_pr_spread_bpm", "settle_pr_drift_bpm",
     "settle_evidence_path", "settle_evidence_sha256",
@@ -79,6 +80,9 @@ def admissible(**over) -> dict:
         "capture_git_commit": "0123456789abcdef",
         "masimo_path": "data/raw/S01_natural.csv",
         "masimo_sha256": "d" * 64,
+        "reference_expected_path": "data/raw/S01_natural.csv",
+        "reference_acquisition_path": "data/raw/S01_natural.acq.json",
+        "reference_acquisition_sha256": "1" * 64,
         "intended_duration_s": 600.0,
         "actual_duration_s": 600.0,
         "early_stop": False,
@@ -189,7 +193,12 @@ _SECTION_4_CONTRACT: dict[str, tuple[str, ...]] = {
     # "capture config, capture-time git commit, Masimo CSV path + hash, commanded-rate
     #  schedule" — the config is an artifact, so it is bound by path + SHA-256 too.
     "Provenance": ("capture_config_path", "capture_config_sha256", "capture_git_commit",
-                   "masimo_path", "masimo_sha256"),
+                   ),
+    # §4 lists "Masimo CSV path + hash" under Provenance, but §6 item 6 makes that binding
+    # CONDITIONAL: a no-agreement session has no reference to bind. What is unconditional is
+    # the acquisition evidence that lets M4 derive which case applies (S12R-06).
+    "Reference": ("reference_expected_path", "reference_acquisition_path",
+                  "reference_acquisition_sha256"),
     # "intended duration vs early stop, retry / replacement status and reason (§6)"
     "Disposition": ("intended_duration_s", "actual_duration_s", "early_stop", "retry_status"),
 }
@@ -1124,10 +1133,14 @@ def materialise(tmp_path, fields=None, *, n_frames=12000, n_invalid=0):
     (tmp_path / fields["capture_config_path"]).write_text("window_s: 30\n", encoding="utf-8")
     (tmp_path / fields["masimo_path"]).write_text("Timestamp,Beats / min\n1,72\n", encoding="utf-8")
     (tmp_path / fields["settle_evidence_path"]).write_text("t,pr\n0,72\n", encoding="utf-8")
+    (tmp_path / fields["reference_acquisition_path"]).write_text(
+        '{"acquired": true}\n', encoding="utf-8"
+    )
 
     for path_key, hash_key in (
         ("raw_path", "raw_sha256"),
         ("capture_config_path", "capture_config_sha256"),
+        ("reference_acquisition_path", "reference_acquisition_sha256"),
         ("masimo_path", "masimo_sha256"),
         ("settle_evidence_path", "settle_evidence_sha256"),
         ("frame_validity_map_path", "frame_validity_map_sha256"),
@@ -1249,3 +1262,93 @@ def test_the_validity_map_must_be_a_1d_boolean_array(tmp_path, arr_kind):
     ).hexdigest()
     with pytest.raises(ManifestError, match="1-D boolean array"):
         _load(tmp_path, fields)
+
+
+# ── S12R-06: NO_AGREEMENT is DERIVED, never declared ─────────────────────────
+
+def no_reference(tmp_path, **over):
+    """A captured session whose Masimo file was never acquired: nothing bound, and nothing
+    sitting at the expected path either."""
+    fields = materialise(tmp_path, admissible(disposition="no_agreement", **over))
+    fields.pop("masimo_path", None)
+    fields.pop("masimo_sha256", None)
+    (tmp_path / "data" / "raw" / "S01_natural.csv").unlink()
+    return fields
+
+
+def test_a_wholly_missing_reference_derives_NO_AGREEMENT(tmp_path):
+    """§6 item 6: "a wholly missing Masimo file is a separately-logged no-agreement session
+    (radar-only, descriptive at most)". Under the old schema this session could not be loaded
+    AT ALL — masimo_path was unconditionally required — so a required failure class simply
+    vanished from the study log."""
+    (s,) = _load(tmp_path, no_reference(tmp_path))
+    assert s.disposition is SessionDisposition.NO_AGREEMENT
+    assert s.disposition_reasons == (), "no-agreement is not an exclusion"
+
+
+def test_a_no_agreement_session_keeps_its_full_radar_binding(tmp_path):
+    """It is radar-only, not discarded: the timebase and integrity bindings all survive."""
+    (s,) = _load(tmp_path, no_reference(tmp_path))
+    assert s.frame0_epoch is not None
+    assert s.raw_path is not None and s.raw_digest_ok is True
+    assert s.n_frames == 12000
+
+
+def test_a_no_agreement_session_is_structurally_barred_from_agreement_scoring(tmp_path):
+    (s,) = _load(tmp_path, no_reference(tmp_path))
+    assert s.is_scorable, "it is a valid scoring-mode session"
+    assert not s.is_agreement_scorable, "but it can never enter an agreement estimand"
+
+
+def test_a_reference_sitting_at_the_expected_path_is_NOT_no_agreement(tmp_path):
+    """The case Codex called out: absence must be DERIVED. If a file is actually there and
+    the manifest simply fails to bind it, declaring no-agreement would let the operator
+    supply both the fact and the verdict — the `checksum_ok` defect one level out."""
+    fields = no_reference(tmp_path)
+    (tmp_path / fields["reference_expected_path"]).write_text("Timestamp\n1\n", encoding="utf-8")
+    with pytest.raises(ManifestError, match="fails to bind"):
+        _load(tmp_path, fields)
+
+
+def test_a_LOST_reference_is_not_no_agreement(tmp_path):
+    """S12R-07 R3's fourth row, from the other side: a reference bound by path + digest that
+    has gone missing was acquired and lost. It must NOT decay into no-agreement."""
+    fields = materialise(tmp_path)
+    (tmp_path / fields["masimo_path"]).unlink()
+    with pytest.raises(ManifestError, match="LOST"):
+        _load(tmp_path, fields)
+
+
+def test_declaring_no_agreement_while_a_reference_is_bound_disagrees(tmp_path):
+    """The operator does not get to choose. A bound, matching reference means the session is
+    agreement-scored, whatever the manifest says."""
+    fields = materialise(tmp_path, admissible(disposition="no_agreement"))
+    with pytest.raises(ManifestError, match="recomputes"):
+        _load(tmp_path, fields)
+
+
+def test_a_half_bound_reference_is_a_broken_manifest(tmp_path):
+    """Neither acquired nor absent."""
+    for drop in ("masimo_path", "masimo_sha256"):
+        fields = materialise(tmp_path)
+        fields.pop(drop)
+        with pytest.raises(ManifestError, match="masimo_"):
+            _load(tmp_path, fields)
+
+
+def test_the_acquisition_record_itself_must_be_bound_and_intact(tmp_path):
+    """Absence is only derivable if the evidence for it is itself verifiable."""
+    fields = no_reference(tmp_path)
+    fields["reference_acquisition_sha256"] = "0" * 64
+    with pytest.raises(ManifestError, match="provenance failure"):
+        _load(tmp_path, fields)
+
+
+def test_exclusion_outranks_no_agreement(tmp_path):
+    """§6 is a hierarchy. A session excluded for a protocol abort is not scored at all, so
+    whether it also lacked a reference never arises."""
+    fields = no_reference(tmp_path, actual_duration_s=10.0, early_stop=True)
+    fields["disposition"] = "excluded"
+    (s,) = _load(tmp_path, fields)
+    assert s.disposition is SessionDisposition.EXCLUDED
+    assert "protocol_abort_did_not_reach_intended_duration" in s.disposition_reasons

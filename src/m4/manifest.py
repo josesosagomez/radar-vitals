@@ -285,8 +285,12 @@ _REQUIRED_SCORING_FIELDS: tuple[tuple[str, str], ...] = (
     ("capture_config_path", "Provenance"),
     ("capture_config_sha256", "Provenance"),
     ("capture_git_commit", "Provenance"),
-    ("masimo_path", "Provenance"),
-    ("masimo_sha256", "Provenance"),
+    # `masimo_path`/`masimo_sha256` are **conditionally** required (S12R-06): a §6 item-6
+    # no-agreement session has no reference to bind. What is unconditional is the evidence
+    # that lets M4 *derive* which case this is — see the two fields below.
+    ("reference_expected_path", "Reference"),
+    ("reference_acquisition_path", "Reference"),
+    ("reference_acquisition_sha256", "Reference"),
     ("intended_duration_s", "Disposition"),
     ("actual_duration_s", "Disposition"),
     ("early_stop", "Disposition"),
@@ -391,6 +395,11 @@ class SessionManifest:
     capture_git_commit: str | None = None
     masimo_path: str | None = None
     masimo_sha256: str | None = None
+    #: Where the reference was to be written, and the bound record of the acquisition attempt.
+    #: Together these make §6 item 6 derivable instead of declarable.
+    reference_expected_path: str | None = None
+    reference_acquisition_path: str | None = None
+    reference_acquisition_sha256: str | None = None
     commanded_rate_schedule: tuple[dict, ...] = ()
 
     # Disposition
@@ -414,6 +423,17 @@ class SessionManifest:
         §3.1's "never scored" is too load-bearing to rest on one check.
         """
         return self.mode is Mode.SCORING and self.data_role in _SCORING_ALLOWED_ROLES
+
+    @property
+    def is_agreement_scorable(self) -> bool:
+        """May this session contribute to a radar-vs-reference agreement number?
+
+        A §6 item-6 `NO_AGREEMENT` session is "radar-only, descriptive at most": it is not
+        excluded — its radar side is real and it keeps its full timebase/integrity binding —
+        but it has no reference, so it can never enter an agreement estimand. That bar is
+        structural rather than a convention someone has to remember (S12R-06 R2).
+        """
+        return self.is_scorable and self.disposition is not SessionDisposition.NO_AGREEMENT
 
 
 # ── Settle criterion (S12R-04) ────────────────────────────────────────────────
@@ -445,7 +465,7 @@ def derive_settle_result(fields: dict, session_id: str) -> tuple[bool, tuple[str
 
 
 def recompute_disposition(
-    fields: dict, session_id: str, *, raw_digest_ok: bool
+    fields: dict, session_id: str, *, raw_digest_ok: bool, reference_acquired: bool = True
 ) -> tuple[SessionDisposition, tuple[str, ...], tuple[str, ...]]:
     """Derive `(verdict, exclusion_reasons, flags)` from the primitive fields alone.
 
@@ -592,7 +612,15 @@ def recompute_disposition(
     if fields.get("retry_status") == RetryStatus.SUPERSEDED.value:
         reasons.append("superseded_by_retry")
 
-    verdict = SessionDisposition.EXCLUDED if reasons else SessionDisposition.ADMITTED
+    # §6 is a hierarchy, and exclusion outranks no-agreement: a session excluded for a
+    # protocol abort or corrupt raw is not scored at all, so whether it also had a reference
+    # never arises. Only a session that is otherwise admissible can be item 6.
+    if reasons:
+        verdict = SessionDisposition.EXCLUDED
+    elif not reference_acquired:
+        verdict = SessionDisposition.NO_AGREEMENT
+    else:
+        verdict = SessionDisposition.ADMITTED
     return verdict, tuple(reasons), tuple(flags)
 
 
@@ -783,7 +811,9 @@ def _validate_rate_schedule(
 
 
 def parse_session(
-    fields: dict, mode: Mode, *, raw_digest_ok: bool | None = None
+    fields: dict, mode: Mode, *,
+    raw_digest_ok: bool | None = None,
+    reference_acquired: bool = True,
 ) -> SessionManifest:
     """Validate one session's fields and return the manifest record.
 
@@ -911,12 +941,17 @@ def parse_session(
         _finite_number(fields, "attempt_utc", session_id)
     elif mode is Mode.SCORING:
         for key in ("raw_path", "frame_validity_map_path", "capture_config_path",
-                    "masimo_path", "capture_git_commit", "subject_id",
-                    "settle_evidence_path"):
+                    "capture_git_commit", "subject_id", "settle_evidence_path",
+                    "reference_expected_path", "reference_acquisition_path"):
             _non_empty_str(fields, key, session_id)
         for key in ("raw_sha256", "frame_validity_map_sha256", "capture_config_sha256",
-                    "masimo_sha256", "settle_evidence_sha256"):
+                    "settle_evidence_sha256", "reference_acquisition_sha256"):
             _sha256(fields, key, session_id)
+        # The Masimo binding is conditional (S12R-06): absent means no-agreement, but a
+        # HALF-bound reference is neither acquired nor absent — it is a broken manifest.
+        if _reference_is_bound(fields):
+            _non_empty_str(fields, "masimo_path", session_id)
+            _sha256(fields, "masimo_sha256", session_id)
 
     # Plan §4 Disposition binds retry/replacement status **and reason** (S12R-09). A reason
     # is only meaningful once the status is not `original`, so it is conditionally required
@@ -953,7 +988,8 @@ def parse_session(
                 "not an optional caller convention (S12R-07 R2)."
             )
         recomputed, reasons, flags = recompute_disposition(
-            fields, session_id, raw_digest_ok=raw_digest_ok
+            fields, session_id,
+            raw_digest_ok=raw_digest_ok, reference_acquired=reference_acquired,
         )
         if recomputed is not disposition:
             raise ManifestError(
@@ -1001,6 +1037,9 @@ def parse_session(
         capture_git_commit=fields.get("capture_git_commit"),
         masimo_path=fields.get("masimo_path"),
         masimo_sha256=fields.get("masimo_sha256"),
+        reference_expected_path=fields.get("reference_expected_path"),
+        reference_acquisition_path=fields.get("reference_acquisition_path"),
+        reference_acquisition_sha256=fields.get("reference_acquisition_sha256"),
         commanded_rate_schedule=schedule,
         intended_duration_s=fields.get("intended_duration_s"),
         actual_duration_s=fields.get("actual_duration_s"),
@@ -1073,12 +1112,18 @@ def verify_bound_files(fields: dict, session_id: str, root: Path) -> bool:
     raw_digest_ok = require_digest("raw_path", "raw_sha256", "the raw capture")
 
     # Everything else: a mismatch is a PROVENANCE FAILURE.
-    for key_path, key_hash, what in (
+    checks = [
         ("capture_config_path", "capture_config_sha256", "the capture config"),
-        ("masimo_path", "masimo_sha256", "the Masimo reference"),
         ("settle_evidence_path", "settle_evidence_sha256", "the settle evidence"),
         ("frame_validity_map_path", "frame_validity_map_sha256", "the frame validity map"),
-    ):
+        ("reference_acquisition_path", "reference_acquisition_sha256",
+         "the reference acquisition record"),
+    ]
+    reference_acquired = _reference_is_bound(fields)
+    if reference_acquired:
+        checks.append(("masimo_path", "masimo_sha256", "the Masimo reference"))
+
+    for key_path, key_hash, what in checks:
         if not require_digest(key_path, key_hash, what):
             raise ManifestError(
                 f"session {session_id!r}: {what} at {fields[key_path]!r} does not match its "
@@ -1087,8 +1132,41 @@ def verify_bound_files(fields: dict, session_id: str, root: Path) -> bool:
                 "counting it as one would report a cause that never happened."
             )
 
+    if not reference_acquired:
+        # §6 item 6 — but only if the absence is DERIVED. The bound acquisition record above
+        # has already been verified; what remains is to confirm no reference is actually
+        # sitting at the expected path. If one is, the manifest is simply not binding it,
+        # which is a provenance defect and emphatically not a no-agreement session.
+        expected = resolve("reference_expected_path")
+        if expected.is_file():
+            raise ManifestError(
+                f"session {session_id!r}: no Masimo reference is bound, but a file exists at "
+                f"reference_expected_path={fields['reference_expected_path']!r}. A "
+                "no-agreement session is one where no reference was acquired (§6 item 6) — "
+                "this one has a reference that the manifest fails to bind. Bind it with a "
+                "path + SHA-256, or explain its presence; M4 will not declare no-agreement "
+                "over a file that is right there."
+            )
+
     _verify_validity_map(fields, session_id, resolve("frame_validity_map_path"))
-    return raw_digest_ok
+    return raw_digest_ok, reference_acquired
+
+
+def _reference_is_bound(fields: dict) -> bool:
+    """Was a Masimo reference acquired? Answered by whether it is BOUND, not by the operator.
+
+    A reference that was acquired was hashed, so it has a digest. That is the whole
+    discriminator, and it is what keeps §6 item 6 objective (S12R-06 R2, S12R-07 R3):
+
+    * bound → the reference existed at capture time. If it is missing now it has been
+      **LOST**, which is a provenance failure — never no-agreement.
+    * not bound → nothing was ever acquired to hash, and `verify_bound_files` additionally
+      confirms nothing is sitting at the expected path before allowing `NO_AGREEMENT`.
+
+    Declaring `NO_AGREEMENT` while omitting the fields would have let the operator supply
+    both the fact and the verdict — the `checksum_ok` defect one level out.
+    """
+    return bool(fields.get("masimo_path")) or bool(fields.get("masimo_sha256"))
 
 
 def _verify_validity_map(fields: dict, session_id: str, path: Path) -> None:
@@ -1173,14 +1251,18 @@ def load_manifest(
 
     parsed = []
     for s in sessions:
-        digest_ok = None
+        digest_ok, reference_acquired = None, True
         if mode is Mode.SCORING and isinstance(s, dict) and s.get("record_kind") != (
             RecordKind.PRE_CAPTURE_ATTEMPT.value
         ):
             # A pre-capture attempt binds no capture artifacts; its settle evidence is
             # verified inside `parse_session`'s own contract.
-            digest_ok = verify_bound_files(s, s.get("session_id", "<unnamed>"), base)
-        parsed.append(parse_session(s, mode, raw_digest_ok=digest_ok))
+            digest_ok, reference_acquired = verify_bound_files(
+                s, s.get("session_id", "<unnamed>"), base
+            )
+        parsed.append(parse_session(
+            s, mode, raw_digest_ok=digest_ok, reference_acquired=reference_acquired
+        ))
 
     seen: set[str] = set()
     for s in parsed:
