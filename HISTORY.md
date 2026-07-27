@@ -7176,3 +7176,81 @@ is closed without checking. If round 8 lands `NO MORE COMMENTS` with every debat
 stop touching the diagnostic and hand the evidence to the user for the go/no-go decision on the
 5-bin relock tracker (HANDOFF.md §3.1) — that decision is not part of this review loop.
 
+## 2026-07-28 - Bin-drift diagnostic round 8: a real data-changing classifier bug, found and fixed
+
+**Set out to do:** process round 8 of the bin-drift diagnostic's post-implementation cross-review
+— 3 findings: `BDR-02 R3` (Blocking — a real bug in round 7's own fix), `BDR-23 R3` and `BDR-24`
+(Should-fix).
+
+**Worked (with evidence):** `BDR-02 R3` was the most consequential finding of the whole review
+loop so far — it claimed round 7's own `classify_window_outcome` fix was itself wrong on real
+data. Before touching any code, read `src/vitals.py:estimate_rate_from_phase` directly (not from
+memory) and confirmed: the no-ECA early-return branch (line 523,
+`if f_r_hz is None or f_r_is_outlier:`) that produces all-not-run rejection codes fires for BOTH
+`f_r_hz=None` AND a finite value outside the physiological gate `[0.15, 0.60]` Hz
+(`_GATE_LO_HZ`/`_GATE_HI_HZ`, lines 507-509) — round 7's classifier required non-finite `f_r_hz`
+in addition to all-not-run codes, which is not the actual producer contract. Loaded the real
+approved replay NPZs directly and reproduced Codex's cited numbers byte-for-byte: massimo1 has 22
+all-not-run windows (16 non-finite + 6 finite-outlier at indices 12/13/27/28/32/33,
+`f_r_hz` in [0.1168, 0.1403]), sweep has 15 (14 non-finite + 1 finite-outlier at index 143,
+`f_r_hz=0.1189`) — round 7's diagnostic was reporting massimo1 as `gate_not_run=16`/
+`other_rejected=26` and sweep as `gate_not_run=14`, both wrong. Fixed all three:
+- **BDR-02 R3** — `gate_not_run` is now decided from all-not-run rejection codes ALONE,
+  independent of `f_r_hz`'s finiteness. Extended the fail-closed checks: an accepted rank paired
+  with a finite-but-out-of-gate `f_r_hz` now also raises (previously only non-finite was
+  checked), and `accepted_rank=-1` paired with any "passed" (0) code now raises too (verified
+  structurally impossible in strict_v1: a passed code is only ever assigned together with the
+  corresponding non-negative rank, `src/vitals.py:903,941-943`). Nine new/updated tests, including
+  the finite-outlier `gate_not_run` case using the real massimo1 value `0.1168`, and the BDR-02 R2
+  end-to-end integration test extended to a fourth window covering this case through the real
+  `run_session` pipeline.
+- **BDR-23 R3** — `n_blocks_used` (added round 7) returned the requested/configured centroid
+  support block count, not the count actually applied when fewer blocks were available (or zero
+  for an empty series, where it still said the requested value). Fixed to return
+  `min(n_window_blocks, n_blocks)`.
+- **BDR-24** — exact-shape validation (round 6/7) still permitted lossy numeric coercion: a
+  fractional `frame_idx`/`accepted_candidate_rank`/`candidate_rejection_codes` array passed shape
+  validation, then was silently truncated by a later cast (`int(599.9)` -> `599`) instead of
+  failing closed. Added integer-valued + finite + non-boolean checks for those three arrays
+  (never `f_r_hz`, a genuine float), plus a rejection-code domain check against
+  `{-1, 0, ..., 7}` (`src/vitals.py`'s documented contract). Confirmed the real NPZ arrays are
+  already `int32` and integer-valued, so this changes no valid result, only what a
+  malformed/replaced NPZ would do.
+
+9 new tests added (92 -> 101 for the diagnostic; full suite 1616 baseline + 101 = 1717 passed, 1
+skipped, matching exactly). Committed at `fedcf4e`. Re-ran on all 4 real captures from that clean
+commit (`results/diagnose/bin_drift/20260727T233529Z/`) and confirmed the corrected counts exactly:
+massimo1 now reports `gate_not_run=22, other_rejected=20, covered=9` (was `16/26/9`), sweep now
+reports `gate_not_run=15` (was `14`) — an exact match to the values independently verified against
+the raw NPZs before the fix was written. `baseline_argmax_bin`/`locked_bin`/`episode_count_at_grid`/
+`centroid_drift_at_grid` are unchanged from round 7 (this round did not touch the drift
+measurement itself). `centroid_drift.n_blocks_used=10` for massimo1 (150 total blocks, so
+`min(10,150)=10` — none of the 4 real captures are short enough for the BDR-23 R3 fix to change a
+displayed value; all reported values were already coincidentally correct, as the finding noted).
+All three round-8 comments moved into `DEBATE COMMENTS` with responses; `COMMENTS OF CODEX` reset
+to await round 9.
+
+**Failed / did not work, and why:** nothing failed. Deliberately did NOT add a permanent pytest
+test hardcoding the massimo1=22/sweep=15 counts against the real files under
+`results/live_demo/`, since that directory is gitignored (not committed) — such a test would fail
+in any other checkout or CI environment. Verified the counts directly via a one-off script and via
+the actual diagnostic re-run's `window_audit.csv` output instead; recorded here as the evidence
+trail.
+
+**Retired / no longer used:** the round-7 evidence numbers for massimo1's `duration_grid_by_outcome`
+full-exposure stratum (`other_rejected 26/26`, `gate_not_run 11/13`) are superseded by the
+corrected `other_rejected 20/20`, `gate_not_run 17/19` — the round-7 numbers were computed with the
+now-fixed classifier bug and must not be cited; `covered 2/2` is unchanged (the classifier bug
+never affected the `covered` class). The qualitative conclusion (drift does not cleanly separate
+`covered` from `gate_not_run`; none of the three classes reach a 5 s excursion) still holds under
+the corrected numbers.
+
+**Next:** check `plans/bin_drift_diagnostic_cross_review.md`'s `COMMENTS OF CODEX` for round 9
+before doing anything else with the diagnostic — this loop has now reopened after implementation
+five times running (rounds 4, 5, 6, 7, 8), and round 8 in particular found a real bug in a
+*previous round's own fix* (not just a gap in the original implementation), so treat every
+still-open area (the classifier, the NPZ validators, provenance) as suspect until Codex confirms
+otherwise, not just newly-touched code. If round 9 lands `NO MORE COMMENTS` with every debate item
+resolved, stop touching the diagnostic and hand the evidence to the user for the go/no-go decision
+on the 5-bin relock tracker (HANDOFF.md §3.1) — that decision is not part of this review loop.
+
