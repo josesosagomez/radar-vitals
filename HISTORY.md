@@ -7104,3 +7104,75 @@ closed without checking. If round 7 lands `NO MORE COMMENTS` with every debate i
 touching the diagnostic and hand the evidence to the user for the go/no-go decision on the 5-bin
 relock tracker (HANDOFF.md §3.1) — that decision is not part of this review loop.
 
+## 2026-07-28 - Bin-drift diagnostic round 7: fail-closed outcome classifier, exact NPZ shapes,
+raw path, centroid-span validation
+
+**Set out to do:** process round 7 of the bin-drift diagnostic's post-implementation cross-review
+— 4 findings: `BDR-02 R2` (Blocking, reopened) plus `BDR-19 R3`, `BDR-22 R2`, `BDR-23 R2`
+(Should-fix, all reopened/follow-up items on rounds 2/6 fixes).
+
+**Worked (with evidence):** verified all four findings directly against the shipped code before
+accepting any of them — every one held up. Before fixing BDR-02 R2, spawned a research pass over
+`src/vitals.py`/`src/window_pipeline.py`/`scripts/live_demo.py` to pin down the exact producer
+semantics: `AHET_MAX_CANDIDATES=3` (`src/vitals.py:27`), `accepted_candidate_rank` domain is
+`{-1,0,1,2}`, and under the `strict_v1` AHET gate mode production/replay runs actually use, an
+accepted window (`rank>=0`) can **never** legitimately pair with a non-finite `f_r_hz` (the
+no-ECA early-return that yields non-finite `f_r_hz` always hardcodes `rank=-1`) or with all-`-1`
+rejection codes (an executed gate always codes the accepted slot `0`, "passed"). Fixed all four:
+- **BDR-02 R2** — `classify_window_outcome` accepted `(rank=0, codes=[-1,-1,-1], f_r_hz=NaN)` as
+  `"covered"` unconditionally, and accepted an out-of-domain rank like 5 with no check;
+  `WindowRow`/`window_audit.csv` also dropped `accepted_candidate_rank` entirely, so `covered`'s
+  own deciding input couldn't be audited from the artifact. Added the field to both; the
+  classifier now raises `ValueError` for an out-of-domain rank, an accepted rank with non-finite
+  `f_r_hz`, an accepted rank with all-not-run codes, or an accepted rank whose own slot isn't
+  coded "passed". Ten new tests, including an end-to-end integration test that runs three real
+  windows (one per outcome class) through the actual `run_session` pipeline, then re-reads the
+  WRITTEN `window_audit.csv` and recomputes each row's `outcome_class` from that row's own
+  persisted raw fields via `classify_window_outcome` directly.
+- **BDR-19 R3** — the round-6 NPZ validator checked only `len(arr) == len(frame_idx)` (row
+  count), so a `(n,1)`-shaped `accepted_candidate_rank`/`f_r_hz` or a `(n,2)`-shaped
+  `candidate_rejection_codes` all passed unchanged (reproduced directly). Now checks each array's
+  **exact** `.shape` against `(n,)` or `(n, AHET_MAX_CANDIDATES)` before any other check.
+- **BDR-22 R2** — round 6's response explicitly declined to add `raw_path` to session summaries,
+  arguing `session_id` was sufficient; direct inspection of all four real summaries confirmed
+  neither `raw_path` nor `adc_stream_path` existed, only `raw_sha256`. Conceded the round-6
+  argument was wrong given the plan's own "path + SHA-256 for every input" contract — added
+  `raw_path` beside `raw_sha256`.
+- **BDR-23 R2** — round 6's `centroid.summary_span_s` config value had no positive-block
+  validation (`summary_span_s=0` produces the Python/NumPy "negative-zero slice selects
+  everything" footgun on one side and an empty/NaN slice on the other, neither a rejection nor a
+  genuine zero-span result), and `summary.json` still hardcoded `trailing_10s_median`/
+  `first_post_calibration_10s_median` regardless of the configured span. Added load-time
+  finite/positive validation plus a runtime check that the span resolves to at least one complete
+  block; renamed the serialized keys to neutral `trailing_median`/`leading_median` and added
+  explicit `summary_span_s`/`n_blocks_used` fields recording what was actually configured/used.
+
+23 new tests added (79 -> 92 for the diagnostic; full suite 1616 baseline + 92 = 1708 passed, 1
+skipped, matching exactly). Committed at `8bcfbbd`. Re-ran on all 4 real captures from that clean
+commit (`results/diagnose/bin_drift/20260727T230616Z/`) — the run completed without any of the
+new fail-closed checks tripping, confirming the real production NPZs were already internally
+consistent (exactly as Codex's finding said); every top-level statistic
+(`baseline_argmax_bin`/`locked_bin`/`episode_count_at_grid`/`centroid_drift_at_grid`) is
+numerically identical to the round-6 run. Spot-checked massimo1's real output directly:
+`raw_path` present and correct, `centroid_drift` uses the new neutral keys
+(`summary_span_s: 10.0, n_blocks_used: 10, trailing_median: ..., leading_median: ...`),
+`window_audit.csv` has the new `accepted_candidate_rank` column, and outcome counts
+(`covered=9, gate_not_run=16, other_rejected=26`) match prior evidence exactly. All four
+round-7 comments moved into `DEBATE COMMENTS` with responses; `COMMENTS OF CODEX` reset to await
+round 8.
+
+**Failed / did not work, and why:** nothing failed. No design decisions were escalated this round.
+
+**Retired / no longer used:** `summary.json`'s `centroid_drift.trailing_10s_median` and
+`.first_post_calibration_10s_median` keys are retired, replaced by
+`trailing_median`/`leading_median` plus `summary_span_s`/`n_blocks_used` (BDR-23 R2) — any script
+reading the old key names against a new run's `summary.json` will need updating (none exist yet;
+the diagnostic's own outputs are the only consumer so far).
+
+**Next:** check `plans/bin_drift_diagnostic_cross_review.md`'s `COMMENTS OF CODEX` for round 8
+before doing anything else with the diagnostic — this loop has now reopened after implementation
+four times running (rounds 4, 5, 6, 7), each time finding real code defects, so do not assume it
+is closed without checking. If round 8 lands `NO MORE COMMENTS` with every debate item resolved,
+stop touching the diagnostic and hand the evidence to the user for the go/no-go decision on the
+5-bin relock tracker (HANDOFF.md §3.1) — that decision is not part of this review loop.
+
