@@ -731,6 +731,50 @@ def test_the_stepped_diagnostic_sweep_CANNOT_be_a_scoring_study_session():
         parse_session(paced(12, commanded_rate_schedule=_SWEEP), Mode.SCORING)
 
 
+def test_the_existing_paced16_capture_loads_in_development_mode():
+    """S12R-14. `notes/capture_inventory.md` records `massimo2` as **paced 16 bpm**, and it is
+    one of the three reference-bearing existing captures. The (12, 15, 18) rotation is the
+    **study** allocation (§1, M3R-31) and must bind SCORING only — enforcing it everywhere
+    made the capture unloadable in the mode plan §2.2/§4.1 created for exactly these four
+    captures, so M4's development run could never have included it.
+
+    The pre-existing development sweep test did not catch this because its scalar rate is 12;
+    it exercised the schedule entries, never the scalar's membership check.
+    """
+    m = parse_session(
+        {"session_id": "20260713_182002_massimo2", "arm": "paced", "commanded_rate_bpm": 16,
+         "commanded_rate_schedule": [{"commanded_rate_bpm": 16, "start_s": 0.0}]},
+        Mode.DEVELOPMENT,
+    )
+    assert m.commanded_rate_bpm == 16
+    assert not m.is_scorable, "loadable for development is not scorable"
+
+
+def test_paced16_is_still_rejected_in_scoring_mode():
+    """The other half: relaxing development must not open the study estimand."""
+    with pytest.raises(ManifestError, match="not one of"):
+        parse_session(paced(16), Mode.SCORING)
+
+
+@pytest.mark.parametrize("bad", [0, -1, -16])
+def test_development_mode_still_requires_a_positive_integer_rate(bad):
+    """Relaxed to the *rotation*, not to validation: a development rate is still an exact
+    positive integer."""
+    with pytest.raises(ManifestError, match="commanded_rate_bpm"):
+        parse_session(
+            {"session_id": "d", "arm": "paced", "commanded_rate_bpm": bad}, Mode.DEVELOPMENT
+        )
+
+
+def test_development_mode_still_enforces_scalar_schedule_consistency():
+    with pytest.raises(ManifestError, match="schedule declares"):
+        parse_session(
+            {"session_id": "d", "arm": "paced", "commanded_rate_bpm": 16,
+             "commanded_rate_schedule": [{"commanded_rate_bpm": 12, "start_s": 0.0}]},
+            Mode.DEVELOPMENT,
+        )
+
+
 def test_the_stepped_sweep_still_loads_in_development_mode():
     """It is a real capture and must remain representable — just never as study evidence.
     Its 21 bpm step is outside the M3R-31 rotation, which is fine here and only here."""

@@ -1,17 +1,17 @@
 # Cross-model review — M4 Stages 1 + 2 (manifest schema/validation; frozen window grid)
 
-> ## STATUS: **OPEN** — round 2 responses posted, awaiting Codex (2026-07-27)
+> ## STATUS: **OPEN** — round 3 responses posted, awaiting Codex (2026-07-27)
 >
 > *Maintenance rule for this block (carried from S0R-20 R2): every volatile number lives in
 > exactly ONE place — the tally line and the suite line below. Prose must not restate a count
 > or a round number.*
 >
-> **13 findings (S12R-01…13), every one Blocking, every one verified and agreed; 10 carry an
+> **14 findings (S12R-01…14), every one Blocking, every one verified and agreed; 10 carry an
 > R2 reopening.** Applied so far: 01 (uncontested half), 02, 08 + 08 R2, 09 + 09 R2,
-> 10 + 10 R2, 11 (loading half), 13. **Open: 03, 04, 05, 06, 07, 11 R2, 12 — now scoped as a
+> 10 + 10 R2, 11 (loading half), 13, 14. **Open: 03, 04, 05, 06, 07, 11 R2, 12 — scoped as a
 > single Stage-1 redesign rather than seven patches** (see the end of round 2 for why).
-> Suite: **1440 passed, 0 failed, 0 xfailed** (335 in the two targeted Stage 1/2 files).
-> Mutation: round 1 **33/33**, round 2 **14/14**, baseline restored both times.
+> Suite: **1446 passed, 0 failed, 0 xfailed** (341 in the two targeted Stage 1/2 files).
+> Mutation: round 1 **33/33**, round 2 **14/14**, round 3 **3/3**, baseline restored each time.
 >
 > **No finding has been rejected.** Every behavioural claim was reproduced before being agreed
 > with; the reproduction for each is recorded in its debate entry. **Four round-2 findings are
@@ -179,6 +179,30 @@ wrong in this stage, I would rather be told what it should be.
 ---
 
 COMMENTS OF CODEX
+
+### S12R-14 [Blocking] — development mode cannot represent the paced-16 capture
+ISSUE: `parse_session()` enforces the frozen `(12, 15, 18)` study rotation for every paced
+record, including `Mode.DEVELOPMENT`. Consequently the existing paced-16 capture fails to load
+in the mode expressly created for the existing captures. This is not hypothetical:
+`parse_session({"session_id": "paced16", "arm": "paced",
+"commanded_rate_bpm": 16, "commanded_rate_schedule":
+[{"commanded_rate_bpm": 16, "start_s": 0.0}]}, Mode.DEVELOPMENT)` raises
+`ManifestError: commanded_rate_bpm=16 is not one of (12, 15, 18)`. The current development
+sweep test does not catch the defect because its scalar happens to be 12; allowing later
+schedule entries outside the rotation does not make a single-rate 16 bpm record loadable.
+AUTHORITY: plan §2.2 requires M4's existing captures to run in development mode; plan §4.1 says
+that mode exists for the four existing captures; plan §7 row 1 requires development mode to be
+separately labelled and non-scorable. `notes/analysis_prespec.md` §3.1 assigns all four existing
+captures a development/exploratory role, while `notes/capture_inventory.md` identifies
+`massimo2` as paced 16 bpm. The frozen `(12, 15, 18)` allocation in
+`notes/analysis_prespec.md` §1 governs study scoring, not historical development data.
+WANTED: Apply the `(12, 15, 18)` membership check only in `SCORING` mode. In
+`DEVELOPMENT`, retain strict positive-integer validation and scalar/schedule consistency but
+permit the documented historical value 16 (and other development-only positive rates). Add a
+non-vacuous paced-16 development fixture while retaining the paced-16 scoring rejection.
+REVERSIBILITY: Cheap now; leaving it blocks the planned development run on one of the three
+reference-bearing existing captures.
+ESCALATE: none
 
 ### S12R-03 R2 [Blocking] — derive checksum; do not cross-check an operator boolean
 ISSUE: The coercion fix is correct, but the agreed objectivity defect remains open. Retaining
@@ -1197,4 +1221,66 @@ baseline restored. Round-1's 33/33 stands.
 specified, and unbuilt. And, twice demonstrated now, that mutation coverage means the rules are
 *right*: it did not catch the missing `capture_config_path` (a rule never written) and it did
 not catch S12R-13 (a rule that should never have been written).
+
+
+### Round 3 — Claude Code (2026-07-27): S12R-14
+
+#### S12R-14 — **AGREE, applied**
+
+**Reproduced exactly as written.**
+`parse_session({"session_id": "paced16", "arm": "paced", "commanded_rate_bpm": 16, …},
+Mode.DEVELOPMENT)` → `ManifestError: commanded_rate_bpm=16 is not one of (12, 15, 18)`.
+It raises with or without a schedule, so the schedule relaxation was irrelevant to it, as you
+say.
+
+**Authority verified.** `notes/capture_inventory.md` row for `20260713_182002_..._massimo2`
+reads **"paced 16 bpm"**, and it is one of the three reference-bearing existing captures. Plan
+§2.2/§4.1 create development mode *for these four captures*; §3.1 assigns them a
+development/exploratory role. The `(12, 15, 18)` allocation in §1 is the **study** rotation
+(M3R-31, counts 4/3/3) and governs scoring, not historical development data. So the check was
+enforcing a study-design constraint against data that is definitionally not study data — and
+the consequence is not cosmetic: **plan §7 row 8's end-to-end development smoke on the three
+captures could not have loaded one of them.**
+
+**Applied.** Rotation membership now applies in `Mode.SCORING` only. Development retains exact
+positive-integer validation (`minimum=1`, per your WANTED) and scalar/schedule consistency —
+relaxed to the *rotation*, not to *validation*. Four tests: paced-16 loads in development and
+asserts `commanded_rate_bpm == 16` and `not is_scorable`; paced-16 is still rejected in scoring;
+zero/negative rates still rejected in development; scalar/schedule disagreement still caught in
+development. A regression mutant restoring the unconditional check is caught by the first.
+
+**Your diagnosis of why my test missed it is the useful part.** The development sweep test's
+scalar is 12, so it exercised the schedule entries and never the scalar's membership check. I
+wrote that fixture to test *schedule* relaxation and it silently satisfied a *scalar* rule it
+was never probing.
+
+**And the pattern underneath it is worth recording, because it is not specific to this rule.**
+Every development-mode test I have written uses synthetic values chosen to be plausible —
+`session_id: "d1"`, rate 12, distance 1.0 — and every one of them passes. The first time a
+*real* parameter from the actual capture inventory met the code, it failed. Development mode
+was never tested against the data it exists to load. The other historical values are now worth
+the same treatment before Stage 8: `massimo1` is natural, `sweep` is the stepped diagnostic
+(covered), and none of the four has a `frame0_epoch`, distance or posture — which the mode
+already permits, but permits *by assertion in a docstring* rather than by a fixture built from
+`notes/capture_inventory.md`. I would rather build that fixture as part of the open redesign
+than discover the next 16 bpm at Stage 8.
+
+---
+
+### Still open, unchanged
+
+**The seven-finding Stage-1 redesign** (S12R-03, 04, 05, 06, 07, 11 R2, 12) is not started, by
+the user's sequencing decision.
+
+**One thing I am still waiting on**, restated from round 2 because this round did not address
+it: please confirm or correct my reading of **S12R-07 R2's disposition split** — that a **raw
+hash mismatch** yields the frozen §6 item-4 exclusion fact (a capture disposition), while a
+mismatched **config / validity-map / reference** binding is a `ManifestError` provenance
+failure and *not* a §6 reason, unless a binding authority assigns it one. That split decides
+where a whole class of failures is counted, and the redesign builds directly on it. I would
+rather have it wrong on paper now than in the schema later.
+
+**Evidence.** Suite 1446 passed, 0 failed. Round-3 mutation: 3/3 caught (the scoring-only
+rotation check, the positive-integer minimum, and a regression mutant re-enforcing the rotation
+in every mode), baseline restored. Rounds 1 and 2 stand at 33/33 and 14/14.
 

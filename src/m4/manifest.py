@@ -624,11 +624,18 @@ def parse_session(fields: dict, mode: Mode) -> SessionManifest:
             )
         # Exact int (S12R-10): `int(12.9)` silently became 12, turning a producer bug into a
         # valid frozen rate and mis-filing the session in the M3R-31 rate allocation.
-        rate = _exact_int(fields, "commanded_rate_bpm", session_id)
-        if rate not in PACED_RATES_BPM:
+        rate = _exact_int(fields, "commanded_rate_bpm", session_id, minimum=1)
+        # S12R-14: the (12, 15, 18) rotation is the **study** allocation (§1, M3R-31) and
+        # binds SCORING only. Enforcing it in development mode made the existing paced-16
+        # capture (`massimo2`, `notes/capture_inventory.md`) unloadable in the very mode
+        # plan §2.2/§4.1 created for the four existing captures — so M4 could not have run
+        # on one of the three reference-bearing captures at all.
+        if mode is Mode.SCORING and rate not in PACED_RATES_BPM:
             raise ManifestError(
                 f"session {session_id!r}: commanded_rate_bpm={rate!r} is not one of "
-                f"{PACED_RATES_BPM} (the frozen M3R-31 rotation)."
+                f"{PACED_RATES_BPM} (the frozen M3R-31 rotation). Historical development "
+                "rates such as the existing 16 bpm capture load in DEVELOPMENT mode, which "
+                "is exploratory / apparent / in-sample and never a study estimand."
             )
     elif arm is Arm.NATURAL and rate is not None:
         raise ManifestError(
