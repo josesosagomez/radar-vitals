@@ -998,7 +998,10 @@ def parse_session(
     if kind is RecordKind.PRE_CAPTURE_ATTEMPT:
         for key, group in _REQUIRED_PRE_CAPTURE_FIELDS:
             _require(fields, key, session_id, group)
-        present_but_forbidden = [k for k in _FORBIDDEN_ON_PRE_CAPTURE if fields.get(k) is not None]
+        # By PRESENCE, not non-null (S12R-25): `"raw_path": null` is still the key appearing
+        # on a record whose contract says it is absent, and key presence is what discriminates
+        # a v2 record's shape.
+        present_but_forbidden = [k for k in _FORBIDDEN_ON_PRE_CAPTURE if k in fields]
         if present_but_forbidden:
             raise ManifestError(
                 f"session {session_id!r}: record_kind is 'pre_capture_attempt', but these "
@@ -1101,11 +1104,9 @@ def parse_session(
         for key in ("raw_sha256", "frame_validity_map_sha256", "capture_config_sha256",
                     "settle_evidence_sha256", "reference_acquisition_sha256"):
             _sha256(fields, key, session_id)
-        # The Masimo binding is conditional (S12R-06): absent means no-agreement, but a
-        # HALF-bound reference is neither acquired nor absent — it is a broken manifest.
-        if _reference_is_bound(fields):
-            _non_empty_str(fields, "masimo_path", session_id)
-            _sha256(fields, "masimo_sha256", session_id)
+        # The Masimo binding is conditional (S12R-06). `_reference_is_bound` validates the
+        # binding's shape and raises on a half or empty one (S12R-19).
+        _reference_is_bound(fields, session_id)
 
     # Plan §4 Disposition binds retry/replacement status **and reason** (S12R-09). A reason
     # is only meaningful once the status is not `original`, so it is conditionally required
@@ -1294,8 +1295,8 @@ def verify_bound_files(
         ("reference_acquisition_path", "reference_acquisition_sha256",
          "the reference acquisition record"),
     ]
-    reference_acquired = _reference_is_bound(fields)
-    if reference_acquired:
+    reference_bound = _reference_is_bound(fields, session_id)
+    if reference_bound:
         checks.append(("masimo_path", "masimo_sha256", "the Masimo reference"))
 
     for key_path, key_hash, what in checks:
@@ -1307,41 +1308,111 @@ def verify_bound_files(
                 "counting it as one would report a cause that never happened."
             )
 
-    if not reference_acquired:
-        # §6 item 6 — but only if the absence is DERIVED. The bound acquisition record above
-        # has already been verified; what remains is to confirm no reference is actually
-        # sitting at the expected path. If one is, the manifest is simply not binding it,
-        # which is a provenance defect and emphatically not a no-agreement session.
-        expected = resolve("reference_expected_path")
+    # The acquisition record's digest matched above, so its CONTENT is now usable evidence.
+    _non_empty_str(fields, "reference_expected_path", session_id)
+    record_says_acquired = _read_acquisition_record(
+        resolve("reference_acquisition_path"), session_id, fields["reference_expected_path"]
+    )
+    expected = resolve("reference_expected_path")
+
+    if record_says_acquired and not reference_bound:
+        raise ManifestError(
+            f"session {session_id!r}: the acquisition record says a reference WAS acquired, "
+            "but the manifest binds none. An acquired reference that is no longer bound has "
+            "been LOST — a provenance failure — and must never be recorded as a §6 item-6 "
+            "no-agreement session (S12R-07 R3)."
+        )
+    if not record_says_acquired:
+        if reference_bound:
+            raise ManifestError(
+                f"session {session_id!r}: the acquisition record says NO reference was "
+                "acquired, yet the manifest binds one. The record and the binding must agree."
+            )
         if expected.is_file():
             raise ManifestError(
-                f"session {session_id!r}: no Masimo reference is bound, but a file exists at "
-                f"reference_expected_path={fields['reference_expected_path']!r}. A "
-                "no-agreement session is one where no reference was acquired (§6 item 6) — "
-                "this one has a reference that the manifest fails to bind. Bind it with a "
-                "path + SHA-256, or explain its presence; M4 will not declare no-agreement "
-                "over a file that is right there."
+                f"session {session_id!r}: the acquisition record says no reference was "
+                f"acquired, but a file exists at reference_expected_path="
+                f"{fields['reference_expected_path']!r}. M4 will not declare no-agreement "
+                "over a file that is right there — bind it, or explain its presence."
             )
+
+    reference_acquired = record_says_acquired
 
     _verify_validity_map(fields, session_id, resolve("frame_validity_map_path"))
     return _VerifiedBindings(_VERIFY_TOKEN, raw_digest_ok, reference_acquired)
 
 
-def _reference_is_bound(fields: dict) -> bool:
-    """Was a Masimo reference acquired? Answered by whether it is BOUND, not by the operator.
+#: The acquisition record's canonical schema tag (S12R-19). Versioned, because this document
+#: is what makes §6 item 6 derivable — a change to its meaning must not be silent.
+ACQUISITION_SCHEMA = "reference_acquisition_v1"
 
-    A reference that was acquired was hashed, so it has a digest. That is the whole
-    discriminator, and it is what keeps §6 item 6 objective (S12R-06 R2, S12R-07 R3):
 
-    * bound → the reference existed at capture time. If it is missing now it has been
-      **LOST**, which is a provenance failure — never no-agreement.
-    * not bound → nothing was ever acquired to hash, and `verify_bound_files` additionally
-      confirms nothing is sitting at the expected path before allowing `NO_AGREEMENT`.
+def _reference_is_bound(fields: dict, session_id: str) -> bool:
+    """Is a Masimo reference BOUND? Raises on a half or empty binding (S12R-19).
 
-    Declaring `NO_AGREEMENT` while omitting the fields would have let the operator supply
-    both the fact and the verdict — the `checksum_ok` defect one level out.
+    The first version used truthiness (`bool(fields.get("masimo_path"))`), so
+    `masimo_path=""` counted as *wholly absent* and could derive `NO_AGREEMENT` — an empty
+    string is a malformed binding, not evidence that nothing was acquired.
     """
-    return bool(fields.get("masimo_path")) or bool(fields.get("masimo_sha256"))
+    has_path = fields.get("masimo_path") is not None
+    has_hash = fields.get("masimo_sha256") is not None
+    if has_path != has_hash:
+        raise ManifestError(
+            f"session {session_id!r}: the Masimo reference is HALF bound "
+            f"(masimo_path={'set' if has_path else 'absent'}, "
+            f"masimo_sha256={'set' if has_hash else 'absent'}). That is neither an acquired "
+            "reference nor an absent one — §6 item 6 needs the difference to be unambiguous."
+        )
+    if not has_path:
+        return False
+    _non_empty_str(fields, "masimo_path", session_id)
+    _sha256(fields, "masimo_sha256", session_id)
+    return True
+
+
+def _read_acquisition_record(path: Path, session_id: str, expected_path: str) -> bool:
+    """Parse the VERIFIED acquisition record and return whether a reference was acquired.
+
+    **S12R-19 was the hole this closes.** The record was hashed and never read, so arbitrary
+    bytes counted as objective evidence that nothing was acquired — and the project's own
+    fixture proved the inversion, writing `{"acquired": true}` and then deriving
+    `NO_AGREEMENT` from the file's absence. Absence at scoring time cannot distinguish
+    never-acquired from acquired-then-lost, which is precisely the distinction S12R-07 R3
+    required be preserved.
+
+    Only reached once the file's digest matches, so its content is as bound as its bytes.
+    """
+    try:
+        doc = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:                                  # noqa: BLE001 - reported as-is
+        raise ManifestError(
+            f"session {session_id!r}: the reference acquisition record at {path} is not "
+            f"readable JSON ({type(exc).__name__}: {exc})."
+        ) from None
+
+    if not isinstance(doc, dict) or doc.get("schema") != ACQUISITION_SCHEMA:
+        raise ManifestError(
+            f"session {session_id!r}: the reference acquisition record must be a JSON object "
+            f"with schema={ACQUISITION_SCHEMA!r}, got {doc.get('schema') if isinstance(doc, dict) else type(doc).__name__!r}."
+        )
+    acquired = doc.get("acquired")
+    if type(acquired) is not bool:
+        raise ManifestError(
+            f"session {session_id!r}: the acquisition record's 'acquired' must be a JSON "
+            f"boolean, got {acquired!r}."
+        )
+    if doc.get("expected_path") != expected_path:
+        raise ManifestError(
+            f"session {session_id!r}: the acquisition record documents "
+            f"expected_path={doc.get('expected_path')!r} but the manifest binds "
+            f"reference_expected_path={expected_path!r}. They must describe the same file."
+        )
+    if not acquired and not str(doc.get("reason", "")).strip():
+        raise ManifestError(
+            f"session {session_id!r}: the acquisition record says no reference was acquired "
+            "but gives no reason. §6 requires counts AND reasons at every level."
+        )
+    return acquired
 
 
 def _verify_validity_map(fields: dict, session_id: str, path: Path) -> None:

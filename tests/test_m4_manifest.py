@@ -1144,7 +1144,7 @@ def test_an_unknown_record_kind_is_rejected():
 
 # ── S12R-03 / S12R-07: verification happens INSIDE the scoring load path ──────
 
-def materialise(tmp_path, fields=None, *, n_frames=12000, n_invalid=0):
+def materialise(tmp_path, fields=None, *, n_frames=12000, n_invalid=0, acquired=True):
     """Write every bound artifact and rewrite `fields` with the real digests.
 
     Verification is only meaningful against real bytes, so these tests build a genuine
@@ -1166,8 +1166,18 @@ def materialise(tmp_path, fields=None, *, n_frames=12000, n_invalid=0):
     (tmp_path / fields["capture_config_path"]).write_text("window_s: 30\n", encoding="utf-8")
     (tmp_path / fields["masimo_path"]).write_text("Timestamp,Beats / min\n1,72\n", encoding="utf-8")
     (tmp_path / fields["settle_evidence_path"]).write_text("t,pr\n0,72\n", encoding="utf-8")
+    # S12R-19: this record's CONTENT is now evidence, so it must actually say something true.
+    # Its first version wrote `{"acquired": true}` and the no-reference fixture then derived
+    # NO_AGREEMENT anyway — the fixture contradicted itself and the code could not tell.
+    acq = {
+        "schema": "reference_acquisition_v1",
+        "expected_path": fields["reference_expected_path"],
+        "acquired": acquired,
+    }
+    if not acquired:
+        acq["reason"] = "Masimo app failed to export; no file was produced"
     (tmp_path / fields["reference_acquisition_path"]).write_text(
-        '{"acquired": true}\n', encoding="utf-8"
+        json.dumps(acq), encoding="utf-8"
     )
 
     for path_key, hash_key in (
@@ -1300,9 +1310,13 @@ def test_the_validity_map_must_be_a_1d_boolean_array(tmp_path, arr_kind):
 # ── S12R-06: NO_AGREEMENT is DERIVED, never declared ─────────────────────────
 
 def no_reference(tmp_path, **over):
-    """A captured session whose Masimo file was never acquired: nothing bound, and nothing
-    sitting at the expected path either."""
-    fields = materialise(tmp_path, admissible(disposition="no_agreement", **over))
+    """A captured session whose Masimo file was never acquired.
+
+    All three legs of §6 item 6 agree: the acquisition record SAYS not acquired and gives a
+    reason, nothing is bound, and nothing sits at the expected path."""
+    fields = materialise(
+        tmp_path, admissible(disposition="no_agreement", **over), acquired=False
+    )
     fields.pop("masimo_path", None)
     fields.pop("masimo_sha256", None)
     (tmp_path / "data" / "raw" / "S01_natural.csv").unlink()
@@ -1345,7 +1359,7 @@ def test_a_reference_sitting_at_the_expected_path_is_NOT_no_agreement(tmp_path):
     supply both the fact and the verdict — the `checksum_ok` defect one level out."""
     fields = no_reference(tmp_path)
     (tmp_path / fields["reference_expected_path"]).write_text("Timestamp\n1\n", encoding="utf-8")
-    with pytest.raises(ManifestError, match="fails to bind"):
+    with pytest.raises(ManifestError, match="right there"):
         _load(tmp_path, fields)
 
 
@@ -1857,3 +1871,100 @@ def test_the_verified_capability_cannot_be_forged():
 def test_a_verified_record_from_load_manifest_carries_the_flag(tmp_path):
     (s,) = _load(tmp_path, materialise(tmp_path))
     assert s.bindings_verified and s.is_scorable
+
+
+# ── S12R-19: the acquisition record's CONTENT is the evidence ────────────────
+
+def _acq(tmp_path, fields, **over):
+    """Rewrite the acquisition record and re-hash it."""
+    import hashlib
+    doc = {"schema": "reference_acquisition_v1",
+           "expected_path": fields["reference_expected_path"], "acquired": False,
+           "reason": "no export produced"}
+    doc.update(over)
+    p = tmp_path / fields["reference_acquisition_path"]
+    p.write_text(json.dumps(doc), encoding="utf-8")
+    fields["reference_acquisition_sha256"] = hashlib.sha256(p.read_bytes()).hexdigest()
+    return fields
+
+
+def test_an_acquisition_record_claiming_ACQUIRED_cannot_yield_no_agreement(tmp_path):
+    """The inversion the old fixture proved: it wrote `{"acquired": true}`, the Masimo file
+    was then deleted, and NO_AGREEMENT was derived anyway — because the record was hashed and
+    never read. Absence at scoring time cannot tell never-acquired from acquired-then-lost."""
+    fields = _acq(tmp_path, no_reference(tmp_path), acquired=True, reason=None)
+    with pytest.raises(ManifestError, match="has been LOST"):
+        _load(tmp_path, fields)
+
+
+def test_a_record_saying_NOT_acquired_while_a_reference_is_bound_disagrees(tmp_path):
+    fields = _acq(tmp_path, materialise(tmp_path), acquired=False)
+    with pytest.raises(ManifestError, match="record and the binding must agree"):
+        _load(tmp_path, fields)
+
+
+def test_the_acquisition_record_must_name_the_same_expected_path(tmp_path):
+    fields = _acq(tmp_path, no_reference(tmp_path), expected_path="data/raw/something_else.csv")
+    with pytest.raises(ManifestError, match="same file"):
+        _load(tmp_path, fields)
+
+
+def test_a_not_acquired_record_must_give_a_reason(tmp_path):
+    """§6 requires counts AND reasons at every level."""
+    fields = _acq(tmp_path, no_reference(tmp_path), reason="   ")
+    with pytest.raises(ManifestError, match="no reason"):
+        _load(tmp_path, fields)
+
+
+@pytest.mark.parametrize(
+    "over, match",
+    [({"schema": "something_else"}, "schema="),
+     ({"acquired": "false"}, "must be a JSON"),
+     ({"acquired": None}, "must be a JSON")],
+)
+def test_a_malformed_acquisition_record_is_rejected(tmp_path, over, match):
+    fields = _acq(tmp_path, no_reference(tmp_path), **over)
+    with pytest.raises(ManifestError, match=match):
+        _load(tmp_path, fields)
+
+
+def test_acquisition_record_bytes_that_are_not_json_are_rejected(tmp_path):
+    import hashlib
+    fields = no_reference(tmp_path)
+    p = tmp_path / fields["reference_acquisition_path"]
+    p.write_text("not json at all", encoding="utf-8")
+    fields["reference_acquisition_sha256"] = hashlib.sha256(p.read_bytes()).hexdigest()
+    with pytest.raises(ManifestError, match="readable JSON"):
+        _load(tmp_path, fields)
+
+
+@pytest.mark.parametrize("drop, keep", [("masimo_sha256", "masimo_path"),
+                                        ("masimo_path", "masimo_sha256")])
+def test_a_HALF_bound_reference_is_rejected(tmp_path, drop, keep):
+    fields = materialise(tmp_path)
+    fields.pop(drop)
+    with pytest.raises(ManifestError, match="HALF bound"):
+        _load(tmp_path, fields)
+
+
+def test_an_EMPTY_masimo_path_is_malformed_not_absent(tmp_path):
+    """S12R-19: truthiness made `masimo_path=""` count as *wholly absent*, so an empty string
+    could derive NO_AGREEMENT. An empty binding is a broken manifest."""
+    fields = materialise(tmp_path)
+    fields["masimo_path"] = ""
+    with pytest.raises(ManifestError, match="masimo_path"):
+        _load(tmp_path, fields)
+
+
+# ── S12R-25: forbidden pre-capture fields, rejected by PRESENCE ──────────────
+
+@pytest.mark.parametrize(
+    "field", ["raw_path", "frame0_epoch", "n_frames", "masimo_path", "intended_duration_s",
+              "early_stop", "clock_offset_end_s", "capture_git_commit"],
+)
+def test_a_forbidden_pre_capture_field_is_rejected_even_when_null(tmp_path, field):
+    """`fields.get(k) is not None` accepted every capture-only key set to JSON `null`, which
+    contradicts the stated invariant that these are ABSENT rather than optional — and left
+    key presence unable to discriminate a v2 record's shape."""
+    with pytest.raises(ManifestError, match="capture-only fields are present"):
+        parse_session(pre_capture(**{field: None}), Mode.SCORING)
