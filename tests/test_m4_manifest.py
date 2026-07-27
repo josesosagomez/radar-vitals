@@ -53,6 +53,21 @@ _REQUIRED_KEYS = [
 ]
 
 
+
+def _verified(*, raw_digest_ok: bool = True, reference_acquired: bool = True):
+    """Mint the verified-bindings capability for schema tests (S12R-17).
+
+    Schema tests assert the manifest contract, not integrity, so they need a record without
+    hashing real files. This reaches into a module private **deliberately** — that is the
+    point of the token: production code cannot do this without visibly importing
+    `_VERIFY_TOKEN`, whereas the old `raw_digest_ok=True` was an ordinary public argument.
+    Integrity itself is tested against real bytes through `load_manifest`.
+    """
+    from src.m4.manifest import _VERIFY_TOKEN, _VerifiedBindings
+
+    return _VerifiedBindings(_VERIFY_TOKEN, raw_digest_ok, reference_acquired)
+
+
 def admissible(**over) -> dict:
     """A session that M4 recomputes as ADMITTED. Every exclusion test perturbs one field."""
     base = {
@@ -141,7 +156,7 @@ def manifest_doc(*sessions: dict) -> dict:
 # ── The happy path, so the negatives below mean something ─────────────────────
 
 def test_a_complete_admissible_session_parses_in_scoring_mode():
-    m = parse_session(admissible(), Mode.SCORING, raw_digest_ok=True)
+    m = parse_session(admissible(), Mode.SCORING, verified=_verified())
     assert m.mode is Mode.SCORING and m.is_scorable
     assert m.session_id == "S01_natural"
     assert m.arm is Arm.NATURAL
@@ -162,7 +177,7 @@ def test_scoring_mode_rejects_every_missing_required_field(missing):
     fields = admissible()
     del fields[missing]
     with pytest.raises(ManifestError) as exc:
-        parse_session(fields, Mode.SCORING, raw_digest_ok=True)
+        parse_session(fields, Mode.SCORING, verified=_verified())
     assert missing in str(exc.value), "the error must name the missing field"
 
 
@@ -171,7 +186,7 @@ def test_a_present_but_null_required_field_is_also_rejected(nulled):
     """`"distance_m": null` is missing, not supplied."""
     fields = admissible(**{nulled: None})
     with pytest.raises(ManifestError):
-        parse_session(fields, Mode.SCORING, raw_digest_ok=True)
+        parse_session(fields, Mode.SCORING, verified=_verified())
 
 
 #: Plan §4's manifest table, transcribed field by field from the *document* rather than from
@@ -224,7 +239,7 @@ def test_every_section_4_field_is_required_in_scoring_mode(group, field):
     fields = admissible()
     del fields[field]
     with pytest.raises(ManifestError) as exc:
-        parse_session(fields, Mode.SCORING, raw_digest_ok=True)
+        parse_session(fields, Mode.SCORING, verified=_verified())
     assert field in str(exc.value)
 
 
@@ -267,39 +282,39 @@ def test_conditionally_required_section_4_fields_are_enforced_when_applicable():
     required only in the state that gives them meaning, so they are not in the unconditional
     list and need their own coverage."""
     with pytest.raises(ManifestError, match="commanded_rate_bpm is missing"):
-        parse_session(admissible(arm="paced"), Mode.SCORING, raw_digest_ok=True)
+        parse_session(admissible(arm="paced"), Mode.SCORING, verified=_verified())
     with pytest.raises(ManifestError, match="retry_reason"):
-        parse_session(admissible(retry_status="retry"), Mode.SCORING, raw_digest_ok=True)
+        parse_session(admissible(retry_status="retry"), Mode.SCORING, verified=_verified())
 
 
 # ── §4.1 design-field contract, tested AT the equality boundaries ─────────────
 
 @pytest.mark.parametrize("d", [0.8, 1.4, 1.0, 0.80000001, 1.39999999])
 def test_distance_inside_the_inclusive_range_is_accepted(d):
-    assert parse_session(admissible(distance_m=d), Mode.SCORING, raw_digest_ok=True).distance_m == pytest.approx(d)
+    assert parse_session(admissible(distance_m=d), Mode.SCORING, verified=_verified()).distance_m == pytest.approx(d)
 
 
 def test_distance_boundaries_are_inclusive_at_both_ends():
     """§4.1: '0.8 <= distance_m <= 1.4. Inclusive at both ends.' Stage 1 pins the equality
     boundaries: 0.8 and 1.4 accepted, 0.79 and 1.41 rejected."""
-    assert parse_session(admissible(distance_m=DISTANCE_MIN_M), Mode.SCORING, raw_digest_ok=True).distance_m == 0.8
-    assert parse_session(admissible(distance_m=DISTANCE_MAX_M), Mode.SCORING, raw_digest_ok=True).distance_m == 1.4
+    assert parse_session(admissible(distance_m=DISTANCE_MIN_M), Mode.SCORING, verified=_verified()).distance_m == 0.8
+    assert parse_session(admissible(distance_m=DISTANCE_MAX_M), Mode.SCORING, verified=_verified()).distance_m == 1.4
     for outside in (0.79, 1.41):
         with pytest.raises(ManifestError, match="outside the protocol range"):
-            parse_session(admissible(distance_m=outside), Mode.SCORING, raw_digest_ok=True)
+            parse_session(admissible(distance_m=outside), Mode.SCORING, verified=_verified())
 
 
 @pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
 def test_non_finite_distance_is_rejected(bad):
     with pytest.raises(ManifestError, match="not finite"):
-        parse_session(admissible(distance_m=bad), Mode.SCORING, raw_digest_ok=True)
+        parse_session(admissible(distance_m=bad), Mode.SCORING, verified=_verified())
 
 
 def test_distance_in_centimetres_is_rejected_not_silently_converted():
     """The legacy `run_metadata.json` field is `distance_cm`. 100 cm is a plausible-looking
     value that must NOT be read as 100 m — conversion is explicit, never implicit (§4.1)."""
     with pytest.raises(ManifestError, match="outside the protocol range"):
-        parse_session(admissible(distance_m=100), Mode.SCORING, raw_digest_ok=True)
+        parse_session(admissible(distance_m=100), Mode.SCORING, verified=_verified())
 
 
 @pytest.mark.parametrize("bad", ["1.0 m", "1.0", True, False, None, ["1.0"]])
@@ -307,7 +322,7 @@ def test_non_numeric_distance_is_rejected(bad):
     """S12R-10 R2 added `True` and the clean numeric string `"1.0"`: `float(True)` is **1.0**,
     which sits inside the protocol range, so a boolean parsed as a valid 1.0 m distance."""
     with pytest.raises(ManifestError, match="distance_m"):
-        parse_session(admissible(distance_m=bad), Mode.SCORING, raw_digest_ok=True)
+        parse_session(admissible(distance_m=bad), Mode.SCORING, verified=_verified())
 
 
 @pytest.mark.parametrize("bad", ["1785000000.25", True, "not-an-epoch", [1785000000.25]])
@@ -315,14 +330,14 @@ def test_frame0_epoch_must_be_a_number_not_a_string(bad):
     """S12R-10 R2. `float("1785000000.25")` succeeded, so a string origin parsed as valid —
     in the single field every window boundary and reference span is measured from."""
     with pytest.raises(ManifestError, match="frame0_epoch"):
-        parse_session(admissible(frame0_epoch=bad), Mode.SCORING, raw_digest_ok=True)
+        parse_session(admissible(frame0_epoch=bad), Mode.SCORING, verified=_verified())
 
 
 @pytest.mark.parametrize("bad", ["standing", "supine", "Seated", "seated ", "", None])
 def test_posture_must_equal_the_canonical_seated(bad):
     """The estimand fixes posture; a differing session is not a member of this design."""
     with pytest.raises(ManifestError):
-        parse_session(admissible(posture=bad), Mode.SCORING, raw_digest_ok=True)
+        parse_session(admissible(posture=bad), Mode.SCORING, verified=_verified())
     assert CANONICAL_POSTURE == "seated"
 
 
@@ -335,17 +350,17 @@ def test_posture_must_equal_the_canonical_seated(bad):
 )
 def test_unknown_enum_values_are_rejected_and_the_error_lists_the_allowed_set(key, bad):
     with pytest.raises(ManifestError) as exc:
-        parse_session(admissible(**{key: bad}), Mode.SCORING, raw_digest_ok=True)
+        parse_session(admissible(**{key: bad}), Mode.SCORING, verified=_verified())
     assert key in str(exc.value) and "is not one of" in str(exc.value)
 
 
 def test_paced_arm_requires_a_commanded_rate_from_the_frozen_rotation():
     for rate in (12, 15, 18):
-        assert parse_session(paced(rate), Mode.SCORING, raw_digest_ok=True).commanded_rate_bpm == rate
+        assert parse_session(paced(rate), Mode.SCORING, verified=_verified()).commanded_rate_bpm == rate
     with pytest.raises(ManifestError, match="commanded_rate_bpm is missing"):
-        parse_session(admissible(arm="paced"), Mode.SCORING, raw_digest_ok=True)
+        parse_session(admissible(arm="paced"), Mode.SCORING, verified=_verified())
     with pytest.raises(ManifestError, match="not one of"):
-        parse_session(paced(16), Mode.SCORING, raw_digest_ok=True)
+        parse_session(paced(16), Mode.SCORING, verified=_verified())
 
 
 @pytest.mark.parametrize("bad", [12.9, 12.0, "12", True, None])
@@ -353,24 +368,24 @@ def test_commanded_rate_must_be_an_exact_int(bad):
     """S12R-10: `int(12.9)` silently became 12 — a producer bug promoted into a valid frozen
     rate, which would then mis-file the session in the M3R-31 rate allocation (4/3/3)."""
     with pytest.raises(ManifestError, match="commanded_rate_bpm"):
-        parse_session(paced(12, commanded_rate_bpm=bad), Mode.SCORING, raw_digest_ok=True)
+        parse_session(paced(12, commanded_rate_bpm=bad), Mode.SCORING, verified=_verified())
 
 
 def test_natural_arm_must_not_carry_a_commanded_rate():
     with pytest.raises(ManifestError, match="has no commanded rate"):
-        parse_session(admissible(arm="natural", commanded_rate_bpm=12), Mode.SCORING, raw_digest_ok=True)
+        parse_session(admissible(arm="natural", commanded_rate_bpm=12), Mode.SCORING, verified=_verified())
 
 
 def test_frame0_epoch_must_be_finite():
     for bad in (float("nan"), float("inf")):
         with pytest.raises(ManifestError, match="frame0_epoch"):
-            parse_session(admissible(frame0_epoch=bad), Mode.SCORING, raw_digest_ok=True)
+            parse_session(admissible(frame0_epoch=bad), Mode.SCORING, verified=_verified())
 
 
 def test_frame0_epoch_may_be_fractional():
     """It is a synchronised clock reading, not an integer second (§7 requires the
     fractional case to work end to end)."""
-    m = parse_session(admissible(frame0_epoch=1785000000.9375), Mode.SCORING, raw_digest_ok=True)
+    m = parse_session(admissible(frame0_epoch=1785000000.9375), Mode.SCORING, verified=_verified())
     assert m.frame0_epoch == pytest.approx(1785000000.9375)
 
 
@@ -589,7 +604,7 @@ def test_early_stop_contradicting_the_durations_RAISES_and_is_not_an_exclusion_r
     with pytest.raises(ManifestError, match="cannot be both halted early and complete"):
         parse_session(
             admissible(early_stop=True, actual_duration_s=600.0, disposition="excluded"),
-            Mode.SCORING, raw_digest_ok=True,
+            Mode.SCORING, verified=_verified(),
         )
     # An early stop that genuinely fell short is still the ordinary item-3 exclusion.
     verdict, reasons, _ = recompute_disposition(
@@ -650,7 +665,7 @@ def test_multiple_failing_rules_are_all_reported_not_just_the_first():
 
 def test_operator_admitted_but_M4_recomputes_excluded_raises():
     with pytest.raises(ManifestError) as exc:
-        parse_session(admissible(disposition="admitted"), Mode.SCORING, raw_digest_ok=False)
+        parse_session(admissible(disposition="admitted"), Mode.SCORING, verified=_verified(raw_digest_ok=False))
     msg = str(exc.value)
     assert "recomputes" in msg and "stored_checksum_failed" in msg
 
@@ -660,14 +675,14 @@ def test_operator_excluded_but_M4_recomputes_admitted_also_raises():
     is just as much a disagreement — silently accepting it would let a session be dropped
     for an unrecorded reason, which is an unlogged degree of freedom."""
     with pytest.raises(ManifestError) as exc:
-        parse_session(admissible(disposition="excluded"), Mode.SCORING, raw_digest_ok=True)
+        parse_session(admissible(disposition="excluded"), Mode.SCORING, verified=_verified())
     assert "recomputes" in str(exc.value)
 
 
 def test_agreement_on_excluded_is_accepted_and_keeps_the_reasons():
     m = parse_session(
         admissible(disposition="excluded", actual_duration_s=10.0, early_stop=True),
-        Mode.SCORING, raw_digest_ok=True,
+        Mode.SCORING, verified=_verified(),
     )
     assert m.disposition is SessionDisposition.EXCLUDED
     assert "protocol_abort_did_not_reach_intended_duration" in m.disposition_reasons
@@ -705,7 +720,7 @@ def test_development_sessions_cannot_reach_a_scoring_path():
 
 
 def test_require_scoring_mode_passes_for_scoring_sessions():
-    require_scoring_mode([parse_session(admissible(), Mode.SCORING, raw_digest_ok=True)], "HR agreement")
+    require_scoring_mode([parse_session(admissible(), Mode.SCORING, verified=_verified())], "HR agreement")
 
 
 # ── §3.1 role/mode matrix (S12R-11) ───────────────────────────────────────────
@@ -721,14 +736,14 @@ def test_a_never_scored_data_role_cannot_be_parsed_in_scoring_mode(role):
     closed at the role, not the mode.
     """
     with pytest.raises(ManifestError, match="may never produce a"):
-        parse_session(admissible(data_role=role), Mode.SCORING, raw_digest_ok=True)
+        parse_session(admissible(data_role=role), Mode.SCORING, verified=_verified())
 
 
 @pytest.mark.parametrize("role", ["evaluation", "collision"])
 def test_a_scoring_eligible_data_role_LOADS(role):
     """Both load in scoring mode. Whether they may be *scored* is a separate question, and
     for `collision` it has no method-agnostic answer (S12R-11 R2)."""
-    parse_session(admissible(data_role=role), Mode.SCORING, raw_digest_ok=True)
+    parse_session(admissible(data_role=role), Mode.SCORING, verified=_verified())
 
 
 def test_only_evaluation_is_unconditionally_scorable():
@@ -736,8 +751,8 @@ def test_only_evaluation_is_unconditionally_scorable():
     method-specific, so a method-agnostic boolean cannot encode it — and the first version
     answered True, i.e. asserted the confirmatory reading in the permissive direction, which
     is how tuning data reaches a headline."""
-    ev = parse_session(admissible(data_role="evaluation"), Mode.SCORING, raw_digest_ok=True)
-    col = parse_session(admissible(data_role="collision"), Mode.SCORING, raw_digest_ok=True)
+    ev = parse_session(admissible(data_role="evaluation"), Mode.SCORING, verified=_verified())
+    col = parse_session(admissible(data_role="collision"), Mode.SCORING, verified=_verified())
     assert ev.is_scorable
     assert not col.is_scorable
 
@@ -748,7 +763,13 @@ def test_a_never_scored_role_is_not_scorable_even_if_constructed_directly(role):
     trust that `parse_session` was the only way in."""
     from src.m4.manifest import SessionManifest
 
-    m = SessionManifest(mode=Mode.SCORING, session_id="x", data_role=DataRole(role))
+    # Give it everything else a scorable record needs, so the ROLE is the operative reason
+    # rather than a missing disposition masking it.
+    m = SessionManifest(
+        mode=Mode.SCORING, session_id="x", data_role=DataRole(role),
+        disposition=SessionDisposition.ADMITTED, _verified=_verified(),
+    )
+    assert m.bindings_verified, "the fixture must clear the earlier gates"
     assert not m.is_scorable
     with pytest.raises(ManifestError, match=role):
         require_scoring_mode([m], "HR agreement")
@@ -767,14 +788,14 @@ def test_a_paced_session_requires_its_commanded_rate_schedule():
     fields = paced(15)
     del fields["commanded_rate_schedule"]
     with pytest.raises(ManifestError, match="commanded_rate_schedule is missing"):
-        parse_session(fields, Mode.SCORING, raw_digest_ok=True)
+        parse_session(fields, Mode.SCORING, verified=_verified())
 
 
 def test_a_natural_session_must_not_carry_a_schedule():
     with pytest.raises(ManifestError, match="Only the paced arm"):
         parse_session(
             admissible(commanded_rate_schedule=[{"commanded_rate_bpm": 12, "start_s": 0.0}]),
-            Mode.SCORING, raw_digest_ok=True,
+            Mode.SCORING, verified=_verified(),
         )
 
 
@@ -797,14 +818,14 @@ def test_a_natural_session_must_not_carry_a_schedule():
 )
 def test_a_malformed_rate_schedule_is_rejected(schedule, match):
     with pytest.raises(ManifestError, match=match):
-        parse_session(paced(12, commanded_rate_schedule=schedule), Mode.SCORING, raw_digest_ok=True)
+        parse_session(paced(12, commanded_rate_schedule=schedule), Mode.SCORING, verified=_verified())
 
 
 def test_a_single_entry_schedule_must_agree_with_the_scalar_rate():
     with pytest.raises(ManifestError, match="schedule declares"):
         parse_session(
             paced(12, commanded_rate_schedule=[{"commanded_rate_bpm": 15, "start_s": 0.0}]),
-            Mode.SCORING, raw_digest_ok=True,
+            Mode.SCORING, verified=_verified(),
         )
 
 
@@ -825,7 +846,7 @@ def test_the_stepped_diagnostic_sweep_CANNOT_be_a_scoring_study_session():
     imported a development protocol into the frozen study estimand.
     """
     with pytest.raises(ManifestError, match="exactly one"):
-        parse_session(paced(12, commanded_rate_schedule=_SWEEP), Mode.SCORING, raw_digest_ok=True)
+        parse_session(paced(12, commanded_rate_schedule=_SWEEP), Mode.SCORING, verified=_verified())
 
 
 def test_the_existing_paced16_capture_loads_in_development_mode():
@@ -850,7 +871,7 @@ def test_the_existing_paced16_capture_loads_in_development_mode():
 def test_paced16_is_still_rejected_in_scoring_mode():
     """The other half: relaxing development must not open the study estimand."""
     with pytest.raises(ManifestError, match="not one of"):
-        parse_session(paced(16), Mode.SCORING, raw_digest_ok=True)
+        parse_session(paced(16), Mode.SCORING, verified=_verified())
 
 
 @pytest.mark.parametrize("bad", [0, -1, -16])
@@ -895,7 +916,7 @@ def test_every_bound_hash_must_look_like_a_sha256(key, bad):
     """§4 binds each artifact "by path + SHA-256". A hash that cannot be a SHA-256 cannot
     check anything, and CLAUDE.md §3.1 requires every result to trace to hashed input."""
     with pytest.raises(ManifestError, match=key):
-        parse_session(admissible(**{key: bad}), Mode.SCORING, raw_digest_ok=True)
+        parse_session(admissible(**{key: bad}), Mode.SCORING, verified=_verified())
 
 
 @pytest.mark.parametrize(
@@ -905,7 +926,7 @@ def test_every_bound_hash_must_look_like_a_sha256(key, bad):
 @pytest.mark.parametrize("bad", ["", "   ", 17, ["a"]])
 def test_every_bound_path_must_be_a_non_empty_string(key, bad):
     with pytest.raises(ManifestError, match=key):
-        parse_session(admissible(**{key: bad}), Mode.SCORING, raw_digest_ok=True)
+        parse_session(admissible(**{key: bad}), Mode.SCORING, verified=_verified())
 
 
 def test_the_capture_config_is_bound_by_path_as_well_as_hash():
@@ -914,7 +935,7 @@ def test_the_capture_config_is_bound_by_path_as_well_as_hash():
     fields = admissible()
     del fields["capture_config_path"]
     with pytest.raises(ManifestError, match="capture_config_path"):
-        parse_session(fields, Mode.SCORING, raw_digest_ok=True)
+        parse_session(fields, Mode.SCORING, verified=_verified())
 
 
 # ── retry / replacement reason (S12R-09, partial — see S12R-05) ───────────────
@@ -927,12 +948,12 @@ def test_a_non_original_attempt_requires_its_reason(status):
     if status == "superseded":
         fields["disposition"] = "excluded"
     with pytest.raises(ManifestError, match="retry_reason"):
-        parse_session(fields, Mode.SCORING, raw_digest_ok=True)
+        parse_session(fields, Mode.SCORING, verified=_verified())
 
 
 def test_an_original_attempt_must_not_carry_a_retry_reason():
     with pytest.raises(ManifestError, match="replaced nothing"):
-        parse_session(admissible(retry_reason="subject moved"), Mode.SCORING, raw_digest_ok=True)
+        parse_session(admissible(retry_reason="subject moved"), Mode.SCORING, verified=_verified())
 
 
 def test_a_manifest_cannot_promote_itself_to_scoring_mode():
@@ -1010,7 +1031,7 @@ def test_settle_thresholds_pass_AT_their_equality_boundaries():
     inclusive, so 5.0 and 3.0 exactly are PASSES. Tested on both sides of each boundary."""
     m = parse_session(
         admissible(settle_pr_spread_bpm=5.0, settle_pr_drift_bpm=3.0),
-        Mode.SCORING, raw_digest_ok=True,
+        Mode.SCORING, verified=_verified(),
     )
     assert m.disposition is SessionDisposition.ADMITTED
 
@@ -1054,7 +1075,7 @@ def test_malformed_settle_evidence_is_an_ERROR_not_a_disposition(over):
 def test_a_pre_capture_attempt_loads_and_is_excluded_with_its_derived_reason():
     """§6 items 3 and 5 require these to be logged, but they happen before recording, so they
     have no capture artifacts. The old schema could log one only by fabricating provenance."""
-    m = parse_session(pre_capture(), Mode.SCORING, raw_digest_ok=True)
+    m = parse_session(pre_capture(), Mode.SCORING, verified=_verified())
     assert m.record_kind is RecordKind.PRE_CAPTURE_ATTEMPT
     assert m.disposition is SessionDisposition.EXCLUDED
     assert "settle_pr_spread_exceeds_5bpm" in m.disposition_reasons
@@ -1081,7 +1102,7 @@ def test_a_pre_capture_attempt_must_not_carry_capture_only_fields(field, value):
     class would trade the old contradiction for a space of loadable-but-invalid rows — which
     is where a fabricated-provenance record would live (CLAUDE.md §4)."""
     with pytest.raises(ManifestError, match="capture-only fields are present"):
-        parse_session(pre_capture(**{field: value}), Mode.SCORING, raw_digest_ok=True)
+        parse_session(pre_capture(**{field: value}), Mode.SCORING, verified=_verified())
 
 
 def test_an_attempt_where_BOTH_gates_pass_is_a_contradiction():
@@ -1091,13 +1112,13 @@ def test_an_attempt_where_BOTH_gates_pass_is_a_contradiction():
         parse_session(
             pre_capture(settle_pr_spread_bpm=2.0, settle_pr_drift_bpm=1.0,
                         clock_offset_start_s=0.2),
-            Mode.SCORING, raw_digest_ok=True,
+            Mode.SCORING, verified=_verified(),
         )
 
 
 def test_an_attempt_cannot_be_recorded_as_admitted():
     with pytest.raises(ManifestError, match="recomputes"):
-        parse_session(pre_capture(disposition="admitted"), Mode.SCORING, raw_digest_ok=True)
+        parse_session(pre_capture(disposition="admitted"), Mode.SCORING, verified=_verified())
 
 
 @pytest.mark.parametrize("missing", [k for k, _ in _REQUIRED_PRE_CAPTURE_FIELDS])
@@ -1105,7 +1126,7 @@ def test_a_pre_capture_attempt_rejects_every_missing_required_field(missing):
     fields = pre_capture()
     del fields[missing]
     with pytest.raises(ManifestError) as exc:
-        parse_session(fields, Mode.SCORING, raw_digest_ok=True)
+        parse_session(fields, Mode.SCORING, verified=_verified())
     assert missing in str(exc.value)
 
 
@@ -1118,7 +1139,7 @@ def test_record_kind_defaults_to_captured_session_when_absent():
 
 def test_an_unknown_record_kind_is_rejected():
     with pytest.raises(ManifestError, match="record_kind"):
-        parse_session(admissible(record_kind="aborted"), Mode.SCORING, raw_digest_ok=True)
+        parse_session(admissible(record_kind="aborted"), Mode.SCORING, verified=_verified())
 
 
 # ── S12R-03 / S12R-07: verification happens INSIDE the scoring load path ──────
@@ -1307,9 +1328,15 @@ def test_a_no_agreement_session_keeps_its_full_radar_binding(tmp_path):
 
 
 def test_a_no_agreement_session_is_structurally_barred_from_agreement_scoring(tmp_path):
+    """S12R-16 corrected this test's first version, which asserted `is_scorable` was **True**
+    for a no-agreement session and relied on a separate `is_agreement_scorable` to bar it.
+    That made an unscorable record look scorable to every caller that asked the obvious
+    question. `is_scorable` now means what its name says, and the radar-only capability §6
+    item 6 describes has its own name."""
     (s,) = _load(tmp_path, no_reference(tmp_path))
-    assert s.is_scorable, "it is a valid scoring-mode session"
-    assert not s.is_agreement_scorable, "but it can never enter an agreement estimand"
+    assert not s.is_scorable, "it can never produce a frozen-comparator number"
+    assert not s.scorable_for(_method())
+    assert s.is_radar_only_describable, "but its radar side is real and descriptively usable"
 
 
 def test_a_reference_sitting_at_the_expected_path_is_NOT_no_agreement(tmp_path):
@@ -1559,12 +1586,12 @@ def test_a_direct_parse_also_requires_the_replacement_link(tmp_path):
     reached through `load_manifest` the cross-record check would mask it."""
     fields = admissible(retry_status="retry", retry_reason="warmup_low_confidence")
     with pytest.raises(ManifestError, match="replaces_session_id"):
-        parse_session(fields, Mode.SCORING, raw_digest_ok=True)
+        parse_session(fields, Mode.SCORING, verified=_verified())
 
     fields = admissible(retry_status="superseded", retry_reason="warmup_low_confidence",
                         disposition="excluded")
     with pytest.raises(ManifestError, match="replaced_by_session_id"):
-        parse_session(fields, Mode.SCORING, raw_digest_ok=True)
+        parse_session(fields, Mode.SCORING, verified=_verified())
 
 
 # ── S12R-11 R2: scorability of M7 collision data is METHOD-dependent ─────────
@@ -1579,7 +1606,7 @@ def test_collision_data_confirms_a_method_that_was_not_fit_on_it():
     using M7"."""
     from src.m4.manifest import require_agreement_scoring
 
-    m = parse_session(admissible(data_role="collision"), Mode.SCORING, raw_digest_ok=True)
+    m = parse_session(admissible(data_role="collision"), Mode.SCORING, verified=_verified())
     assert m.scorable_for(_method(fitted=["some_other_session"]))
     require_agreement_scoring([m], "HR agreement", method=_method())
 
@@ -1591,7 +1618,7 @@ def test_collision_data_CANNOT_confirm_a_method_fit_on_it():
 
     m = parse_session(
         admissible(session_id="M7_collision", data_role="collision"),
-        Mode.SCORING, raw_digest_ok=True,
+        Mode.SCORING, verified=_verified(),
     )
     method = _method("stage1b_lag10_veto", fitted=["M7_collision"])
     assert not m.scorable_for(method)
@@ -1599,17 +1626,33 @@ def test_collision_data_CANNOT_confirm_a_method_fit_on_it():
         require_agreement_scoring([m], "HR agreement", method=method)
 
 
-def test_evaluation_data_is_scorable_for_any_method():
-    m = parse_session(admissible(data_role="evaluation"), Mode.SCORING, raw_digest_ok=True)
-    assert m.scorable_for(_method(fitted=["S01_natural"])), (
-        "an evaluation session is the confirmatory evidence base regardless of method"
-    )
+def test_evaluation_data_is_scorable_for_a_method_NOT_fit_on_it():
+    m = parse_session(admissible(data_role="evaluation"), Mode.SCORING, verified=_verified())
+    assert m.scorable_for(_method(fitted=["some_other_session"]))
+
+
+def test_an_EVALUATION_session_a_method_was_fit_on_is_NOT_scorable():
+    """S12R-21. The first version of this test asserted the opposite — that an evaluation
+    session stays scorable "regardless of method" — and the leakage check ran only for
+    `collision`.
+
+    §3.1 makes M6 "evaluation only — never tuning", so a method declaring itself fit on an
+    evaluation session is evidence of a **design violation**, not permission to confirm on the
+    same data. "A capture cannot both fit and confirm the same method" has no role exemption."""
+    from src.m4.manifest import require_agreement_scoring
+
+    m = parse_session(admissible(data_role="evaluation"), Mode.SCORING, verified=_verified())
+    assert not m.scorable_for(_method(fitted=["S01_natural"]))
+    with pytest.raises(ManifestError, match="NEVER tuning"):
+        require_agreement_scoring(
+            [m], "HR agreement", method=_method(fitted=["S01_natural"])
+        )
 
 
 def test_the_method_agnostic_guard_refuses_collision_and_says_why():
     """`require_scoring_mode` is not told a method, so it cannot decide — and says so instead
     of guessing."""
-    m = parse_session(admissible(data_role="collision"), Mode.SCORING, raw_digest_ok=True)
+    m = parse_session(admissible(data_role="collision"), Mode.SCORING, verified=_verified())
     with pytest.raises(ManifestError, match="collision"):
         require_scoring_mode([m], "HR agreement")
 
@@ -1699,4 +1742,118 @@ def test_the_paced16_capture_is_the_one_that_broke_the_first_schema():
     )
     assert m.commanded_rate_bpm == 16
     with pytest.raises(ManifestError, match="not one of"):
-        parse_session(paced(16), Mode.SCORING, raw_digest_ok=True)
+        parse_session(paced(16), Mode.SCORING, verified=_verified())
+
+
+# ── S12R-16: the disposition partition must GATE the output, not just exist ──
+
+def test_an_EXCLUDED_session_passes_no_scoring_guard(tmp_path):
+    """The S12R-16 hole, pinned. The whole §6 partition was recomputed correctly and then
+    ignored: an excluded protocol-abort session reported is_scorable=True and passed BOTH
+    guards, so every Stage-1 exclusion predicate could be derived perfectly and discarded
+    downstream."""
+    from src.m4.manifest import require_agreement_scoring
+
+    fields = materialise(tmp_path, admissible(
+        disposition="excluded", actual_duration_s=10.0, early_stop=True))
+    (s,) = _load(tmp_path, fields)
+    assert s.disposition is SessionDisposition.EXCLUDED
+    assert "protocol_abort_did_not_reach_intended_duration" in s.disposition_reasons
+
+    assert not s.is_scorable
+    assert not s.scorable_for(_method())
+    assert not s.is_radar_only_describable, "excluded is not radar-only either"
+    with pytest.raises(ManifestError, match="NOT ADMITTED"):
+        require_scoring_mode([s], "HR agreement")
+    with pytest.raises(ManifestError, match="NOT ADMITTED"):
+        require_agreement_scoring([s], "HR agreement", method=_method())
+
+
+def test_the_guard_names_the_actual_exclusion_reason(tmp_path):
+    """A guard that says "not eligible" without saying why sends you back to the manifest."""
+    from src.m4.manifest import require_agreement_scoring
+
+    fields = materialise(tmp_path, admissible(
+        disposition="excluded", clock_offset_end_s=9.0))
+    (s,) = _load(tmp_path, fields)
+    with pytest.raises(ManifestError, match="clock_offset_end_s_exceeds_1s"):
+        require_agreement_scoring([s], "HR agreement", method=_method())
+
+
+def test_the_record_kind_gate_holds_even_when_every_other_gate_is_satisfied():
+    """Isolates the `record_kind` clause of the eligibility base.
+
+    Through `load_manifest` it is shadowed — a pre-capture attempt is always EXCLUDED and
+    never carries verified bindings — so its mutant survived until this test existed. It is
+    still a real second lock: `SessionManifest` is directly constructible, and a record
+    claiming to be an attempt while otherwise eligible must not be scorable."""
+    from src.m4.manifest import SessionManifest
+
+    m = SessionManifest(
+        mode=Mode.SCORING, session_id="attempt_claiming_eligibility",
+        record_kind=RecordKind.PRE_CAPTURE_ATTEMPT, data_role=DataRole.EVALUATION,
+        disposition=SessionDisposition.ADMITTED, _verified=_verified(),
+    )
+    assert m.bindings_verified and m.disposition is SessionDisposition.ADMITTED
+    assert not m.is_scorable, "a pre-capture attempt has no capture to score"
+    assert not m.scorable_for(_method())
+    with pytest.raises(ManifestError, match="no capture happened"):
+        require_scoring_mode([m], "HR agreement")
+
+
+def test_a_pre_capture_attempt_passes_no_scoring_guard():
+    from src.m4.manifest import require_agreement_scoring
+
+    a = parse_session(pre_capture(), Mode.SCORING)
+    assert not a.is_scorable and not a.scorable_for(_method())
+    with pytest.raises(ManifestError, match="no capture happened"):
+        require_agreement_scoring([a], "HR agreement", method=_method())
+
+
+# ── S12R-17: verification is a CAPABILITY, not an assertable boolean ─────────
+
+def test_a_record_built_without_verification_is_never_scorable():
+    """The forgery S12R-17 found: `raw_digest_ok=True` was an ordinary public argument, so a
+    caller could assert it for a file that does not exist and get a scorable record. The old
+    "verification is not optional" test only covered OMISSION, so it passed throughout."""
+    from src.m4.manifest import SessionManifest
+
+    direct = SessionManifest(
+        mode=Mode.SCORING, session_id="forged", data_role=DataRole.EVALUATION,
+        disposition=SessionDisposition.ADMITTED,
+    )
+    assert not direct.bindings_verified
+    assert not direct.is_scorable and not direct.scorable_for(_method())
+    with pytest.raises(ManifestError, match="never hashed"):
+        require_scoring_mode([direct], "HR agreement")
+
+
+def test_the_verified_flag_itself_cannot_be_set_by_a_constructor_call():
+    """Found while fixing S12R-17: a plain `bindings_verified: bool` field would have been
+    settable directly — the same forgery, one level down. It is derived from an object only
+    `verify_bound_files` can mint."""
+    from src.m4.manifest import SessionManifest
+
+    for fake in (True, "yes", object(), {"token": "x"}):
+        m = SessionManifest(
+            mode=Mode.SCORING, session_id="forged", data_role=DataRole.EVALUATION,
+            disposition=SessionDisposition.ADMITTED, _verified=fake,
+        )
+        assert not m.bindings_verified, f"{fake!r} must not pass as a verification capability"
+        assert not m.is_scorable
+
+
+def test_the_verified_capability_cannot_be_forged():
+    """It is identity-checked against a module-private token. Python has no true privacy, but
+    forging this requires visibly importing `_VERIFY_TOKEN` — unlike passing `True`."""
+    from src.m4.manifest import _VerifiedBindings
+
+    with pytest.raises(ManifestError, match="only be constructed by verify_bound_files"):
+        _VerifiedBindings(object(), True, True)
+    with pytest.raises(ManifestError, match="only be constructed by verify_bound_files"):
+        _VerifiedBindings("token", True, True)
+
+
+def test_a_verified_record_from_load_manifest_carries_the_flag(tmp_path):
+    (s,) = _load(tmp_path, materialise(tmp_path))
+    assert s.bindings_verified and s.is_scorable

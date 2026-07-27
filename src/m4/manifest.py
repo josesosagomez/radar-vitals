@@ -221,6 +221,34 @@ _SCORING_LOADABLE_ROLES = frozenset({DataRole.EVALUATION, DataRole.COLLISION})
 _UNCONDITIONALLY_SCORABLE_ROLES = frozenset({DataRole.EVALUATION})
 
 
+#: Identity-checked capability token. Only `verify_bound_files` holds it, so a
+#: `_VerifiedBindings` cannot be produced by a caller that has not hashed the artifacts
+#: (S12R-17). Python has no true privacy, but forging this requires deliberately reaching into
+#: a module private — which is a visible act, unlike passing `raw_digest_ok=True`.
+_VERIFY_TOKEN = object()
+
+
+@dataclass(frozen=True)
+class _VerifiedBindings:
+    """Proof that every bound artifact was hashed, carrying the facts that hashing derived.
+
+    S12R-17: the previous design took `raw_digest_ok: bool`, so "verification is unavoidable"
+    was only true of *omission* — a caller could pass `True` for a file that does not exist
+    and get a scorable record. A boolean is an assertion; this is a capability.
+    """
+
+    token: object
+    raw_digest_ok: bool
+    reference_acquired: bool
+
+    def __post_init__(self) -> None:
+        if self.token is not _VERIFY_TOKEN:
+            raise ManifestError(
+                "_VerifiedBindings can only be constructed by verify_bound_files. A scoring "
+                "record must not be creatable from an asserted boolean (S12R-17)."
+            )
+
+
 @dataclass(frozen=True)
 class MethodProvenance:
     """What a consuming estimator was fit, tuned or selected on (§3.1).
@@ -455,6 +483,11 @@ class SessionManifest:
     truncation_bytes: int | None = None
     #: DERIVED by `verify_bound_files`, never declared in the manifest (S12R-03 R2).
     raw_digest_ok: bool | None = None
+    #: The verification capability itself, not a boolean. A plain `bindings_verified: bool`
+    #: field would have been settable by a direct constructor call — the same forgery S12R-17
+    #: found one level up — so the flag is DERIVED from an object only `verify_bound_files`
+    #: can mint.
+    _verified: object | None = field(default=None, repr=False, compare=False)
     packets_received: int | None = None
     packets_dropped: int | None = None
     n_frames: int | None = None
@@ -488,45 +521,75 @@ class SessionManifest:
     raw: dict = field(default_factory=dict, repr=False, compare=False)
 
     @property
-    def is_scorable(self) -> bool:
-        """Only a SCORING-mode manifest **in a scoring-eligible data role** may produce a
-        frozen-comparator number.
+    def bindings_verified(self) -> bool:
+        """Did every bound artifact get hashed? True only for a genuine capability object."""
+        v = self._verified
+        return type(v) is _VerifiedBindings and v.token is _VERIFY_TOKEN
 
-        Mode alone was not a control (S12R-11): mode is supplied by the caller, so a fully
-        populated `data_role="development"` session passed as `Mode.SCORING` reported
-        `is_scorable=True`. `parse_session` now rejects that combination outright, but this
-        property is the second lock — `SessionManifest` is directly constructible, and
-        §3.1's "never scored" is too load-bearing to rest on one check.
+    @property
+    def _eligible_base(self) -> bool:
+        """Everything a record must be before any role or method question is asked.
+
+        **S12R-16 was the hole this closes.** The old `is_scorable` checked mode and role and
+        stopped, so an `EXCLUDED` protocol-abort session — with its §6 reason correctly
+        recomputed — reported `is_scorable=True` and passed both output guards. Every Stage-1
+        exclusion predicate could be derived perfectly and then ignored downstream.
+
+        **S12R-17** adds `bindings_verified`: a record that did not come through complete
+        bound-file hashing is not eligible, which also closes the direct-`SessionManifest`
+        construction path.
         """
-        return self.mode is Mode.SCORING and self.data_role in _UNCONDITIONALLY_SCORABLE_ROLES
+        return (
+            self.mode is Mode.SCORING
+            and self.record_kind is RecordKind.CAPTURED_SESSION
+            and self.disposition is SessionDisposition.ADMITTED
+            and self.bindings_verified
+        )
+
+    @property
+    def is_scorable(self) -> bool:
+        """May this session produce a frozen-comparator number, for **any** method?
+
+        Requires the eligibility base **and** an unconditionally-scorable role. `collision` is
+        absent from that set by design (S12R-11 R2): §3.1 makes M7's role method-specific, so
+        this property has no answer for it — use `scorable_for`.
+        """
+        return self._eligible_base and self.data_role in _UNCONDITIONALLY_SCORABLE_ROLES
+
+    @property
+    def is_radar_only_describable(self) -> bool:
+        """The separately-named capability §6 item 6 asks for (S12R-16).
+
+        A `NO_AGREEMENT` session is "radar-only, descriptive at most": real radar data, full
+        timebase and integrity binding, no reference. It must never look *scorable* — that was
+        the S12R-16 defect — but it is not excluded either, so it needs its own name rather
+        than being folded into `is_scorable` with a caveat.
+        """
+        return (
+            self.mode is Mode.SCORING
+            and self.record_kind is RecordKind.CAPTURED_SESSION
+            and self.disposition is SessionDisposition.NO_AGREEMENT
+            and self.bindings_verified
+        )
 
     def scorable_for(self, method: MethodProvenance) -> bool:
         """May this session produce a frozen-comparator number **for this method** (§3.1)?
 
-        The method-aware answer, and the only one that exists for the `collision` role: M7 is
-        confirmatory for an estimator not fit/tuned/selected on it, and method-development for
-        one that was. The first version returned `True` unconditionally for collision, which
-        asserts the confirmatory reading without knowing the method — and asserts it in the
-        permissive direction, so tuning data could land in a headline (S12R-11 R2).
-        """
-        if not (self.mode is Mode.SCORING and self.data_role in _SCORING_LOADABLE_ROLES):
-            return False
-        if self.disposition is SessionDisposition.NO_AGREEMENT:
-            return False
-        if self.data_role is DataRole.COLLISION:
-            return self.session_id not in method.fitted_on_session_ids
-        return True
+        Three gates: the eligibility base above, a role that may load in scoring mode, and —
+        **for every role, not only `collision`** — that the method was not fit, tuned or
+        selected on this very session. §3.1: "a capture cannot both fit and confirm the same
+        method."
 
-    @property
-    def is_agreement_scorable(self) -> bool:
-        """May this session contribute to a radar-vs-reference agreement number?
-
-        A §6 item-6 `NO_AGREEMENT` session is "radar-only, descriptive at most": it is not
-        excluded — its radar side is real and it keeps its full timebase/integrity binding —
-        but it has no reference, so it can never enter an agreement estimand. That bar is
-        structural rather than a convention someone has to remember (S12R-06 R2).
+        **S12R-21 was the hole here.** The leakage check ran only for `collision`, so an
+        `evaluation` session that a method declared itself fit on stayed scorable — and a test
+        asserted that. §3.1 makes M6 "evaluation only — never tuning", so such a declaration
+        is evidence of a design violation, not permission to confirm on the same data.
         """
-        return self.is_scorable and self.disposition is not SessionDisposition.NO_AGREEMENT
+        if not self._eligible_base:
+            return False
+        if self.data_role not in _SCORING_LOADABLE_ROLES:
+            return False
+        return self.session_id not in method.fitted_on_session_ids
 
 
 # ── Settle criterion (S12R-04) ────────────────────────────────────────────────
@@ -904,9 +967,7 @@ def _validate_rate_schedule(
 
 
 def parse_session(
-    fields: dict, mode: Mode, *,
-    raw_digest_ok: bool | None = None,
-    reference_acquired: bool = True,
+    fields: dict, mode: Mode, *, verified: _VerifiedBindings | None = None
 ) -> SessionManifest:
     """Validate one session's fields and return the manifest record.
 
@@ -1085,16 +1146,18 @@ def parse_session(
                 f"{', '.join(reasons)}). A logged pre-capture attempt is not admitted."
             )
     elif mode is Mode.SCORING:
-        if raw_digest_ok is None:
+        if verified is None:
             raise ManifestError(
-                f"session {session_id!r}: scoring-mode parsing needs the DERIVED raw-digest "
-                "result, which comes from hashing the bound raw file. Use `load_manifest`, "
-                "which verifies every binding before returning a session — verification is "
-                "not an optional caller convention (S12R-07 R2)."
+                f"session {session_id!r}: scoring-mode parsing needs the verified-bindings "
+                "capability, which only `verify_bound_files` can produce. Use "
+                "`load_manifest`, which hashes every binding before returning a session — "
+                "verification is not a caller convention, and it is not an assertable "
+                "boolean either (S12R-07 R2, S12R-17)."
             )
         recomputed, reasons, flags = recompute_disposition(
             fields, session_id,
-            raw_digest_ok=raw_digest_ok, reference_acquired=reference_acquired,
+            raw_digest_ok=verified.raw_digest_ok,
+            reference_acquired=verified.reference_acquired,
         )
         if recomputed is not disposition:
             raise ManifestError(
@@ -1130,7 +1193,8 @@ def parse_session(
         raw_path=fields.get("raw_path"),
         raw_sha256=fields.get("raw_sha256"),
         truncation_bytes=fields.get("truncation_bytes"),
-        raw_digest_ok=raw_digest_ok,
+        raw_digest_ok=verified.raw_digest_ok if verified else None,
+        _verified=verified,
         packets_received=fields.get("packets_received"),
         packets_dropped=fields.get("packets_dropped"),
         n_frames=fields.get("n_frames"),
@@ -1168,9 +1232,9 @@ def _sha256_file(path: Path) -> str:
 
 def verify_bound_files(
     fields: dict, session_id: str, root: Path
-) -> tuple[bool, bool]:
-    """Hash every bound artifact; return the DERIVED `(raw_digest_ok, reference_acquired)`
-    facts (S12R-03, S12R-06, S12R-07).
+) -> _VerifiedBindings:
+    """Hash every bound artifact; return the verified-bindings **capability** carrying the
+    derived facts (S12R-03, S12R-06, S12R-07, S12R-17).
 
     **The disposition split is the load-bearing part**, confirmed by Codex in S12R-07 R3 and
     implemented exactly as stated there:
@@ -1260,7 +1324,7 @@ def verify_bound_files(
             )
 
     _verify_validity_map(fields, session_id, resolve("frame_validity_map_path"))
-    return raw_digest_ok, reference_acquired
+    return _VerifiedBindings(_VERIFY_TOKEN, raw_digest_ok, reference_acquired)
 
 
 def _reference_is_bound(fields: dict) -> bool:
@@ -1362,18 +1426,14 @@ def load_manifest(
 
     parsed = []
     for s in sessions:
-        digest_ok, reference_acquired = None, True
+        verified = None
         if mode is Mode.SCORING and isinstance(s, dict) and s.get("record_kind") != (
             RecordKind.PRE_CAPTURE_ATTEMPT.value
         ):
             # A pre-capture attempt binds no capture artifacts; its settle evidence is
             # verified inside `parse_session`'s own contract.
-            digest_ok, reference_acquired = verify_bound_files(
-                s, s.get("session_id", "<unnamed>"), base
-            )
-        parsed.append(parse_session(
-            s, mode, raw_digest_ok=digest_ok, reference_acquired=reference_acquired
-        ))
+            verified = verify_bound_files(s, s.get("session_id", "<unnamed>"), base)
+        parsed.append(parse_session(s, mode, verified=verified))
 
     seen: set[str] = set()
     for s in parsed:
@@ -1513,6 +1573,41 @@ def validate_retry_policy(sessions: list[SessionManifest], where: str) -> None:
                 )
 
 
+def _ineligibility_reason(s: SessionManifest, method: MethodProvenance | None = None) -> str:
+    """Why this record cannot produce a frozen-comparator number, in the order it is decided.
+
+    Shared by both guards so neither can say something true-but-irrelevant: before S12R-16,
+    `require_scoring_mode` explained roles even when the real reason was that the session was
+    excluded, which sends a reader back to the wrong part of the manifest.
+    """
+    if s.mode is not Mode.SCORING:
+        return f"mode={s.mode.value}"
+    if s.record_kind is not RecordKind.CAPTURED_SESSION:
+        return f"a {s.record_kind.value} — no capture happened, so there is nothing to score"
+    if s.disposition is SessionDisposition.EXCLUDED:
+        return "§6 NOT ADMITTED: " + (", ".join(s.disposition_reasons) or "no reason recorded")
+    if s.disposition is SessionDisposition.NO_AGREEMENT:
+        return "a §6 item-6 no-agreement session — radar-only, no reference to agree with"
+    if s.disposition is not SessionDisposition.ADMITTED:
+        return f"disposition={s.disposition.value if s.disposition else None}"
+    if not s.bindings_verified:
+        return "its bound artifacts were never hashed — verified=False (use load_manifest)"
+    if method is not None and s.session_id in method.fitted_on_session_ids:
+        if s.data_role is DataRole.EVALUATION:
+            return (f"method {method.method_id!r} declares it was fit/tuned on this session, "
+                    "but §3.1 makes evaluation data NEVER tuning — that declaration is itself "
+                    "a protocol violation, not permission to confirm on the same data")
+        return (f"method {method.method_id!r} was fit/tuned/selected on it — for that method "
+                "this capture is development, not confirmatory (§3.1)")
+    if s.data_role not in _SCORING_LOADABLE_ROLES:
+        return (f"data_role={s.data_role.value if s.data_role else None}, which §3.1 never "
+                "scores")
+    if method is None and s.data_role not in _UNCONDITIONALLY_SCORABLE_ROLES:
+        return (f"data_role={s.data_role.value}, whose scorability is method-specific (§3.1) "
+                "— use require_agreement_scoring(..., method=...)")
+    return "not eligible"
+
+
 def require_agreement_scoring(
     sessions: list[SessionManifest], what: str, *, method: MethodProvenance
 ) -> None:
@@ -1523,19 +1618,10 @@ def require_agreement_scoring(
     `NO_AGREEMENT` session; and an M7 `collision` session for a method that was fit, tuned or
     selected on it — "a capture cannot both fit and confirm the same method" (§3.1).
     """
-    offenders = []
-    for s in sessions:
-        if s.scorable_for(method):
-            continue
-        if s.data_role is DataRole.COLLISION:
-            why = (f"M7 collision data, and method {method.method_id!r} was fit/tuned on it "
-                   "— for that method this capture is development, not confirmatory (§3.1)")
-        elif s.disposition is SessionDisposition.NO_AGREEMENT:
-            why = "a §6 item-6 no-agreement session — radar-only, no reference to agree with"
-        else:
-            why = (f"mode={s.mode.value}, data_role="
-                   f"{s.data_role.value if s.data_role else None}")
-        offenders.append(f"{s.session_id!r} ({why})")
+    offenders = [
+        f"{s.session_id!r} ({_ineligibility_reason(s, method)})"
+        for s in sessions if not s.scorable_for(method)
+    ]
 
     if offenders:
         raise ManifestError(
@@ -1559,16 +1645,13 @@ def require_scoring_mode(sessions: list[SessionManifest], what: str) -> None:
     function is not told one. Use `require_agreement_scoring(..., method=...)` for that.
     """
     offenders = [
-        f"{s.session_id!r} (mode={s.mode.value}, "
-        f"data_role={s.data_role.value if s.data_role else None})"
-        for s in sessions
-        if not s.is_scorable
+        f"{s.session_id!r} ({_ineligibility_reason(s)})"
+        for s in sessions if not s.is_scorable
     ]
     if offenders:
         raise ManifestError(
-            f"{what} requires a SCORING-mode session in a scoring-eligible data role, but "
-            f"these are not: {', '.join(offenders)}. Development, engineering and pilot "
-            "output is exploratory / apparent / in-sample and can never be a "
-            "frozen-comparator number (notes/analysis_prespec.md §3.1; "
+            f"{what} may not include: {'; '.join(offenders)}. A frozen-comparator number "
+            "comes only from an ADMITTED captured session, in a scoring-eligible data role, "
+            "whose bindings were verified (notes/analysis_prespec.md §3.1, §6; "
             "plans/m4_offline_harness.md §2.2, §4)."
         )

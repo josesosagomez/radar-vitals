@@ -193,6 +193,232 @@ wrong in this stage, I would rather be told what it should be.
 
 COMMENTS OF CODEX
 
+### S12R-16 [Blocking] — excluded records pass every scoring guard
+ISSUE: The new scorability layer checks mode, role, and `NO_AGREEMENT`, but never rejects
+`SessionDisposition.EXCLUDED` or `RecordKind.PRE_CAPTURE_ATTEMPT`. A captured evaluation
+record objectively excluded for an early abort currently has `is_scorable == True`,
+`is_agreement_scorable == True`, and `scorable_for(method) == True`; both
+`require_scoring_mode` and `require_agreement_scoring` accept it. Thus every Stage-1
+exclusion predicate can be recomputed correctly and then ignored by the output guard.
+AUTHORITY: `notes/analysis_prespec.md` §6 items 3–5 say these sessions are “not admitted”;
+§6 requires dispositions to control the session partition before scoring; plan §7 row 1
+makes that objective disposition Stage 1's scoring gate.
+WANTED: Make every frozen/agreement scoring guard require a captured
+`SessionDisposition.ADMITTED` record in addition to the mode/role/method checks. If
+`NO_AGREEMENT` needs radar-only descriptive processing, expose that as a separately named
+capability rather than allowing `is_scorable` to make an excluded record look eligible.
+Add negative cases for an excluded evaluation session and a pre-capture attempt through
+both guards.
+REVERSIBILITY: Cheap now; once an output emitter consumes these guards, this bypass places
+protocol-aborted or corrupt sessions inside every paper-grade estimand.
+ESCALATE: none
+
+### S12R-17 [Blocking] — hashing remains optional through public construction paths
+ISSUE: `parse_session` refuses a missing derived fact, but accepts any caller-supplied
+`raw_digest_ok=True`; the value carries no proof that `verify_bound_files` produced it.
+`parse_session(admissible(), Mode.SCORING, raw_digest_ok=True)` returns a scorable record
+even though its declared raw path does not exist. The public `SessionManifest` constructor
+is an additional unchecked path. The existing “verification is not optional” test checks
+only omission of the keyword, so it passes while a forged `True` bypasses all hashing.
+AUTHORITY: plan §4 binds artifacts by path + SHA-256; plan §7 row 1 requires checksum and
+validity-map consistency before a scoring record is returned; `CLAUDE.md` §3.1 requires every
+result to trace to hashed inputs; S12R-03/07 required verification to be unavoidable rather
+than a caller convention.
+WANTED: Do not expose a caller-assertable boolean as the capability to construct a scoring
+record. Make the verified scoring-record path internal to `load_manifest` (for example with
+an unforgeable/private verification result), and make output guards reject records that did
+not come through complete bound-file verification. Keep a pure predicate helper if useful,
+but it must not manufacture a public scorable record.
+REVERSIBILITY: Cheap now; permanent unverified-input scoring once later stages call the
+public parser or constructor.
+ESCALATE: none
+
+### S12R-18 [Blocking] — settle evidence is declared, not objectively derived
+ISSUE: `settle_pr_spread_bpm` and `settle_pr_drift_bpm` remain operator-supplied scalars.
+For captured sessions the loader hashes `settle_evidence_path` but never reads it or checks
+that the scalars derive from it; the passing fixture contains only one PR sample, which
+cannot establish a continuous 60 s spread or first-20-vs-last-20 drift. For
+`pre_capture_attempt`, `load_manifest` skips `verify_bound_files` entirely, so an
+outside/nonexistent settle path with an arbitrary 64-hex digest loads successfully. This is
+the same double-source defect as `checksum_ok`: the operator supplies the evidence summary
+and the disposition it justifies. Moreover, the protocol does not say how the first and
+last 20 s are reduced to the two PR values being compared, so choosing that derivation in
+code would itself add pre-registration content.
+AUTHORITY: `notes/protocol.md` SETTLE CRITERION requires a measured continuous 60 s PR spread
+≤5 bpm and first-20-vs-last-20 difference ≤3 bpm; `notes/analysis_prespec.md` §6 item 3 makes
+failure an objective abort; S12R-04 R2 required bound auditable evidence and derivation, not
+a pass/fail declaration; `CLAUDE.md` §3.1 requires hashed input traceability.
+WANTED: Obtain the user's pre-freeze decision on the exact evidence and first/last-20 s
+reduction; then validate a canonical settle-evidence record containing enough timestamped PR
+evidence to prove the continuous 60 s interval, hash and root-confine it for both record
+kinds, and derive both limbs from that verified content. Do not let manifest scalars
+independently control the disposition. Add a fixture whose evidence and declared summaries
+disagree, plus a pre-capture missing/root-escape case.
+REVERSIBILITY: Cheap before captures; permanent selective admission if an unsettled attempt
+can declare favorable summaries.
+ESCALATE: frozen content
+
+### S12R-19 [Blocking] — `NO_AGREEMENT` ignores what the acquisition record says
+ISSUE: `reference_acquisition_path` is hashed but never parsed, so arbitrary bytes count as
+objective evidence that no reference was acquired. The current no-reference fixture proves
+the inversion: `materialise` writes `{"acquired": true}`, then removes the Masimo binding
+and file, and `load_manifest` derives `NO_AGREEMENT`. File absence at scoring time plus an
+uninterpreted digest cannot distinguish never-acquired from acquired-then-lost, which was the
+exact distinction S12R-07 R3 required. `_reference_is_bound` also uses truthiness rather
+than field presence, so `masimo_path=""` with no digest is silently treated as unbound
+instead of as a malformed half-binding.
+AUTHORITY: `notes/analysis_prespec.md` §6 item 6 limits `NO_AGREEMENT` to a wholly missing
+Masimo file; plan §4 and `CLAUDE.md` §3.1 require checkable provenance; S12R-06 R2 and
+S12R-07 R3 require bound objective acquisition evidence and forbid reclassifying a lost
+reference as never acquired.
+WANTED: Give the acquisition record a canonical validated schema and derive acquisition
+status from its verified content. `NO_AGREEMENT` requires an objective “not acquired”
+record consistent with the expected path being absent; an “acquired” record without a
+bound/present reference is a lost/broken provenance error. Reject any present-but-empty or
+half-bound Masimo fields before deriving absence. Replace the current contradictory fixture
+with both cases.
+REVERSIBILITY: Cheap now; later this silently moves lost reference sessions into the
+no-agreement count.
+ESCALATE: none
+
+### S12R-20 [Blocking] — a replacement can masquerade as an original
+ISSUE: Link presence is not validated for `RetryStatus.ORIGINAL`. A valid superseded/retry
+pair still loads after changing the replacement row to `retry_status="original"` and removing
+its `retry_reason`, while leaving `replaces_session_id` intact. The superseded side sees the
+back-link and passes; the “original” side immediately continues. The replacement is then
+admitted without being classified or counted as a retry and without stating the cause on
+both ends. The branch-local validation also accepts a single superseded record whose
+`replaced_by_session_id` and `replaces_session_id` both point to itself, so link symmetry
+alone does not establish that a real second attempt exists.
+AUTHORITY: `notes/analysis_prespec.md` §6 item 7 requires both attempts and the retry
+incidence/reason to be logged, and the Replacement policy requires both discarded and
+replacement sessions to be logged with reason; plan §7 row 1 assigns retry/replacement
+validation to Stage 1.
+WANTED: Enforce a coherent status/link matrix. An original must forbid both replacement
+links and `retry_reason`; a superseded link must target a record semantically marked as its
+replacement, with the same cause. If a middle record can be both retry and superseded,
+represent or validate that combined state explicitly rather than allowing link fields that
+the chosen enum branch ignores. Require distinct acyclic attempt IDs and validate the whole
+replacement graph, not only each selected enum branch. Add the concrete
+original-with-`replaces_session_id` and self-replacement cases.
+REVERSIBILITY: Cheap now; permanent undercounting and denominator distortion once retries
+enter the study ledger.
+ESCALATE: none
+
+### S12R-05 R3 [Blocking] — an abort before warmup cannot be represented
+ISSUE: `selected_confidence` is unconditionally required on every captured scoring record,
+but `warmup_bin_selection.json` is produced only after the first complete 600-frame/30 s
+buffer. A subject withdrawal, operator stop, or equipment intervention before then is a
+captured §6 item-3 abort with raw bytes but no warmup verdict. Removing
+`selected_confidence` from such a correctly excluded record raises a missing-field error, so
+it can be logged only by fabricating `low`/`medium`/`high`.
+AUTHORITY: `notes/analysis_prespec.md` §6 item 3 requires any deliberate stop before the
+intended end to be not admitted and logged; §6 item 7 reads `selected_confidence` only from
+the warmup-selection record; `notes/protocol.md` says warmup occurs after capture starts and
+takes one 600-frame buffer; `CLAUDE.md` §4 forbids fabricated results.
+WANTED: Make the warmup outcome conditional on the capture reaching warmup selection.
+Represent “warmup not reached” objectively (without treating it as low confidence), and
+apply the item-7 iff/retry rules only when a warmup verdict exists. Add a captured early-abort
+fixture shorter than 600 frames with no `selected_confidence`.
+REVERSIBILITY: Cheap now; otherwise legitimate early aborts disappear or acquire fabricated
+retry evidence.
+ESCALATE: none
+
+### S12R-12 R3 [Blocking] — one pre-capture shape conflates sequential gates
+ISSUE: `_REQUIRED_PRE_CAPTURE_FIELDS` always requires both settle evidence and
+`clock_offset_start_s`. Protocol step 3 aborts/re-seats when settling fails; clock sync is
+the later step 3a. Therefore a settle-failed attempt may correctly have no clock-offset
+measurement, yet the schema rejects it. The discriminated record still forces evidence for
+a gate the attempt never reached, recreating S12R-12's fabrication problem inside the new
+record kind.
+AUTHORITY: `notes/protocol.md` SETTLE CRITERION and ordered steps 3/3a;
+`notes/analysis_prespec.md` §6 items 3 and 5 require both kinds of pre-recording failure to
+be logged; `CLAUDE.md` §4 forbids invented measurements.
+WANTED: Discriminate the failed pre-capture stage (or use separate exact variants). A settle
+abort requires verified settle evidence but not a later clock result; a clock-sync restart
+requires evidence that settling passed plus the measured failing offset. Preserve the
+both-gates-pass contradiction for a record claiming a failure.
+REVERSIBILITY: Cheap now; otherwise mandatory settle-abort counts require fabricated clock
+metadata.
+ESCALATE: none
+
+### S12R-21 [Blocking] — method provenance neither proves nor consistently enforces no leakage
+ISSUE: `MethodProvenance` is an unbound caller-authored dataclass, so omitting an M7 session
+ID is sufficient to “prove” eligibility; no path/hash or scoring-run provenance makes the
+set complete. The guard is also applied only to `collision`: an evaluation session
+`S01_natural` returns `scorable_for(MethodProvenance(... fitted_on_session_ids={
+"S01_natural"})) == True`. The existing test explicitly asserts that result, although M6 is
+“evaluation only — never tuning”; a method that says it was fit on M6 exposes a design
+violation, not permission to confirm on the same data.
+AUTHORITY: `notes/analysis_prespec.md` §3.1 makes M6 evaluation-only/never-tuning and states
+that a capture cannot both fit and confirm the same method; plan §6.7 requires every consumed
+file and scoring provenance to be bound; S12R-11 R2 required the output guard to prove
+method eligibility rather than guess.
+WANTED: Bind and validate a canonical method-provenance artifact at the scoring boundary,
+covering every session used to fit, tune, or select the method. Reject confirmatory use of
+any session present in that provenance, including an M6 evaluation session (which should
+also surface the never-tuning protocol violation). Do not let an arbitrary in-memory set be
+the sole positive proof for M7.
+REVERSIBILITY: Cheap before output emitters; permanent data leakage once a tuned method can
+omit an ID and score the same capture as confirmatory.
+ESCALATE: none
+
+### S12R-22 [Blocking] — paced pre-capture attempts lose their assigned study rate
+ISSUE: A `pre_capture_attempt` with `arm="paced"` may omit `commanded_rate_bpm` entirely,
+and a supplied positive value is not checked against the scoring rotation. The rate is a
+between-subject assigned design attribute, not merely something inferred after audio was
+played. Failed/replaced attempts are counted against the evidence floor, so dropping the
+planned 12/15/18 assignment makes the realized allocation and protocol identity
+unreconstructable.
+AUTHORITY: plan §4 puts commanded paced rate 12/15/18 in Identity/estimands;
+`notes/analysis_prespec.md` §1/M3R-31 makes rate a prospectively assigned between-subject
+attribute whose realized allocation is reported; §6 requires missing/replaced attempts to
+remain counted.
+WANTED: In SCORING mode require the assigned `commanded_rate_bpm` on every paced
+pre-capture attempt and enforce membership in 12/15/18. Continue to omit the played-rate
+schedule because no recording began.
+REVERSIBILITY: Cheap now; later an aborted paced attempt cannot be assigned to the study
+allocation it was meant to satisfy.
+ESCALATE: none
+
+### S12R-23 [Blocking] — replacement links ignore same-subject/same-protocol
+ISSUE: `validate_retry_policy` checks link symmetry and cause but never compares the two
+records' design identity. A superseded `subject_id="S01"` session and its linked replacement
+with `subject_id="S99"` load successfully. The same omission permits changing arm,
+commanded-rate assignment, data role, or intended protocol while still calling the second
+record a replacement of the first.
+AUTHORITY: `notes/analysis_prespec.md` §6 Replacement policy permits re-capture only for the
+“same subject, same protocol”; plan §4 binds the identity/design/protocol fields needed to
+check that condition; plan §7 row 1 requires retry/replacement validation in Stage 1.
+WANTED: Define the exact protocol-identity tuple from existing bound fields and require it
+to match across each replacement edge—at minimum subject, arm, assigned commanded rate,
+data role, posture, and intended duration, plus any other field the protocol authority makes
+fixed. Treat measured per-attempt outcomes separately. Add cross-subject and cross-arm/rate
+negative fixtures.
+REVERSIBILITY: Cheap now; otherwise a different subject or study arm can silently replace a
+failed session and alter allocation/evidence-floor accounting.
+ESCALATE: none
+
+### S12R-24 [Blocking] — validity-map polarity is an unbound private convention
+ISSUE: `_verify_validity_map` defines `.npy`, one-dimensional `bool`, and `True == valid`
+without a binding producer/schema authority. Shape and aggregate-count checks cannot infer
+polarity: when exactly half the frames are invalid, a producer using the equally common
+`True == invalid/zero-filled` convention passes the declared invalid-count check while
+identifying the opposite frame indices. Stage 3 would then turn the wrong 30 s windows into
+radar-NaN with no manifest error.
+AUTHORITY: `notes/analysis_prespec.md` §7 makes the positional validity/zero-fill map decide
+which exact windows become radar-NaN, but does not define encoding or polarity; plan §4 calls
+for a versioned, validated manifest; the review invariant says a reasonable but unsourced
+rule is a finding.
+WANTED: Pin the map's file format, dtype, dimensionality, polarity, and schema version in a
+stable capture/manifest contract before the producer writes study data, and validate an
+end-to-end producer fixture—not merely arrays constructed according to the consumer's own
+convention. The frozen semantic remains “any invalid/zero-filled frame makes its window
+radar-NaN”; only its serialization needs to become authoritative.
+REVERSIBILITY: Cheap before the forward capture requirement is implemented; permanently
+wrong window coverage if producer and consumer choose opposite polarity.
+ESCALATE: none
+
 ### S12R-07 R3 [Blocking] — disposition split confirmed, with the reference-absence distinction
 ISSUE: Claude Code's proposed split is correct, but “reference mismatch” must not collapse the
 separate physical-absence case. For a present, readable raw file, a digest mismatch is the
@@ -606,6 +832,20 @@ occur before capture artifacts exist, while retaining the full six-group contrac
 sessions. Do not require dummy hashes/timestamps to make an excluded attempt loadable.
 REVERSIBILITY: Cheap schema design now; otherwise required failures are silently absent or logged
 with fabricated provenance.
+ESCALATE: none
+
+### S12R-25 [Should-fix] — forbidden pre-capture fields are accepted when null
+ISSUE: `_FORBIDDEN_ON_PRE_CAPTURE` is enforced with `fields.get(k) is not None`, so every
+capture-only key is accepted on a `pre_capture_attempt` when explicitly set to JSON `null`.
+That contradicts the redesign's stated invariant that these fields are absent rather than
+optional, and makes key presence unable to discriminate a v2 record's shape.
+AUTHORITY: S12R-12 R2 required separate exact contracts with capture-only fields absent;
+`RecordKind`'s own schema documentation repeats that invariant; plan §4 requires a validated,
+versioned manifest rather than a permissive optional-field union.
+WANTED: Reject forbidden keys by presence (`key in fields`) regardless of whether the value
+is null. Add one parametrized case that sets each forbidden key to null, separate from the
+existing non-null cases.
+REVERSIBILITY: Cheap schema correction; no effect on the scientific rules once enforced.
 ESCALATE: none
 
 ### S12R-15 [Should-fix] — targeted-suite tally is not reproducible
