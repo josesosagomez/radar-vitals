@@ -6477,3 +6477,134 @@ separately-logged **no-agreement** session, but the schema requires `masimo_path
 so such a session cannot be loaded at all — Stage 1 defect, or correctly deferred to Stage 4/5?
 Then Stage 3 (raw-ADC exact-grid reprocessing) alone, then Stage 4 (reference aggregation + gates),
 which triggers a mandatory §6 Masimo review.
+
+## 2026-07-27 - M4 Stages 1+2 cross-review: 14 findings, five rounds, the Stage-1 redesign
+
+**Set out to do:** process Codex's cross-model review of M4 Stages 1+2 (`plans/m4_stage12_review.md`),
+opened at the end of the previous session, and get it far enough that Stage 3 is unblocked.
+
+**Worked (with evidence):**
+
+- **Codex returned 12 Blocking findings on its first pass (S12R-01…12), then reopened 10 of them
+  (R2), then added S12R-13, S12R-14 and the Should-fix S12R-15.** Every behavioural claim was
+  reproduced against the code before being agreed with, and every AUTHORITY citation re-read in
+  the source document. **Not one finding was rejected.** All 14 now have code, across 11 commits:
+  `641e3c9` (round 1), `de42d6b` (round 2), `82d024d` (round 3), `e409cd6` (round 4),
+  `754536f` / `8a159b8` / `c249ad8` / `251ff2c` / `ee8bd74` / `4b8981b` (the six redesign slices),
+  `cddfb48` (round 5).
+- **The suite went 1240 → 1572 passing, 0 failed**, with the two targeted Stage 1/2 files at 464.
+- **Schema v2.** `Admission` (binary) became `SessionDisposition`
+  (`ADMITTED`/`EXCLUDED`/`NO_AGREEMENT`) as one §6 partition key; `RecordKind` discriminates
+  `captured_session` from `pre_capture_attempt`; `checksum_ok` was removed in favour of a derived
+  digest. A v1 document is refused rather than reinterpreted.
+- **§6 item 6 is now representable and objective.** A wholly missing Masimo file derives
+  `NO_AGREEMENT` from *bound* evidence — the reference is unbound, the acquisition record verifies,
+  and nothing sits at `reference_expected_path`. A file actually present but unbound raises; a
+  reference bound by digest and later missing is **LOST**, a provenance failure, never
+  no-agreement. This closes the question left open at the end of the previous session: it was a
+  Stage 1 defect, not a correct deferral — deferring the ledger cannot recover a session Stage 1
+  refuses to load.
+- **Verification moved inside `load_manifest`** (not an optional helper): paths resolve against one
+  documented root and cannot escape it, files are hashed before content is read, and the validity
+  map is checked for shape and count. Plan §7 row 1 named "validity-map consistency" in the
+  **Stage 1** done-when, so deferring it to Stage 3 had been a done-when violation.
+- **§6 item 3's second limb exists at last.** The settle criterion is derived from measured
+  primitives (spread ≤ 5 bpm over 60 s; drift ≤ 3 bpm), inclusive, so 5.0 and 3.0 exactly pass.
+- **The retry/replacement policy is enforced across records** in `load_manifest`: linked identity,
+  the `selected_confidence == "low"` trigger read **both ways**, at most one re-run, and a stated
+  cause that must be evidenced by the predecessor's own recomputed disposition.
+- **Scorability of M7 collision data is method-dependent**, via `MethodProvenance` and
+  `require_agreement_scoring(..., method=...)`. `is_scorable` now answers False for `collision`
+  rather than guessing in the permissive direction.
+- **Mutation evidence:** 33/33, 14/14, 3/3 in rounds 1–3; 12/12, 12/12, 8/8, 12/12 and 5/5 across
+  the redesign slices.
+
+**Failed / did not work, and why:**
+
+- **Round 1's patch introduced four new defects, which Codex found in round 2.** The worst,
+  **S12R-13**, was an over-exclusion introduced *while fixing over-exclusions*: I added a
+  `packets_dropped > packets_received` "impossible" check, but `LiveFrameSource` increments
+  `n_received` per arriving packet and `n_dropped` by the **size of each sequence gap**, so 10/90
+  is the normal shape of a severe-loss session. The check made exactly the worst-loss sessions
+  unloadable — dropping the hardest data and inflating coverage. The other three: a frozen-grid
+  guard that validated a *coerced copy* while callers used the original (`frames_per_win=600.5`
+  → 600, `k=1.9` → window 1, silently); `distance_m=True` parsing as **1.0 m**, inside the
+  protocol range; and a test I wrote that **asserted the opposite of a frozen document** —
+  `notes/protocol.md` calls the stepped 12→15→18→21 capture "a *method development* capture, not
+  a study session", and I had written `test_a_stepped_schedule_may_leave_the_frozen_rotation`
+  celebrating its admission to scoring mode, citing its 21 bpm step as the justification. I read
+  that file for the rates and not for the sentence classifying the capture.
+- **S12R-14: development mode could not load one of its own three reference-bearing captures.**
+  The `(12, 15, 18)` rotation was enforced in every mode, so `massimo2` (paced **16 bpm**) raised.
+  Plan §7 row 8's end-to-end development smoke could not have run. Root cause worth keeping:
+  **every development-mode test used synthetic plausible values**, so the first *real* parameter
+  from `notes/capture_inventory.md` to meet the code was the one that broke it.
+- **S12R-15: a number in a review document that did not trace to a run.** The targeted-suite tally
+  was 341 claimed against 338 actual, and the drift began at round 2 (335 vs 332). Round 1's count
+  was measured; every later one I **computed by arithmetic** instead of re-running the command.
+  Small, but the same class as quoting a metric with no script behind it.
+- **Four defects in my own redesign, found by the mutation harness rather than by reading:** an
+  **unreachable** `NO_AGREEMENT`-and-superseded guard (a superseded record always recomputes to
+  EXCLUDED, so M4R-04 fires first); the "at most one re-run" check keyed on `retry_status`, which
+  **silently never fired** for an a1→a2→a3 chain because the middle record is both a retry and
+  superseded; a dead `SETTLE_WINDOW_S` constant; and **five retry link rules with no test
+  depending on them** — slice 5's first mutation pass caught only **7 of 12**.
+- **The slice-6 mutation harness crashed and left a mutant live in the source tree.**
+  `OSError [Errno 22]` while restoring `src/m4/manifest.py` after its final mutant left the
+  S12R-14 regression (rotation enforced in every mode) on disk. Caught by inspection, restored,
+  and verified three ways: suite back to 1572 (identical to the pre-mutation count), a scripted
+  audit finding no mutant text anywhere in the file, and zero stray `if False:` occurrences. **A
+  bare `write_text` in a `finally` block is not a safe restore** — future harnesses need a verified
+  one.
+- **Mutation testing missed in both directions this session**, which is now demonstrated rather
+  than asserted: it could not catch a rule **never written** (`capture_config_path`, missing from
+  the schema *and* from the self-referential test that claimed to check §4 coverage) nor a rule
+  that **should never have been written** (S12R-13, which had a happily passing test asserting the
+  wrong thing).
+- **Tooling friction, twice costly:** PowerShell's `-replace` is **case-insensitive by default**
+  and mangled string literals during a bulk rename (`"admission"` → `"SessionDisposition"`);
+  reverted and redone with `-creplace`. PowerShell also has no heredocs, and here-strings written
+  with LF do not match a CRLF file. Bulk test edits were more reliable through a scratch Python
+  fixer.
+
+**Retired / no longer used:**
+
+- **`checksum_ok`** — removed from the schema entirely, not merely cross-checked. It was an
+  operator-supplied boolean, so the operator supplied both the verdict and the fact that made the
+  "objective recomputation" agree with it. Retaining it cross-checked would have left two
+  independently editable declarations of one fact.
+- **`Admission`** (binary enum) and the field name `admission` — superseded by `SessionDisposition`
+  / `disposition`, because `NO_AGREEMENT` is not an admission verdict.
+- **`truncation_lost_a_non_final_window`** — the predicate inferred a mid-file cut from a
+  frame-count shortfall and excluded exactly the case §6 item 4 orders **retained**. The item-4
+  truncation limb is now deliberately **unimplemented**; see below.
+- **`early_stop_contradicts_durations`**, `packet_counts_negative`, `packet_counts_missing`,
+  `frame_counts_negative`, `invalid_frames_exceed_total`, `checksum_ok_missing`,
+  `truncation_bytes_missing`, `duration_fields_missing`, `clock_offset_*_missing_or_non_finite` —
+  all **invented exclusion reasons**, now `ManifestError`s. Exclusion reasons are reported
+  study-wide, so a schema defect logged as a §6 disposition would put a fabricated cause into a
+  published table.
+- **`SETTLE_WINDOW_S`** — defined and read nowhere; the 60 s window cannot be verified from an
+  already-reduced scalar.
+- **The self-referential §4 coverage test** — it compared `_REQUIRED_SCORING_FIELDS` against a
+  hand-copy of itself and asserted only that six group *labels* existed. Replaced by the §4 table
+  transcribed from the plan document, one case per field, plus a reverse test that every required
+  field traces to a named authority.
+
+**Next:**
+
+- **Codex's verification pass over the redesign.** All 14 findings have code; whether the code is
+  right is what the pass is for, and this session's hit rate is the argument for looking hard.
+- **S12R-01 stays escalated.** §6 item 4 names `mirror_truncated_bytes` as the mechanism for
+  detecting a mid-recording cut, but `LiveFrameSource` sets it to `file_size % bytes_per_frame` —
+  a sub-frame remainder that can never locate one. **User decision 2026-07-27: record the conflict
+  and resolve it at the M0 freeze**, not by amending §6 now. A test pins the unimplemented state.
+- **The temporal replacement clause** ("no replacement once any of that subject's data is scored")
+  is documented with a named Stage-5 enforcement point against persisted scoring state; it cannot
+  be decided from a timeless manifest and must be built with Stage 5.
+- **Five rules defined rather than transcribed** are flagged in the code for challenge:
+  validity-map polarity, the pre-capture field boundary, the retry-reason evidence mapping,
+  `MethodProvenance`'s shape, and the schema-version bump.
+- Then Stage 3 (raw-ADC exact-grid reprocessing) alone, then Stage 4 (reference aggregation +
+  gates), which triggers a mandatory CLAUDE.md §6 Masimo-parser review.
+
