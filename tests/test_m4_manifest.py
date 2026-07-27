@@ -47,6 +47,7 @@ _REQUIRED_KEYS = [
     "capture_git_commit",
     "reference_expected_path", "reference_acquisition_path", "reference_acquisition_sha256",
     "intended_duration_s", "actual_duration_s", "early_stop", "retry_status",
+    "selected_confidence",
     "settle_pr_spread_bpm", "settle_pr_drift_bpm",
     "settle_evidence_path", "settle_evidence_sha256",
 ]
@@ -87,6 +88,7 @@ def admissible(**over) -> dict:
         "actual_duration_s": 600.0,
         "early_stop": False,
         "retry_status": "original",
+        "selected_confidence": "high",
         # Settle evidence comfortably inside both limbs (5 bpm spread, 3 bpm drift).
         "settle_pr_spread_bpm": 2.0,
         "settle_pr_drift_bpm": 1.0,
@@ -237,6 +239,7 @@ _NON_SECTION_4_AUTHORITY: dict[str, str] = {
     "settle_pr_drift_bpm": "§6 item 3 + notes/protocol.md SETTLE CRITERION limb 2 (S12R-04)",
     "settle_evidence_path": "S12R-04 R2: the criterion must be derived from auditable evidence",
     "settle_evidence_sha256": "S12R-04 R2: auditable evidence is bound by path + SHA-256",
+    "selected_confidence": "§6 item 7's frozen re-run trigger, from warmup_bin_selection.json",
 }
 
 
@@ -1352,3 +1355,204 @@ def test_exclusion_outranks_no_agreement(tmp_path):
     (s,) = _load(tmp_path, fields)
     assert s.disposition is SessionDisposition.EXCLUDED
     assert "protocol_abort_did_not_reach_intended_duration" in s.disposition_reasons
+
+
+# ── S12R-05: retry / replacement, enforced ACROSS records ────────────────────
+
+def _pair(tmp_path, reason="warmup_low_confidence", **prior_over):
+    """A superseded attempt and the retry that replaced it, both fully materialised."""
+    prior_fields = dict(
+        session_id="S01_natural_a1", disposition="excluded",
+        retry_status="superseded", retry_reason=reason,
+        replaced_by_session_id="S01_natural_a2", selected_confidence="low",
+    )
+    prior_fields.update(prior_over)
+    prior = materialise(tmp_path, admissible(**prior_fields))
+    later = materialise(tmp_path, admissible(
+        session_id="S01_natural_a2", retry_status="retry", retry_reason=reason,
+        replaces_session_id="S01_natural_a1",
+    ))
+    return prior, later
+
+
+def test_a_linked_warmup_retry_pair_loads(tmp_path):
+    """§6 item 7: the one permitted re-run, triggered by selected_confidence == 'low'."""
+    prior, later = _pair(tmp_path)
+    a, b = _load(tmp_path, prior, later)
+    assert a.disposition is SessionDisposition.EXCLUDED
+    assert "superseded_by_retry" in a.disposition_reasons
+    assert b.disposition is SessionDisposition.ADMITTED
+    assert b.replaces_session_id == "S01_natural_a1"
+
+
+def test_a_replacement_must_name_a_session_that_exists(tmp_path):
+    """"Both the discarded and the replacement session are logged" — a dangling link means
+    one of them is not in the record at all."""
+    prior, _ = _pair(tmp_path)
+    with pytest.raises(ManifestError, match="not in this manifest"):
+        _load(tmp_path, prior)
+
+
+def test_the_two_ends_of_a_replacement_must_agree(tmp_path):
+    prior, later = _pair(tmp_path)
+    later["replaces_session_id"] = "someone_else"
+    with pytest.raises(ManifestError, match="not in this manifest|names"):
+        _load(tmp_path, prior, later)
+
+
+def test_a_warmup_rerun_requires_the_frozen_low_confidence_TRIGGER(tmp_path):
+    """§6 item 7: "re-run iff selected_confidence == 'low'". Without this, a manifest could
+    label any clean attempt superseded and have M4 accept its exclusion."""
+    prior, later = _pair(tmp_path, selected_confidence="high")
+    with pytest.raises(ManifestError, match="frozen trigger is 'low'"):
+        _load(tmp_path, prior, later)
+
+
+def test_an_original_still_marked_low_confidence_was_never_re_run(tmp_path):
+    """The trigger is an *iff*, so it binds in both directions: a low-confidence original
+    that was scored as-is skipped the re-run the frozen policy requires."""
+    fields = materialise(tmp_path, admissible(selected_confidence="low"))
+    with pytest.raises(ManifestError, match="never superseded"):
+        _load(tmp_path, fields)
+
+
+def test_at_most_ONE_warmup_rerun_per_session(tmp_path):
+    """§6 item 7 / M3R-20: "at most one re-run per session"; if the retry is also low the
+    session is captured and scored anyway, so coverage cannot be inflated by discarding hard
+    sessions."""
+    a1, a2 = _pair(tmp_path)
+    a2.update(retry_status="superseded", replaced_by_session_id="S01_natural_a3",
+              disposition="excluded", selected_confidence="low")
+    a3 = materialise(tmp_path, admissible(
+        session_id="S01_natural_a3", retry_status="retry",
+        retry_reason="warmup_low_confidence", replaces_session_id="S01_natural_a2",
+    ))
+    with pytest.raises(ManifestError, match="at most \*\*one\*\* re-run|at most"):
+        _load(tmp_path, a1, a2, a3)
+
+
+@pytest.mark.parametrize(
+    "reason, prior_over, ok",
+    [
+        ("protocol_abort", {"actual_duration_s": 10.0, "early_stop": True}, True),
+        ("epoch_sync_failure", {"clock_offset_end_s": 9.0}, True),
+        ("protocol_abort", {}, False),
+        ("epoch_sync_failure", {}, False),
+    ],
+)
+def test_a_replacement_reason_must_be_evidenced_by_the_predecessor(tmp_path, reason, prior_over, ok):
+    """Items 3-5 are permitted causes, but the stated cause must match what the predecessor
+    was actually excluded for — otherwise any clean attempt could be relabelled and dropped."""
+    prior, later = _pair(tmp_path, reason=reason, **prior_over)
+    prior["selected_confidence"] = "high"
+    later["selected_confidence"] = "high"
+    if ok:
+        a, _ = _load(tmp_path, prior, later)
+        assert a.disposition is SessionDisposition.EXCLUDED
+    else:
+        with pytest.raises(ManifestError, match="was not excluded for that cause"):
+            _load(tmp_path, prior, later)
+
+
+def test_item_6_is_not_a_replacement_reason():
+    """"Reason 6 is a no-agreement session (not re-captured)" — absent from the enum by
+    construction, so it cannot even be spelled."""
+    from src.m4.manifest import RetryReason
+
+    assert {r.value for r in RetryReason} == {
+        "warmup_low_confidence", "protocol_abort", "corrupt_raw", "epoch_sync_failure",
+    }
+
+
+def test_a_no_agreement_session_cannot_ALSO_be_superseded(tmp_path):
+    """§6: "reason 6 is a no-agreement session (**not re-captured**)".
+
+    This turns out to be structural rather than a rule anyone has to write: a superseded
+    record always recomputes to EXCLUDED via `superseded_by_retry`, so declaring both
+    `no_agreement` and `superseded` fails the M4R-04 agreement check. I had written an
+    explicit guard for it in `validate_retry_policy` and removed it once this test showed it
+    was unreachable — a line no test could fail on is not a rule."""
+    fields = no_reference(tmp_path)
+    fields.update(retry_status="superseded", retry_reason="protocol_abort",
+                  replaced_by_session_id="whatever", disposition="no_agreement")
+    with pytest.raises(ManifestError, match="recomputes 'excluded'"):
+        _load(tmp_path, fields)
+
+
+def test_an_unknown_retry_reason_is_rejected(tmp_path):
+    fields = materialise(tmp_path, admissible(
+        retry_status="retry", retry_reason="subject_sneezed",
+        replaces_session_id="x",
+    ))
+    with pytest.raises(ManifestError, match="retry_reason"):
+        _load(tmp_path, fields)
+
+
+# ── Each retry link rule, isolated (all five survived the first mutation pass) ─
+
+def test_a_retry_must_name_a_predecessor_that_exists(tmp_path):
+    """Loaded alone, so the retry side is what fails: "both the discarded and the
+    replacement session are logged" (§6 item 7)."""
+    _, later = _pair(tmp_path)
+    later["replaces_session_id"] = "ghost_session"
+    with pytest.raises(ManifestError, match="not in this manifest"):
+        _load(tmp_path, later)
+
+
+def test_the_retry_side_link_must_point_back(tmp_path):
+    """Retry first in the document, so the retry-side agreement check is the one that runs."""
+    prior, later = _pair(tmp_path)
+    prior["replaced_by_session_id"] = "some_third_session"
+    with pytest.raises(ManifestError, match="but that session names"):
+        _load(tmp_path, later, prior)
+
+
+def test_the_superseded_side_link_must_point_forward(tmp_path):
+    """Superseded first, so its own agreement check is the one that runs."""
+    prior, later = _pair(tmp_path)
+    later["replaces_session_id"] = "some_third_session"
+    with pytest.raises(ManifestError, match="but that session replaces"):
+        _load(tmp_path, prior, later)
+
+
+def test_both_ends_of_a_replacement_must_state_the_same_cause(tmp_path):
+    """A pair that disagrees about why the replacement happened has not logged one event —
+    it has logged two different claims about it."""
+    prior, later = _pair(
+        tmp_path, reason="protocol_abort", actual_duration_s=10.0, early_stop=True,
+    )
+    prior["selected_confidence"] = "high"
+    later["selected_confidence"] = "high"
+    later["retry_reason"] = "corrupt_raw"
+    with pytest.raises(ManifestError, match="Both ends of a replacement log the same cause"):
+        _load(tmp_path, prior, later)
+
+
+@pytest.mark.parametrize(
+    "status, link_key",
+    [("retry", "replaces_session_id"), ("superseded", "replaced_by_session_id")],
+)
+def test_a_non_original_attempt_must_carry_its_link(tmp_path, status, link_key):
+    """Without the link the record says a replacement happened but not with what — the
+    accounting §6 item 7 requires at study level cannot be reconstructed."""
+    fields = materialise(tmp_path, admissible(
+        retry_status=status, retry_reason="warmup_low_confidence",
+        disposition="excluded" if status == "superseded" else "admitted",
+        selected_confidence="low" if status == "superseded" else "high",
+    ))
+    fields.pop(link_key, None)
+    with pytest.raises(ManifestError, match=link_key):
+        _load(tmp_path, fields)
+
+
+def test_a_direct_parse_also_requires_the_replacement_link(tmp_path):
+    """`parse_session` is public, so the row-local half of the rule has to hold there too —
+    reached through `load_manifest` the cross-record check would mask it."""
+    fields = admissible(retry_status="retry", retry_reason="warmup_low_confidence")
+    with pytest.raises(ManifestError, match="replaces_session_id"):
+        parse_session(fields, Mode.SCORING, raw_digest_ok=True)
+
+    fields = admissible(retry_status="superseded", retry_reason="warmup_low_confidence",
+                        disposition="excluded")
+    with pytest.raises(ManifestError, match="replaced_by_session_id"):
+        parse_session(fields, Mode.SCORING, raw_digest_ok=True)

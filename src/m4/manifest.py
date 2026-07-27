@@ -109,6 +109,34 @@ class RetryStatus(str, Enum):
     SUPERSEDED = "superseded"      # this session was replaced by a later attempt
 
 
+class SelectedConfidence(str, Enum):
+    """`warmup_bin_selection.json`'s verdict, as `src/warmup_select.py` writes it.
+
+    §6 item 7 makes `low` the **frozen re-run trigger** — "re-run iff
+    `selected_confidence == "low"`" — so this vocabulary is load-bearing, not descriptive.
+    """
+
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+
+
+class RetryReason(str, Enum):
+    """The **only** permitted replacement causes (§6 item 7 + the binding Replacement policy).
+
+    "A session not admitted for reasons 3–5 may be re-captured … reason 6 is a no-agreement
+    session (**not re-captured**); reason 7 is the single warmup retry." So item 6 has no
+    member here by construction: a no-agreement session is logged, never replaced.
+    """
+
+    WARMUP_LOW_CONFIDENCE = "warmup_low_confidence"   # item 7 — the one permitted warmup re-run
+    PROTOCOL_ABORT = "protocol_abort"                 # item 3
+    CORRUPT_RAW = "corrupt_raw"                       # item 4
+    EPOCH_SYNC_FAILURE = "epoch_sync_failure"         # item 5
+
+
+
+
 #: `notes/protocol.md`: the subject "must be within 0.8-1.4 m". Inclusive at both ends
 #: (plan §4.1); Stage 1 pins the equality boundaries.
 DISTANCE_MIN_M = 0.8
@@ -141,6 +169,22 @@ PACED_RATES_BPM = (12, 15, 18)
 SETTLE_MAX_PR_SPREAD_BPM = 5.0
 SETTLE_MAX_PR_DRIFT_BPM = 3.0
 SETTLE_WINDOW_S = 60.0
+
+#: Which §6 exclusion reason a replacement cause must actually be evidenced by on the
+#: superseded record. A stated reason the predecessor's own disposition does not support is an
+#: unlogged degree of freedom: without this, any clean attempt could be relabelled and dropped.
+_RETRY_REASON_EVIDENCE: dict[RetryReason, tuple[str, ...]] = {
+    RetryReason.PROTOCOL_ABORT: (
+        "protocol_abort_did_not_reach_intended_duration",
+        f"settle_pr_spread_exceeds_{SETTLE_MAX_PR_SPREAD_BPM:g}bpm",
+        f"settle_pr_drift_exceeds_{SETTLE_MAX_PR_DRIFT_BPM:g}bpm",
+    ),
+    RetryReason.CORRUPT_RAW: ("stored_checksum_failed",),
+    RetryReason.EPOCH_SYNC_FAILURE: (
+        f"clock_offset_start_s_exceeds_{MAX_CLOCK_OFFSET_S:g}s",
+        f"clock_offset_end_s_exceeds_{MAX_CLOCK_OFFSET_S:g}s",
+    ),
+}
 
 #: Plan §4 calls for a **versioned** manifest (S12R-09). The version is a property of the
 #: manifest document, not of a session, so `load_manifest` enforces it. Bump only with a
@@ -295,6 +339,9 @@ _REQUIRED_SCORING_FIELDS: tuple[tuple[str, str], ...] = (
     ("actual_duration_s", "Disposition"),
     ("early_stop", "Disposition"),
     ("retry_status", "Disposition"),
+    # §6 item 7's frozen re-run trigger, read from `warmup_bin_selection.json`. Objective and
+    # agreement-blind: warmup selection never sees the Masimo.
+    ("selected_confidence", "Retry"),
     # Authority is §6 item 3 + `notes/protocol.md` SETTLE CRITERION, not §4's table (S12R-04).
     ("settle_pr_spread_bpm", "Settle"),
     ("settle_pr_drift_bpm", "Settle"),
@@ -407,7 +454,10 @@ class SessionManifest:
     actual_duration_s: float | None = None
     early_stop: bool | None = None
     retry_status: RetryStatus | None = None
-    retry_reason: str | None = None
+    retry_reason: RetryReason | None = None
+    selected_confidence: SelectedConfidence | None = None
+    replaces_session_id: str | None = None
+    replaced_by_session_id: str | None = None
 
     raw: dict = field(default_factory=dict, repr=False, compare=False)
 
@@ -956,8 +1006,20 @@ def parse_session(
     # Plan §4 Disposition binds retry/replacement status **and reason** (S12R-09). A reason
     # is only meaningful once the status is not `original`, so it is conditionally required
     # rather than always required.
+    retry_reason = None
+    selected_confidence = (
+        _as_enum(fields["selected_confidence"], SelectedConfidence,
+                 "selected_confidence", session_id)
+        if present("selected_confidence") else None
+    )
     if retry is not None and retry is not RetryStatus.ORIGINAL:
         _non_empty_str(fields, "retry_reason", session_id)
+        retry_reason = _as_enum(
+            fields["retry_reason"], RetryReason, "retry_reason", session_id
+        )
+        link_key = ("replaces_session_id" if retry is RetryStatus.RETRY
+                    else "replaced_by_session_id")
+        _non_empty_str(fields, link_key, session_id)
     elif retry is RetryStatus.ORIGINAL and fields.get("retry_reason") is not None:
         raise ManifestError(
             f"session {session_id!r}: retry_status is 'original' but retry_reason="
@@ -1045,7 +1107,10 @@ def parse_session(
         actual_duration_s=fields.get("actual_duration_s"),
         early_stop=fields.get("early_stop"),
         retry_status=retry,
-        retry_reason=fields.get("retry_reason"),
+        retry_reason=retry_reason,
+        selected_confidence=selected_confidence,
+        replaces_session_id=fields.get("replaces_session_id"),
+        replaced_by_session_id=fields.get("replaced_by_session_id"),
         raw=fields,
     )
 
@@ -1269,7 +1334,137 @@ def load_manifest(
         if s.session_id in seen:
             raise ManifestError(f"{p}: duplicate session_id {s.session_id!r}")
         seen.add(s.session_id)
+
+    # Cross-record rules need the whole document, which is exactly why they live here and
+    # not in `parse_session` (S12R-05 R2).
+    if mode is Mode.SCORING:
+        validate_retry_policy(parsed, str(p))
     return parsed
+
+
+def validate_retry_policy(sessions: list[SessionManifest], where: str) -> None:
+    """Enforce §6 item 7 and the binding Replacement policy **across records** (S12R-05 R2).
+
+    These rules are not row-local, but "not row-local" is not the same as "not Stage 1":
+    plan §7 row 1 names retry/replacement in this stage's done-when, and `load_manifest` sees
+    every session in the document, so the *link*, *trigger*, *count* and *reason* rules are
+    all decidable here. Reducing the whole policy to `retry_status == "superseded"` let a
+    manifest label any clean attempt superseded and have M4 accept its exclusion.
+
+    Enforced:
+
+    * **Linked identity.** A superseded attempt names its replacement and vice versa, both
+      must exist in this manifest, and the two links must agree.
+    * **Trigger.** A warmup re-run is permitted **iff** the superseded attempt reports
+      `selected_confidence == "low"` — §6 item 7's frozen trigger, in both directions.
+    * **Count.** "At most one re-run per session": a warmup retry may not itself be
+      superseded for the same cause.
+    * **Reason.** Restricted to items 3–5 plus the item-7 warmup retry, and the stated cause
+      must be evidenced by the predecessor's own recomputed disposition. Item 6 is absent by
+      construction: `RetryReason` has no no-agreement member, and a `NO_AGREEMENT` session may
+      not be superseded at all.
+
+    **NOT enforced here, deliberately, and this is the note S12R-05 R2 asked to be recorded:**
+    "no replacement once any of that subject's data is scored" is **temporal**. It cannot be
+    decided from a timeless manifest, and a manifest-supplied "before scoring" boolean would
+    not be objective — it is the operator asserting the very thing being checked. **Its
+    enforcement point is the Stage-5 disposition-ledger / scoring entry, against a persisted
+    study-scoring state (an immutable run ledger recording when each subject was first
+    scored).** Recorded here so the binding rule is not lost between stages; it must be built
+    when Stage 5 is.
+    """
+    by_id = {s.session_id: s for s in sessions}
+
+    def fail(msg: str) -> None:
+        raise ManifestError(f"{where}: {msg}")
+
+    for s in sessions:
+        if s.retry_status is None or s.retry_status is RetryStatus.ORIGINAL:
+            # §6 item 7's trigger is an "iff": a low-confidence attempt must have been
+            # re-run. An original still carrying `low` was scored without the re-run the
+            # frozen policy requires.
+            if s.selected_confidence is SelectedConfidence.LOW:
+                fail(
+                    f"session {s.session_id!r} is an original attempt with "
+                    "selected_confidence='low' but was never superseded. §6 item 7's trigger "
+                    "is 're-run iff low' — scoring it as-is skips the one re-run the frozen "
+                    "policy requires. (A retry that is *also* low IS scored — but this is not "
+                    "a retry.)"
+                )
+            continue
+
+        reason = s.retry_reason
+        if reason is None:
+            fail(f"session {s.session_id!r} is {s.retry_status.value!r} without a retry_reason")
+
+        if s.retry_status is RetryStatus.SUPERSEDED:
+            # There is deliberately no NO_AGREEMENT check here. §6's "reason 6 is a
+            # no-agreement session (not re-captured)" is already structural: a superseded
+            # record always recomputes to EXCLUDED via `superseded_by_retry`, so a manifest
+            # declaring `no_agreement` **and** `superseded` is rejected by the M4R-04
+            # agreement check before this function runs. A guard here would be unreachable —
+            # a line no test could fail on, which is how vacuous checks accumulate (S12R-08).
+            other = by_id.get(s.replaced_by_session_id)
+            if other is None:
+                fail(
+                    f"session {s.session_id!r} is superseded but replaced_by_session_id="
+                    f"{s.replaced_by_session_id!r} is not in this manifest. Both the "
+                    "discarded and the replacement session are logged (§6 item 7)."
+                )
+            if other.replaces_session_id != s.session_id:
+                fail(
+                    f"session {s.session_id!r} names {other.session_id!r} as its replacement, "
+                    f"but that session replaces {other.replaces_session_id!r}."
+                )
+            continue
+
+        # RetryStatus.RETRY — this session replaced an earlier attempt.
+        prior = by_id.get(s.replaces_session_id)
+        if prior is None:
+            fail(
+                f"session {s.session_id!r} is a retry but replaces_session_id="
+                f"{s.replaces_session_id!r} is not in this manifest."
+            )
+        if prior.replaced_by_session_id != s.session_id:
+            fail(
+                f"session {s.session_id!r} claims to replace {prior.session_id!r}, but that "
+                f"session names {prior.replaced_by_session_id!r} as its replacement."
+            )
+        if prior.retry_reason is not reason:
+            fail(
+                f"session {s.session_id!r} gives retry_reason={reason.value!r} but the "
+                f"session it replaces gives {prior.retry_reason.value if prior.retry_reason else None!r}. "
+                "Both ends of a replacement log the same cause."
+            )
+
+        if reason is RetryReason.WARMUP_LOW_CONFIDENCE:
+            if prior.selected_confidence is not SelectedConfidence.LOW:
+                fail(
+                    f"session {s.session_id!r} is a warmup re-run, but the attempt it "
+                    f"replaces reports selected_confidence="
+                    f"{prior.selected_confidence.value if prior.selected_confidence else None!r}. "
+                    "§6 item 7's frozen trigger is 'low', and nothing else licenses a re-run."
+                )
+            # Keyed on the LINK, not on `retry_status`: the middle record of a
+            # a1 -> a2 -> a3 chain is both a retry and superseded, and a single enum can only
+            # say one of those. `replaces_session_id` is present on it either way.
+            if prior.replaces_session_id is not None:
+                fail(
+                    f"session {s.session_id!r} supersedes {prior.session_id!r}, which was "
+                    "itself a warmup retry. §6 item 7 allows **at most one** re-run per "
+                    "session; if the retry is also 'low' the session is captured and scored "
+                    "anyway, so coverage cannot be inflated by discarding hard sessions."
+                )
+        else:
+            evidence = _RETRY_REASON_EVIDENCE[reason]
+            if not set(evidence) & set(prior.disposition_reasons):
+                fail(
+                    f"session {s.session_id!r} states retry_reason={reason.value!r}, but the "
+                    f"session it replaces was not excluded for that cause (its recomputed "
+                    f"reasons are {prior.disposition_reasons or '()'}). A replacement cause "
+                    "the predecessor's own disposition does not support would let a clean "
+                    "attempt be relabelled and silently dropped."
+                )
 
 
 def require_scoring_mode(sessions: list[SessionManifest], what: str) -> None:
