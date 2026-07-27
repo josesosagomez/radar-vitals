@@ -146,8 +146,8 @@ def test_every_integer_second_lands_in_exactly_one_window_fractional_origin():
 
 
 def test_reference_span_rejects_a_non_finite_origin():
-    for bad in (float("nan"), float("inf")):
-        with pytest.raises(WindowGridError, match="frame0_epoch must be finite"):
+    for bad in (float("nan"), float("inf"), float("-inf")):
+        with pytest.raises(WindowGridError, match="must be a finite number"):
             window_reference_span(0, frame0_epoch=bad)
 
 
@@ -221,3 +221,53 @@ def test_the_frozen_defaults_are_still_accepted_everywhere():
     assert explicit == build_window_grid(12000, 1000.0)
     assert len(explicit) == 20
     assert explicit[0].epoch_end - explicit[0].epoch_start == pytest.approx(30.0)
+
+
+# ── S12R-08 R2: the guard must validate, not coerce ───────────────────────────
+
+@pytest.mark.parametrize("bad", [600.5, 600.0, "600", True, None])
+def test_frames_per_win_must_be_an_exact_integer(bad):
+    """`int(600.5)` is 600, so validating a coerced copy while the body used the original
+    let a fractional window length through and silently truncated it. The grid then
+    addressed a different window than the argument named, with plausible-looking spans."""
+    with pytest.raises(WindowGridError):
+        window_frame_span(1, frames_per_win=bad)
+    with pytest.raises(WindowGridError):
+        build_window_grid(1200, 0.0, frames_per_win=bad)
+
+
+@pytest.mark.parametrize("bad", [1.9, 1.0, "1", True, None])
+def test_window_index_k_must_be_an_exact_integer(bad):
+    """`window_frame_span(k=1.9)` silently returned window 1."""
+    with pytest.raises(WindowGridError, match="k="):
+        window_frame_span(bad)
+
+
+@pytest.mark.parametrize("bad", [12000.7, 12000.0, "12000", True, None])
+def test_n_frames_must_be_an_exact_integer(bad):
+    with pytest.raises(WindowGridError, match="n_frames"):
+        n_complete_windows(bad)
+
+
+@pytest.mark.parametrize("bad", ["20", None, [20.0]])
+def test_fs_must_be_a_finite_number_before_the_frozen_check(bad):
+    """`fs="20"` passed the frozen-value comparison via `float(fs)` and then failed deep in
+    the arithmetic with a bare TypeError instead of a named WindowGridError."""
+    with pytest.raises(WindowGridError, match="fs="):
+        window_reference_span(0, 1000.0, fs=bad)
+
+
+@pytest.mark.parametrize("bad", ["1785000000.25", True, None])
+def test_frame0_epoch_must_be_a_number(bad):
+    with pytest.raises(WindowGridError, match="frame0_epoch"):
+        window_reference_span(0, bad)
+
+
+def test_the_validated_values_are_what_the_grid_actually_uses():
+    """The regression this class of bug produces: the guard passes, the body computes from
+    the unvalidated original, and the two disagree. Exact ints leave no room for that."""
+    lo, hi = window_frame_span(1, frames_per_win=600)
+    assert (lo, hi) == (600, 1200)
+    g = build_window_grid(12000, 1785000000.25, fs=20.0, frames_per_win=600)
+    assert len(g) == 20
+    assert g[19].frame_start == 11400 and g[19].frame_end == 12000

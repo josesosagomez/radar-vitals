@@ -237,9 +237,20 @@ def test_distance_in_centimetres_is_rejected_not_silently_converted():
         parse_session(admissible(distance_m=100), Mode.SCORING)
 
 
-def test_non_numeric_distance_is_rejected():
-    with pytest.raises(ManifestError, match="not a number"):
-        parse_session(admissible(distance_m="1.0 m"), Mode.SCORING)
+@pytest.mark.parametrize("bad", ["1.0 m", "1.0", True, False, None, ["1.0"]])
+def test_non_numeric_distance_is_rejected(bad):
+    """S12R-10 R2 added `True` and the clean numeric string `"1.0"`: `float(True)` is **1.0**,
+    which sits inside the protocol range, so a boolean parsed as a valid 1.0 m distance."""
+    with pytest.raises(ManifestError, match="distance_m"):
+        parse_session(admissible(distance_m=bad), Mode.SCORING)
+
+
+@pytest.mark.parametrize("bad", ["1785000000.25", True, "not-an-epoch", [1785000000.25]])
+def test_frame0_epoch_must_be_a_number_not_a_string(bad):
+    """S12R-10 R2. `float("1785000000.25")` succeeded, so a string origin parsed as valid —
+    in the single field every window boundary and reference span is measured from."""
+    with pytest.raises(ManifestError, match="frame0_epoch"):
+        parse_session(admissible(frame0_epoch=bad), Mode.SCORING)
 
 
 @pytest.mark.parametrize("bad", ["standing", "supine", "Seated", "seated ", "", None])
@@ -443,9 +454,27 @@ def test_malformed_packet_counts_are_an_ERROR_not_an_exclusion(over):
         recompute_admission(admissible(**over), "S")
 
 
-def test_packets_dropped_cannot_exceed_packets_received():
-    with pytest.raises(ManifestError, match="exceeds packets_received"):
-        recompute_admission(admissible(packets_received=100, packets_dropped=101), "S")
+@pytest.mark.parametrize(
+    "received, dropped", [(10, 90), (100, 101), (1, 1000), (10, 10)],
+)
+def test_packets_dropped_MAY_exceed_packets_received(received, dropped):
+    """S12R-13 — a defect introduced by the S12R-10 fix, caught on review.
+
+    The counters are **not a partition**: `LiveFrameSource._loop` increments `n_received` by
+    one per arriving packet, but `n_dropped` by the **size of each sequence gap**. Severe
+    loss legitimately gives 10 received / 90 dropped. §6 item 4 freezes
+    `n_dropped / n_received > 5 %` as flag-only with **no upper bound**, so these must load,
+    flag, and stay ADMITTED.
+
+    Rejecting them would have made precisely the worst-loss sessions unloadable — dropping
+    the hardest data and inflating coverage, which is the exact failure mode §6 item 4's
+    flag-don't-exclude rule exists to prevent.
+    """
+    verdict, reasons, flags = recompute_admission(
+        admissible(packets_received=received, packets_dropped=dropped), "S"
+    )
+    assert verdict is Admission.ADMITTED, reasons
+    assert any("packet_loss_above" in f for f in flags)
 
 
 def test_rule_protocol_abort_did_not_reach_intended_duration():
@@ -682,20 +711,35 @@ def test_a_single_entry_schedule_must_agree_with_the_scalar_rate():
         )
 
 
-def test_a_stepped_schedule_may_leave_the_frozen_rotation():
-    """`notes/protocol.md`'s diagnostic sweep steps 12 -> 15 -> 18 -> **21**, so the schedule
-    entries deliberately do NOT have to be members of the M3R-31 rotation. That constraint
-    belongs to `commanded_rate_bpm`, which is what the §3.2 pooling table reads."""
+_SWEEP = [
+    {"commanded_rate_bpm": 12, "start_s": 0.0},
+    {"commanded_rate_bpm": 15, "start_s": 120.0},
+    {"commanded_rate_bpm": 18, "start_s": 240.0},
+    {"commanded_rate_bpm": 21, "start_s": 360.0},
+]
+
+
+def test_the_stepped_diagnostic_sweep_CANNOT_be_a_scoring_study_session():
+    """S12R-09 R2. The previous version of this test asserted the opposite and was wrong.
+
+    `notes/protocol.md` heads the stepped 12->15->18->21 capture "Diagnostic arm" and states
+    it "is a *method development* capture, **not a study session**"; §3.2 makes the paced
+    commanded rate **between-subject**. Allowing a multi-entry schedule in scoring mode
+    imported a development protocol into the frozen study estimand.
+    """
+    with pytest.raises(ManifestError, match="exactly one"):
+        parse_session(paced(12, commanded_rate_schedule=_SWEEP), Mode.SCORING)
+
+
+def test_the_stepped_sweep_still_loads_in_development_mode():
+    """It is a real capture and must remain representable — just never as study evidence.
+    Its 21 bpm step is outside the M3R-31 rotation, which is fine here and only here."""
     m = parse_session(
-        paced(12, commanded_rate_schedule=[
-            {"commanded_rate_bpm": 12, "start_s": 0.0},
-            {"commanded_rate_bpm": 15, "start_s": 120.0},
-            {"commanded_rate_bpm": 18, "start_s": 240.0},
-            {"commanded_rate_bpm": 21, "start_s": 360.0},
-        ]),
-        Mode.SCORING,
+        {"session_id": "sweep", "arm": "paced", "commanded_rate_bpm": 12,
+         "commanded_rate_schedule": _SWEEP},
+        Mode.DEVELOPMENT,
     )
-    assert len(m.commanded_rate_schedule) == 4
+    assert len(m.commanded_rate_schedule) == 4 and not m.is_scorable
 
 
 # ── Provenance binding: path + SHA-256 (S12R-09) ──────────────────────────────

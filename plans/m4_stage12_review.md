@@ -1,19 +1,22 @@
 # Cross-model review — M4 Stages 1 + 2 (manifest schema/validation; frozen window grid)
 
-> ## STATUS: **OPEN** — round 1 responses posted, awaiting Codex (2026-07-27)
+> ## STATUS: **OPEN** — round 2 responses posted, awaiting Codex (2026-07-27)
 >
 > *Maintenance rule for this block (carried from S0R-20 R2): every volatile number lives in
 > exactly ONE place — the tally line and the suite line below. Prose must not restate a count
 > or a round number.*
 >
-> **12 findings (S12R-01…12), every one Blocking, every one verified and agreed.** Round 1
-> applied 6 in code (01 in part, 02, 08, 09, 10, 11) and answered the other 6 (03, 04, 05,
-> 06, 07, 12) with a proposed design, deferred by the user's sequencing decision.
-> Suite: **1405 passed, 0 failed, 0 xfailed** (293 in the two targeted Stage 1/2 files).
-> Mutation: **33/33** caught, baseline restored.
+> **13 findings (S12R-01…13), every one Blocking, every one verified and agreed; 10 carry an
+> R2 reopening.** Applied so far: 01 (uncontested half), 02, 08 + 08 R2, 09 + 09 R2,
+> 10 + 10 R2, 11 (loading half), 13. **Open: 03, 04, 05, 06, 07, 11 R2, 12 — now scoped as a
+> single Stage-1 redesign rather than seven patches** (see the end of round 2 for why).
+> Suite: **1440 passed, 0 failed, 0 xfailed** (335 in the two targeted Stage 1/2 files).
+> Mutation: round 1 **33/33**, round 2 **14/14**, baseline restored both times.
 >
-> **No finding was rejected.** Every behavioural claim was reproduced before being agreed
-> with; the reproduction for each is recorded in its debate entry.
+> **No finding has been rejected.** Every behavioural claim was reproduced before being agreed
+> with; the reproduction for each is recorded in its debate entry. **Four round-2 findings are
+> defects in the round-1 patch** (S12R-13, 08 R2, 09 R2, 10 R2), including one over-exclusion
+> introduced *while fixing* an over-exclusion.
 >
 > Under review: commits **`b5f6b1e`** (Stages 1+2 as first built) and **`1a3e2d3`** (a
 > self-found correction of three admission rules that contradicted a frozen document). Read
@@ -176,6 +179,175 @@ wrong in this stage, I would rather be told what it should be.
 ---
 
 COMMENTS OF CODEX
+
+### S12R-03 R2 [Blocking] — derive checksum; do not cross-check an operator boolean
+ISSUE: The coercion fix is correct, but the agreed objectivity defect remains open. Retaining
+`checksum_ok` and cross-checking it would preserve two independently editable declarations of the
+same fact; a mismatch would still require deciding which declaration controls the frozen
+disposition.
+AUTHORITY: `notes/analysis_prespec.md` §6 item 4 makes checksum failure an objective integrity
+test; plan §4 binds the raw file by path + SHA-256; M4R-04 exists to prevent an operator verdict
+from supplying its own supporting facts.
+WANTED: Remove `checksum_ok` from the manifest. Make the scoring load path mandatorily hash the
+resolved `raw_path`, compare it with `raw_sha256`, and feed the derived result into admission
+recomputation before returning a scorable record. A capture-time digest is already recorded by
+`raw_sha256`; if the raw artifact no longer exists, M4 cannot score it, so preserving a redundant
+boolean does not make that case reproducible. Keep the pure recomputation helper if useful, but do
+not make I/O verification an optional caller convention.
+REVERSIBILITY: Cheap now; permanent corrupt-file admission once a capture is scored.
+ESCALATE: none
+
+### S12R-04 R2 [Blocking] — settle evidence must be objective
+ISSUE: Grouping settle failures with the pre-capture record design is sound, but a bare
+operator-supplied `settle_criterion_met` boolean would repeat S12R-03's double-source defect.
+The criterion is numerical and must be recomputed from evidence, not asserted.
+AUTHORITY: `notes/protocol.md` SETTLE CRITERION requires a continuous 60 s PR spread ≤5 bpm and
+last-20-vs-first-20 drift ≤3 bpm; `notes/analysis_prespec.md` §6 item 3 makes failure an objective
+protocol-abort disposition; M4R-04 requires recomputation from primitives.
+WANTED: Bind the pre-capture settle evidence (or the exact measured primitives with auditable
+source/hash) and derive the two threshold results at their equality boundaries. Put that evidence
+on the pre-capture attempt record from S12R-12; do not accept an unverified pass/fail boolean.
+REVERSIBILITY: Cheap before the study; a declared boolean can selectively admit an unsettled
+session without reproducible evidence.
+ESCALATE: none
+
+### S12R-05 R2 [Blocking] — split static retry validation from the temporal lock
+ISSUE: The cross-record rules remain Stage 1 work even though they are not row-local. The final
+“no replacement once scoring has begun” clause is genuinely temporal and cannot be proven from a
+timeless manifest alone, but that does not defer the link/trigger/count/reason rules.
+AUTHORITY: `notes/analysis_prespec.md` §6 item 7 and Replacement policy; plan §7 row 1 explicitly
+puts retry/replacement in Stage 1's done-when.
+WANTED: In `load_manifest`, enforce linked predecessor/replacement IDs, low-confidence warmup as
+the sole warmup-retry trigger, at most one such retry, and replacement reasons restricted to
+items 3–5. Enforce the temporal “before scoring” rule at the Stage-5/scoring entry point against a
+persisted study-scoring state or immutable run ledger; document that enforcement point now so the
+binding rule is not lost. A manifest-supplied “before scoring” boolean is not objective.
+REVERSIBILITY: Cheap now; otherwise retries can silently lift coverage or replace already-seen
+data.
+ESCALATE: none
+
+### S12R-06 R2 [Blocking] — use one disposition partition
+ISSUE: The agreed no-agreement gap remains. A separate `reference_status` alongside binary
+admission would create combinatorial states and force Stage 5 to reconstruct the §6 partition.
+Conversely, naming a third value `Admission.NO_AGREEMENT` makes “admission” mean two different
+things.
+AUTHORITY: `notes/analysis_prespec.md` §6 defines one session-level disposition hierarchy and
+requires a wholly missing Masimo file to be separately logged no-agreement, radar-only.
+WANTED: Prefer a renamed single `SessionDisposition` enum with at least `ADMITTED`, `EXCLUDED`,
+and `NO_AGREEMENT`. A no-agreement captured session must retain the full radar/timebase/integrity
+binding while agreement scoring is structurally barred. Give the verifier an objective expected
+reference path/acquisition record so physical absence is derived; merely omitting the Masimo
+fields while also declaring `NO_AGREEMENT` would let the operator supply both fact and verdict.
+REVERSIBILITY: Cheap schema work now; later it changes the partition key for every ledger row.
+ESCALATE: none
+
+### S12R-07 R2 [Blocking] — file verification must be mandatory and disposition-aware
+ISSUE: `verify_bound_files` is the right separation from the pure predicate, but only if every
+scoring load necessarily calls it. A helper future callers may omit would leave the current
+done-when violation intact.
+AUTHORITY: plan §4 path+SHA-256 bindings; plan §7 row 1 requires checksum and validity-map
+consistency in Stage 1; `CLAUDE.md` §3.1 requires traceability to hashed inputs.
+WANTED: Integrate verification into the scoring `load_manifest` path before sessions are returned.
+Resolve paths from one documented stable root, hash before reading, require the validity map's
+canonical type/shape to be exactly one entry per frame, and compare its invalid count with
+`n_invalid_frames`. A raw hash mismatch produces the frozen item-4 exclusion fact; mismatched
+config/validity-map/reference bindings are manifest/provenance failures unless a binding authority
+explicitly assigns them a session disposition.
+REVERSIBILITY: Cheap now; optional verification permanently permits wrong-window coverage.
+ESCALATE: none
+
+### S12R-08 R2 [Blocking] — frozen-grid guard still coerces invalid arguments
+ISSUE: `_require_frozen_grid` checks `float(fs)` and `int(frames_per_win)` but callers continue
+using the original values. Consequently `frames_per_win=600.5` passes and is silently truncated to
+600; `window_frame_span(k=1.9)` silently returns window 1; fractional `n_frames` is also floored.
+This is the same lossy-coercion class fixed in the manifest, now on the exact-grid API.
+AUTHORITY: `notes/analysis_prespec.md` §7 defines integer frame numbers and exact
+`[k·600,(k+1)·600)` spans; plan §7 row 2 makes exact endpoint/grid transcription the Stage-2
+done-when.
+WANTED: Require exact integer types for `frames_per_win`, `n_frames`, and `k`, and a finite numeric
+`fs` exactly equal to 20, without `int()` accepting fractional/string inputs. Use the normalized
+validated values rather than the originals. Keeping `frames_per_window` as a clearly generic
+arithmetic helper is acceptable because it does not construct a scoring grid.
+REVERSIBILITY: Cheap now; silent coercion can address the wrong frame window while producing
+plausible spans.
+ESCALATE: none
+
+### S12R-09 R2 [Blocking] — diagnostic sweep is admitted as a scoring study session
+ISSUE: The invented schedule shape currently allows an `evaluation`/SCORING paced record with
+scalar rate 12 and a 12→15→18→21 multi-entry schedule. The cited 21 bpm sweep is explicitly a
+method-development diagnostic capture, not evidence that the study scoring schema should accept
+stepped rates. This imports a development protocol into the frozen study estimand.
+AUTHORITY: `notes/protocol.md` “Diagnostic arm — the STEPPED breathing-rate capture” calls it
+“method development … not a study session”; `notes/analysis_prespec.md` §3.2 makes paced commanded
+rate between-subject and allocates study subjects to 12/15/18; plan §4 defines arm as
+natural/paced with commanded paced rate 12/15/18.
+WANTED: The `{commanded_rate_bpm, start_s}` serialization is acceptable, but in SCORING mode
+require exactly one entry at `start_s=0` matching the scalar 12/15/18 rate. Permit the multi-step
+21 bpm diagnostic schedule only in DEVELOPMENT mode (or a later explicitly non-study record
+kind). Replace the test that currently celebrates the scoring bypass.
+REVERSIBILITY: Cheap now; otherwise a method-development sweep can enter a pre-registered paced
+estimand.
+ESCALATE: none
+
+### S12R-10 R2 [Blocking] — strict primitive validation is incomplete
+ISSUE: The exact validators fixed the reproduced counter/boolean examples, but design/timebase
+parsing still uses permissive `float()` coercion. `distance_m=True` parses as 1.0 m and
+`frame0_epoch="1785000000.25"` parses as a valid origin. Both malformed JSON primitives reach a
+scoring `SessionManifest`.
+AUTHORITY: plan §4 calls for a validated manifest; §4.1 names `distance_m`'s canonical form as a
+numeric float in metres; §7 binds `frame0_epoch` as a synchronised UTC measurement; S12R-10's
+agreed remedy was strict validation without lossy `bool()`/`int()` coercion.
+WANTED: Route distance and frame-0 epoch through strict finite-number validation that rejects
+booleans and strings, then apply the inclusive distance bounds. Audit every remaining scoring
+primitive for the same bypass and add regression cases for these two concrete values.
+REVERSIBILITY: Cheap now; a boolean distance changes the descriptive result and a string origin
+hides a producer/schema defect.
+ESCALATE: none
+
+### S12R-11 R2 [Blocking] — collision is not unconditionally scorable
+ISSUE: Loading `collision` in scoring mode may be necessary, but the implementation goes further:
+`is_scorable=True` and `require_scoring_mode` passes without knowing the consuming estimator.
+For an estimator fit, tuned, or selected on M7, frozen §3.1 requires the opposite verdict.
+AUTHORITY: `notes/analysis_prespec.md` §3.1 says M7's role is method-specific: confirmatory only
+for an estimator not fit/tuned/selected on M7, and development/exploratory for a method that was.
+WANTED: Allow the row to load, but do not label it unconditionally scorable. The output guard must
+receive the consuming method/provenance and prove that method is M7-eligible, or defer the
+positive decision to a mandatory method-aware pooling guard. A method-agnostic boolean cannot
+encode this binding rule.
+REVERSIBILITY: Cheap before method outputs exist; later it can put tuning data into a confirmatory
+headline.
+ESCALATE: none
+
+### S12R-12 R2 [Blocking] — use a discriminated pre-capture record
+ISSUE: The grouped disposition-record design remains unbuilt. Making every field merely optional
+on one session class would replace the current contradiction with a large set of invalid but
+loadable states.
+AUTHORITY: `notes/analysis_prespec.md` §6 items 3 and 5 require pre-capture settle/sync failures to
+be logged; `notes/protocol.md` places both gates before capture; `CLAUDE.md` §4 forbids dummy
+artifacts.
+WANTED: Use a discriminated record kind (for example captured session versus pre-capture attempt)
+with separate exact required-field sets. A pre-capture failure requires identity/design,
+timestamp, objective settle/sync evidence and disposition reason, while capture-only fields are
+absent; a captured session retains the full §4 contract. Keep both record kinds in the versioned
+manifest and study-level counts.
+REVERSIBILITY: Cheap now; a loose optional-field union becomes a permanent ambiguous schema.
+ESCALATE: none
+
+### S12R-13 [Blocking] — high packet loss is falsely declared impossible
+ISSUE: The new consistency validator raises whenever `packets_dropped > packets_received`. Those
+counters are independent: `LiveFrameSource` increments `n_received` for packets that arrive and
+increments `n_dropped` by sequence gaps, so severe loss can legitimately produce, for example,
+10 received and 90 dropped. Frozen arithmetic then gives `90/10 > 5%`, which must flag but not
+exclude; current code refuses to load it as “impossible.”
+AUTHORITY: `scripts/live_demo.py` `LiveFrameSource._loop` defines the counter semantics;
+`notes/analysis_prespec.md` §6 item 4 explicitly freezes `n_dropped / n_received > 5%` as a
+flag-only rule and defines no upper ratio bound.
+WANTED: Remove the `dropped > received` validation and test ratios above 1.0 as retained,
+packet-loss-flagged sessions. Continue requiring each counter individually to be a non-negative
+integer.
+REVERSIBILITY: Cheap now; the current check selectively makes the worst packet-loss sessions
+unloadable, inflating coverage.
+ESCALATE: none
 
 ### S12R-01 [Blocking] — truncation admission predicate
 ISSUE: `truncation_lost_a_non_final_window` does not establish that truncation cut a
@@ -765,4 +937,264 @@ open. That the applied six are complete beyond what is written above. And, per S
 lesson, not that mutation coverage means the tests assert the *right* semantics: it cannot
 detect a rule I never wrote, which is how `capture_config_path` went missing in the first
 place.
+
+
+### Round 2 — Claude Code (2026-07-27): responses to the R2 findings and S12R-13
+
+**All eleven reproduced; none rejected.** Four are defects in the round-1 patch itself, which
+is the part worth saying plainly: fixing a coercion class introduced a new over-exclusion, and
+one of my new tests asserted the opposite of a frozen document. The remaining seven are the
+deferred design work, now with concrete direction.
+
+**Applied this round:** S12R-13, 08 R2, 09 R2, 10 R2.
+**Open as one Stage-1 redesign:** S12R-03, 04, 05, 06, 07, 11, 12 R2.
+
+---
+
+#### S12R-13 — **AGREE. A defect I introduced in round 1.**
+
+**Reproduced.** `recompute_admission(admissible(packets_received=10, packets_dropped=90))`
+raised `ManifestError: packets_dropped=90 exceeds packets_received=10. Impossible`.
+
+**Your counter-semantics claim is exactly right, and I should have checked it before writing
+the rule.** `LiveFrameSource._loop` increments `n_received` by **one per arriving packet**
+(`self.n_received += 1`) but increments `n_dropped` by the **size of each sequence gap**
+(`gap = seq - last_seq - 1; self.n_dropped += gap`, plus a leading-loss gap of `seq - 1`).
+They are independent counters, not a partition, so `dropped > received` is not merely possible
+— it is the *expected* shape of a severe-loss session.
+
+**The consequence is the worst kind.** §6 item 4 freezes `n_dropped / n_received > 5 %` as
+flag-only with no upper bound. My check made precisely the highest-loss sessions **unloadable**
+— silently removing the hardest data and inflating coverage. That is the same over-exclusion
+failure mode as S12R-01, which I had just finished fixing, reintroduced one function away.
+
+**Applied.** The check is deleted; the deletion is commented with the counter semantics so it
+is not "helpfully" restored. Each counter is still individually validated as a non-negative
+exact integer. Tests cover 10/90, 100/101, 1/1000 and 10/10 as ADMITTED + flagged, and a
+regression mutant that re-adds the raise is caught.
+
+**Note on why round 1's mutation evidence did not catch this.** Every mutant disabled a rule
+and asked whether a test failed. This rule *had* a passing test — `dropped=101, received=100`
+raising was exactly what I asserted. Mutation testing confirms a rule is load-bearing; it
+cannot tell you the rule should not exist. That is now twice in this review that the harness's
+blind spot has been the thing that mattered (S12R-09 was the first).
+
+---
+
+#### S12R-08 R2 — **AGREE, applied**
+
+**Reproduced, all four.** `window_frame_span(1, frames_per_win=600.5)` → `(600, 1200)`;
+`window_frame_span(1.9)` → `(600, 1200)`, i.e. window 1 under an argument naming window 1.9;
+`n_complete_windows(12000.7)` → 20; `fs="20"` passed the frozen comparison via `float(fs)` and
+then died deep in the arithmetic with a bare `TypeError`, not a named `WindowGridError`.
+
+You have named the mechanism precisely: I validated a **coerced copy** and let the body compute
+from the **original**. That is the same lossy-coercion class I had just fixed in the manifest,
+reproduced in the exact-grid API, and it is worse here because a wrong window still returns a
+perfectly plausible span.
+
+**Applied.** `_exact_index` requires exact `int` for `frames_per_win`, `n_frames` and `k`
+(rejecting `bool`, since `type(True) is bool`); `fs` must be a finite `int`/`float` **before**
+the frozen comparison; `frame0_epoch` likewise. `_require_frozen_grid` returns the validated
+values and every call site now computes from those, not from its arguments — with a mutant per
+call site proving each substitution is load-bearing.
+
+**`frames_per_window` left generic, as you allow** — it constructs no grid.
+
+---
+
+#### S12R-09 R2 — **AGREE, applied. My test asserted the opposite of the source.**
+
+**Verified in the document.** `notes/protocol.md` heads the capture "Diagnostic arm — the
+STEPPED breathing-rate capture" and states: "It is a *method development* capture, **not a
+study session**." §3.2 makes the paced commanded rate between-subject with study subjects
+allocated to 12/15/18.
+
+**Reproduced.** An `evaluation`/SCORING paced record with scalar rate 12 and a
+12 → 15 → 18 → 21 schedule parsed cleanly.
+
+**This one is worth being explicit about.** I did not merely permit the sweep — I wrote a test
+named `test_a_stepped_schedule_may_leave_the_frozen_rotation` that *celebrated* it, and cited
+the 21 bpm step as the justification. I read protocol.md for the rates and did not read the
+sentence classifying the capture. That is the same error as the first draft's §6 predicates:
+reading a source for the detail I was looking for rather than for what it decides.
+
+**Applied.** In SCORING mode the schedule must be exactly one entry at `start_s = 0` matching
+the scalar rate. A multi-entry schedule loads only in DEVELOPMENT mode, where the sweep belongs
+and where its out-of-rotation 21 bpm step is fine. The offending test is replaced by
+`test_the_stepped_diagnostic_sweep_CANNOT_be_a_scoring_study_session`, with a companion
+confirming it still loads in development mode — it is a real capture and must stay
+representable, just never as study evidence.
+
+The `{commanded_rate_bpm, start_s}` serialization stands, per your acceptance. It remains the
+one shape in Stage 1 that is defined rather than transcribed.
+
+---
+
+#### S12R-10 R2 — **AGREE, applied**
+
+**Reproduced.** `distance_m=True` → **1.0 m**, inside the protocol range, admitted.
+`frame0_epoch="1785000000.25"` → accepted as a valid origin. `distance_m="1.0"` → 1.0.
+
+My round-1 fix covered the fields the finding's proven examples named and stopped there;
+`_validate_distance` and the `frame0_epoch` branch kept their permissive `float()`. Auditing
+"every remaining scoring primitive", as you ask, is what I should have done rather than fixing
+the cited instances — which is the lesson recorded in this project's own working method and
+which I failed to apply.
+
+**Applied.** Both route through exact numeric-type validation before their domain rules. The
+existing `test_non_numeric_distance_is_rejected` is extended with `True`, `False` and the clean
+string `"1.0"`; `frame0_epoch` gets its own case for the string, boolean and list forms.
+
+**Audit result, for the record.** The remaining scoring primitives now all pass through an
+exact validator: counters and `truncation_bytes` through `_exact_int`; durations, clock offsets
+and `frame0_epoch` through `_finite_number`; `distance_m` through its own type check plus
+bounds; paths and `capture_git_commit` through `_non_empty_str`; digests through `_sha256`;
+`posture` by string equality; `arm`/`data_role`/`admission`/`retry_status` through the enum
+constructor; `commanded_rate_bpm` through `_exact_int`. I am not claiming that list is
+exhaustive by proof — it is exhaustive by inspection of `_REQUIRED_SCORING_FIELDS`.
+
+---
+
+#### S12R-03 R2 — **AGREE with the stronger remedy: remove `checksum_ok`**
+
+You have answered the question I asked, and the reasoning is better than my "retain and
+cross-check" option: two independently editable declarations of one fact would leave a mismatch
+requiring someone to decide which declaration controls the frozen disposition — reintroducing
+the operator judgement at one remove.
+
+Your disposal of my objection also holds. I wanted to preserve the ability to record "verified
+at capture time, failed" for an artifact that no longer exists — but if the raw file is gone,
+M4 cannot score the session at all, so the boolean preserves nothing reproducible.
+
+**Accepted for the redesign:** `checksum_ok` is removed from the schema; the scoring load path
+mandatorily hashes the resolved `raw_path` against `raw_sha256` and feeds the derived result
+into recomputation. The pure helper stays, but verification stops being a caller convention.
+
+---
+
+#### S12R-04 R2 — **AGREE**
+
+**Verified.** `notes/protocol.md`'s SETTLE CRITERION is numeric on both limbs — a continuous
+60 s PR spread ≤ 5 bpm, and last-20 s vs first-20 s drift ≤ 3 bpm. So there is measured
+evidence to bind, and a bare `settle_criterion_met` boolean would have been S12R-03's
+double-source defect in a new field. You are right that I was about to add exactly that.
+
+**Accepted:** bind the settle evidence (or the exact measured primitives with an auditable
+source and hash) and derive both threshold results **at their equality boundaries** — 5.0 and
+3.0 exactly are passes, per the ≤ in the document. It goes on the pre-capture attempt record
+from S12R-12.
+
+---
+
+#### S12R-05 R2 — **AGREE with the split**
+
+The distinction you draw is the one I missed: "not row-local" is not the same as "not Stage 1".
+The link/trigger/count/reason rules are decidable from the manifest **document** — they are
+cross-record, not temporal — and `load_manifest` already sees every session, so it can enforce
+linked predecessor/replacement IDs, low-confidence warmup as the sole retry trigger, at most one
+such retry, and replacement reasons restricted to items 3–5.
+
+Only "before any of that subject's data is scored" is genuinely temporal, and I agree a
+manifest-supplied boolean for it would not be objective. **Accepted:** enforce it at the
+Stage-5/scoring entry point against persisted scoring state, and document that enforcement point
+now — in the plan, not only in a comment — so the binding rule is not lost between stages.
+
+---
+
+#### S12R-06 R2 — **AGREE, and your framing is better than either option I offered**
+
+I proposed `Admission.NO_AGREEMENT` or a separate `reference_status`, and you correctly rejected
+both: the first makes "admission" mean two things, the second creates combinatorial states and
+forces Stage 5 to reconstruct §6's partition from two fields.
+
+**Accepted:** one renamed `SessionDisposition` enum — `ADMITTED`, `EXCLUDED`, `NO_AGREEMENT` —
+as the single partition key, with a no-agreement session retaining its full radar/timebase/
+integrity binding while agreement scoring is structurally barred.
+
+**And your last sentence is the part I would have got wrong.** Omitting the Masimo fields while
+declaring `NO_AGREEMENT` would let the operator supply both the fact and the verdict — the
+identical defect to `checksum_ok`, which I would have walked straight back into while fixing it
+elsewhere. The expected reference path/acquisition record must be bound so physical absence is
+**derived**.
+
+---
+
+#### S12R-07 R2 — **AGREE**
+
+Correct, and it is the difference between a fix and the appearance of one: an optional helper
+leaves the done-when violation exactly where it was, since nothing compels a future caller.
+
+**Accepted:** verification integrated into the scoring `load_manifest` path before sessions are
+returned; paths resolved from one documented stable root; hash before read; validity map
+required to be exactly one entry per frame in a canonical type/shape, with its invalid count
+compared against `n_invalid_frames`.
+
+**Your disposition split is the load-bearing detail** and I want to confirm I have it right: a
+**raw hash mismatch** produces the frozen §6 item-4 exclusion fact (a capture disposition),
+whereas a mismatched **config / validity-map / reference** binding is a manifest/provenance
+failure — a `ManifestError`, not a §6 reason — unless a binding authority explicitly assigns it
+a session disposition. That keeps invented causes out of the study's reason counts, which is
+S12R-10's principle applied to the I/O layer.
+
+---
+
+#### S12R-11 R2 — **AGREE. My reading was half right and the implementation was wrong.**
+
+Allowing the row to **load** was correct; labelling it unconditionally **scorable** was not.
+`is_scorable=True` and a passing `require_scoring_mode` assert that the session may produce a
+frozen-comparator number — and §3.1 makes that assertion undecidable without knowing the
+consuming estimator. For a method fit, tuned or selected on M7, §3.1 requires the opposite
+verdict, so a method-agnostic boolean cannot encode the rule; it can only guess, and it
+currently guesses in the permissive direction.
+
+**Accepted:** the row loads, but the positive scorability decision moves to a guard that
+receives the consuming method's provenance and must prove M7-eligibility. I will not implement
+that as a boolean on the record.
+
+**One thing I want to flag rather than decide.** This makes `is_scorable` method-dependent for
+one role and method-independent for the others, which is an asymmetry worth being deliberate
+about — I would rather the property stopped claiming to answer the question at all for
+`collision` than have it return a value that is right for some callers.
+
+---
+
+#### S12R-12 R2 — **AGREE**
+
+Correct, and it names the trap I was heading into: making every capture field optional on one
+session class trades one contradiction for a large space of loadable-but-invalid states, and
+that space is exactly where a fabricated-provenance record would eventually live.
+
+**Accepted:** a discriminated record kind — captured session vs pre-capture attempt — with
+separate **exact** required-field sets. A pre-capture attempt carries identity/design, a
+timestamp, the objective settle/sync evidence and a disposition reason, and capture-only fields
+are **absent rather than optional**; a captured session keeps the full §4 contract. Both kinds
+live in the versioned manifest and both enter study-level counts.
+
+---
+
+### Where this leaves the review
+
+**Applied and evidenced:** S12R-01 (uncontested half), 02, 08 + 08 R2, 09 + 09 R2, 10 + 10 R2,
+11 (loading half), 13.
+
+**Open — and they are now one coherent piece of work, not seven:** S12R-03, 04, 05, 06, 07,
+11 R2, 12 R2 all land on the same redesign. A discriminated record kind (12) is what makes the
+pre-capture settle evidence (04) representable; the `SessionDisposition` partition (06) is what
+the no-agreement kind resolves to; mandatory bound-file verification (07) is what makes the
+checksum objective (03) and is where the derived-absence check for (06) lives; the retry rules
+(05) are cross-record validation in the same load path; and (11 R2) is the output guard that
+path feeds. Building them separately would mean three passes over the same schema.
+
+**No open questions for you this round** — R2 answered all five I raised. I have restated my
+reading of S12R-07 R2's disposition split above so you can correct it before I build on it.
+
+**Evidence.** Suite 1440 passed, 0 failed. Round-2 mutation: 14 mutants covering every new R2
+rule plus a regression mutant re-adding the S12R-13 `dropped > received` raise — all caught,
+baseline restored. Round-1's 33/33 stands.
+
+**What I am not claiming.** That the seven open findings are addressed — they are agreed,
+specified, and unbuilt. And, twice demonstrated now, that mutation coverage means the rules are
+*right*: it did not catch the missing `capture_config_path` (a rule never written) and it did
+not catch S12R-13 (a rule that should never have been written).
 

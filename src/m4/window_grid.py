@@ -38,16 +38,42 @@ class WindowGridError(ValueError):
     """Raised when the grid is asked for something the frozen spec does not define."""
 
 
-def _require_frozen_grid(fs: float, frames_per_win: int) -> tuple[float, int]:
-    """Reject any (fs, frames_per_win) pair that is not the frozen grid (S12R-08).
+def _exact_index(value, name: str) -> int:
+    """An exact integer frame/window index — no coercion (S12R-08 R2).
+
+    `int(600.5)` is 600 and `int(1.9)` is 1, so validating a *coerced copy* while the caller
+    keeps the original let `frames_per_win=600.5` and `k=1.9` through silently: the grid
+    then addressed a different window than the argument named, while still returning
+    plausible spans. §7 defines the grid on integer frame numbers, so anything else is a
+    caller defect, not a value to round. `bool` is excluded because `type(True) is bool`.
+    """
+    if type(value) is not int:
+        raise WindowGridError(
+            f"{name}={value!r} must be an exact integer (got {type(value).__name__}); the "
+            "frozen grid of `notes/analysis_prespec.md` §7 is defined on whole frames and "
+            "nothing here rounds."
+        )
+    return value
+
+
+def _require_frozen_grid(fs, frames_per_win) -> tuple[float, int]:
+    """Reject any (fs, frames_per_win) pair that is not **exactly** the frozen grid.
 
     The parameters exist so the frozen values are *visible at the call site* rather than
     buried as literals — not so a different grid can be built. Accepting `fs=10.0` silently
     produced 60 s reference spans while every docstring still said 30 s: the estimand changed
     and nothing raised. A different grid is an amendment to a pre-registered analysis decision
     (`notes/analysis_prespec.md` §4 amendment mechanism), never a keyword argument.
+
+    Returns the **validated** values, which callers must use in place of their arguments —
+    validating a coerced copy and then computing from the original is what S12R-08 R2 found.
     """
-    if float(fs) != FRAME_RATE_HZ or int(frames_per_win) != FRAMES_PER_WINDOW:
+    frames = _exact_index(frames_per_win, "frames_per_win")
+    if type(fs) not in (int, float) or not np.isfinite(fs):
+        raise WindowGridError(
+            f"fs={fs!r} must be a finite number (got {type(fs).__name__})."
+        )
+    if float(fs) != FRAME_RATE_HZ or frames != FRAMES_PER_WINDOW:
         raise WindowGridError(
             f"the M4 scoring grid is FROZEN at fs={FRAME_RATE_HZ:g} Hz and "
             f"{FRAMES_PER_WINDOW} frames/window ({WINDOW_SECONDS:g} s), got fs={fs!r} and "
@@ -56,7 +82,7 @@ def _require_frozen_grid(fs: float, frames_per_win: int) -> tuple[float, int]:
             "shifts every window boundary and every reference span. If you need generic "
             "window arithmetic for diagnostics, do it outside the scoring grid."
         )
-    return float(fs), int(frames_per_win)
+    return float(fs), frames
 
 
 def frames_per_window(window_s: float = WINDOW_SECONDS, fs: float = FRAME_RATE_HZ) -> int:
@@ -91,19 +117,21 @@ def n_complete_windows(n_frames: int, frames_per_win: int = FRAMES_PER_WINDOW) -
     Floor division, because a window is scored **iff** it is complete: the trailing partial
     window is dropped, never padded and never scored short.
     """
-    _require_frozen_grid(FRAME_RATE_HZ, frames_per_win)
-    if n_frames < 0:
+    _, frames = _require_frozen_grid(FRAME_RATE_HZ, frames_per_win)
+    n = _exact_index(n_frames, "n_frames")
+    if n < 0:
         raise WindowGridError(f"n_frames must be >= 0, got {n_frames!r}")
-    return int(n_frames) // int(frames_per_win)
+    return n // frames
 
 
 def window_frame_span(k: int, frames_per_win: int = FRAMES_PER_WINDOW) -> tuple[int, int]:
     """Half-open frame interval `[k·N, (k+1)·N)` for window `k`."""
-    _require_frozen_grid(FRAME_RATE_HZ, frames_per_win)
-    if k < 0:
+    _, frames = _require_frozen_grid(FRAME_RATE_HZ, frames_per_win)
+    idx = _exact_index(k, "k")
+    if idx < 0:
         raise WindowGridError(f"window index k must be >= 0, got {k!r}")
-    start = int(k) * int(frames_per_win)
-    return start, start + int(frames_per_win)
+    start = idx * frames
+    return start, start + frames
 
 
 def window_reference_span(
@@ -117,11 +145,15 @@ def window_reference_span(
     `frame0_epoch` may be fractional — it is the synchronised UTC time at receipt of frame 0,
     not an integer second, and **never** `start_wall_utc` (written before configuration).
     """
-    _require_frozen_grid(fs, frames_per_win)
-    if not np.isfinite(frame0_epoch):
-        raise WindowGridError(f"frame0_epoch must be finite, got {frame0_epoch!r}")
-    start_frame, end_frame = window_frame_span(k, frames_per_win)
-    return frame0_epoch + start_frame / fs, frame0_epoch + end_frame / fs
+    rate, frames = _require_frozen_grid(fs, frames_per_win)
+    if type(frame0_epoch) not in (int, float) or not np.isfinite(frame0_epoch):
+        raise WindowGridError(
+            f"frame0_epoch={frame0_epoch!r} must be a finite number "
+            f"(got {type(frame0_epoch).__name__})."
+        )
+    origin = float(frame0_epoch)
+    start_frame, end_frame = window_frame_span(k, frames)
+    return origin + start_frame / rate, origin + end_frame / rate
 
 
 def reference_sample_mask(
@@ -169,9 +201,9 @@ def build_window_grid(
     """
     # Gate here explicitly: a capture shorter than one window yields an empty list without
     # ever reaching `window_reference_span`, so a non-frozen `fs` would pass unnoticed.
-    _require_frozen_grid(fs, frames_per_win)
+    rate, frames = _require_frozen_grid(fs, frames_per_win)
     return [
-        Window(k, *window_frame_span(k, frames_per_win),
-               *window_reference_span(k, frame0_epoch, fs, frames_per_win))
-        for k in range(n_complete_windows(n_frames, frames_per_win))
+        Window(k, *window_frame_span(k, frames),
+               *window_reference_span(k, frame0_epoch, rate, frames))
+        for k in range(n_complete_windows(n_frames, frames))
     ]

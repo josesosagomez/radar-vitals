@@ -376,17 +376,23 @@ def recompute_admission(
     n_invalid = _exact_int(fields, "n_invalid_frames", session_id, minimum=0)
 
     # Internally impossible combinations are malformed manifests, not §6 dispositions.
+    # `n_invalid_frames` counts a subset of `n_frames`, so exceeding it really is impossible.
     if n_invalid > n_frames:
         raise ManifestError(
             f"session {session_id!r}: n_invalid_frames={n_invalid} exceeds n_frames="
             f"{n_frames}. Impossible, so the manifest is wrong; this is not a capture "
             "disposition and must not be counted as one."
         )
-    if dropped > received:
-        raise ManifestError(
-            f"session {session_id!r}: packets_dropped={dropped} exceeds packets_received="
-            f"{received}. Impossible, so the manifest is wrong."
-        )
+
+    # S12R-13: `packets_dropped > packets_received` is NOT impossible and must never raise.
+    # The counters are independent, not a partition: `LiveFrameSource._loop` increments
+    # `n_received` by **one per arriving packet** while `n_dropped` grows by the **size of
+    # each sequence gap** (`seq - last_seq - 1`, plus any leading gap). Severe loss therefore
+    # legitimately yields e.g. 10 received / 90 dropped, and §6 item 4 freezes
+    # `n_dropped / n_received > 5 %` as flag-only with **no upper bound**. Rejecting a ratio
+    # above 1.0 would make exactly the worst-loss sessions unloadable — silently removing the
+    # hardest sessions and inflating coverage, which is the failure mode this stage's
+    # invariants call out by name. Each counter is still individually non-negative (above).
 
     # ── §6 item 5: epoch-sync failure ────────────────────────────────────────
     for key, offset in offsets.items():
@@ -454,15 +460,19 @@ def _as_enum(value, enum_cls, key: str, session_id: str):
 
 
 def _validate_distance(value, session_id: str) -> float:
-    """§4.1: finite, metres, 0.8 <= d <= 1.4 **inclusive**."""
-    try:
-        d = float(value)
-    except (TypeError, ValueError):
+    """§4.1: finite, metres, 0.8 <= d <= 1.4 **inclusive**.
+
+    S12R-10 R2: this used `float(value)`, which accepted `True` as **1.0 m** — inside the
+    protocol range — and `"1.0"` as a number. §4.1 names the canonical form as a numeric
+    float in metres, so the type is checked exactly before the bounds are applied.
+    """
+    if type(value) not in (int, float):
         raise ManifestError(
-            f"session {session_id!r}: distance_m={value!r} is not a number. It is metres "
-            "(the legacy run_metadata field is distance_cm — convert explicitly, never "
-            "implicitly)."
-        ) from None
+            f"session {session_id!r}: distance_m={value!r} is not a number "
+            f"(got {type(value).__name__}). It is metres, as a JSON number — the legacy "
+            "run_metadata field is distance_cm, and conversion is explicit, never implicit."
+        )
+    d = float(value)
     if not math.isfinite(d):
         raise ManifestError(f"session {session_id!r}: distance_m={d!r} is not finite.")
     if not (DISTANCE_MIN_M <= d <= DISTANCE_MAX_M):
@@ -494,11 +504,14 @@ def _validate_rate_schedule(
     buried so the review can reject or replace it — inventing predicates quietly is what went
     wrong in the first draft.
 
-    Deliberately **not** constrained: the rate *values*. The M3R-31 rotation (12/15/18) binds
-    the paced arm's allocation, but `notes/protocol.md`'s diagnostic sweep steps
-    12 → 15 → 18 → **21**, so requiring membership of `PACED_RATES_BPM` here would reject a
-    legitimate schedule. That constraint belongs to `commanded_rate_bpm`, which is the field
-    the pooling table reads.
+    **A SCORING session must carry exactly one entry, at `start_s = 0`, matching the scalar
+    `commanded_rate_bpm`** (S12R-09 R2). The first version allowed a stepped schedule here on
+    the grounds that `notes/protocol.md`'s sweep runs 12 → 15 → 18 → **21** — but that
+    document calls the stepped capture "a *method development* capture, **not a study
+    session**", and §3.2 makes the paced commanded rate **between-subject**. Admitting a
+    stepped schedule into scoring mode therefore imported a development protocol into the
+    frozen study estimand. A multi-entry schedule now loads only in DEVELOPMENT mode, where
+    the sweep belongs and where its rates need not be members of the M3R-31 rotation.
     """
     raw = fields.get("commanded_rate_schedule")
 
@@ -548,8 +561,19 @@ def _validate_rate_schedule(
             "schedule is relative to the start of the recording."
         )
 
+    # S12R-09 R2: a study paced session holds ONE commanded rate for the whole recording.
+    # `notes/protocol.md` classes the stepped 12->15->18->21 sweep as method development,
+    # "not a study session", and §3.2 makes the paced rate between-subject.
+    if mode is Mode.SCORING and len(raw) != 1:
+        raise ManifestError(
+            f"session {session_id!r}: a SCORING paced session must carry exactly one "
+            f"commanded_rate_schedule entry, got {len(raw)}. A stepped schedule is the "
+            "diagnostic sweep, which notes/protocol.md calls a method-development capture "
+            "and not a study session — load it in DEVELOPMENT mode."
+        )
+
     # A single-rate paced session must agree with its own scalar field; a stepped schedule
-    # has no single scalar to agree with, so the check applies only to the 1-entry case.
+    # (development only, per the check above) has no single scalar to agree with.
     rate = fields.get("commanded_rate_bpm")
     if len(raw) == 1 and rate is not None and raw[0]["commanded_rate_bpm"] != rate:
         raise ManifestError(
@@ -617,14 +641,12 @@ def parse_session(fields: dict, mode: Mode) -> SessionManifest:
     distance = _validate_distance(fields["distance_m"], session_id) if present("distance_m") else None
     posture = _validate_posture(fields["posture"], session_id) if present("posture") else None
 
-    frame0 = fields.get("frame0_epoch")
-    if frame0 is not None:
-        frame0 = float(frame0)
-        if not math.isfinite(frame0):
-            raise ManifestError(
-                f"session {session_id!r}: frame0_epoch={frame0!r} is not finite. It is the "
-                "synchronised UTC time at receipt of frame 0 — never start_wall_utc."
-            )
+    # S12R-10 R2: `float(frame0)` accepted the STRING "1785000000.25" as a valid origin,
+    # hiding a producer defect in the one field every window boundary is measured from.
+    # §7 binds it to a synchronised UTC *measurement*, so it must arrive as a JSON number.
+    frame0 = None
+    if present("frame0_epoch"):
+        frame0 = _finite_number(fields, "frame0_epoch", session_id)
 
     # ── §3.1 role/mode matrix (S12R-11) ──────────────────────────────────────
     #
