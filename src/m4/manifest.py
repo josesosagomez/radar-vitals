@@ -166,9 +166,13 @@ PACED_RATES_BPM = (12, 15, 18)
 #: and the equality boundary is tested on both sides. A bare operator-supplied
 #: `settle_criterion_met` boolean would have been the `checksum_ok` defect again (S12R-04 R2):
 #: the criterion is numerical, so M4 derives it from the measured primitives.
+#:
+#: The criterion's **60 s window** is deliberately not a constant here: nothing in this module
+#: can verify it. `settle_pr_spread_bpm` arrives as a scalar already reduced over that window
+#: by whatever produced the bound evidence, so a `SETTLE_WINDOW_S` would be a value no code
+#: reads and no test could fail on. It is stated above, where it belongs, as documentation.
 SETTLE_MAX_PR_SPREAD_BPM = 5.0
 SETTLE_MAX_PR_DRIFT_BPM = 3.0
-SETTLE_WINDOW_S = 60.0
 
 #: Which §6 exclusion reason a replacement cause must actually be evidenced by on the
 #: superseded record. A stated reason the predecessor's own disposition does not support is an
