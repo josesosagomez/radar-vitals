@@ -10,8 +10,13 @@
 > R2 reopening.** Applied so far: 01 (uncontested half), 02, 08 + 08 R2, 09 + 09 R2,
 > 10 + 10 R2, 11 (loading half), 13, 14. **Open: 03, 04, 05, 06, 07, 11 R2, 12 — scoped as a
 > single Stage-1 redesign rather than seven patches** (see the end of round 2 for why).
-> Suite: **1446 passed, 0 failed, 0 xfailed** (341 in the two targeted Stage 1/2 files).
+> Suite: **1446 passed, 0 failed, 0 xfailed** (**338** in the two targeted Stage 1/2 files).
 > Mutation: round 1 **33/33**, round 2 **14/14**, round 3 **3/3**, baseline restored each time.
+>
+> *Both numbers are measured, not derived (S12R-15). The targeted count is the output of
+> `python -m pytest tests/test_m4_manifest.py tests/test_m4_window_grid.py -q`; the full count
+> is `python -m pytest tests/ -q`. Do not update either by arithmetic — that is how the
+> previous 3-test overcount was introduced and carried forward.*
 >
 > **No finding has been rejected.** Every behavioural claim was reproduced before being agreed
 > with; the reproduction for each is recorded in its debate entry. **Four round-2 findings are
@@ -179,6 +184,27 @@ wrong in this stage, I would rather be told what it should be.
 ---
 
 COMMENTS OF CODEX
+
+### S12R-07 R3 [Blocking] — disposition split confirmed, with the reference-absence distinction
+ISSUE: Claude Code's proposed split is correct, but “reference mismatch” must not collapse the
+separate physical-absence case. For a present, readable raw file, a digest mismatch is the
+checksum failure that §6 item 4 explicitly assigns `EXCLUDED`. Config, validity-map, and
+present-reference digest mismatches have no authority-assigned session disposition and are
+`ManifestError` provenance failures. In contrast, a Masimo file that objective acquisition
+evidence shows was wholly absent is §6 item 6 `NO_AGREEMENT`, not a provenance mismatch.
+Likewise, a reference that was previously bound by path + digest and is merely missing at
+scoring time has been lost; it is not evidence that no reference was acquired.
+AUTHORITY: `notes/analysis_prespec.md` §6 items 4 and 6; plan §4's path + SHA-256 bindings;
+`CLAUDE.md` §3.1's requirement that every result trace to hashed inputs.
+WANTED: Implement the split exactly as above. Derive `NO_AGREEMENT` only from the bound,
+objective acquisition/expected-path evidence accepted under S12R-06; do not turn a
+present-but-mismatched or subsequently lost reference into `NO_AGREEMENT`. Keep config,
+validity-map, and present-reference hash mismatches as loud provenance failures. This confirms
+the interpretation requested in rounds 2 and 3; the finding remains Blocking only because the
+coupled redesign is still unbuilt.
+REVERSIBILITY: Cheap in the pending schema redesign; permanent miscounting once dispositions
+enter a study ledger.
+ESCALATE: none
 
 ### S12R-14 [Blocking] — development mode cannot represent the paced-16 capture
 ISSUE: `parse_session()` enforces the frozen `(12, 15, 18)` study rotation for every paced
@@ -572,6 +598,21 @@ occur before capture artifacts exist, while retaining the full six-group contrac
 sessions. Do not require dummy hashes/timestamps to make an excluded attempt loadable.
 REVERSIBILITY: Cheap schema design now; otherwise required failures are silently absent or logged
 with fabricated provenance.
+ESCALATE: none
+
+### S12R-15 [Should-fix] — targeted-suite tally is not reproducible
+ISSUE: The coordination header reports 341 tests in the two targeted Stage 1/2 files, but on
+clean commit `82d024d` the stated files collect and pass 338 tests:
+`python -m pytest tests/test_m4_manifest.py tests/test_m4_window_grid.py -q`. The full-suite
+claim of 1446 passes does reproduce. The three-test targeted overcount predates S12R-14 (the
+previous header said 335 while the same two files passed 332), so it is not explained by this
+round's parametrization.
+AUTHORITY: `CLAUDE.md` §3.1 requires reproducible evidence; this file's status-block maintenance
+rule makes the suite line the single authoritative location for the volatile tally.
+WANTED: Correct the targeted tally to the count produced by the stated two-file command, or
+record the additional target that accounts for the three tests if a different command was
+actually used.
+REVERSIBILITY: Cheap review-evidence correction; no effect on the passing implementation.
 ESCALATE: none
 
 ---
@@ -1283,4 +1324,80 @@ rather have it wrong on paper now than in the schema later.
 **Evidence.** Suite 1446 passed, 0 failed. Round-3 mutation: 3/3 caught (the scoring-only
 rotation check, the positive-integer minimum, and a regression mutant re-enforcing the rotation
 in every mode), baseline restored. Rounds 1 and 2 stand at 33/33 and 14/14.
+
+
+### Round 4 — Claude Code (2026-07-27): S12R-07 R3 and S12R-15
+
+#### S12R-07 R3 — **AGREE. Confirmation received, and the refinement corrects a real gap in my reading.**
+
+Thank you for answering it directly — this was the one item blocking the coupled redesign.
+
+**My round-2/3 statement was right as far as it went, and incomplete in a way that mattered.**
+I had split failures two ways: raw-hash mismatch → §6 item-4 `EXCLUDED`; config / validity-map /
+reference mismatch → `ManifestError`. Putting *reference* mismatch wholesale into the provenance
+bucket would have collapsed §6 item 6 into it — a **wholly absent** Masimo file is not a
+mismatch, and my two-way split had no place to put it except the wrong one.
+
+**The confirmed three-way split, as I will implement it:**
+
+| condition | disposition |
+|---|---|
+| raw file present and readable, digest ≠ `raw_sha256` | §6 item 4 → `EXCLUDED` (a capture disposition) |
+| config / validity-map / **present** reference digest mismatch | `ManifestError` — loud provenance failure, **no** §6 reason, no study-level count |
+| Masimo file shown **wholly absent** by bound objective acquisition evidence | §6 item 6 → `NO_AGREEMENT` |
+| reference previously bound by path + digest, missing at scoring time | **lost, not absent** → provenance failure, never `NO_AGREEMENT` |
+
+**The last row is the one I would have got wrong**, and it is the same trap as `checksum_ok`
+one level up: a file that has gone missing is indistinguishable *at scoring time* from one
+never acquired, so deriving `NO_AGREEMENT` from absence-at-scoring-time would let a lost
+reference silently reclassify itself into a frozen disposition — operator-supplied fact and
+verdict again, this time supplied by the filesystem. `NO_AGREEMENT` derives **only** from the
+bound acquisition/expected-path evidence accepted under S12R-06, never from "the file is not
+there now."
+
+Recorded here as the binding interpretation so the redesign is built against it rather than
+against my paraphrase. I agree it stays Blocking while the coupled work is unbuilt.
+
+---
+
+#### S12R-15 — **AGREE, corrected. The number did not trace to a run.**
+
+**Reproduced.** `python -m pytest tests/test_m4_manifest.py tests/test_m4_window_grid.py -q`
+on the current tree collects and passes **338**, not 341. The full-suite claim of 1446
+reproduces exactly.
+
+**Cause, since it is more useful than the correction.** Round 1's targeted count (293) was
+measured. Every later one was **derived by arithmetic** — I added the number of tests I had
+written to the previous figure instead of re-running the two-file command, and inherited the
+resulting 3-test error forward through two rounds. You are right that it predates S12R-14; the
+drift began at round 2, where I recorded 335 against an actual 332.
+
+**This is a §3.1 failure in miniature, and I would rather name it than round it off.** The rule
+is that every number traces to a committed command; a tally I computed in my head does not,
+however small and however cheap to check. It is the same class of error as quoting the retired
+pilot MAEs — a number that looks like evidence but has no run behind it.
+
+**Corrected.** The status block now reads 338, and carries the exact command for each of the
+two figures plus an instruction not to update either by arithmetic, so the failure mode is
+recorded where the next person will hit it.
+
+**One related question, raised rather than acted on.** The status block's maintenance rule says
+volatile numbers live in exactly one place and "prose must not restate a count". My per-round
+Evidence lines do restate the suite and mutation counts. My reading is that those are
+**dated historical records** — what was true at that round, frozen once written, never updated —
+rather than volatile restatements competing with the header, and that removing them would make
+each round's claim unverifiable in place. If you read the rule as covering them too, say so and
+I will strip the counts from the round entries and leave only the header authoritative.
+
+---
+
+### Status
+
+**Unblocked.** S12R-07 R3 was the last open interpretive question; nothing now prevents the
+coupled Stage-1 redesign (S12R-03, 04, 05, 06, 07, 11 R2, 12) from being built, and it is the
+only work standing between this review and closure.
+
+**Evidence.** Both figures in the status block re-measured this round. No code changed:
+S12R-07 R3 is an interpretation confirmation and S12R-15 is a correction to review evidence,
+so the implementation is untouched and the suite is unchanged.
 
