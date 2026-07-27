@@ -1,8 +1,8 @@
 # Plan: Range-bin drift measurement (`scripts/diagnose_bin_drift.py`)
 
-> **Implemented, run on all 4 real captures, and committed.** Review has gone through 7 rounds
-> (`plans/bin_drift_diagnostic_cross_review.md`, BDR-01…23 plus round-7 R2/R3 reopenings),
-> reopening four times after implementation as Codex found real gaps between the shipped code
+> **Implemented, run on all 4 real captures, and committed.** Review has gone through 8 rounds
+> (`plans/bin_drift_diagnostic_cross_review.md`, BDR-01…24 plus R2/R3 reopenings),
+> reopening five times after implementation as Codex found real gaps between the shipped code
 > and what the plan claimed:
 > round 4 (BDR-11…13) found the decided centroid-drift grid was never wired up, plus a stale
 > table and a scope-text inconsistency; round 5 (BDR-11 R2, BDR-14…19) found the window-scale
@@ -26,7 +26,20 @@
 > `(n,2)`) array; the raw ADC path was still absent from every session summary (only its hash
 > was recorded); and the config-bound centroid support (round 6) had no
 > positive-block validation and still serialized hardcoded "10s" field names regardless of the
-> configured span.** All fixed below. Both prior escalations (**BDR-04 Option A, BDR-07 Option A**)
+> configured span; **round 8 (BDR-02 R3, BDR-23 R3, BDR-24) found the round-7 `gate_not_run`
+> criterion was itself wrong on real data** — it required a non-finite `f_r_hz` in addition to
+> all-not-run rejection codes, but the producer's no-ECA early return
+> (`src/vitals.py:523`) that produces all-not-run codes fires for `f_r_hz=None` **or** a finite
+> value outside the physiological gate `[0.15, 0.60]` Hz, so round 7 mislabeled 6 real massimo1
+> windows and 1 real sweep window as `other_rejected` instead of `gate_not_run` (verified
+> directly against the approved replay NPZs: massimo1 has 22 true gate-skipped windows, not 16;
+> sweep has 15, not 14); **the round-7 `n_blocks_used` field recorded the requested/configured
+> centroid-support block count, not the block count actually used**, wrong whenever a session had
+> fewer post-calibration blocks than the configured span; **and exact-shape validation
+> (round 6/7) still permitted lossy numeric coercion** — a fractional `frame_idx`/
+> `accepted_candidate_rank`/`candidate_rejection_codes` array passed shape validation and was
+> then silently truncated by `int(...)`/`.astype(np.int64)` downstream instead of failing
+> closed. All fixed below. Both prior escalations (**BDR-04 Option A, BDR-07 Option A**)
 > remain decided — see **§8**. No new escalations this round.
 
 ## Context
@@ -123,7 +136,7 @@ Verified: NPZ `frame_idx` is the window's **end frame** (599, 659, … ) → win
 complete 20-frame block are massimo1=10, massimo2=11, sweep=11, live_test1=15 frames — all
 non-zero, so §7.1's trailing-block policy is exercised on real data, not a hypothetical.
 
-### 1.1 Every config value governs behavior, or the run fails closed (BDR-19, BDR-19 R2, BDR-19 R3, BDR-23, BDR-23 R2)
+### 1.1 Every config value governs behavior, or the run fails closed (BDR-19, BDR-19 R2, BDR-19 R3, BDR-23, BDR-23 R2, BDR-23 R3, BDR-24)
 
 Round 4 hashed the config file; round 5 found two of its values (`trailing_block_policy`,
 `episodes.gap_rule`) were loaded and then never consulted — the discard/no-bridging behavior was
@@ -156,9 +169,22 @@ it depends on `fs`, which lives in `live_demo_config.yaml`, not the diagnostic c
 would still label its statistics "10s". Fixed: the keys are now neutral (`trailing_median`,
 `leading_median`) plus two new fields recording what was actually used:
 `summary_span_s` (the configured value) and `n_blocks_used` (the resolved block count) —
-`trailing_leading_centroid_medians` now returns `n_window_blocks` as a third value precisely so
-callers can serialize it truthfully. The BDR-23 mutation test now asserts through the return
-value's block count, not just the numeric medians.
+`trailing_leading_centroid_medians` now returns a third value precisely so callers can serialize
+it truthfully. The BDR-23 mutation test now asserts through the return value's block count, not
+just the numeric medians.
+
+**Round 8 (BDR-23 R3) found that third return value itself was wrong:** it was
+`n_window_blocks`, the REQUESTED/configured block count, not the block count actually applied.
+`n_trailing`/`n_leading` (`min(n_window_blocks, n_blocks)`) were used to compute the medians, but
+the function returned the unclamped `n_window_blocks` instead — with a 10-block configured
+support and only 3 blocks available, all three are used but the field said 10; for an empty
+series it said 10 despite using zero. All four real sessions happen to have ≥10 post-calibration
+blocks, so their reported values were coincidentally correct; a shorter capture would not be.
+Fixed: `trailing_leading_centroid_medians` now returns `n_used = min(n_window_blocks, n_blocks)`
+(`0` for an empty series) — the actual count, not the request. The requested value is not
+duplicated under another name since `summary_span_s` (already serialized) fully determines it
+given `fs`/`block_frames`. Tests for the few-blocks and empty-series cases now assert the true
+used count (3 and 0) instead of ignoring/asserting the stale requested value.
 
 A malformed NPZ hop grid is rejected before alignment (`validate_frame_idx_grid`). Round 5's
 version (BDR-19) rejected a first endpoint *below* the first valid window end, non-monotonic
@@ -182,6 +208,19 @@ silently change `gate_not_run` classification. Fixed: `validate_frame_idx_grid` 
 must each be `(n,)`; `candidate_rejection_codes` must be `(n, AHET_MAX_CANDIDATES)` (imported from
 `src.vitals`, not a duplicated literal `3`) — before any slicing or classification, all raising
 `ValueError`.
+
+**Round 8 (BDR-24) found exact-shape checking alone still permitted lossy numeric coercion:**
+`frame_idx=[599.9, 659.9]`, `accepted_rank=[0.9, -1.0]`, and a fractional/out-of-domain
+`candidate_rejection_codes` row all passed shape validation (a `.shape` check does not care about
+dtype or fractional values), then were silently truncated by `int(...)`/`.astype(np.int64)`
+downstream — the frame endpoint became 599 (dropping the fractional evidence of corruption), the
+rank became 0, a code of `0.9` became `0` ("passed"), classifying a malformed row `"covered"`
+instead of failing closed. Fixed: `frame_idx`, `accepted_candidate_rank`, and
+`candidate_rejection_codes` (never `f_r_hz`, a genuine float) must now be finite, non-boolean, and
+integer-valued (`np.array_equal(arr, np.round(arr))`) before any cast; `candidate_rejection_codes`
+is additionally checked against the producer's own code domain `{-1, 0, ..., 7}`
+(`REJECTION_CODE_DOMAIN`, src/vitals.py's documented contract) — an out-of-domain integer code
+(e.g. `99`) now raises even though it is integer-valued.
 
 ## 2. Reused components (nothing reimplemented)
 
@@ -384,12 +423,22 @@ directory already exists; `summary.json` records its own `run_id`.
     of the configured span — BDR-23 R2) — `centroid_drift_at_grid`: whether the displacement
     meets each of `{0.3, 0.5, 1.0}` bin. **Session-level only.**
   - **window-outcome classifier** — mutually exclusive: `covered`, `gate_not_run`,
-    `other_rejected`, and **fail-closed on evidence the producer can never legitimately emit**
-    (BDR-02 R2): an `accepted_candidate_rank` outside `{-1, 0, ..., AHET_MAX_CANDIDATES-1}`;
-    `accepted_candidate_rank >= 0` paired with a non-finite `f_r_hz` (ECA/AHET only runs when
-    `f_r_hz` is finite); `accepted_candidate_rank >= 0` paired with all-not-run rejection codes;
-    or an accepted rank whose own slot is not coded "passed" — each raises rather than silently
-    landing in `"covered"`.
+    `other_rejected`. **`gate_not_run` is decided from all-not-run rejection codes ALONE
+    (BDR-02 R3, corrected):** the no-ECA early return that produces them (`src/vitals.py:523`)
+    fires whenever `f_r_hz` is `None` **or** a finite value outside the physiological gate
+    `[0.15, 0.60]` Hz (`src/vitals.py:507-509`) — round 7 additionally required `f_r_hz` to be
+    non-finite, which mislabeled real finite-outlier windows as `other_rejected` (verified
+    directly against the approved replay NPZs: massimo1 has 6 such windows, sweep has 1; the
+    corrected counts are massimo1 `gate_not_run=22`/`other_rejected=20`, sweep `gate_not_run=15`,
+    against round 7's `16`/`26` and `14`). And **fail-closed on evidence the producer can never
+    legitimately emit** (BDR-02 R2, BDR-02 R3): an `accepted_candidate_rank` outside
+    `{-1, 0, ..., AHET_MAX_CANDIDATES-1}`; `accepted_candidate_rank >= 0` paired with a
+    non-finite `f_r_hz`, or a finite `f_r_hz` outside the physiological gate (either failure
+    means ECA/AHET could not have run, so a non-negative rank is impossible); an accepted rank
+    paired with all-not-run rejection codes; an accepted rank whose own slot is not coded
+    "passed"; or `accepted_candidate_rank == -1` paired with any slot coded "passed" (a passed
+    slot always forces the corresponding non-negative rank, `src/vitals.py:941-943`) — each
+    raises rather than silently landing in `"covered"` or `"other_rejected"`.
   - **`outcome_stratified_report`** (full_exposure / transitional) — for each outcome class:
     count, mean off-baseline duration (raw seconds), mean longest excursion, **and
     `mean_off_baseline_fraction`** (`off_baseline_duration_s / post_calibration_observed_s`,
@@ -503,11 +552,11 @@ measurement is available.
 |---|---|
 | `scripts/diagnose_bin_drift.py` | CLI: `--config scripts/live_demo_config.yaml --diagnostic-config scripts/diagnose_bin_drift_config.yaml --captures <4 dirs> --replays <matched-generation dirs, per §8> --out results/diagnose/bin_drift` |
 | `scripts/diagnose_bin_drift_config.yaml` | The diagnostic's own bound parameters (§1.1, §5) |
-| `tests/test_diagnose_bin_drift.py` | 92 tests (§7.1) |
+| `tests/test_diagnose_bin_drift.py` | 101 tests (§7.1) |
 
 Nothing else is touched. `data/raw/` not involved (empty); originals opened read-only.
 
-### 7.1 Test plan (expanded across rounds 4–7)
+### 7.1 Test plan (expanded across rounds 4–8)
 
 - Synthetic reflector stepped bin 25→27 mid-session: argmax series shows the step at the right
   block; occupancy fractions exact (`test_compute_occupancy_fractions`).
@@ -597,9 +646,22 @@ Nothing else is touched. `data/raw/` not involved (empty); originals opened read
 - **Centroid-support validation and truthful serialization (BDR-23 R2):** `load_diagnostic_config`
   raises on `summary_span_s <= 0` (tested for both `0` and a negative value);
   `trailing_leading_centroid_medians` raises when a positive span still rounds to fewer than one
-  complete block; the BDR-23 mutation test now also asserts the returned block count
-  (`n_window_blocks`) changes between a 10 s and a 5 s configured span, not just the numeric
-  medians.
+  complete block; the BDR-23 mutation test now also asserts the returned block count changes
+  between a 10 s and a 5 s configured span, not just the numeric medians.
+- **`gate_not_run` fires on a finite physiological outlier, not only non-finite `f_r_hz`
+  (BDR-02 R3):** `classify_window_outcome(-1, [-1,-1,-1], 0.1168)` (a real massimo1 value, below
+  the 0.15 Hz gate floor) returns `"gate_not_run"`, same as the non-finite case; an accepted rank
+  paired with a finite out-of-gate `f_r_hz` raises; `accepted_rank=-1` paired with any "passed"
+  code raises. The BDR-02 R2 end-to-end integration test was extended to a fourth window
+  demonstrating the finite-outlier `gate_not_run` case through the real `run_session` pipeline,
+  not just the unit-level classifier.
+- **`n_blocks_used` reports the actual count, not the request (BDR-23 R3):** the few-blocks test
+  (3 available against a 10-block request) now asserts `3`; the empty-series test asserts `0` —
+  both previously asserted or ignored the stale requested value.
+- **Integer-valued and domain checks reject lossy coercion (BDR-24):** a fractional `frame_idx`,
+  a fractional `accepted_candidate_rank`, a fractional `candidate_rejection_codes` row, an
+  integer-valued but out-of-domain code (`99`), and a boolean-dtype `accepted_candidate_rank` all
+  raise; `f_r_hz` (a genuine float) is confirmed exempt from the integer-valued check.
 
 ## 8. Design decisions (both escalations resolved by the user, 2026-07-27)
 
@@ -625,9 +687,9 @@ entries are `correlation_not_available`; no replay is generated for it.
 
 ## 9. Verification
 
-1. `conda run -n radar-vitals python -m pytest tests/test_diagnose_bin_drift.py -q` — all 92
+1. `conda run -n radar-vitals python -m pytest tests/test_diagnose_bin_drift.py -q` — all 101
    cases pass.
-2. Full suite still green (script is additive; expect 1616 baseline + 92 = 1708 passed, 1
+2. Full suite still green (script is additive; expect 1616 baseline + 101 = 1717 passed, 1
    skipped).
 3. Run on all 4 captures **from a clean committed tree**; confirm all output files exist
    (including the widened `bin_energy_blocks.csv`, the real `motion_energy_windows.npz` matrix,
@@ -653,7 +715,13 @@ entries are `correlation_not_available`; no replay is generated for it.
    `summary.json` carries `raw_path` beside `raw_sha256` (BDR-22 R2); confirm `centroid_drift`
    uses the neutral `summary_span_s`/`n_blocks_used`/`trailing_median`/`leading_median` keys, not
    the retired `trailing_10s_median`/`first_post_calibration_10s_median` names (BDR-23 R2).
-8. Session end: HISTORY.md append + HANDOFF.md rewrite (per CLAUDE.md §10) — including the
+8. **Round 8:** confirm massimo1's real re-run reports `gate_not_run=22`/`other_rejected=20` and
+   sweep reports `gate_not_run=15` (BDR-02 R3, corrected from round 7's `16`/`26` and `14` — spot
+   -check directly against `window_audit.csv`, not just the console summary); confirm
+   `centroid_drift.n_blocks_used` reflects the actual block count for a session shorter than the
+   configured span, not the requested value (BDR-23 R3); confirm a fractional or out-of-domain
+   NPZ field is rejected by `validate_frame_idx_grid` before any cast (BDR-24).
+9. Session end: HISTORY.md append + HANDOFF.md rewrite (per CLAUDE.md §10) — including the
    evidence summary, its evidence paths, and this round's fixes.
 
 ## 10. Explicitly out of scope

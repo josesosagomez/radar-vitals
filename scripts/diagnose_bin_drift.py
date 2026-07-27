@@ -504,10 +504,14 @@ def trailing_leading_centroid_medians(blocks: BlockSeries, cfg: DiagnosticConfig
     from the "last N s"). The support itself is config-bound, not a hardcoded
     10.0 literal (BDR-23).
 
-    Returns `(trailing_median, leading_median, n_window_blocks)` -- the block
-    count is returned (not just used internally) so callers can serialize it
-    alongside the configured span (BDR-23 R2), rather than a hardcoded "10s"
-    label that would lie for any other configured value.
+    Returns `(trailing_median, leading_median, n_blocks_used)` -- `n_blocks_used`
+    is the ACTUAL block count applied, `min(n_window_blocks, len(blocks))`
+    (BDR-23 R3, corrected: round-7 returned the REQUESTED `n_window_blocks`
+    even when fewer blocks were actually available -- e.g. a 10-block
+    configured support with only 3 blocks in the series silently reported 10,
+    not the 3 actually used; 0, not 10, for an empty series). The requested
+    span is already recorded separately as `summary_span_s` wherever this is
+    serialized, so it is not duplicated here under another name.
 
     Raises `ValueError` if the configured span rounds to fewer than one
     complete block (BDR-23 R2) -- e.g. `summary_span_s` too small relative to
@@ -524,12 +528,11 @@ def trailing_leading_centroid_medians(blocks: BlockSeries, cfg: DiagnosticConfig
         )
     n_blocks = len(blocks.block_start_frame)
     if n_blocks == 0:
-        return float("nan"), float("nan"), n_window_blocks
-    n_trailing = min(n_window_blocks, n_blocks)
-    n_leading = min(n_window_blocks, n_blocks)
-    trailing_median = float(np.median(blocks.centroid[-n_trailing:]))
-    leading_median = float(np.median(blocks.centroid[:n_leading]))
-    return trailing_median, leading_median, n_window_blocks
+        return float("nan"), float("nan"), 0
+    n_used = min(n_window_blocks, n_blocks)
+    trailing_median = float(np.median(blocks.centroid[-n_used:]))
+    leading_median = float(np.median(blocks.centroid[:n_used]))
+    return trailing_median, leading_median, n_used
 
 
 def centroid_drift_at_grid(trailing_median: float, leading_median: float,
@@ -551,30 +554,51 @@ def centroid_drift_at_grid(trailing_median: float, leading_median: float,
 
 REJECTION_CODE_NOT_ATTEMPTED = -1
 REJECTION_CODE_PASSED = 0
+REJECTION_CODE_DOMAIN = frozenset(range(-1, 8))  # -1 gate_not_run, 0 passed, 1-7 rejection reasons (src/vitals.py)
+
+# Physiological respiration gate (src/vitals.py:507-509 -- local to
+# estimate_rate_from_phase there, so not importable as a module constant).
+# An f_r_hz outside this range routes through the SAME no-ECA early-return
+# branch as f_r_hz=None (src/vitals.py:523), producing accepted_candidate_rank=-1
+# and all-not-run rejection codes with a FINITE f_r_hz (BDR-02 R3).
+RESP_GATE_LO_HZ = 0.15
+RESP_GATE_HI_HZ = 0.60
 
 
 def classify_window_outcome(accepted_rank: int, rejection_codes: np.ndarray,
                              f_r_hz: float) -> str:
     """Mutually exclusive classifier (plan §4). Fail-closed on evidence the
     producer (scripts/live_demo.py, the strict_v1 AHET gate mode production
-    runs use) can never actually emit (BDR-02 R2):
+    runs use) can never actually emit (BDR-02 R2, BDR-02 R3):
 
     - `accepted_rank` outside the domain `{-1, 0, ..., AHET_MAX_CANDIDATES-1}`
       this generation's 3 candidate slots allow.
     - `accepted_rank >= 0` (a candidate accepted) paired with a non-finite
-      `f_r_hz` -- impossible under strict_v1: ECA/AHET evaluation, the only
-      path that can produce a non-negative rank, runs only when `f_r_hz` is
-      finite; the no-ECA early return that yields a non-finite `f_r_hz`
-      always hardcodes `accepted_rank=-1`.
+      `f_r_hz`, or a finite `f_r_hz` outside the physiological gate
+      `[RESP_GATE_LO_HZ, RESP_GATE_HI_HZ]` -- impossible under strict_v1:
+      ECA/AHET evaluation, the only path that can produce a non-negative
+      rank, runs only when `f_r_hz` is finite AND within the gate; either
+      failure routes through the no-ECA early return, which always hardcodes
+      `accepted_rank=-1` (src/vitals.py:523).
     - `accepted_rank >= 0` paired with all-not-run (`-1`) rejection codes --
       also impossible: an executed strict_v1 gate always assigns concrete
       codes, including `REJECTION_CODE_PASSED` (0) for the accepted slot.
     - `accepted_rank >= 0` whose own slot's rejection code is not
       `REJECTION_CODE_PASSED` -- the accepted-slot-passed invariant the
       generation guarantees.
+    - `accepted_rank == -1` paired with any slot coded `REJECTION_CODE_PASSED`
+      -- also impossible: a passed slot always forces the corresponding
+      non-negative rank to be returned (src/vitals.py:941-943).
 
     A malformed or replaced NPZ that violates any of these raises `ValueError`
-    rather than silently landing in `"covered"`."""
+    rather than silently landing in `"covered"`.
+
+    `gate_not_run` is decided from all-not-run rejection codes ALONE (BDR-02
+    R3, corrected): the no-ECA early return that produces them
+    (src/vitals.py:523) fires for f_r_hz=None **or** a finite value outside
+    the physiological gate -- round 7's classifier additionally required
+    `f_r_hz` to be non-finite, which mislabeled real finite-outlier windows
+    (massimo1 has 6, sweep has 1) as `other_rejected`."""
     if accepted_rank < -1 or accepted_rank >= AHET_MAX_CANDIDATES:
         raise ValueError(
             f"accepted_candidate_rank={accepted_rank} is outside the valid domain "
@@ -582,13 +606,19 @@ def classify_window_outcome(accepted_rank: int, rejection_codes: np.ndarray,
             f"{AHET_MAX_CANDIDATES}."
         )
     all_not_run = bool(np.all(rejection_codes == REJECTION_CODE_NOT_ATTEMPTED))
-    f_r_invalid = not np.isfinite(f_r_hz)
     if accepted_rank >= 0:
-        if f_r_invalid:
+        if not np.isfinite(f_r_hz):
             raise ValueError(
                 f"accepted_candidate_rank={accepted_rank} (a candidate was accepted) is "
                 "contradictory with a non-finite f_r_hz -- ECA/AHET evaluation only runs "
                 "when f_r_hz is finite."
+            )
+        if not (RESP_GATE_LO_HZ <= f_r_hz <= RESP_GATE_HI_HZ):
+            raise ValueError(
+                f"accepted_candidate_rank={accepted_rank} (a candidate was accepted) is "
+                f"contradictory with f_r_hz={f_r_hz}, outside the physiological gate "
+                f"[{RESP_GATE_LO_HZ}, {RESP_GATE_HI_HZ}] Hz -- ECA/AHET evaluation only "
+                "runs when f_r_hz passes this gate."
             )
         if all_not_run:
             raise ValueError(
@@ -603,9 +633,45 @@ def classify_window_outcome(accepted_rank: int, rejection_codes: np.ndarray,
                 f"({REJECTION_CODE_PASSED})."
             )
         return "covered"
-    if all_not_run and f_r_invalid:
+    if bool(np.any(rejection_codes == REJECTION_CODE_PASSED)):
+        raise ValueError(
+            f"accepted_candidate_rank=-1 is contradictory with a 'passed' "
+            f"({REJECTION_CODE_PASSED}) entry in rejection_codes={rejection_codes.tolist()} "
+            "-- a passed slot always forces the corresponding non-negative rank."
+        )
+    if all_not_run:
         return "gate_not_run"
     return "other_rejected"
+
+
+def _require_integer_valued(name: str, arr: np.ndarray) -> None:
+    """Reject a boolean, non-finite, or fractional array before any numeric
+    cast (BDR-24) -- exact-shape validation alone still let
+    `frame_idx=[599.9, 659.9]`/`accepted_rank=[0.9, -1.0]`/fractional
+    rejection codes through, after which `int(...)`/`.astype(np.int64)`
+    downstream silently truncated them (e.g. 599.9 -> 599, 0.9 -> 0),
+    changing alignment/classification instead of failing closed."""
+    if arr.dtype == np.bool_:
+        raise ValueError(f"{name} has boolean dtype; expected an integer-valued array.")
+    if not np.all(np.isfinite(arr)):
+        raise ValueError(f"{name} contains non-finite values; expected finite integers.")
+    if not np.array_equal(arr, np.round(arr)):
+        raise ValueError(f"{name} contains fractional values; expected integer-valued data.")
+
+
+def _require_rejection_code_domain(rejection_codes: np.ndarray) -> None:
+    """Validate every rejection code against the producer's own domain
+    (BDR-24) -- `{-1, 0, ..., 7}` (src/vitals.py: -1=gate_not_run, 0=passed,
+    1-7=specific rejection reasons). An out-of-domain code (e.g. from a
+    corrupted or hand-edited NPZ) would otherwise be accepted as long as it
+    happened to be integer-valued."""
+    codes_int = rejection_codes.astype(np.int64)
+    bad = ~np.isin(codes_int, np.array(sorted(REJECTION_CODE_DOMAIN)))
+    if np.any(bad):
+        raise ValueError(
+            f"candidate_rejection_codes contains values outside the known domain "
+            f"{sorted(REJECTION_CODE_DOMAIN)}: {codes_int[bad].tolist()}."
+        )
 
 
 def validate_frame_idx_grid(frame_idx: np.ndarray, window_frames: int, hop_s: float,
@@ -613,11 +679,12 @@ def validate_frame_idx_grid(frame_idx: np.ndarray, window_frames: int, hop_s: fl
                              accepted_rank: np.ndarray, rejection_codes: np.ndarray,
                              f_r_hz: np.ndarray) -> None:
     """Reject a malformed NPZ hop grid before alignment (plan §7.1, BDR-19,
-    BDR-19 R2, BDR-19 R3) -- a misanchored first endpoint, an endpoint beyond
-    the last complete frame, non-monotonic or off-hop spacing, or an outcome
-    array whose declared SHAPE (not just row count) does not match what the
-    generation guarantees. Raises ValueError; never silently proceeds on bad
-    input.
+    BDR-19 R2, BDR-19 R3, BDR-24) -- a misanchored first endpoint, an endpoint
+    beyond the last complete frame, non-monotonic or off-hop spacing, an
+    outcome array whose declared SHAPE (not just row count) does not match
+    what the generation guarantees, or one whose VALUES are not the
+    integer-valued data the generation guarantees. Raises ValueError; never
+    silently proceeds on bad input.
 
     BDR-19 R2 found the round-1 fix only rejected a first endpoint BELOW
     599 (`[659, 719]` passed, mislabeling row 0 -- which actually spans frames
@@ -631,7 +698,16 @@ def validate_frame_idx_grid(frame_idx: np.ndarray, window_frames: int, hop_s: fl
     `accepted_candidate_rank`/`f_r_hz` too (direct testing reproduced all
     three) -- a 2-D scalar field or a wrong-width code row would then either
     fail incidentally downstream or silently change `gate_not_run`
-    classification. Every array's exact declared shape is now checked."""
+    classification. Every array's exact declared shape is now checked.
+
+    BDR-24 found that exact-shape checking still permitted lossy numeric
+    coercion: `frame_idx=[599.9, 659.9]`, `accepted_rank=[0.9, -1.0]`, and
+    fractional/out-of-domain rejection codes all passed the shape check, then
+    were silently truncated/miscast downstream. `frame_idx`,
+    `accepted_candidate_rank`, and `candidate_rejection_codes` (never
+    `f_r_hz`, which is a genuine float) must now be finite, non-boolean, and
+    integer-valued before any cast; `candidate_rejection_codes` is
+    additionally checked against the producer's own code domain."""
     n = len(frame_idx)
     for name, arr, expected_shape in (
         ("frame_idx", frame_idx, (n,)),
@@ -645,6 +721,11 @@ def validate_frame_idx_grid(frame_idx: np.ndarray, window_frames: int, hop_s: fl
                 "NPZ outcome array must be exactly shaped, not just row-count-matched "
                 "(BDR-19 R3)."
             )
+    for name, arr in (("frame_idx", frame_idx),
+                       ("accepted_candidate_rank", accepted_rank),
+                       ("candidate_rejection_codes", rejection_codes)):
+        _require_integer_valued(name, arr)
+    _require_rejection_code_domain(rejection_codes)
     if n == 0:
         return
     first_valid_end = window_frames - 1

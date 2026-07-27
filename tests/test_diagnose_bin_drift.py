@@ -374,18 +374,24 @@ def test_trailing_leading_centroid_medians_matches_real_capture_arithmetic():
 
 
 def test_trailing_leading_centroid_medians_degrades_gracefully_with_few_blocks():
+    """BDR-23 R3: with only 3 blocks available against a 10-block requested
+    support, `n_blocks_used` must report the ACTUAL count applied (3), not
+    the requested 10 -- round 7 returned the requested count unconditionally."""
     blocks = _blocks_from_argmax([8, 9, 10])  # only 3 blocks, fewer than N=10
     cfg = diag_cfg()
-    trailing, leading, _ = dbd.trailing_leading_centroid_medians(blocks, cfg, FS)
+    trailing, leading, n_blocks_used = dbd.trailing_leading_centroid_medians(blocks, cfg, FS)
     assert np.isfinite(trailing) and np.isfinite(leading)
+    assert n_blocks_used == 3
 
 
 def test_trailing_leading_centroid_medians_empty_series_is_nan():
+    """BDR-23 R3: an empty block series actually uses ZERO blocks -- must
+    report 0, not the requested/configured support (round 7 returned 10)."""
     blocks = _blocks_from_argmax([])
     cfg = diag_cfg()
     trailing, leading, n_blocks_used = dbd.trailing_leading_centroid_medians(blocks, cfg, FS)
     assert np.isnan(trailing) and np.isnan(leading)
-    assert n_blocks_used == 10  # the configured support, even with no data to apply it to
+    assert n_blocks_used == 0
 
 
 def test_trailing_leading_centroid_medians_support_is_config_bound():
@@ -496,30 +502,53 @@ def test_centroid_drift_at_grid_nan_input_is_false_everywhere():
     assert grid == {0.3: False, 0.5: False, 1.0: False}
 
 
-# ── window classification (BDR-02 R2: fail-closed on evidence the strict_v1
-# producer can never actually emit) ─────────────────────────────────────────
+# ── window classification (BDR-02 R2/R3: fail-closed on evidence the
+# strict_v1 producer can never actually emit) ───────────────────────────────
+
+# 0.3 Hz (18 bpm) is a realistic in-physiological-gate respiration rate
+# (src/vitals.py: [0.15, 0.60] Hz) -- used wherever a fixture needs a
+# LEGITIMATELY accepted window (accepted_rank>=0), since round 8 (BDR-02 R3)
+# now enforces that gate for the accepted branch. 1.2 Hz (72 bpm) is
+# deliberately OUT of gate, used for the gate-violation test below.
+IN_GATE_F_R_HZ = 0.3
+OUT_OF_GATE_F_R_HZ = 1.2
+
 
 def test_classify_window_outcome_covered():
     # Accepted slot 0 is coded PASSED (0); the real producer invariant.
     codes = np.array([0, -1, -1])
-    assert dbd.classify_window_outcome(0, codes, 1.2) == "covered"
+    assert dbd.classify_window_outcome(0, codes, IN_GATE_F_R_HZ) == "covered"
 
 
-def test_classify_window_outcome_gate_not_run():
+def test_classify_window_outcome_gate_not_run_nonfinite_f_r_hz():
     codes = np.array([-1, -1, -1])
     assert dbd.classify_window_outcome(-1, codes, float("nan")) == "gate_not_run"
 
 
+def test_classify_window_outcome_gate_not_run_finite_outlier_f_r_hz():
+    """BDR-02 R3: the no-ECA early return (src/vitals.py:523) that produces
+    all-not-run rejection codes fires for f_r_hz=None OR a FINITE value
+    outside the physiological gate -- not only for non-finite f_r_hz. Real
+    data confirms this: massimo1 has 6 such windows (f_r_hz in
+    [0.1168, 0.1403], all < the 0.15 Hz gate floor) and sweep has 1
+    (f_r_hz=0.1189), all with accepted_rank=-1 and all-not-run codes. Round
+    7's classifier required non-finite f_r_hz in addition to all-not-run
+    codes, mislabeling these as other_rejected."""
+    codes = np.array([-1, -1, -1])
+    assert dbd.classify_window_outcome(-1, codes, 0.1168) == "gate_not_run"
+    assert dbd.classify_window_outcome(-1, codes, OUT_OF_GATE_F_R_HZ) == "gate_not_run"
+
+
 def test_classify_window_outcome_other_rejected():
     codes = np.array([2, 3, -1])
-    assert dbd.classify_window_outcome(-1, codes, 1.2) == "other_rejected"
+    assert dbd.classify_window_outcome(-1, codes, IN_GATE_F_R_HZ) == "other_rejected"
 
 
 def test_classify_window_outcome_rejects_out_of_domain_rank():
     """BDR-02 R2: rank 5 exceeds AHET_MAX_CANDIDATES=3's valid {-1,0,1,2}."""
     codes = np.array([0, -1, -1])
     with pytest.raises(ValueError):
-        dbd.classify_window_outcome(5, codes, 1.2)
+        dbd.classify_window_outcome(5, codes, IN_GATE_F_R_HZ)
 
 
 def test_classify_window_outcome_rejects_below_domain_rank():
@@ -538,10 +567,19 @@ def test_classify_window_outcome_rejects_accepted_with_nonfinite_f_r_hz():
         dbd.classify_window_outcome(0, codes, float("nan"))
 
 
+def test_classify_window_outcome_rejects_accepted_with_out_of_gate_finite_f_r_hz():
+    """BDR-02 R3: accepted_rank>=0 can also never legitimately pair with a
+    FINITE f_r_hz outside the physiological gate -- ECA/AHET only runs when
+    f_r_hz passes the gate, so an accepted rank implies f_r_hz was in-gate."""
+    codes = np.array([0, -1, -1])
+    with pytest.raises(ValueError):
+        dbd.classify_window_outcome(0, codes, OUT_OF_GATE_F_R_HZ)
+
+
 def test_classify_window_outcome_rejects_accepted_with_all_not_run_codes():
     codes = np.array([-1, -1, -1])
     with pytest.raises(ValueError):
-        dbd.classify_window_outcome(0, codes, 1.2)
+        dbd.classify_window_outcome(0, codes, IN_GATE_F_R_HZ)
 
 
 def test_classify_window_outcome_rejects_accepted_slot_not_coded_passed():
@@ -549,7 +587,17 @@ def test_classify_window_outcome_rejects_accepted_slot_not_coded_passed():
     "accepted" but slot 1's own code is 2 (a rejection code), contradictory."""
     codes = np.array([-1, 2, -1])
     with pytest.raises(ValueError):
-        dbd.classify_window_outcome(1, codes, 1.2)
+        dbd.classify_window_outcome(1, codes, IN_GATE_F_R_HZ)
+
+
+def test_classify_window_outcome_rejects_negative_rank_with_passed_code():
+    """BDR-02 R3: accepted_rank=-1 can never legitimately pair with a
+    'passed' (0) code anywhere in rejection_codes -- a passed slot always
+    forces the corresponding non-negative rank to be returned
+    (src/vitals.py:941-943)."""
+    codes = np.array([-1, 0, -1])
+    with pytest.raises(ValueError):
+        dbd.classify_window_outcome(-1, codes, IN_GATE_F_R_HZ)
 
 
 # ── validate_frame_idx_grid (BDR-19, BDR-19 R2) ─────────────────────────────
@@ -680,6 +728,63 @@ def test_validate_frame_idx_grid_rejects_wrong_rejection_code_column_count():
         with pytest.raises(ValueError):
             dbd.validate_frame_idx_grid(frame_idx, WINDOW_FRAMES, HOP_S, FS, 720,
                                          rank, codes_wrong_width, f_r)
+
+
+# ── validate_frame_idx_grid integer-valued/domain checks (BDR-24: exact-shape
+# checking alone still let lossy numeric coercion through) ─────────────────
+
+def test_validate_frame_idx_grid_rejects_fractional_frame_idx():
+    """BDR-24: [599.9, 659.9] passed shape validation, then was silently
+    truncated to [599, 659] by int() downstream instead of failing closed."""
+    frame_idx = np.array([599.9, 659.9])
+    rank, codes, f_r = _outcome_arrays(2)
+    with pytest.raises(ValueError):
+        dbd.validate_frame_idx_grid(frame_idx, WINDOW_FRAMES, HOP_S, FS, 720, rank, codes, f_r)
+
+
+def test_validate_frame_idx_grid_rejects_fractional_accepted_rank():
+    frame_idx = np.array([599, 659], dtype=int)
+    _, codes, f_r = _outcome_arrays(2)
+    rank = np.array([0.9, -1.0])
+    with pytest.raises(ValueError):
+        dbd.validate_frame_idx_grid(frame_idx, WINDOW_FRAMES, HOP_S, FS, 720, rank, codes, f_r)
+
+
+def test_validate_frame_idx_grid_rejects_fractional_rejection_codes():
+    frame_idx = np.array([599, 659], dtype=int)
+    rank, _, f_r = _outcome_arrays(2)
+    codes = np.array([[0.9, 2.0, 5.0], [-1, -1, -1]])
+    with pytest.raises(ValueError):
+        dbd.validate_frame_idx_grid(frame_idx, WINDOW_FRAMES, HOP_S, FS, 720, rank, codes, f_r)
+
+
+def test_validate_frame_idx_grid_rejects_out_of_domain_rejection_codes():
+    """BDR-24: an integer-valued but out-of-domain code (99) must raise --
+    the producer's own domain is {-1, 0, ..., 7}."""
+    frame_idx = np.array([599, 659], dtype=int)
+    rank, _, f_r = _outcome_arrays(2)
+    codes = np.array([[99, -1, -1], [-1, -1, -1]], dtype=int)
+    with pytest.raises(ValueError):
+        dbd.validate_frame_idx_grid(frame_idx, WINDOW_FRAMES, HOP_S, FS, 720, rank, codes, f_r)
+
+
+def test_validate_frame_idx_grid_rejects_boolean_accepted_rank():
+    frame_idx = np.array([599, 659], dtype=int)
+    _, codes, f_r = _outcome_arrays(2)
+    rank = np.array([True, False])
+    with pytest.raises(ValueError):
+        dbd.validate_frame_idx_grid(frame_idx, WINDOW_FRAMES, HOP_S, FS, 720, rank, codes, f_r)
+
+
+def test_validate_frame_idx_grid_does_not_require_f_r_hz_integrality():
+    """f_r_hz is a genuine float (a frequency in Hz), never meant to be
+    integer-valued -- only frame_idx/accepted_candidate_rank/
+    candidate_rejection_codes are checked."""
+    frame_idx = np.array([599, 659], dtype=int)
+    rank, codes, _ = _outcome_arrays(2)
+    f_r = np.array([0.31977403022976636, np.nan])
+    dbd.validate_frame_idx_grid(frame_idx, WINDOW_FRAMES, HOP_S, FS, 720,
+                                 rank, codes, f_r)  # must not raise
 
 
 # ── align_windows (window-scale energy computed DIRECTLY on the cube, BDR-14;
@@ -1489,7 +1594,7 @@ def test_window_audit_csv_persists_rank_and_outcome_recomputes_from_raw_fields(t
     run through the real run_session pipeline end to end, one window per
     outcome class, each satisfying the real strict_v1 producer invariants."""
     capture_dir = tmp_path / "cap_outcomes"
-    n_frames = 720
+    n_frames = 780
     _write_tiny_capture(capture_dir, n_frames)
     (capture_dir / "warmup_bin_selection.json").write_text(
         json.dumps({"selected_bin": 4,
@@ -1513,17 +1618,20 @@ def test_window_audit_csv_persists_rank_and_outcome_recomputes_from_raw_fields(t
                                     for i, b in enumerate([3, 4, 5])]}),
         encoding="utf-8",
     )
-    # Window 0: gate_not_run. Window 1: covered (slot 0 coded PASSED).
-    # Window 2: other_rejected. Each satisfies the real strict_v1 invariants
-    # BDR-02 R2 now enforces.
-    frame_idx = np.array([599, 659, 719], dtype=int)
-    accepted_rank = np.array([-1, 0, -1])
+    # Window 0: gate_not_run via non-finite f_r_hz. Window 1: covered (slot 0
+    # coded PASSED, in-gate f_r_hz). Window 2: other_rejected. Window 3:
+    # gate_not_run via a FINITE respiration value outside the physiological
+    # gate (BDR-02 R3 -- 0.12 Hz < the 0.15 Hz gate floor). Each satisfies the
+    # real strict_v1 producer invariants BDR-02 R2/R3 now enforce.
+    frame_idx = np.array([599, 659, 719, 779], dtype=int)
+    accepted_rank = np.array([-1, 0, -1, -1])
     rejection_codes = np.array([
         [-1, -1, -1],
         [0, -1, -1],
         [2, 3, -1],
+        [-1, -1, -1],
     ])
-    f_r_hz = np.array([np.nan, 1.2, 1.5])
+    f_r_hz = np.array([np.nan, 0.3, 1.5, 0.12])
     np.savez(replay_dir / "live_intermediates.npz", frame_idx=frame_idx,
              accepted_candidate_rank=accepted_rank,
              candidate_rejection_codes=rejection_codes, f_r_hz=f_r_hz)
@@ -1549,8 +1657,10 @@ def test_window_audit_csv_persists_rank_and_outcome_recomputes_from_raw_fields(t
     audit_path = out_dir / "cap_outcomes" / "window_audit.csv"
     with audit_path.open(newline="", encoding="utf-8") as fh:
         rows = list(csv.DictReader(fh))
-    assert len(rows) == 3
-    assert [r["outcome_class"] for r in rows] == ["gate_not_run", "covered", "other_rejected"]
+    assert len(rows) == 4
+    assert [r["outcome_class"] for r in rows] == [
+        "gate_not_run", "covered", "other_rejected", "gate_not_run",
+    ]
     for row in rows:
         rank = int(row["accepted_candidate_rank"])
         codes = np.array([int(c) for c in row["rejection_codes"].split(";")])

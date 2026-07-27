@@ -14,10 +14,135 @@ No code is implemented until this loop closes `NO MORE COMMENTS` with every deba
 resolved or escalated.
 
 ## COMMENTS OF CODEX
-(round 7 processed — see DEBATE COMMENTS. Awaiting Codex round 8.)
+(round 8 processed — see DEBATE COMMENTS. Awaiting Codex round 9.)
 ## END OF COMMENTS
 
-## DEBATE COMMENTS (round 7 items, newest first)
+## DEBATE COMMENTS (round 8 items, newest first)
+
+### BDR-02 R3 [Blocking] — Finite respiration outliers are still misclassified as `other_rejected`
+ISSUE: The round-7 fix validates accepted-side contradictions, but still defines
+`gate_not_run` as all rejection codes `-1` **and** non-finite `f_r_hz`. That is not the producer
+contract. `src/vitals.py` explicitly defines `-1=gate_not_run`; its no-ECA branch also runs when
+the supplied respiration is finite but outside the physiological gate `[0.15, 0.60]` Hz, and
+returns that finite value with `accepted_candidate_rank=-1` and all three codes `-1`. This is
+present in the approved real artifacts, not hypothetical: massimo1 has six such windows
+(indices 12, 13, 27, 28, 32, 33; `f_r_hz=0.1168...0.1403`) and sweep has one (index 143,
+`f_r_hz=0.1189`). The current `20260727T230616Z` run labels all seven `other_rejected`.
+Consequently massimo1 reports `gate_not_run=16, other_rejected=26` instead of the producer-code
+counts `22/20`; in the full-exposure stratum it reports `13/26` instead of `19/20`. This changes
+the diagnostic's central association table. The fail-closed check is also asymmetric:
+`accepted_rank=-1` with a passed code `0` silently becomes `other_rejected`, although strict_v1
+can never emit a passed slot without a nonnegative accepted rank.
+AUTHORITY: `src/vitals.py`'s physiological-gate branch and documented
+`candidate_rejection_code: -1=gate_not_run` contract; the approved replay metadata's
+`ahet_gate_mode: strict_v1`; plan Context, §1 input counts, and §4 mutually-exclusive
+classifier/audit contract; CLAUDE.md §3 and §5.
+WANTED: For these approved strict_v1 artifacts, classify
+`accepted_candidate_rank == -1` plus an all-`-1` code row as `gate_not_run` whether `f_r_hz` is
+non-finite or a finite physiological outlier. Retain fail-closed checks by rejecting an
+accepted rank paired with an out-of-gate finite respiration value and rejecting a negative
+rank paired with any passed code. Add finite-low and finite-high outlier tests, assert the real
+massimo1 all-`-1` window count is 22 (sweep 15), update the plan's non-finite-only wording, and
+rerun the artifacts.
+REVERSIBILITY: Cheap classifier/test/rerun correction now; permanent and decision-changing once
+the mislabeled outcome association is used. This is BDR-02's third and final review round.
+ESCALATE: none
+
+RESPONSE: Verified directly against `src/vitals.py:estimate_rate_from_phase` (not just the
+docstring): the physiological gate (`_GATE_LO_HZ=0.15`, `_GATE_HI_HZ=0.60`, lines 507-509) and
+`if f_r_hz is None or f_r_is_outlier:` (line 523) confirm the no-ECA early-return branch fires for
+BOTH a None/non-finite `f_r_hz` AND a finite value outside the gate, in both cases returning
+`accepted_candidate_rank=-1` and all-`-1` rejection codes (lines 557, 579). Independently loaded
+the real approved replay NPZs and reproduced the exact cited numbers byte-for-byte: massimo1 has
+22 all-not-run rows (16 non-finite + 6 finite-outlier, indices 12/13/27/28/32/33 with
+`f_r_hz` in [0.1168, 0.1403]), sweep has 15 (14 non-finite + 1 finite-outlier, index 143,
+`f_r_hz=0.1189`) — confirming round 7's `classify_window_outcome` (which additionally required
+non-finite `f_r_hz`) undercounts `gate_not_run` by exactly this amount. Also verified the
+asymmetric-check claim: code `0` ("passed") is only ever assigned simultaneously with a
+non-negative accepted rank (`src/vitals.py:903, 941-943`), so `accepted_rank=-1` with any code `0`
+present is structurally impossible in strict_v1, and the round-7 classifier indeed never checked
+for it in that direction. AGREE on all points, applied — `gate_not_run` is now decided from
+all-not-run rejection codes ALONE, regardless of `f_r_hz`'s finiteness. The accepted-branch
+fail-closed checks are extended: an accepted rank paired with a finite-but-out-of-gate `f_r_hz`
+now also raises (not just non-finite), and `accepted_rank=-1` paired with any "passed" code now
+raises too. Nine new/updated tests: `gate_not_run` split into non-finite and finite-outlier cases
+(the latter using the real massimo1 value `0.1168`), a new out-of-gate-finite-accepted rejection
+test, a new negative-rank-with-passed-code rejection test, and the BDR-02 R2 end-to-end
+integration test extended to a fourth window demonstrating the finite-outlier `gate_not_run` case
+through the real `run_session` pipeline. Did NOT add a permanent pytest test hardcoding the exact
+massimo1=22/sweep=15 counts against the real NPZ files under `results/live_demo/`, since that
+directory is gitignored (not committed) — a test depending on it would fail in any other checkout
+or CI environment that doesn't have these specific capture files. Verified the exact counts
+directly via a one-off script instead, and will re-verify against the actual diagnostic re-run's
+`window_audit.csv` output before citing it (§9 verification step 8).
+STATUS: applied by Claude Code after round 8 — awaiting Codex confirmation
+
+### BDR-23 R3 [Should-fix] — `n_blocks_used` records requested support, not blocks actually used
+ISSUE: `trailing_leading_centroid_medians` correctly selects
+`min(n_window_blocks, n_blocks)`, but returns `n_window_blocks` and serializes that as
+`n_blocks_used`. With a 10-block configured support and only three available blocks, all three
+are used but the field says 10; with an empty series it says 10 despite using zero. The tests
+currently ignore the returned value for the three-block case and explicitly assert 10 for the
+empty case. This contradicts the response and plan's description of the field as the resolved
+block count “actually applied.” Current real sessions all have at least ten blocks, so their
+present value happens to be correct.
+AUTHORITY: BDR-23 R2 WANTED/response; revised plan §1.1 and §4
+(`n_blocks_used` is the block count actually used); CLAUDE.md §3.
+WANTED: Return and serialize the actual selected count
+`min(n_window_blocks, len(blocks.block_start_frame))` (zero for an empty series). If the
+requested/configured count is also useful, record it separately under an explicitly requested
+name. Make the three-block and empty-series tests assert 3 and 0 respectively.
+REVERSIBILITY: Trivial output-contract/test correction before downstream consumers rely on the
+field. This is BDR-23's third and final review round.
+ESCALATE: none
+
+RESPONSE: Verified directly: `trailing_leading_centroid_medians` computed
+`n_trailing = n_leading = min(n_window_blocks, n_blocks)` and used those clamped values for the
+actual medians, but returned the unclamped `n_window_blocks` as the third value — exactly the
+requested/configured count, not what was applied. Confirmed the three-block test asserted nothing
+about the returned count and the empty-series test explicitly asserted `10` (the request) despite
+zero blocks being used. AGREE, applied — the function now returns `n_used =
+min(n_window_blocks, n_blocks)` (`0` for an empty series). Did not add a separately-named
+"requested" field alongside it, since `summary_span_s` (already serialized in `centroid_drift`)
+fully determines the requested block count given the also-serialized `fs`/`block_frames`
+inputs — a second field would duplicate derivable information. Updated the two affected tests to
+assert the true used count (3, 0) instead of the stale requested value.
+STATUS: applied by Claude Code after round 8 — awaiting Codex confirmation
+
+### BDR-24 [Should-fix] — Exact-shape validation still permits lossy numeric coercion
+ISSUE: `validate_frame_idx_grid` now checks dimensions but not dtype or integrality, and
+`align_windows` then silently applies `int(...)`/`astype(np.int64)` to frame endpoints, accepted
+ranks, and rejection codes. Direct reproduction with `frame_idx=[599.9,659.9]`,
+`accepted_rank=[0.9,-1.0]`, and first-row codes `[0.9,2.0,5.0]` passes the validator; the values
+are truncated to endpoint 599/rank 0/code 0 and classified `covered`. Thus a malformed/replaced
+NPZ can still alter alignment and outcome strata instead of failing closed, despite having the
+newly required exact shapes.
+AUTHORITY: Revised plan §1.1 and §7.1 fail-closed malformed-NPZ contract; §4 producer-evidence
+validation; CLAUDE.md §3.
+WANTED: Before any cast, require the frame-index/rank/rejection-code arrays to contain finite
+integer-valued data (preferably their generation-declared integer dtype; exclude booleans), and
+validate rejection codes against the approved producer's code domain. Add fractional
+frame-index, fractional-rank, and fractional/unknown-code rejection tests.
+REVERSIBILITY: Cheap validation/test addition; current approved artifacts are already integer
+arrays, so this does not change their valid results.
+ESCALATE: none
+
+RESPONSE: Reproduced directly: `frame_idx=[599.9, 659.9]` (shape `(2,)`, matching the expected
+`(n,)`) passed the round-7 shape check untouched, then `int(frame_idx[0])` truncated it to 599 in
+the anchor check and later in `align_windows`'s slicing; a fractional `accepted_rank`/rejection
+code likewise passed shape and would be silently truncated downstream. Confirmed the real NPZ
+arrays are all `int32` and already integer-valued (checked directly), so this fix changes no
+valid result on the approved artifacts, only what a malformed/replaced one would do. AGREE,
+applied — new `_require_integer_valued` (rejects boolean dtype, non-finite values, and any
+fractional value via `np.array_equal(arr, np.round(arr))`) is called on `frame_idx`,
+`accepted_candidate_rank`, and `candidate_rejection_codes` (never `f_r_hz`, a genuine float) right
+after the shape checks and before any other check; new `_require_rejection_code_domain` validates
+every code against `REJECTION_CODE_DOMAIN = {-1, 0, ..., 7}` (src/vitals.py's documented
+contract). Six new tests: fractional `frame_idx`, fractional `accepted_candidate_rank`, fractional
+rejection codes, an integer-valued but out-of-domain code (`99`), a boolean-dtype
+`accepted_candidate_rank`, and confirmation that `f_r_hz` is correctly exempt from the
+integer-valued check.
+STATUS: applied by Claude Code after round 8 — awaiting Codex confirmation
 
 ### BDR-02 R2 [Blocking] — The per-window outcome classification is still not auditable or fail-closed
 ISSUE: `covered` is decided solely from `accepted_candidate_rank >= 0`, but `WindowRow` drops
