@@ -75,8 +75,13 @@ DISTANCE_MAX_M = 1.4
 #: The estimand fixes posture. A session with any other value is not a member of this design.
 CANONICAL_POSTURE = "seated"
 
-#: `notes/analysis_prespec.md` §6: NTP-synced, max +/-1 s, re-checked at session end.
+#: `notes/analysis_prespec.md` §6 item 5: NTP-synced, max +/-1 s, re-checked at session end.
 MAX_CLOCK_OFFSET_S = 1.0
+
+#: §6 item 4, frozen tolerance: `n_dropped / n_received > 5 %` **flags** the session
+#: (reported) but "does not by itself exclude it" — the per-frame validity map decides which
+#: WINDOWS are radar-NaN. Exceeding this is not an admission failure.
+PACKET_LOSS_FLAG_RATIO = 0.05
 
 #: Commanded paced rates, frozen by the M3R-31 rotation (12 -> 15 -> 18).
 PACED_RATES_BPM = (12, 15, 18)
@@ -104,7 +109,9 @@ _REQUIRED_SCORING_FIELDS: tuple[tuple[str, str], ...] = (
     ("raw_path", "Integrity"),
     ("raw_sha256", "Integrity"),
     ("truncation_bytes", "Integrity"),
-    ("packet_loss_frames", "Integrity"),
+    ("checksum_ok", "Integrity"),
+    ("packets_received", "Integrity"),
+    ("packets_dropped", "Integrity"),
     ("n_frames", "Integrity"),
     ("n_invalid_frames", "Integrity"),
     ("frame_validity_map_path", "Integrity"),
@@ -134,6 +141,8 @@ class SessionManifest:
     data_role: DataRole | None = None
     admission: Admission | None = None
     admission_reasons: tuple[str, ...] = ()
+    #: Reported, never excluding (§6 item 4) — e.g. packet loss above the 5 % tolerance.
+    flags: tuple[str, ...] = ()
 
     # Design / descriptive
     distance_m: float | None = None
@@ -148,7 +157,9 @@ class SessionManifest:
     raw_path: str | None = None
     raw_sha256: str | None = None
     truncation_bytes: int | None = None
-    packet_loss_frames: int | None = None
+    checksum_ok: bool | None = None
+    packets_received: int | None = None
+    packets_dropped: int | None = None
     n_frames: int | None = None
     n_invalid_frames: int | None = None
     frame_validity_map_path: str | None = None
@@ -179,21 +190,46 @@ class SessionManifest:
 # ── Admission recomputation (M4R-04) ──────────────────────────────────────────
 
 
-def recompute_admission(fields: dict, session_id: str) -> tuple[Admission, tuple[str, ...]]:
-    """Derive the admission disposition from the primitive fields alone.
+def recompute_admission(
+    fields: dict, session_id: str, fs: float = 20.0, frames_per_window: int = 600
+) -> tuple[Admission, tuple[str, ...], tuple[str, ...]]:
+    """Derive `(verdict, exclusion_reasons, flags)` from the primitive fields alone.
 
-    One named rule per exclusion cause, so a disagreement points at *which* rule fired
-    rather than at the verdict as a whole. The rules are the ones plan §7 row 1 enumerates:
-    clock offset at both ends, checksum/truncation, intended-duration vs abort, packet loss,
-    retry/replacement, validity-map consistency.
+    **The predicates are transcribed from `notes/analysis_prespec.md` §6, which is FROZEN.**
+    Plan §7 row 1 lists the *causes* to check; §6 defines what each one decides. Where they
+    could be read differently, §6 wins. Three of these were wrong in the first draft and are
+    called out below, because the wrong versions were all *more* aggressive — they would have
+    silently discarded admissible sessions, which is an unlogged degree of freedom.
+
+    Exclusion rules (session **not admitted**):
+
+    * **§6 item 3 — protocol abort.** A run "deliberately halted before its intended 10-min
+      end". The M3R-37 discriminator is one question: *did the run reach its intended
+      duration?* If not, item 3, not admitted. A run that DID reach its intended end but
+      whose stored file has an incomplete trailing window is item 4 and is **retained**.
+    * **§6 item 4 — corrupt raw.** Not admitted iff a stored checksum fails, **or** the raw
+      is truncated so a **non-final** window is lost. Losing only the trailing partial window
+      is explicitly retained ("that tail window is simply unscored").
+    * **§6 item 5 — epoch-sync failure.** |offset| > 1 s at either end.
+    * **§6 item 7 / plan §4** — a session superseded by its one permitted re-run: its windows
+      "do not enter the coverage denominator".
+
+    Flags (reported, **never** excluding):
+
+    * **§6 item 4 — packet loss** above `n_dropped / n_received > 5 %`: "flags the session
+      (reported) but does not by itself exclude it; the per-frame validity map decides which
+      windows are radar-NaN". The first draft excluded on *any* packet loss, which
+      contradicts this outright.
 
     Deliberately **not** checked here: that `raw_sha256` matches the bytes on disk, and that
     the validity map's length and invalid-count match its file. Both need the files, which
-    Stage 3 opens; this function is pure and works from the manifest alone. What it *can*
-    check from the manifest — the internal consistency of the declared counts — it does.
+    Stage 3 opens; this function is pure and works from the manifest alone. `checksum_ok` is
+    the recorded outcome of that verification, not a substitute for it.
     """
     reasons: list[str] = []
+    flags: list[str] = []
 
+    # ── §6 item 5: epoch-sync failure ────────────────────────────────────────
     for key in ("clock_offset_start_s", "clock_offset_end_s"):
         offset = fields.get(key)
         if offset is None or not math.isfinite(float(offset)):
@@ -201,41 +237,66 @@ def recompute_admission(fields: dict, session_id: str) -> tuple[Admission, tuple
         elif abs(float(offset)) > MAX_CLOCK_OFFSET_S:
             reasons.append(f"{key}_exceeds_{MAX_CLOCK_OFFSET_S:g}s")
 
+    # ── §6 item 3: protocol abort — did the run reach its intended duration? ─
+    intended, actual = fields.get("intended_duration_s"), fields.get("actual_duration_s")
+    reached_intended: bool | None = None
+    if intended is None or actual is None:
+        reasons.append("duration_fields_missing")
+    else:
+        reached_intended = float(actual) >= float(intended)
+        if not reached_intended:
+            reasons.append("protocol_abort_did_not_reach_intended_duration")
+    if bool(fields.get("early_stop", False)) and reached_intended is not False:
+        # early_stop says the operator halted it, yet the durations say it completed.
+        # Not a silent tiebreak: the manifest contradicts itself and must be fixed.
+        reasons.append("early_stop_contradicts_durations")
+
+    # ── §6 item 4: corrupt raw (checksum, or a NON-FINAL window lost) ────────
+    checksum_ok = fields.get("checksum_ok")
+    if checksum_ok is None:
+        reasons.append("checksum_ok_missing")
+    elif not bool(checksum_ok):
+        reasons.append("stored_checksum_failed")
+
     truncation = fields.get("truncation_bytes")
+    n_frames = fields.get("n_frames")
     if truncation is None:
         reasons.append("truncation_bytes_missing")
     elif int(truncation) > 0:
-        reasons.append("raw_truncated")
+        flags.append("raw_truncated_trailing")
+        if n_frames is not None and intended is not None and frames_per_window > 0:
+            stored_windows = int(n_frames) // int(frames_per_window)
+            expected_windows = int(float(intended) * float(fs)) // int(frames_per_window)
+            if stored_windows < expected_windows:
+                # A whole window that should exist is gone: the cut reached a non-final
+                # window, which §6 item 4 makes corrupt. A trailing fragment does not.
+                reasons.append("truncation_lost_a_non_final_window")
 
-    packet_loss = fields.get("packet_loss_frames")
-    if packet_loss is None:
-        reasons.append("packet_loss_frames_missing")
-    elif int(packet_loss) > 0:
-        reasons.append("packet_loss_detected")
+    # ── §6 item 4: packet loss FLAGS, never excludes ─────────────────────────
+    received, dropped = fields.get("packets_received"), fields.get("packets_dropped")
+    if received is None or dropped is None:
+        reasons.append("packet_counts_missing")
+    elif int(received) < 0 or int(dropped) < 0:
+        reasons.append("packet_counts_negative")
+    elif int(received) > 0:
+        ratio = int(dropped) / int(received)
+        if ratio > PACKET_LOSS_FLAG_RATIO:
+            flags.append(f"packet_loss_above_{PACKET_LOSS_FLAG_RATIO:.0%}")
 
-    if bool(fields.get("early_stop", False)):
-        reasons.append("early_stop")
-    intended, actual = fields.get("intended_duration_s"), fields.get("actual_duration_s")
-    if intended is not None and actual is not None and float(actual) < float(intended):
-        reasons.append("actual_duration_below_intended")
-
-    retry = fields.get("retry_status")
-    if retry == RetryStatus.SUPERSEDED.value:
+    # ── §6 item 7 / plan §4: superseded attempt ──────────────────────────────
+    if fields.get("retry_status") == RetryStatus.SUPERSEDED.value:
         reasons.append("superseded_by_retry")
 
-    n_frames, n_invalid = fields.get("n_frames"), fields.get("n_invalid_frames")
+    # ── Internal consistency of the declared frame counts ────────────────────
+    n_invalid = fields.get("n_invalid_frames")
     if n_frames is not None and n_invalid is not None:
         if int(n_invalid) < 0 or int(n_frames) < 0:
             reasons.append("frame_counts_negative")
         elif int(n_invalid) > int(n_frames):
             reasons.append("invalid_frames_exceed_total")
-        elif packet_loss is not None and int(packet_loss) > 0 and int(n_invalid) == 0:
-            # Packets were lost but no frame is marked invalid: the map cannot be describing
-            # the same capture, and a window containing a dropped frame must be radar-NaN.
-            reasons.append("validity_map_inconsistent_with_packet_loss")
 
     verdict = Admission.EXCLUDED if reasons else Admission.ADMITTED
-    return verdict, tuple(reasons)
+    return verdict, tuple(reasons), tuple(flags)
 
 
 # ── Parsing / validation ──────────────────────────────────────────────────────
@@ -356,8 +417,9 @@ def parse_session(fields: dict, mode: Mode) -> SessionManifest:
     admission = (_as_enum(fields["admission"], Admission, "admission", session_id)
                  if present("admission") else None)
     reasons: tuple[str, ...] = ()
+    flags: tuple[str, ...] = ()
     if mode is Mode.SCORING:
-        recomputed, reasons = recompute_admission(fields, session_id)
+        recomputed, reasons, flags = recompute_admission(fields, session_id)
         if recomputed is not admission:
             raise ManifestError(
                 f"session {session_id!r}: operator recorded admission={admission.value!r} but "
@@ -376,6 +438,7 @@ def parse_session(fields: dict, mode: Mode) -> SessionManifest:
         data_role=role,
         admission=admission,
         admission_reasons=reasons,
+        flags=flags,
         distance_m=distance,
         posture=posture,
         frame0_epoch=frame0,
@@ -384,7 +447,9 @@ def parse_session(fields: dict, mode: Mode) -> SessionManifest:
         raw_path=fields.get("raw_path"),
         raw_sha256=fields.get("raw_sha256"),
         truncation_bytes=fields.get("truncation_bytes"),
-        packet_loss_frames=fields.get("packet_loss_frames"),
+        checksum_ok=fields.get("checksum_ok"),
+        packets_received=fields.get("packets_received"),
+        packets_dropped=fields.get("packets_dropped"),
         n_frames=fields.get("n_frames"),
         n_invalid_frames=fields.get("n_invalid_frames"),
         frame_validity_map_path=fields.get("frame_validity_map_path"),

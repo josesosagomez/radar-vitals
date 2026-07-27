@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.m4.manifest import (  # noqa: E402
     CANONICAL_POSTURE,
+    PACKET_LOSS_FLAG_RATIO,
     DISTANCE_MAX_M,
     DISTANCE_MIN_M,
     MAX_CLOCK_OFFSET_S,
@@ -36,8 +37,8 @@ _REQUIRED_KEYS = [
     "session_id", "subject_id", "arm", "data_role", "admission",
     "distance_m", "posture",
     "frame0_epoch", "clock_offset_start_s", "clock_offset_end_s",
-    "raw_path", "raw_sha256", "truncation_bytes", "packet_loss_frames",
-    "n_frames", "n_invalid_frames",
+    "raw_path", "raw_sha256", "truncation_bytes", "checksum_ok",
+    "packets_received", "packets_dropped", "n_frames", "n_invalid_frames",
     "frame_validity_map_path", "frame_validity_map_sha256",
     "capture_config_sha256", "capture_git_commit", "masimo_path", "masimo_sha256",
     "intended_duration_s", "actual_duration_s", "early_stop", "retry_status",
@@ -60,7 +61,9 @@ def admissible(**over) -> dict:
         "raw_path": "data/raw/S01_natural.bin",
         "raw_sha256": "a" * 64,
         "truncation_bytes": 0,
-        "packet_loss_frames": 0,
+        "checksum_ok": True,
+        "packets_received": 100000,
+        "packets_dropped": 0,
         "n_frames": 12000,
         "n_invalid_frames": 0,
         "frame_validity_map_path": "data/raw/S01_natural.validity.npy",
@@ -212,8 +215,8 @@ def test_frame0_epoch_may_be_fractional():
 # ── Admission recomputation: one NAMED negative test per rule (M4R-04) ────────
 
 def test_recompute_admits_a_clean_session():
-    verdict, reasons = recompute_admission(admissible(), "S01")
-    assert verdict is Admission.ADMITTED and reasons == ()
+    verdict, reasons, flags = recompute_admission(admissible(), "S01")
+    assert verdict is Admission.ADMITTED and reasons == () and flags == ()
 
 
 @pytest.mark.parametrize("key", ["clock_offset_start_s", "clock_offset_end_s"])
@@ -223,7 +226,7 @@ def test_rule_clock_offset_exceeds_one_second_at_either_end(key):
     assert recompute_admission(admissible(**{key: 1.0}), "S")[0] is Admission.ADMITTED
     assert recompute_admission(admissible(**{key: -1.0}), "S")[0] is Admission.ADMITTED
     for beyond in (1.0001, -1.0001, 3.0):
-        verdict, reasons = recompute_admission(admissible(**{key: beyond}), "S")
+        verdict, reasons, _ = recompute_admission(admissible(**{key: beyond}), "S")
         assert verdict is Admission.EXCLUDED
         assert f"{key}_exceeds_{MAX_CLOCK_OFFSET_S:g}s" in reasons
 
@@ -231,94 +234,152 @@ def test_rule_clock_offset_exceeds_one_second_at_either_end(key):
 @pytest.mark.parametrize("key", ["clock_offset_start_s", "clock_offset_end_s"])
 def test_rule_clock_offset_missing_or_non_finite(key):
     for bad in (None, float("nan"), float("inf")):
-        verdict, reasons = recompute_admission(admissible(**{key: bad}), "S")
+        verdict, reasons, _ = recompute_admission(admissible(**{key: bad}), "S")
         assert verdict is Admission.EXCLUDED
         assert f"{key}_missing_or_non_finite" in reasons
 
 
-def test_rule_raw_truncated():
-    verdict, reasons = recompute_admission(admissible(truncation_bytes=4096), "S")
-    assert verdict is Admission.EXCLUDED and "raw_truncated" in reasons
+def test_rule_stored_checksum_failed():
+    """§6 item 4: 'a stored file checksum fails' -> corrupt, not admitted."""
+    verdict, reasons, _ = recompute_admission(admissible(checksum_ok=False), "S")
+    assert verdict is Admission.EXCLUDED and "stored_checksum_failed" in reasons
+
+
+def test_rule_checksum_ok_missing():
+    verdict, reasons, _ = recompute_admission(admissible(checksum_ok=None), "S")
+    assert verdict is Admission.EXCLUDED and "checksum_ok_missing" in reasons
+
+
+def test_a_trailing_partial_window_is_RETAINED_not_excluded():
+    """§6 item 4, verbatim: a session that reached its intended duration 'with all complete
+    windows plus an incomplete trailing partial window is RETAINED - that tail window is
+    simply unscored'. The first draft excluded on ANY truncation, which would have silently
+    discarded admissible sessions."""
+    # 600 s intended => 20 expected windows. 12010 frames stored = 20 complete + a 10-frame
+    # tail; the truncation removed only part of that tail.
+    verdict, reasons, flags = recompute_admission(
+        admissible(truncation_bytes=4096, n_frames=12010), "S"
+    )
+    assert verdict is Admission.ADMITTED, reasons
+    assert "raw_truncated_trailing" in flags, "truncation must still be REPORTED"
+
+
+def test_rule_truncation_that_loses_a_non_final_window_excludes():
+    """The other half of §6 item 4: a cut that reaches a mid-recording window is corrupt.
+    600 s intended => 20 expected windows; only 19 survive."""
+    verdict, reasons, _ = recompute_admission(
+        admissible(truncation_bytes=4096, n_frames=11400), "S"
+    )
+    assert verdict is Admission.EXCLUDED
+    assert "truncation_lost_a_non_final_window" in reasons
 
 
 def test_rule_truncation_bytes_missing():
-    verdict, reasons = recompute_admission(admissible(truncation_bytes=None), "S")
+    verdict, reasons, _ = recompute_admission(admissible(truncation_bytes=None), "S")
     assert verdict is Admission.EXCLUDED and "truncation_bytes_missing" in reasons
 
 
-def test_rule_packet_loss_detected():
-    verdict, reasons = recompute_admission(
-        admissible(packet_loss_frames=3, n_invalid_frames=3), "S"
+def test_packet_loss_FLAGS_the_session_and_never_excludes_it():
+    """§6 item 4, verbatim: packet loss above the frozen tolerance 'flags the session
+    (reported) but does not by itself exclude it; the per-frame validity map decides which
+    windows are radar-NaN'. The first draft excluded on ANY packet loss."""
+    # 4 % - under tolerance: no flag, no exclusion.
+    verdict, reasons, flags = recompute_admission(
+        admissible(packets_received=100000, packets_dropped=4000), "S"
     )
-    assert verdict is Admission.EXCLUDED and "packet_loss_detected" in reasons
-
-
-def test_rule_packet_loss_frames_missing():
-    verdict, reasons = recompute_admission(admissible(packet_loss_frames=None), "S")
-    assert verdict is Admission.EXCLUDED and "packet_loss_frames_missing" in reasons
-
-
-def test_rule_early_stop():
-    verdict, reasons = recompute_admission(admissible(early_stop=True), "S")
-    assert verdict is Admission.EXCLUDED and "early_stop" in reasons
-
-
-def test_rule_actual_duration_below_intended():
-    verdict, reasons = recompute_admission(
-        admissible(intended_duration_s=600.0, actual_duration_s=412.0), "S"
+    assert verdict is Admission.ADMITTED and flags == ()
+    # 6 % - over tolerance: FLAGGED, still admitted.
+    verdict, reasons, flags = recompute_admission(
+        admissible(packets_received=100000, packets_dropped=6000, n_invalid_frames=120), "S"
     )
-    assert verdict is Admission.EXCLUDED and "actual_duration_below_intended" in reasons
-    # Running slightly long is not an exclusion cause.
-    assert recompute_admission(
-        admissible(actual_duration_s=601.0), "S"
-    )[0] is Admission.ADMITTED
+    assert verdict is Admission.ADMITTED, reasons
+    assert any("packet_loss_above" in f for f in flags)
+
+
+def test_packet_loss_flag_boundary_is_strictly_greater_than_five_percent():
+    at = recompute_admission(
+        admissible(packets_received=100000, packets_dropped=5000), "S"
+    )[2]
+    over = recompute_admission(
+        admissible(packets_received=100000, packets_dropped=5001), "S"
+    )[2]
+    assert at == (), "exactly 5 % is not 'above' the tolerance"
+    assert any("packet_loss_above" in f for f in over)
+    assert PACKET_LOSS_FLAG_RATIO == 0.05
+
+
+def test_rule_packet_counts_missing_or_negative():
+    for over in ({"packets_received": None}, {"packets_dropped": None}):
+        verdict, reasons, _ = recompute_admission(admissible(**over), "S")
+        assert verdict is Admission.EXCLUDED and "packet_counts_missing" in reasons
+    verdict, reasons, _ = recompute_admission(admissible(packets_dropped=-1), "S")
+    assert verdict is Admission.EXCLUDED and "packet_counts_negative" in reasons
+
+
+def test_rule_protocol_abort_did_not_reach_intended_duration():
+    """§6 item 3 / M3R-37: the discriminator is one question - did the run reach its
+    intended duration?"""
+    verdict, reasons, _ = recompute_admission(
+        admissible(intended_duration_s=600.0, actual_duration_s=412.0, early_stop=True), "S"
+    )
+    assert verdict is Admission.EXCLUDED
+    assert "protocol_abort_did_not_reach_intended_duration" in reasons
+    # Reaching or exceeding the intended duration is admissible.
+    assert recompute_admission(admissible(actual_duration_s=600.0), "S")[0] is Admission.ADMITTED
+    assert recompute_admission(admissible(actual_duration_s=601.0), "S")[0] is Admission.ADMITTED
+
+
+def test_rule_early_stop_contradicting_the_durations_is_an_error():
+    """early_stop says the operator halted it, the durations say it completed. Not a silent
+    tiebreak - the manifest contradicts itself."""
+    verdict, reasons, _ = recompute_admission(
+        admissible(early_stop=True, actual_duration_s=600.0), "S"
+    )
+    assert verdict is Admission.EXCLUDED and "early_stop_contradicts_durations" in reasons
+
+
+def test_rule_duration_fields_missing():
+    for over in ({"intended_duration_s": None}, {"actual_duration_s": None}):
+        verdict, reasons, _ = recompute_admission(admissible(**over), "S")
+        assert verdict is Admission.EXCLUDED and "duration_fields_missing" in reasons
 
 
 def test_rule_superseded_by_retry():
-    verdict, reasons = recompute_admission(admissible(retry_status="superseded"), "S")
+    verdict, reasons, _ = recompute_admission(admissible(retry_status="superseded"), "S")
     assert verdict is Admission.EXCLUDED and "superseded_by_retry" in reasons
     # A retry that IS the kept session stays admissible.
     assert recompute_admission(admissible(retry_status="retry"), "S")[0] is Admission.ADMITTED
 
 
 def test_rule_invalid_frames_exceed_total():
-    verdict, reasons = recompute_admission(
+    verdict, reasons, _ = recompute_admission(
         admissible(n_frames=100, n_invalid_frames=101), "S"
     )
     assert verdict is Admission.EXCLUDED and "invalid_frames_exceed_total" in reasons
 
 
 def test_rule_frame_counts_negative():
-    verdict, reasons = recompute_admission(admissible(n_invalid_frames=-1), "S")
+    verdict, reasons, _ = recompute_admission(admissible(n_invalid_frames=-1), "S")
     assert verdict is Admission.EXCLUDED and "frame_counts_negative" in reasons
-
-
-def test_rule_validity_map_inconsistent_with_packet_loss():
-    """Packets were lost but no frame is marked invalid: the map cannot be describing the
-    same capture, and a window containing a dropped frame must become radar-NaN."""
-    verdict, reasons = recompute_admission(
-        admissible(packet_loss_frames=5, n_invalid_frames=0), "S"
-    )
-    assert verdict is Admission.EXCLUDED
-    assert "validity_map_inconsistent_with_packet_loss" in reasons
 
 
 def test_multiple_failing_rules_are_all_reported_not_just_the_first():
     """A manifest with three defects must name three, or fixing one reveals the next."""
-    verdict, reasons = recompute_admission(
-        admissible(truncation_bytes=1, early_stop=True, clock_offset_end_s=9.0), "S"
+    verdict, reasons, _ = recompute_admission(
+        admissible(checksum_ok=False, actual_duration_s=1.0, clock_offset_end_s=9.0), "S"
     )
     assert verdict is Admission.EXCLUDED
-    assert {"raw_truncated", "early_stop", "clock_offset_end_s_exceeds_1s"} <= set(reasons)
+    assert {"stored_checksum_failed", "protocol_abort_did_not_reach_intended_duration",
+            "clock_offset_end_s_exceeds_1s"} <= set(reasons)
 
 
 # ── Operator vs recomputed disagreement (the M4R-04 headline) ─────────────────
 
 def test_operator_admitted_but_M4_recomputes_excluded_raises():
     with pytest.raises(ManifestError) as exc:
-        parse_session(admissible(admission="admitted", truncation_bytes=8), Mode.SCORING)
+        parse_session(admissible(admission="admitted", checksum_ok=False), Mode.SCORING)
     msg = str(exc.value)
-    assert "recomputes" in msg and "raw_truncated" in msg
+    assert "recomputes" in msg and "stored_checksum_failed" in msg
 
 
 def test_operator_excluded_but_M4_recomputes_admitted_also_raises():
@@ -332,10 +393,10 @@ def test_operator_excluded_but_M4_recomputes_admitted_also_raises():
 
 def test_agreement_on_excluded_is_accepted_and_keeps_the_reasons():
     m = parse_session(
-        admissible(admission="excluded", early_stop=True), Mode.SCORING
+        admissible(admission="excluded", actual_duration_s=10.0, early_stop=True), Mode.SCORING
     )
     assert m.admission is Admission.EXCLUDED
-    assert "early_stop" in m.admission_reasons
+    assert "protocol_abort_did_not_reach_intended_duration" in m.admission_reasons
 
 
 # ── Development mode (§2.2 / §4) ──────────────────────────────────────────────
