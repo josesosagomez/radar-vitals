@@ -1549,12 +1549,16 @@ def test_a_retry_must_name_a_predecessor_that_exists(tmp_path):
         _load(tmp_path, later)
 
 
-def test_the_retry_side_link_must_point_back(tmp_path):
-    """Retry first in the document, so the retry-side agreement check is the one that runs."""
+def test_a_replacement_pair_that_disagrees_about_its_own_link_is_rejected(tmp_path):
+    """Both directions are now walked as a graph, so which of the two messages fires depends
+    on the shape rather than on document order — but a disagreeing pair never loads.
+
+    The third record exists so the mismatch itself is the failure, not a dangling target."""
     prior, later = _pair(tmp_path)
-    prior["replaced_by_session_id"] = "some_third_session"
-    with pytest.raises(ManifestError, match="but that session names"):
-        _load(tmp_path, later, prior)
+    third = materialise(tmp_path, admissible(session_id="a3"))
+    prior["replaced_by_session_id"] = "a3"
+    with pytest.raises(ManifestError, match="but that session"):
+        _load(tmp_path, later, prior, third)
 
 
 def test_the_superseded_side_link_must_point_forward(tmp_path):
@@ -1968,3 +1972,117 @@ def test_a_forbidden_pre_capture_field_is_rejected_even_when_null(tmp_path, fiel
     key presence unable to discriminate a v2 record's shape."""
     with pytest.raises(ManifestError, match="capture-only fields are present"):
         parse_session(pre_capture(**{field: None}), Mode.SCORING)
+
+
+# ── S12R-20: the status is a summary of the LINKS, not a separate claim ─────
+
+def test_a_replacement_relabelled_ORIGINAL_cannot_keep_its_link(tmp_path):
+    """The S12R-20 masquerade. Validating per selected enum branch let the "original" side
+    skip every check while keeping `replaces_session_id`: the superseded side saw its
+    back-link and passed, and the replacement was admitted without ever being classified or
+    counted as a retry."""
+    prior, later = _pair(tmp_path)
+    later["retry_status"] = "original"
+    later.pop("retry_reason", None)
+    with pytest.raises(ManifestError, match="links imply"):
+        _load(tmp_path, prior, later)
+
+
+@pytest.mark.parametrize(
+    "status, links",
+    [("original", {"replaced_by_session_id": "x"}),
+     ("original", {"replaces_session_id": "x"}),
+     ("retry", {}),
+     ("superseded", {}),
+     ("retry", {"replaced_by_session_id": "x"}),
+     ("superseded", {"replaces_session_id": "x"})],
+)
+def test_the_declared_status_must_match_the_links(tmp_path, status, links):
+    over = dict(retry_status=status, **links)
+    if status != "original":
+        over["retry_reason"] = "warmup_low_confidence"
+    fields = materialise(tmp_path, admissible(**over))
+    with pytest.raises(ManifestError, match="links imply|must be a non-empty string"):
+        _load(tmp_path, fields)
+
+
+def test_a_record_cannot_replace_ITSELF(tmp_path):
+    """Link symmetry alone does not prove a second attempt exists — a self-replacing record
+    is trivially symmetric."""
+    fields = materialise(tmp_path, admissible(
+        session_id="solo", disposition="excluded", retry_status="superseded",
+        retry_reason="warmup_low_confidence", replaced_by_session_id="solo",
+        replaces_session_id="solo", selected_confidence="low"))
+    with pytest.raises(ManifestError, match="names ITSELF"):
+        _load(tmp_path, fields)
+
+
+def test_a_cyclic_replacement_chain_is_rejected(tmp_path):
+    """Attempts are ordered in time, so the graph must be acyclic."""
+    # A non-warmup cause, so the one-re-run rule does not fire first and the cycle detector
+    # is what this test actually exercises.
+    common = dict(disposition="excluded", retry_status="superseded",
+                  retry_reason="protocol_abort", actual_duration_s=10.0, early_stop=True)
+    a = materialise(tmp_path, admissible(
+        session_id="c1", replaced_by_session_id="c2", replaces_session_id="c2", **common))
+    b = materialise(tmp_path, admissible(
+        session_id="c2", replaced_by_session_id="c1", replaces_session_id="c1", **common))
+    with pytest.raises(ManifestError, match="CYCLIC"):
+        _load(tmp_path, a, b)
+
+
+def test_an_original_must_not_state_a_retry_reason(tmp_path):
+    fields = materialise(tmp_path, admissible(retry_reason="warmup_low_confidence"))
+    with pytest.raises(ManifestError, match="replaced nothing"):
+        _load(tmp_path, fields)
+
+
+def test_a_retry_pointing_at_a_session_that_never_names_it_back(tmp_path):
+    """Isolates the REVERSE-direction link check.
+
+    The forward walk cannot see this edge: the predecessor carries no `replaced_by_session_id`
+    at all, so iterating forward links skips it entirely. Only walking the reverse direction
+    catches a retry that points at a session which never claimed to be replaced."""
+    orphan = materialise(tmp_path, admissible(session_id="d1"))
+    claimer = materialise(tmp_path, admissible(
+        session_id="d2", retry_status="retry", retry_reason="warmup_low_confidence",
+        replaces_session_id="d1"))
+    with pytest.raises(ManifestError, match="but that session names"):
+        _load(tmp_path, orphan, claimer)
+
+
+# ── S12R-23: same subject, same protocol ────────────────────────────────────
+
+@pytest.mark.parametrize(
+    "field, value",
+    [("subject_id", "S99"), ("data_role", "collision"), ("posture", "seated"),
+     ("intended_duration_s", 300.0)],
+)
+def test_a_replacement_must_share_the_protocol_identity(tmp_path, field, value):
+    """§6's Replacement policy permits re-capture only for the "same subject, same protocol".
+    Without this, a different subject or arm could silently absorb a failed session's slot and
+    distort the realized allocation and the evidence-floor accounting."""
+    prior, later = _pair(tmp_path)
+    if later.get(field) == value:
+        pytest.skip("fixture already matches; nothing to differ")
+    later[field] = value
+    with pytest.raises(ManifestError, match="SAME SUBJECT and SAME PROTOCOL"):
+        _load(tmp_path, prior, later)
+
+
+def test_a_replacement_may_not_switch_arm_or_rate(tmp_path):
+    prior, later = _pair(tmp_path)
+    later["arm"] = "paced"
+    later["commanded_rate_bpm"] = 12
+    later["commanded_rate_schedule"] = [{"commanded_rate_bpm": 12, "start_s": 0.0}]
+    with pytest.raises(ManifestError, match="SAME SUBJECT and SAME PROTOCOL"):
+        _load(tmp_path, prior, later)
+
+
+def test_a_matching_replacement_pair_still_loads(tmp_path):
+    """The positive case, so the negatives above mean something."""
+    prior, later = _pair(tmp_path)
+    a, b = _load(tmp_path, prior, later)
+    assert a.disposition is SessionDisposition.EXCLUDED
+    assert b.disposition is SessionDisposition.ADMITTED
+    assert b.subject_id == a.subject_id

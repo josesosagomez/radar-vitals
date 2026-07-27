@@ -1555,93 +1555,157 @@ def validate_retry_policy(sessions: list[SessionManifest], where: str) -> None:
     def fail(msg: str) -> None:
         raise ManifestError(f"{where}: {msg}")
 
+    # ── 1. The declared status must be exactly what the LINKS say ────────────
+    #
+    # S12R-20: validating per selected enum branch let link fields the branch ignored pass
+    # unseen — a replacement relabelled `original` kept its `replaces_session_id`, the
+    # superseded side saw its back-link and was satisfied, and the replacement was admitted
+    # without being counted as a retry. The status is now a checked summary of the graph,
+    # not an independent claim. It also gives the a1->a2->a3 middle record a definite
+    # answer, which one enum branch could not.
     for s in sessions:
-        if s.retry_status is None or s.retry_status is RetryStatus.ORIGINAL:
-            # §6 item 7's trigger is an "iff": a low-confidence attempt must have been
-            # re-run. An original still carrying `low` was scored without the re-run the
-            # frozen policy requires.
-            if s.selected_confidence is SelectedConfidence.LOW:
+        has_prev = s.replaces_session_id is not None
+        has_next = s.replaced_by_session_id is not None
+        implied = (RetryStatus.SUPERSEDED if has_next
+                   else RetryStatus.RETRY if has_prev
+                   else RetryStatus.ORIGINAL)
+        if s.retry_status is not implied:
+            fail(
+                f"session {s.session_id!r} declares retry_status="
+                f"{s.retry_status.value if s.retry_status else None!r} but its links imply "
+                f"{implied.value!r} (replaces={s.replaces_session_id!r}, "
+                f"replaced_by={s.replaced_by_session_id!r}). The status summarises the links; "
+                "it is not a separate claim."
+            )
+        # No reason-presence checks here: `parse_session` already requires a `retry_reason`
+        # for a non-original status and forbids one for an original, and it runs first on
+        # every path into this function. Duplicating them produced two mutants that survived
+        # — lines no test could fail on, which is how vacuous checks accumulate (S12R-08).
+
+        for key, target in (("replaces_session_id", s.replaces_session_id),
+                            ("replaced_by_session_id", s.replaced_by_session_id)):
+            if target == s.session_id:
                 fail(
-                    f"session {s.session_id!r} is an original attempt with "
-                    "selected_confidence='low' but was never superseded. §6 item 7's trigger "
-                    "is 're-run iff low' — scoring it as-is skips the one re-run the frozen "
-                    "policy requires. (A retry that is *also* low IS scored — but this is not "
-                    "a retry.)"
+                    f"session {s.session_id!r} names ITSELF as {key}. A replacement needs two "
+                    "distinct attempts; link symmetry alone does not prove a second one exists."
                 )
+
+        # §6 item 7's trigger is an "iff": a low-confidence attempt must have been re-run.
+        if implied is RetryStatus.ORIGINAL and s.selected_confidence is SelectedConfidence.LOW:
+            fail(
+                f"session {s.session_id!r} is an original attempt with "
+                "selected_confidence='low' but was never superseded. §6 item 7's trigger is "
+                "'re-run iff low' — scoring it as-is skips the one re-run the frozen policy "
+                "requires. (A retry that is *also* low IS scored — but this is not a retry.)"
+            )
+
+    # ── 2. Every edge, walked as a graph ─────────────────────────────────────
+    for s in sessions:
+        if s.replaced_by_session_id is None:
             continue
+        nxt = by_id.get(s.replaced_by_session_id)
+        if nxt is None:
+            fail(
+                f"session {s.session_id!r} is superseded but replaced_by_session_id="
+                f"{s.replaced_by_session_id!r} is not in this manifest. Both the discarded "
+                "and the replacement session are logged (§6 item 7)."
+            )
+        if nxt.replaces_session_id != s.session_id:
+            fail(
+                f"session {s.session_id!r} names {nxt.session_id!r} as its replacement, but "
+                f"that session replaces {nxt.replaces_session_id!r}."
+            )
+        _validate_replacement_edge(s, nxt, fail)
 
-        reason = s.retry_reason
-        if reason is None:
-            fail(f"session {s.session_id!r} is {s.retry_status.value!r} without a retry_reason")
-
-        if s.retry_status is RetryStatus.SUPERSEDED:
-            # There is deliberately no NO_AGREEMENT check here. §6's "reason 6 is a
-            # no-agreement session (not re-captured)" is already structural: a superseded
-            # record always recomputes to EXCLUDED via `superseded_by_retry`, so a manifest
-            # declaring `no_agreement` **and** `superseded` is rejected by the M4R-04
-            # agreement check before this function runs. A guard here would be unreachable —
-            # a line no test could fail on, which is how vacuous checks accumulate (S12R-08).
-            other = by_id.get(s.replaced_by_session_id)
-            if other is None:
-                fail(
-                    f"session {s.session_id!r} is superseded but replaced_by_session_id="
-                    f"{s.replaced_by_session_id!r} is not in this manifest. Both the "
-                    "discarded and the replacement session are logged (§6 item 7)."
-                )
-            if other.replaces_session_id != s.session_id:
-                fail(
-                    f"session {s.session_id!r} names {other.session_id!r} as its replacement, "
-                    f"but that session replaces {other.replaces_session_id!r}."
-                )
+    # The reverse direction, walked separately: an edge whose PREDECESSOR carries no forward
+    # link is invisible to the loop above, so a retry could point at a session that never
+    # names it back.
+    for s in sessions:
+        if s.replaces_session_id is None:
             continue
-
-        # RetryStatus.RETRY — this session replaced an earlier attempt.
-        prior = by_id.get(s.replaces_session_id)
-        if prior is None:
+        prev = by_id.get(s.replaces_session_id)
+        if prev is None:
             fail(
                 f"session {s.session_id!r} is a retry but replaces_session_id="
                 f"{s.replaces_session_id!r} is not in this manifest."
             )
-        if prior.replaced_by_session_id != s.session_id:
+        if prev.replaced_by_session_id != s.session_id:
             fail(
-                f"session {s.session_id!r} claims to replace {prior.session_id!r}, but that "
-                f"session names {prior.replaced_by_session_id!r} as its replacement."
-            )
-        if prior.retry_reason is not reason:
-            fail(
-                f"session {s.session_id!r} gives retry_reason={reason.value!r} but the "
-                f"session it replaces gives {prior.retry_reason.value if prior.retry_reason else None!r}. "
-                "Both ends of a replacement log the same cause."
+                f"session {s.session_id!r} claims to replace {prev.session_id!r}, but that "
+                f"session names {prev.replaced_by_session_id!r} as its replacement."
             )
 
-        if reason is RetryReason.WARMUP_LOW_CONFIDENCE:
-            if prior.selected_confidence is not SelectedConfidence.LOW:
+    # ── 3. No cycles ─────────────────────────────────────────────────────────
+    for s in sessions:
+        seen, node = {s.session_id}, s
+        while node.replaced_by_session_id is not None:
+            node = by_id[node.replaced_by_session_id]
+            if node.session_id in seen:
                 fail(
-                    f"session {s.session_id!r} is a warmup re-run, but the attempt it "
-                    f"replaces reports selected_confidence="
-                    f"{prior.selected_confidence.value if prior.selected_confidence else None!r}. "
-                    "§6 item 7's frozen trigger is 'low', and nothing else licenses a re-run."
+                    f"the replacement chain through {s.session_id!r} is CYCLIC "
+                    f"({' -> '.join(seen)} -> {node.session_id}). Attempts are ordered in "
+                    "time, so the graph must be acyclic."
                 )
-            # Keyed on the LINK, not on `retry_status`: the middle record of a
-            # a1 -> a2 -> a3 chain is both a retry and superseded, and a single enum can only
-            # say one of those. `replaces_session_id` is present on it either way.
-            if prior.replaces_session_id is not None:
-                fail(
-                    f"session {s.session_id!r} supersedes {prior.session_id!r}, which was "
-                    "itself a warmup retry. §6 item 7 allows **at most one** re-run per "
-                    "session; if the retry is also 'low' the session is captured and scored "
-                    "anyway, so coverage cannot be inflated by discarding hard sessions."
-                )
-        else:
-            evidence = _RETRY_REASON_EVIDENCE[reason]
-            if not set(evidence) & set(prior.disposition_reasons):
-                fail(
-                    f"session {s.session_id!r} states retry_reason={reason.value!r}, but the "
-                    f"session it replaces was not excluded for that cause (its recomputed "
-                    f"reasons are {prior.disposition_reasons or '()'}). A replacement cause "
-                    "the predecessor's own disposition does not support would let a clean "
-                    "attempt be relabelled and silently dropped."
-                )
+            seen.add(node.session_id)
+
+
+#: The design attributes §6's Replacement policy fixes across a replacement: "may be
+#: re-captured (**same subject, same protocol**)". Measured per-attempt outcomes — durations
+#: actually achieved, packet counts, warmup confidence — are deliberately NOT here; only what
+#: the protocol assigns in advance (S12R-23).
+_PROTOCOL_IDENTITY_FIELDS = (
+    "subject_id", "arm", "commanded_rate_bpm", "data_role", "posture", "intended_duration_s",
+)
+
+
+def _validate_replacement_edge(prior, later, fail) -> None:
+    """One superseded -> replacement edge: cause, trigger, count and protocol identity."""
+    if prior.retry_reason is not later.retry_reason:
+        fail(
+            f"session {later.session_id!r} gives retry_reason="
+            f"{later.retry_reason.value if later.retry_reason else None!r} but the session it "
+            f"replaces gives {prior.retry_reason.value if prior.retry_reason else None!r}. "
+            "Both ends of a replacement log the same cause."
+        )
+
+    # S12R-23: §6 permits re-capture "same subject, same protocol".
+    for field_name in _PROTOCOL_IDENTITY_FIELDS:
+        a, b = getattr(prior, field_name), getattr(later, field_name)
+        if a != b:
+            fail(
+                f"session {later.session_id!r} replaces {prior.session_id!r} but "
+                f"{field_name} differs ({a!r} vs {b!r}). §6's Replacement policy permits "
+                "re-capture only for the SAME SUBJECT and SAME PROTOCOL — otherwise a "
+                "different subject or arm can silently absorb a failed session's slot and "
+                "distort the realized allocation."
+            )
+
+    reason = later.retry_reason
+    if reason is RetryReason.WARMUP_LOW_CONFIDENCE:
+        if prior.selected_confidence is not SelectedConfidence.LOW:
+            fail(
+                f"session {later.session_id!r} is a warmup re-run, but the attempt it "
+                f"replaces reports selected_confidence="
+                f"{prior.selected_confidence.value if prior.selected_confidence else None!r}. "
+                "§6 item 7's frozen trigger is 'low', and nothing else licenses a re-run."
+            )
+        if prior.replaces_session_id is not None:
+            fail(
+                f"session {later.session_id!r} supersedes {prior.session_id!r}, which was "
+                "itself a warmup retry. §6 item 7 allows **at most one** re-run per session; "
+                "if the retry is also 'low' the session is captured and scored anyway, so "
+                "coverage cannot be inflated by discarding hard sessions."
+            )
+    else:
+        evidence = _RETRY_REASON_EVIDENCE[reason]
+        if not set(evidence) & set(prior.disposition_reasons):
+            fail(
+                f"session {later.session_id!r} states retry_reason={reason.value!r}, but the "
+                f"session it replaces was not excluded for that cause (its recomputed reasons "
+                f"are {prior.disposition_reasons or '()'}). A replacement cause the "
+                "predecessor's own disposition does not support would let a clean attempt be "
+                "relabelled and silently dropped."
+            )
 
 
 def _ineligibility_reason(s: SessionManifest, method: MethodProvenance | None = None) -> str:
