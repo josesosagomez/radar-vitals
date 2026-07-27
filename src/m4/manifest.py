@@ -1166,8 +1166,11 @@ def _sha256_file(path: Path) -> str:
     return h.hexdigest()
 
 
-def verify_bound_files(fields: dict, session_id: str, root: Path) -> bool:
-    """Hash every bound artifact and return the DERIVED raw-digest result (S12R-03, S12R-07).
+def verify_bound_files(
+    fields: dict, session_id: str, root: Path
+) -> tuple[bool, bool]:
+    """Hash every bound artifact; return the DERIVED `(raw_digest_ok, reference_acquired)`
+    facts (S12R-03, S12R-06, S12R-07).
 
     **The disposition split is the load-bearing part**, confirmed by Codex in S12R-07 R3 and
     implemented exactly as stated there:
