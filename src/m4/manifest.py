@@ -207,7 +207,29 @@ MANIFEST_SCHEMA_VERSION = 2
 #:
 #: Barred: `development` ("never confirmatory/headline"), `engineering` ("never scored, never
 #: evaluation"), `pilot` ("excluded from confirmatory metrics").
-_SCORING_ALLOWED_ROLES = frozenset({DataRole.EVALUATION, DataRole.COLLISION})
+_SCORING_LOADABLE_ROLES = frozenset({DataRole.EVALUATION, DataRole.COLLISION})
+
+#: Roles that are **unconditionally** scorable once loaded. `collision` is deliberately absent
+#: (S12R-11 R2): §3.1 makes M7's role *method-specific* — confirmatory only for an estimator
+#: not fit, tuned or selected on M7 — so no method-agnostic boolean can answer it. Asking
+#: `is_scorable` of a collision session is asking a question that has no answer until the
+#: consuming method is named; see `SessionManifest.scorable_for`.
+_UNCONDITIONALLY_SCORABLE_ROLES = frozenset({DataRole.EVALUATION})
+
+
+@dataclass(frozen=True)
+class MethodProvenance:
+    """What a consuming estimator was fit, tuned or selected on (§3.1).
+
+    §3.1: "A capture cannot both fit and confirm the same method." That is decidable, but
+    only against the *method's* provenance, which is why the guard takes it as an argument
+    rather than reading a flag off the session. `fitted_on_session_ids` is the set of sessions
+    whose data went into choosing this method's parameters or thresholds — e.g. M11c's
+    Stage 1B lag-10 veto and M8's collision tuning both name the M7 capture here.
+    """
+
+    method_id: str
+    fitted_on_session_ids: frozenset[str] = frozenset()
 
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
@@ -472,7 +494,24 @@ class SessionManifest:
         property is the second lock — `SessionManifest` is directly constructible, and
         §3.1's "never scored" is too load-bearing to rest on one check.
         """
-        return self.mode is Mode.SCORING and self.data_role in _SCORING_ALLOWED_ROLES
+        return self.mode is Mode.SCORING and self.data_role in _UNCONDITIONALLY_SCORABLE_ROLES
+
+    def scorable_for(self, method: MethodProvenance) -> bool:
+        """May this session produce a frozen-comparator number **for this method** (§3.1)?
+
+        The method-aware answer, and the only one that exists for the `collision` role: M7 is
+        confirmatory for an estimator not fit/tuned/selected on it, and method-development for
+        one that was. The first version returned `True` unconditionally for collision, which
+        asserts the confirmatory reading without knowing the method — and asserts it in the
+        permissive direction, so tuning data could land in a headline (S12R-11 R2).
+        """
+        if not (self.mode is Mode.SCORING and self.data_role in _SCORING_LOADABLE_ROLES):
+            return False
+        if self.disposition is SessionDisposition.NO_AGREEMENT:
+            return False
+        if self.data_role is DataRole.COLLISION:
+            return self.session_id not in method.fitted_on_session_ids
+        return True
 
     @property
     def is_agreement_scorable(self) -> bool:
@@ -972,8 +1011,8 @@ def parse_session(
     # SCORING. §3.1 makes engineering "never scored, never evaluation", development "never
     # confirmatory/headline" and the pilot "excluded from confirmatory metrics", so the
     # binding is between the *role* and the mode, not the mode alone.
-    if mode is Mode.SCORING and role is not None and role not in _SCORING_ALLOWED_ROLES:
-        allowed = ", ".join(sorted(r.value for r in _SCORING_ALLOWED_ROLES))
+    if mode is Mode.SCORING and role is not None and role not in _SCORING_LOADABLE_ROLES:
+        allowed = ", ".join(sorted(r.value for r in _SCORING_LOADABLE_ROLES))
         raise ManifestError(
             f"session {session_id!r}: data_role={role.value!r} may never produce a "
             f"frozen-comparator number (notes/analysis_prespec.md §3.1); scoring mode "
@@ -1467,6 +1506,38 @@ def validate_retry_policy(sessions: list[SessionManifest], where: str) -> None:
                 )
 
 
+def require_agreement_scoring(
+    sessions: list[SessionManifest], what: str, *, method: MethodProvenance
+) -> None:
+    """The method-aware output guard (S12R-11 R2). Call this before emitting any agreement
+    number, with the provenance of the estimator that produced it.
+
+    Rejects, per session: a non-scoring mode or never-scored role; a §6 item-6
+    `NO_AGREEMENT` session; and an M7 `collision` session for a method that was fit, tuned or
+    selected on it — "a capture cannot both fit and confirm the same method" (§3.1).
+    """
+    offenders = []
+    for s in sessions:
+        if s.scorable_for(method):
+            continue
+        if s.data_role is DataRole.COLLISION:
+            why = (f"M7 collision data, and method {method.method_id!r} was fit/tuned on it "
+                   "— for that method this capture is development, not confirmatory (§3.1)")
+        elif s.disposition is SessionDisposition.NO_AGREEMENT:
+            why = "a §6 item-6 no-agreement session — radar-only, no reference to agree with"
+        else:
+            why = (f"mode={s.mode.value}, data_role="
+                   f"{s.data_role.value if s.data_role else None}")
+        offenders.append(f"{s.session_id!r} ({why})")
+
+    if offenders:
+        raise ManifestError(
+            f"{what} may not include: {'; '.join(offenders)}. "
+            "A capture cannot both fit and confirm the same method "
+            "(notes/analysis_prespec.md §3.1)."
+        )
+
+
 def require_scoring_mode(sessions: list[SessionManifest], what: str) -> None:
     """Refuse to let a non-scorable session reach a scoring path (§4).
 
@@ -1475,6 +1546,10 @@ def require_scoring_mode(sessions: list[SessionManifest], what: str) -> None:
 
     "Non-scorable" is mode **and** data role (S12R-11): a development-role session is barred
     even if someone hands it in as `Mode.SCORING`.
+
+    **This guard is method-agnostic, so it rejects `collision` too** — not because M7 data is
+    never scorable, but because whether it is depends on the consuming estimator and this
+    function is not told one. Use `require_agreement_scoring(..., method=...)` for that.
     """
     offenders = [
         f"{s.session_id!r} (mode={s.mode.value}, "

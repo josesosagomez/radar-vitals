@@ -725,12 +725,21 @@ def test_a_never_scored_data_role_cannot_be_parsed_in_scoring_mode(role):
 
 
 @pytest.mark.parametrize("role", ["evaluation", "collision"])
-def test_a_scoring_eligible_data_role_is_accepted(role):
-    """`evaluation` is "the confirmatory evidence base"; M7 `collision` is confirmatory for
-    any estimator not fit on it, so the schema admits it and §3.2's pooling table carries
-    the per-method exclusion."""
-    m = parse_session(admissible(data_role=role), Mode.SCORING, raw_digest_ok=True)
-    assert m.is_scorable
+def test_a_scoring_eligible_data_role_LOADS(role):
+    """Both load in scoring mode. Whether they may be *scored* is a separate question, and
+    for `collision` it has no method-agnostic answer (S12R-11 R2)."""
+    parse_session(admissible(data_role=role), Mode.SCORING, raw_digest_ok=True)
+
+
+def test_only_evaluation_is_unconditionally_scorable():
+    """`is_scorable` deliberately answers False for `collision`: §3.1 makes M7's role
+    method-specific, so a method-agnostic boolean cannot encode it — and the first version
+    answered True, i.e. asserted the confirmatory reading in the permissive direction, which
+    is how tuning data reaches a headline."""
+    ev = parse_session(admissible(data_role="evaluation"), Mode.SCORING, raw_digest_ok=True)
+    col = parse_session(admissible(data_role="collision"), Mode.SCORING, raw_digest_ok=True)
+    assert ev.is_scorable
+    assert not col.is_scorable
 
 
 @pytest.mark.parametrize("role", ["development", "engineering", "pilot"])
@@ -1556,3 +1565,138 @@ def test_a_direct_parse_also_requires_the_replacement_link(tmp_path):
                         disposition="excluded")
     with pytest.raises(ManifestError, match="replaced_by_session_id"):
         parse_session(fields, Mode.SCORING, raw_digest_ok=True)
+
+
+# ── S12R-11 R2: scorability of M7 collision data is METHOD-dependent ─────────
+
+def _method(name="eca_v2", fitted=()):
+    from src.m4.manifest import MethodProvenance
+    return MethodProvenance(method_id=name, fitted_on_session_ids=frozenset(fitted))
+
+
+def test_collision_data_confirms_a_method_that_was_not_fit_on_it():
+    """§3.1: M7 is "confirmatory only for an estimator that was not fit, tuned, or selected
+    using M7"."""
+    from src.m4.manifest import require_agreement_scoring
+
+    m = parse_session(admissible(data_role="collision"), Mode.SCORING, raw_digest_ok=True)
+    assert m.scorable_for(_method(fitted=["some_other_session"]))
+    require_agreement_scoring([m], "HR agreement", method=_method())
+
+
+def test_collision_data_CANNOT_confirm_a_method_fit_on_it():
+    """"A capture cannot both fit and confirm the same method" — e.g. M11c's Stage 1B lag-10
+    veto and M8's collision tuning, which are named in §3.1 as fit on M7."""
+    from src.m4.manifest import require_agreement_scoring
+
+    m = parse_session(
+        admissible(session_id="M7_collision", data_role="collision"),
+        Mode.SCORING, raw_digest_ok=True,
+    )
+    method = _method("stage1b_lag10_veto", fitted=["M7_collision"])
+    assert not m.scorable_for(method)
+    with pytest.raises(ManifestError, match="both fit and confirm"):
+        require_agreement_scoring([m], "HR agreement", method=method)
+
+
+def test_evaluation_data_is_scorable_for_any_method():
+    m = parse_session(admissible(data_role="evaluation"), Mode.SCORING, raw_digest_ok=True)
+    assert m.scorable_for(_method(fitted=["S01_natural"])), (
+        "an evaluation session is the confirmatory evidence base regardless of method"
+    )
+
+
+def test_the_method_agnostic_guard_refuses_collision_and_says_why():
+    """`require_scoring_mode` is not told a method, so it cannot decide — and says so instead
+    of guessing."""
+    m = parse_session(admissible(data_role="collision"), Mode.SCORING, raw_digest_ok=True)
+    with pytest.raises(ManifestError, match="collision"):
+        require_scoring_mode([m], "HR agreement")
+
+
+def test_a_no_agreement_session_is_rejected_by_the_method_aware_guard(tmp_path):
+    from src.m4.manifest import require_agreement_scoring
+
+    (s,) = _load(tmp_path, no_reference(tmp_path))
+    assert not s.scorable_for(_method())
+    with pytest.raises(ManifestError, match="no-agreement"):
+        require_agreement_scoring([s], "HR agreement", method=_method())
+
+
+# ── The four real captures, from notes/capture_inventory.md ──────────────────
+#
+# S12R-14 exposed the gap these close: every development-mode test used synthetic values
+# chosen to be plausible, so the FIRST real parameter to meet the code — massimo2's 16 bpm —
+# was the one that broke it. Development mode had never been tested against the data it
+# exists to load. Transcribed from `notes/capture_inventory.md`; the four share
+# `distance`/`posture`/`frame0_epoch` = absent, which is exactly why the mode exists.
+
+_CAPTURE_INVENTORY = [
+    # (session_id, arm, commanded_rate_bpm, schedule)
+    ("20260713_170323_live_test1", "natural", None, None),
+    ("20260713_172042_massimo1", "natural", None, None),
+    ("20260713_182002_massimo2", "paced", 16, [{"commanded_rate_bpm": 16, "start_s": 0.0}]),
+    ("20260714_180523_sweep", "paced", 12, [
+        {"commanded_rate_bpm": 12, "start_s": 0.0},
+        {"commanded_rate_bpm": 15, "start_s": 120.0},
+        {"commanded_rate_bpm": 18, "start_s": 240.0},
+        {"commanded_rate_bpm": 21, "start_s": 360.0},
+    ]),
+]
+
+
+@pytest.mark.parametrize(
+    "session_id, arm, rate, schedule", _CAPTURE_INVENTORY,
+    ids=[c[0] for c in _CAPTURE_INVENTORY],
+)
+def test_every_existing_capture_loads_in_development_mode(session_id, arm, rate, schedule):
+    """All four must load, with their real arms and rates — including the 16 bpm outside the
+    frozen rotation and the sweep's 21 bpm step. Plan §7 row 8's end-to-end development smoke
+    runs on three of these; if one cannot be loaded, that stage cannot run."""
+    fields = {"session_id": session_id, "arm": arm, "data_role": "development"}
+    if rate is not None:
+        fields["commanded_rate_bpm"] = rate
+    if schedule is not None:
+        fields["commanded_rate_schedule"] = schedule
+
+    m = parse_session(fields, Mode.DEVELOPMENT)
+    assert m.session_id == session_id
+    assert m.commanded_rate_bpm == rate
+    assert m.data_role is DataRole.DEVELOPMENT
+    assert not m.is_scorable, "development data is exploratory / apparent / in-sample"
+    # The fields these captures genuinely lack, which is the whole reason the mode exists.
+    assert m.frame0_epoch is None and m.distance_m is None and m.posture is None
+
+
+@pytest.mark.parametrize(
+    "session_id, arm, rate, schedule", _CAPTURE_INVENTORY,
+    ids=[c[0] for c in _CAPTURE_INVENTORY],
+)
+def test_no_existing_capture_can_be_scored(session_id, arm, rate, schedule):
+    """§3.1: the four existing captures are "development/tuning AND exploratory evaluation
+    only; never confirmatory/headline". The bar must hold for every one of them."""
+    from src.m4.manifest import MethodProvenance, require_agreement_scoring
+
+    fields = {"session_id": session_id, "arm": arm, "data_role": "development"}
+    if rate is not None:
+        fields["commanded_rate_bpm"] = rate
+    if schedule is not None:
+        fields["commanded_rate_schedule"] = schedule
+
+    m = parse_session(fields, Mode.DEVELOPMENT)
+    assert not m.scorable_for(MethodProvenance("any_method"))
+    with pytest.raises(ManifestError):
+        require_agreement_scoring([m], "HR agreement", method=MethodProvenance("any_method"))
+
+
+def test_the_paced16_capture_is_the_one_that_broke_the_first_schema():
+    """A named regression for S12R-14, so the specific value that failed keeps its own test
+    rather than living only inside a parametrisation."""
+    m = parse_session(
+        {"session_id": "20260713_182002_massimo2", "arm": "paced", "commanded_rate_bpm": 16,
+         "data_role": "development"},
+        Mode.DEVELOPMENT,
+    )
+    assert m.commanded_rate_bpm == 16
+    with pytest.raises(ManifestError, match="not one of"):
+        parse_session(paced(16), Mode.SCORING, raw_digest_ok=True)
