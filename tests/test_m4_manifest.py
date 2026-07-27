@@ -1,7 +1,7 @@
-"""M4 Stage 1 — manifest schema, validation and admission recomputation.
+"""M4 Stage 1 — manifest schema, validation and disposition recomputation.
 
 Done-when (plan §7 row 1): scoring mode rejects every missing required field with a named
-error; M4 recomputes the admission disposition from the primitive fields and **fails loudly
+error; M4 recomputes the disposition disposition from the primitive fields and **fails loudly
 if it disagrees with the operator-supplied verdict, with a named negative test per rule**
 (M4R-04); development mode is separately labelled and cannot emit scoring output.
 """
@@ -22,7 +22,7 @@ from src.m4.manifest import (  # noqa: E402
     DISTANCE_MIN_M,
     MANIFEST_SCHEMA_VERSION,
     MAX_CLOCK_OFFSET_S,
-    Admission,
+    SessionDisposition,
     Arm,
     DataRole,
     ManifestError,
@@ -30,12 +30,12 @@ from src.m4.manifest import (  # noqa: E402
     RetryStatus,
     load_manifest,
     parse_session,
-    recompute_admission,
+    recompute_disposition,
     require_scoring_mode,
 )
 
 _REQUIRED_KEYS = [
-    "session_id", "subject_id", "arm", "data_role", "admission",
+    "session_id", "subject_id", "arm", "data_role", "disposition",
     "distance_m", "posture",
     "frame0_epoch", "clock_offset_start_s", "clock_offset_end_s",
     "raw_path", "raw_sha256", "truncation_bytes", "checksum_ok",
@@ -54,7 +54,7 @@ def admissible(**over) -> dict:
         "subject_id": "S01",
         "arm": "natural",
         "data_role": "evaluation",
-        "admission": "admitted",
+        "disposition": "admitted",
         "distance_m": 1.0,
         "posture": "seated",
         "frame0_epoch": 1785000000.25,
@@ -109,8 +109,8 @@ def test_a_complete_admissible_session_parses_in_scoring_mode():
     assert m.session_id == "S01_natural"
     assert m.arm is Arm.NATURAL
     assert m.data_role is DataRole.EVALUATION
-    assert m.admission is Admission.ADMITTED
-    assert m.admission_reasons == ()
+    assert m.disposition is SessionDisposition.ADMITTED
+    assert m.disposition_reasons == ()
     assert m.retry_status is RetryStatus.ORIGINAL
     assert m.frame0_epoch == pytest.approx(1785000000.25)
 
@@ -144,8 +144,8 @@ def test_a_present_but_null_required_field_is_also_rejected(nulled):
 #: Two copies of one incomplete list agreeing is not coverage.
 _SECTION_4_CONTRACT: dict[str, tuple[str, ...]] = {
     # "subject ID, arm (natural / paced), commanded paced rate (12/15/18), data role (§3.1),
-    #  study admission disposition"
-    "Identity": ("subject_id", "arm", "data_role", "admission"),
+    #  study disposition disposition"
+    "Identity": ("subject_id", "arm", "data_role", "disposition"),
     # "`distance_m` and `posture` (M4R-15)"
     "Design": ("distance_m", "posture"),
     # "`frame0_epoch` …, start **and** end PC<->phone clock offsets"
@@ -266,7 +266,7 @@ def test_posture_must_equal_the_canonical_seated(bad):
 @pytest.mark.parametrize(
     "key, bad",
     [("arm", "sitting"), ("data_role", "confirmatory"), ("retry_status", "redone"),
-     ("admission", "maybe")],
+     ("disposition", "maybe")],
 )
 def test_unknown_enum_values_are_rejected_and_the_error_lists_the_allowed_set(key, bad):
     with pytest.raises(ManifestError) as exc:
@@ -309,22 +309,22 @@ def test_frame0_epoch_may_be_fractional():
     assert m.frame0_epoch == pytest.approx(1785000000.9375)
 
 
-# ── Admission recomputation: one NAMED negative test per rule (M4R-04) ────────
+# ── SessionDisposition recomputation: one NAMED negative test per rule (M4R-04) ────────
 
 def test_recompute_admits_a_clean_session():
-    verdict, reasons, flags = recompute_admission(admissible(), "S01")
-    assert verdict is Admission.ADMITTED and reasons == () and flags == ()
+    verdict, reasons, flags = recompute_disposition(admissible(), "S01")
+    assert verdict is SessionDisposition.ADMITTED and reasons == () and flags == ()
 
 
 @pytest.mark.parametrize("key", ["clock_offset_start_s", "clock_offset_end_s"])
 def test_rule_clock_offset_exceeds_one_second_at_either_end(key):
     """§6: NTP-synced, max +/-1 s, re-checked at session end. Tested AT the boundary:
     exactly 1.0 s is admissible, a hair beyond is not."""
-    assert recompute_admission(admissible(**{key: 1.0}), "S")[0] is Admission.ADMITTED
-    assert recompute_admission(admissible(**{key: -1.0}), "S")[0] is Admission.ADMITTED
+    assert recompute_disposition(admissible(**{key: 1.0}), "S")[0] is SessionDisposition.ADMITTED
+    assert recompute_disposition(admissible(**{key: -1.0}), "S")[0] is SessionDisposition.ADMITTED
     for beyond in (1.0001, -1.0001, 3.0):
-        verdict, reasons, _ = recompute_admission(admissible(**{key: beyond}), "S")
-        assert verdict is Admission.EXCLUDED
+        verdict, reasons, _ = recompute_disposition(admissible(**{key: beyond}), "S")
+        assert verdict is SessionDisposition.EXCLUDED
         assert f"{key}_exceeds_{MAX_CLOCK_OFFSET_S:g}s" in reasons
 
 
@@ -335,13 +335,13 @@ def test_a_missing_or_non_finite_clock_offset_is_an_ERROR_not_an_exclusion(key):
     reason counts §6 requires ('counts and reasons at every level')."""
     for bad in (None, float("nan"), float("inf"), "0.2"):
         with pytest.raises(ManifestError, match=key):
-            recompute_admission(admissible(**{key: bad}), "S")
+            recompute_disposition(admissible(**{key: bad}), "S")
 
 
 def test_rule_stored_checksum_failed():
     """§6 item 4: 'a stored file checksum fails' -> corrupt, not admitted."""
-    verdict, reasons, _ = recompute_admission(admissible(checksum_ok=False), "S")
-    assert verdict is Admission.EXCLUDED and "stored_checksum_failed" in reasons
+    verdict, reasons, _ = recompute_disposition(admissible(checksum_ok=False), "S")
+    assert verdict is SessionDisposition.EXCLUDED and "stored_checksum_failed" in reasons
 
 
 @pytest.mark.parametrize("bad", [None, "false", "true", 0, 1, "", "no"])
@@ -350,7 +350,7 @@ def test_checksum_ok_must_be_an_exact_boolean(bad):
     manifest recording a FAILED checksum as the string "false" was ADMITTED. Exact type,
     no coercion — `0`/`1` are rejected too, as in the Stage 0 adapter (S0R-02, S0R-18)."""
     with pytest.raises(ManifestError, match="checksum_ok"):
-        recompute_admission(admissible(checksum_ok=bad), "S")
+        recompute_disposition(admissible(checksum_ok=bad), "S")
 
 
 def test_a_trailing_partial_window_is_RETAINED_not_excluded():
@@ -360,10 +360,10 @@ def test_a_trailing_partial_window_is_RETAINED_not_excluded():
     discarded admissible sessions."""
     # 600 s intended => 20 expected windows. 12010 frames stored = 20 complete + a 10-frame
     # tail; the truncation removed only part of that tail.
-    verdict, reasons, flags = recompute_admission(
+    verdict, reasons, flags = recompute_disposition(
         admissible(truncation_bytes=4096, n_frames=12010), "S"
     )
-    assert verdict is Admission.ADMITTED, reasons
+    assert verdict is SessionDisposition.ADMITTED, reasons
     assert "raw_truncated_trailing" in flags, "truncation must still be REPORTED"
 
 
@@ -375,10 +375,10 @@ def test_a_completed_run_whose_LAST_window_is_short_is_still_RETAINED():
 
     This is a **regression test for an over-exclusion**: a wrong answer here silently drops
     an admissible session out of a pre-registered analysis, which looks like caution."""
-    verdict, reasons, flags = recompute_admission(
+    verdict, reasons, flags = recompute_disposition(
         admissible(truncation_bytes=4096, n_frames=11999), "S"
     )
-    assert verdict is Admission.ADMITTED, reasons
+    assert verdict is SessionDisposition.ADMITTED, reasons
     assert "raw_truncated_trailing" in flags
 
 
@@ -393,22 +393,22 @@ def test_the_item_4_truncation_limb_is_UNIMPLEMENTED_and_escalated():
     Until the conflict is resolved at the M0 freeze, **no truncation value excludes**; every
     one is flagged and retained. Delete this test only together with that resolution."""
     for n_frames, truncation in ((12000, 1), (11999, 4096), (600, 65535), (0, 12)):
-        verdict, reasons, flags = recompute_admission(
+        verdict, reasons, flags = recompute_disposition(
             admissible(truncation_bytes=truncation, n_frames=n_frames,
                        actual_duration_s=600.0), "S"
         )
-        assert verdict is Admission.ADMITTED, (n_frames, truncation, reasons)
+        assert verdict is SessionDisposition.ADMITTED, (n_frames, truncation, reasons)
         assert "raw_truncated_trailing" in flags
     assert not any(
         "truncat" in r
-        for r in recompute_admission(admissible(truncation_bytes=4096), "S")[1]
+        for r in recompute_disposition(admissible(truncation_bytes=4096), "S")[1]
     ), "no exclusion reason may mention truncation while the limb is escalated"
 
 
 @pytest.mark.parametrize("bad", [None, -1, 4096.0, "4096", True])
 def test_truncation_bytes_must_be_a_non_negative_exact_int(bad):
     with pytest.raises(ManifestError, match="truncation_bytes"):
-        recompute_admission(admissible(truncation_bytes=bad), "S")
+        recompute_disposition(admissible(truncation_bytes=bad), "S")
 
 
 def test_packet_loss_FLAGS_the_session_and_never_excludes_it():
@@ -416,23 +416,23 @@ def test_packet_loss_FLAGS_the_session_and_never_excludes_it():
     (reported) but does not by itself exclude it; the per-frame validity map decides which
     windows are radar-NaN'. The first draft excluded on ANY packet loss."""
     # 4 % - under tolerance: no flag, no exclusion.
-    verdict, reasons, flags = recompute_admission(
+    verdict, reasons, flags = recompute_disposition(
         admissible(packets_received=100000, packets_dropped=4000), "S"
     )
-    assert verdict is Admission.ADMITTED and flags == ()
+    assert verdict is SessionDisposition.ADMITTED and flags == ()
     # 6 % - over tolerance: FLAGGED, still admitted.
-    verdict, reasons, flags = recompute_admission(
+    verdict, reasons, flags = recompute_disposition(
         admissible(packets_received=100000, packets_dropped=6000, n_invalid_frames=120), "S"
     )
-    assert verdict is Admission.ADMITTED, reasons
+    assert verdict is SessionDisposition.ADMITTED, reasons
     assert any("packet_loss_above" in f for f in flags)
 
 
 def test_packet_loss_flag_boundary_is_strictly_greater_than_five_percent():
-    at = recompute_admission(
+    at = recompute_disposition(
         admissible(packets_received=100000, packets_dropped=5000), "S"
     )[2]
-    over = recompute_admission(
+    over = recompute_disposition(
         admissible(packets_received=100000, packets_dropped=5001), "S"
     )[2]
     assert at == (), "exactly 5 % is not 'above' the tolerance"
@@ -448,10 +448,10 @@ def test_packet_loss_flag_boundary_is_strictly_greater_than_five_percent():
 )
 def test_malformed_packet_counts_are_an_ERROR_not_an_exclusion(over):
     """S12R-10. `packets_dropped=-1` previously became the invented exclusion reason
-    `packet_counts_negative` and — because an operator who also wrote `admission: excluded`
+    `packet_counts_negative` and — because an operator who also wrote `disposition: excluded`
     got agreement — parsed clean. §6 names no such gate."""
     with pytest.raises(ManifestError, match="packets_"):
-        recompute_admission(admissible(**over), "S")
+        recompute_disposition(admissible(**over), "S")
 
 
 @pytest.mark.parametrize(
@@ -470,24 +470,24 @@ def test_packets_dropped_MAY_exceed_packets_received(received, dropped):
     the hardest data and inflating coverage, which is the exact failure mode §6 item 4's
     flag-don't-exclude rule exists to prevent.
     """
-    verdict, reasons, flags = recompute_admission(
+    verdict, reasons, flags = recompute_disposition(
         admissible(packets_received=received, packets_dropped=dropped), "S"
     )
-    assert verdict is Admission.ADMITTED, reasons
+    assert verdict is SessionDisposition.ADMITTED, reasons
     assert any("packet_loss_above" in f for f in flags)
 
 
 def test_rule_protocol_abort_did_not_reach_intended_duration():
     """§6 item 3 / M3R-37: the discriminator is one question - did the run reach its
     intended duration?"""
-    verdict, reasons, _ = recompute_admission(
+    verdict, reasons, _ = recompute_disposition(
         admissible(intended_duration_s=600.0, actual_duration_s=412.0, early_stop=True), "S"
     )
-    assert verdict is Admission.EXCLUDED
+    assert verdict is SessionDisposition.EXCLUDED
     assert "protocol_abort_did_not_reach_intended_duration" in reasons
     # Reaching or exceeding the intended duration is admissible.
-    assert recompute_admission(admissible(actual_duration_s=600.0), "S")[0] is Admission.ADMITTED
-    assert recompute_admission(admissible(actual_duration_s=601.0), "S")[0] is Admission.ADMITTED
+    assert recompute_disposition(admissible(actual_duration_s=600.0), "S")[0] is SessionDisposition.ADMITTED
+    assert recompute_disposition(admissible(actual_duration_s=601.0), "S")[0] is SessionDisposition.ADMITTED
 
 
 def test_early_stop_contradicting_the_durations_RAISES_and_is_not_an_exclusion_reason():
@@ -495,20 +495,20 @@ def test_early_stop_contradicting_the_durations_RAISES_and_is_not_an_exclusion_r
     names no such gate: the M3R-37 discriminator is the duration question **alone**. The
     first draft invented `early_stop_contradicts_durations` as an exclusion *reason*, which
     was doubly wrong — unsourced, and invisible whenever the operator also wrote
-    `admission: excluded`, because then the two agreed and the manifest parsed clean."""
+    `disposition: excluded`, because then the two agreed and the manifest parsed clean."""
     with pytest.raises(ManifestError, match="cannot be both halted early and complete"):
-        recompute_admission(admissible(early_stop=True, actual_duration_s=600.0), "S")
+        recompute_disposition(admissible(early_stop=True, actual_duration_s=600.0), "S")
     # It must not be reachable through the operator-agreement path either.
     with pytest.raises(ManifestError, match="cannot be both halted early and complete"):
         parse_session(
-            admissible(early_stop=True, actual_duration_s=600.0, admission="excluded"),
+            admissible(early_stop=True, actual_duration_s=600.0, disposition="excluded"),
             Mode.SCORING,
         )
     # An early stop that genuinely fell short is still the ordinary item-3 exclusion.
-    verdict, reasons, _ = recompute_admission(
+    verdict, reasons, _ = recompute_disposition(
         admissible(early_stop=True, actual_duration_s=412.0), "S"
     )
-    assert verdict is Admission.EXCLUDED
+    assert verdict is SessionDisposition.EXCLUDED
     assert "protocol_abort_did_not_reach_intended_duration" in reasons
 
 
@@ -521,14 +521,14 @@ def test_early_stop_contradicting_the_durations_RAISES_and_is_not_an_exclusion_r
 )
 def test_malformed_duration_or_early_stop_fields_are_an_ERROR(over):
     with pytest.raises(ManifestError):
-        recompute_admission(admissible(**over), "S")
+        recompute_disposition(admissible(**over), "S")
 
 
 def test_rule_superseded_by_retry():
-    verdict, reasons, _ = recompute_admission(admissible(retry_status="superseded"), "S")
-    assert verdict is Admission.EXCLUDED and "superseded_by_retry" in reasons
+    verdict, reasons, _ = recompute_disposition(admissible(retry_status="superseded"), "S")
+    assert verdict is SessionDisposition.EXCLUDED and "superseded_by_retry" in reasons
     # A retry that IS the kept session stays admissible.
-    assert recompute_admission(admissible(retry_status="retry"), "S")[0] is Admission.ADMITTED
+    assert recompute_disposition(admissible(retry_status="retry"), "S")[0] is SessionDisposition.ADMITTED
 
 
 def test_invalid_frames_exceeding_the_total_RAISES_and_is_not_an_exclusion_reason():
@@ -536,7 +536,7 @@ def test_invalid_frames_exceeding_the_total_RAISES_and_is_not_an_exclusion_reaso
     "the manifest is internally contradictory", and inventing one would report a cause that
     never happened in the study's exclusion table."""
     with pytest.raises(ManifestError, match="exceeds n_frames"):
-        recompute_admission(admissible(n_frames=100, n_invalid_frames=101), "S")
+        recompute_disposition(admissible(n_frames=100, n_invalid_frames=101), "S")
 
 
 @pytest.mark.parametrize(
@@ -546,15 +546,15 @@ def test_invalid_frames_exceeding_the_total_RAISES_and_is_not_an_exclusion_reaso
 )
 def test_malformed_frame_counts_are_an_ERROR(over):
     with pytest.raises(ManifestError, match="n_(invalid_)?frames"):
-        recompute_admission(admissible(**over), "S")
+        recompute_disposition(admissible(**over), "S")
 
 
 def test_multiple_failing_rules_are_all_reported_not_just_the_first():
     """A manifest with three defects must name three, or fixing one reveals the next."""
-    verdict, reasons, _ = recompute_admission(
+    verdict, reasons, _ = recompute_disposition(
         admissible(checksum_ok=False, actual_duration_s=1.0, clock_offset_end_s=9.0), "S"
     )
-    assert verdict is Admission.EXCLUDED
+    assert verdict is SessionDisposition.EXCLUDED
     assert {"stored_checksum_failed", "protocol_abort_did_not_reach_intended_duration",
             "clock_offset_end_s_exceeds_1s"} <= set(reasons)
 
@@ -563,7 +563,7 @@ def test_multiple_failing_rules_are_all_reported_not_just_the_first():
 
 def test_operator_admitted_but_M4_recomputes_excluded_raises():
     with pytest.raises(ManifestError) as exc:
-        parse_session(admissible(admission="admitted", checksum_ok=False), Mode.SCORING)
+        parse_session(admissible(disposition="admitted", checksum_ok=False), Mode.SCORING)
     msg = str(exc.value)
     assert "recomputes" in msg and "stored_checksum_failed" in msg
 
@@ -573,16 +573,16 @@ def test_operator_excluded_but_M4_recomputes_admitted_also_raises():
     is just as much a disagreement — silently accepting it would let a session be dropped
     for an unrecorded reason, which is an unlogged degree of freedom."""
     with pytest.raises(ManifestError) as exc:
-        parse_session(admissible(admission="excluded"), Mode.SCORING)
+        parse_session(admissible(disposition="excluded"), Mode.SCORING)
     assert "recomputes" in str(exc.value)
 
 
 def test_agreement_on_excluded_is_accepted_and_keeps_the_reasons():
     m = parse_session(
-        admissible(admission="excluded", actual_duration_s=10.0, early_stop=True), Mode.SCORING
+        admissible(disposition="excluded", actual_duration_s=10.0, early_stop=True), Mode.SCORING
     )
-    assert m.admission is Admission.EXCLUDED
-    assert "protocol_abort_did_not_reach_intended_duration" in m.admission_reasons
+    assert m.disposition is SessionDisposition.EXCLUDED
+    assert "protocol_abort_did_not_reach_intended_duration" in m.disposition_reasons
 
 
 # ── Development mode (§2.2 / §4) ──────────────────────────────────────────────
@@ -827,7 +827,7 @@ def test_a_non_original_attempt_requires_its_reason(status):
     the discarded attempt to be "logged with reason"."""
     fields = admissible(retry_status=status)
     if status == "superseded":
-        fields["admission"] = "excluded"
+        fields["disposition"] = "excluded"
     with pytest.raises(ManifestError, match="retry_reason"):
         parse_session(fields, Mode.SCORING)
 
@@ -887,8 +887,10 @@ def test_load_manifest_requires_a_schema_version(tmp_path):
         load_manifest(_write(tmp_path, {"sessions": [admissible()]}), Mode.SCORING)
 
 
-@pytest.mark.parametrize("bad", [0, 2, 99, "1", 1.0, True, None])
+@pytest.mark.parametrize("bad", [0, 1, 3, 99, "2", 2.0, True, None])
 def test_load_manifest_refuses_an_unknown_schema_version(tmp_path, bad):
+    """`1` is in the list deliberately: v1 used the binary `admission` field, so reading a v1
+    document as v2 would silently reinterpret the disposition partition (S12R-06)."""
     doc = {"manifest_schema_version": bad, "sessions": [admissible()]}
     with pytest.raises(ManifestError, match="manifest_schema_version"):
         load_manifest(_write(tmp_path, doc), Mode.SCORING)

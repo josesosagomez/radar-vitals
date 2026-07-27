@@ -1,4 +1,4 @@
-"""M4 Stage 1 — the session manifest: schema, validation, admission recomputation.
+"""M4 Stage 1 — the session manifest: schema, validation, disposition recomputation.
 
 Implements `plans/m4_offline_harness.md` §4 and §4.1. The manifest binds, per session, the
 identity/estimand fields, the design fields, the timebase, integrity, provenance and
@@ -13,7 +13,7 @@ Two rules shape everything here:
 a missing field means the frozen estimand set cannot be formed, and guessing one is how a
 session that was never part of the design ends up inside a pre-registered result.
 
-**M4 recomputes the admission disposition from the primitive fields and refuses to proceed
+**M4 recomputes the session disposition from the primitive fields and refuses to proceed
 if it disagrees with the operator's verdict** (M4R-04). An operator verdict alone is an
 opinion; recomputation makes it checkable. Disagreement is an error, never a silent
 override in either direction — M4 does not "know better" and does not defer.
@@ -57,9 +57,47 @@ class DataRole(str, Enum):
     COLLISION = "collision"        # M7: role is method-specific (see §3.1)
 
 
-class Admission(str, Enum):
+class RecordKind(str, Enum):
+    """What kind of thing a manifest row describes (S12R-12).
+
+    §6 items 3 and 5 require settle aborts and clock-resync restarts to be **logged**, but
+    both are detected *before* recording starts, so they have no frame-0 epoch, no raw file,
+    no validity map and no reference. The first schema required all of those unconditionally,
+    so such an attempt could only be logged by fabricating provenance (CLAUDE.md §4 forbids
+    it) — "logged always" and "requires artifacts that cannot exist" cannot both hold.
+
+    The fix is a **discriminated** record, not a union of optional fields: making every
+    capture field optional would trade one contradiction for a large space of loadable-but-
+    invalid rows, and that space is where a fabricated record would eventually live. Each
+    kind therefore has its own **exact** required-field set, and capture-only fields must be
+    **absent** from a pre-capture attempt rather than merely omitted.
+    """
+
+    CAPTURED_SESSION = "captured_session"
+    PRE_CAPTURE_ATTEMPT = "pre_capture_attempt"
+
+
+class SessionDisposition(str, Enum):
+    """The single §6 session-level partition key (S12R-06).
+
+    One enum, not a binary `admission` plus a side-channel: a separate `reference_status`
+    field would create combinatorial states and force the Stage 5 ledger to reconstruct §6's
+    partition from two columns, while overloading "admission" with a third meaning would make
+    one word mean two things.
+
+    `NO_AGREEMENT` is §6 item 6 — "a **wholly missing Masimo file** is a separately-logged
+    no-agreement session (radar-only, descriptive at most)". Such a session keeps its full
+    radar/timebase/integrity binding and is structurally barred from agreement scoring; it is
+    **not** an exclusion, and its windows are not an exclusion count.
+
+    **It is derived, never declared** (S12R-06 R2, S12R-07 R3). Omitting the Masimo fields
+    while writing `NO_AGREEMENT` would let the operator supply both the fact and the verdict —
+    the `checksum_ok` defect again. See `_derive_reference_disposition`.
+    """
+
     ADMITTED = "admitted"
     EXCLUDED = "excluded"
+    NO_AGREEMENT = "no_agreement"
 
 
 class RetryStatus(str, Enum):
@@ -81,7 +119,7 @@ MAX_CLOCK_OFFSET_S = 1.0
 
 #: §6 item 4, frozen tolerance: `n_dropped / n_received > 5 %` **flags** the session
 #: (reported) but "does not by itself exclude it" — the per-frame validity map decides which
-#: WINDOWS are radar-NaN. Exceeding this is not an admission failure.
+#: WINDOWS are radar-NaN. Exceeding this never changes the session disposition.
 PACKET_LOSS_FLAG_RATIO = 0.05
 
 #: Commanded paced rates, frozen by the M3R-31 rotation (12 -> 15 -> 18).
@@ -90,7 +128,11 @@ PACED_RATES_BPM = (12, 15, 18)
 #: Plan §4 calls for a **versioned** manifest (S12R-09). The version is a property of the
 #: manifest document, not of a session, so `load_manifest` enforces it. Bump only with a
 #: migration: this is the root provenance record for every session.
-MANIFEST_SCHEMA_VERSION = 1
+#: **Version 2** (S12R-06/12): `admission` became the three-valued `disposition`, `record_kind`
+#: discriminates captured sessions from pre-capture attempts, and `checksum_ok` was removed in
+#: favour of derived verification. A v1 document cannot be read as v2 — the disposition
+#: partition changed meaning — so the reader refuses it rather than guessing.
+MANIFEST_SCHEMA_VERSION = 2
 
 #: `notes/analysis_prespec.md` §3.1 decides which data roles may ever produce a
 #: frozen-comparator number (S12R-11). Everything absent from this set is barred from
@@ -199,7 +241,7 @@ _REQUIRED_SCORING_FIELDS: tuple[tuple[str, str], ...] = (
     ("subject_id", "Identity"),
     ("arm", "Identity"),
     ("data_role", "Identity"),
-    ("admission", "Identity"),
+    ("disposition", "Identity"),
     ("distance_m", "Design"),
     ("posture", "Design"),
     ("frame0_epoch", "Timebase"),
@@ -241,8 +283,8 @@ class SessionManifest:
     arm: Arm | None = None
     commanded_rate_bpm: int | None = None
     data_role: DataRole | None = None
-    admission: Admission | None = None
-    admission_reasons: tuple[str, ...] = ()
+    disposition: SessionDisposition | None = None
+    disposition_reasons: tuple[str, ...] = ()
     #: Reported, never excluding (§6 item 4) — e.g. packet loss above the 5 % tolerance.
     flags: tuple[str, ...] = ()
 
@@ -298,12 +340,12 @@ class SessionManifest:
         return self.mode is Mode.SCORING and self.data_role in _SCORING_ALLOWED_ROLES
 
 
-# ── Admission recomputation (M4R-04) ──────────────────────────────────────────
+# ── Disposition recomputation (M4R-04) ────────────────────────────────────────
 
 
-def recompute_admission(
+def recompute_disposition(
     fields: dict, session_id: str
-) -> tuple[Admission, tuple[str, ...], tuple[str, ...]]:
+) -> tuple[SessionDisposition, tuple[str, ...], tuple[str, ...]]:
     """Derive `(verdict, exclusion_reasons, flags)` from the primitive fields alone.
 
     **The predicates are transcribed from `notes/analysis_prespec.md` §6, which is FROZEN.**
@@ -432,7 +474,7 @@ def recompute_admission(
     if fields.get("retry_status") == RetryStatus.SUPERSEDED.value:
         reasons.append("superseded_by_retry")
 
-    verdict = Admission.EXCLUDED if reasons else Admission.ADMITTED
+    verdict = SessionDisposition.EXCLUDED if reasons else SessionDisposition.ADMITTED
     return verdict, tuple(reasons), tuple(flags)
 
 
@@ -587,7 +629,7 @@ def parse_session(fields: dict, mode: Mode) -> SessionManifest:
     """Validate one session's fields and return the manifest record.
 
     In SCORING mode every §4 required field must be present and every §4.1 rule must hold,
-    and the recomputed admission must agree with the operator's. In DEVELOPMENT mode the
+    and the recomputed disposition must agree with the operator's. In DEVELOPMENT mode the
     fields that the 4 existing captures genuinely lack may be absent — but any field that
     *is* present is still validated, so development mode is a smaller contract, not a
     laxer one.
@@ -691,15 +733,16 @@ def parse_session(fields: dict, mode: Mode) -> SessionManifest:
             f"{fields['retry_reason']!r} is set. An original attempt replaced nothing."
         )
 
-    admission = (_as_enum(fields["admission"], Admission, "admission", session_id)
-                 if present("admission") else None)
+    disposition = (_as_enum(fields["disposition"], SessionDisposition, "disposition", session_id)
+                   if present("disposition") else None)
     reasons: tuple[str, ...] = ()
     flags: tuple[str, ...] = ()
     if mode is Mode.SCORING:
-        recomputed, reasons, flags = recompute_admission(fields, session_id)
-        if recomputed is not admission:
+        recomputed, reasons, flags = recompute_disposition(fields, session_id)
+        if recomputed is not disposition:
             raise ManifestError(
-                f"session {session_id!r}: operator recorded admission={admission.value!r} but "
+                f"session {session_id!r}: operator recorded disposition="
+                f"{disposition.value!r} but "
                 f"M4 recomputes {recomputed.value!r} from the primitive fields"
                 + (f" (reasons: {', '.join(reasons)})" if reasons else "")
                 + ". M4 neither overrides the operator nor defers to them — the disagreement "
@@ -713,8 +756,8 @@ def parse_session(fields: dict, mode: Mode) -> SessionManifest:
         arm=arm,
         commanded_rate_bpm=rate,
         data_role=role,
-        admission=admission,
-        admission_reasons=reasons,
+        disposition=disposition,
+        disposition_reasons=reasons,
         flags=flags,
         distance_m=distance,
         posture=posture,
