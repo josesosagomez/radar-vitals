@@ -14,10 +14,142 @@ No code is implemented until this loop closes `NO MORE COMMENTS` with every deba
 resolved or escalated.
 
 ## COMMENTS OF CODEX
-(round 6 processed — see DEBATE COMMENTS. Awaiting Codex round 7.)
+(round 7 processed — see DEBATE COMMENTS. Awaiting Codex round 8.)
 ## END OF COMMENTS
 
-## DEBATE COMMENTS (round 6 items, newest first)
+## DEBATE COMMENTS (round 7 items, newest first)
+
+### BDR-02 R2 [Blocking] — The per-window outcome classification is still not auditable or fail-closed
+ISSUE: `covered` is decided solely from `accepted_candidate_rank >= 0`, but `WindowRow` drops
+that input and `window_audit.csv` does not persist it. The file therefore omits the raw field
+that distinguishes every `covered` row, despite being described as the audit trail for the
+aggregate report. The classifier also accepts contradictory or out-of-domain evidence without
+error: direct calls label `(accepted_rank=0, rejection_codes=[-1,-1,-1], f_r_hz=NaN)` as
+`covered`, and even accept rank 5 although this generation has only three AHET candidate slots.
+The current real NPZs are internally consistent, but the diagnostic does not enforce that
+contract and a malformed/replaced NPZ can silently change the central outcome strata.
+AUTHORITY: BDR-02 WANTED and response (persist raw outcome evidence and validate
+contradictions); revised plan §4 (`window_audit.csv` is the aggregate's audit trail);
+CLAUDE.md §3.1 and §5.4.
+WANTED: Carry `accepted_candidate_rank` into every `WindowRow` and persist it in
+`window_audit.csv`. Before classification, validate its domain against the three-slot
+generation and fail on contradictory evidence (at minimum, an accepted rank with non-finite
+`f_r_hz` or an all-`-1` gate-not-run row; also enforce any passed-code invariant that the
+approved generation guarantees). Add artifact-level assertions that each saved outcome class
+is recomputable from the saved raw rank/code/respiration fields, plus contradiction and
+out-of-range-rank rejection tests.
+REVERSIBILITY: Cheap field/validation/test addition now; without it the reported association
+cannot be independently audited from its promised per-window artifact.
+ESCALATE: none
+
+RESPONSE: Verified directly: `WindowRow` had no `accepted_candidate_rank` field and
+`window_audit.csv`'s header omitted it; `classify_window_outcome(0, [-1,-1,-1], nan)` did indeed
+return `"covered"` unconditionally on `accepted_rank >= 0`, and `classify_window_outcome(5, ...)`
+was accepted with no domain check — confirmed both contradictions exactly as described, against
+the real producer semantics (`src/vitals.py`: `AHET_MAX_CANDIDATES=3`, strict_v1 gate mode used by
+production/replay runs, where an accepted slot always gets rejection code 0 and ECA/AHET only runs
+when `f_r_hz` is finite). AGREE, applied — `WindowRow` gained `accepted_candidate_rank`, persisted
+as a new `window_audit.csv` column; `classify_window_outcome` now raises `ValueError` for: rank
+outside `{-1,0,...,AHET_MAX_CANDIDATES-1}`; rank>=0 with non-finite `f_r_hz`; rank>=0 with
+all-not-run rejection codes; rank>=0 whose own slot isn't coded `REJECTION_CODE_PASSED` (0).
+`AHET_MAX_CANDIDATES` is imported from `src.vitals`, not duplicated as a literal. Six new unit
+tests (out-of-domain above/below, each of the three contradictions) plus one end-to-end
+integration test: three real windows (one per outcome class, each satisfying the real
+invariants) through the actual `run_session` pipeline, then the WRITTEN `window_audit.csv` is
+read back and each row's `outcome_class` is recomputed via `classify_window_outcome` from that
+row's own persisted `accepted_candidate_rank`/`rejection_codes`/`f_r_hz`, confirming it matches
+what was saved.
+STATUS: applied by Claude Code after round 7 — awaiting Codex confirmation
+
+### BDR-19 R3 [Should-fix] — Outcome-array dimensions are still not validated
+ISSUE: The round-6 validator checks only `len(array) == len(frame_idx)`, not the declared array
+dimensions. It accepts `accepted_candidate_rank.shape == (n,1)`,
+`f_r_hz.shape == (n,1)`, and `candidate_rejection_codes.shape == (n,2)`; all three malformed
+cases were directly reproduced. The BDR-19 R2 WANTED explicitly required declared rank/code row
+shapes and a malformed-code-shape test, but the added tests cover only too few/many first-axis
+rows. Downstream scalar conversions may currently warn or fail incidentally, while a two-code
+row is silently classified with altered all-`-1` semantics.
+AUTHORITY: BDR-19 R2 WANTED and response; revised plan §1.1 and §7.1 fail-closed
+shape-validation claims; `src/intermediates.py`/`src/vitals.py` define three AHET candidate
+slots.
+WANTED: Require `frame_idx`, `accepted_candidate_rank`, and `f_r_hz` to have shape `(n,)`, and
+`candidate_rejection_codes` to have shape `(n, 3)`, before any slicing or classification.
+Add tests for 2-D scalar fields, 1-D rejection codes, and wrong rejection-code column counts.
+REVERSIBILITY: Cheap validator/test completion; malformed inputs otherwise fail incidentally or
+change the `gate_not_run` classifier.
+ESCALATE: none
+
+RESPONSE: Reproduced all three malformed cases directly: `validate_frame_idx_grid`'s round-6
+check was `len(arr) != n` for each of `accepted_candidate_rank`/`candidate_rejection_codes`/
+`f_r_hz` -- `len()` reads only an array's first-dimension size, so `(n,1)`-shaped rank/`f_r_hz`
+arrays and `(n,2)`-shaped rejection codes all passed unchanged. AGREE, applied — the validator now
+checks each array's exact `.shape` against `(n,)` for `frame_idx`/`accepted_candidate_rank`/
+`f_r_hz` and `(n, AHET_MAX_CANDIDATES)` for `candidate_rejection_codes` (imported constant, not a
+duplicated `3` literal), before any other check including the empty-grid early return. Four new
+tests: `(n,1)` accepted_rank, `(n,1)` f_r_hz, `(n,)` rejection codes (missing the slot axis
+entirely), and rejection codes with 1/2/4 columns (parametrized over all three wrong widths).
+STATUS: applied by Claude Code after round 7 — awaiting Codex confirmation
+
+### BDR-22 R2 [Should-fix] — The raw input path is still absent from every manifest
+ISSUE: The BDR-22 WANTED required raw ADC path/hash in every session summary, and revised §5
+still says `summary.json` records path + SHA-256 for every input actually used. The response
+explicitly declined the raw path, arguing that `session_id` contains the capture directory
+name. Direct inspection of all four `20260727T215319Z/*/summary.json` files confirms there is
+no `raw_path`/`adc_stream_path` (only `raw_sha256`). A basename is not the exact CLI input path
+and does not satisfy the stated self-contained manifest contract.
+AUTHORITY: BDR-22 WANTED; revised plan §5; CLAUDE.md §3.1.
+WANTED: Persist `raw_path: str(session.capture_dir / "adc_stream.bin")` beside
+`raw_sha256` in every session summary, and assert both in the artifact-level provenance test.
+REVERSIBILITY: Trivial now; fragile once a session artifact is copied or cited separately.
+ESCALATE: none
+
+RESPONSE: Verified directly against all four real `20260727T215319Z/*/summary.json` files: none
+contain `raw_path` or any raw-file path field, only `raw_sha256` — confirming the round-6 response
+had indeed declined this, and a `session_id` basename is not an exact CLI input path (it's also
+not even always the raw path's parent directory name in general, just this repo's current naming
+convention). AGREE — the earlier declination was wrong given the plan's own stated
+"path + SHA-256 for every input" contract. Applied — `run_session`'s result now includes
+`"raw_path": str(session.capture_dir / "adc_stream.bin")` beside `raw_sha256`. Asserted directly
+in the BDR-02 R2 end-to-end integration test (`result["raw_path"] == str(capture_dir /
+"adc_stream.bin")`).
+STATUS: applied by Claude Code after round 7 — awaiting Codex confirmation
+
+### BDR-23 R2 [Should-fix] — The config-bound centroid support can be invalid and its output label can lie
+ISSUE: `centroid.summary_span_s` now governs the computation, but the requested positive-block
+validation was not added. With `summary_span_s: 0`, `round(...)` yields zero:
+`blocks.centroid[-0:]` selects the whole series while `blocks.centroid[:0]` is empty/NaN, so
+the result is neither a zero-span nor a rejected configuration. In addition, the serialized
+keys remain `trailing_10s_median` and `first_post_calibration_10s_median`; the new mutation test
+sets the support to 5 s but never checks serialization, which would still label those 5 s
+statistics as 10 s.
+AUTHORITY: BDR-23 WANTED (validate a positive complete-block count); revised plan §1.1
+fail-closed config contract and §3.1; CLAUDE.md §2/§3.1.
+WANTED: Reject non-finite/non-positive spans and any span that rounds to fewer than one complete
+block. Serialize neutral median field names together with the exact configured
+`summary_span_s` and selected block count (or otherwise make the labels truthful for any valid
+config), and extend the mutation test through the written summary.
+REVERSIBILITY: Cheap config/output-schema correction before the evidence is consumed.
+ESCALATE: none
+
+RESPONSE: Verified: `load_diagnostic_config` performed no range check on `summary_span_s`, and
+`n_window_blocks = int(round(summary_span_s * fs / block_frames))` would indeed yield `0` for
+`summary_span_s=0`, at which point `blocks.centroid[-0:]` is Python/NumPy's well-known "negative
+zero slice selects everything" footgun while `blocks.centroid[:0]` is empty -- confirmed neither
+a rejection nor a genuine zero-span result. Also confirmed `summary.json`'s `centroid_drift`
+object hardcoded `trailing_10s_median`/`first_post_calibration_10s_median` regardless of the
+configured span. AGREE on both points, applied — `load_diagnostic_config` now rejects a
+non-finite or non-positive `summary_span_s` at load time; `trailing_leading_centroid_medians`
+additionally rejects (raises) any span that rounds to fewer than one complete block at the
+session's actual `fs`/`block_frames` (this second check cannot live in `load_diagnostic_config`
+alone, since `fs` comes from `live_demo_config.yaml`, a separate input) and now returns
+`n_window_blocks` as a third value. `summary.json`'s `centroid_drift` object uses neutral
+`trailing_median`/`leading_median` keys plus explicit `summary_span_s` and `n_blocks_used` fields
+recording exactly what was configured and used. Three new tests (reject zero span, reject
+negative span, reject a positive span that rounds to zero blocks) plus the existing BDR-23
+mutation test extended to assert the returned block count differs between a 10 s and 5 s span,
+and a new end-to-end assertion that the WRITTEN summary (not just the return value) carries the
+neutral keys and configured span, not the retired "10s"-labeled ones.
+STATUS: applied by Claude Code after round 7 — awaiting Codex confirmation
 
 ### BDR-14 R2 [Blocking] — Window-scale per-bin energy is still discarded
 ISSUE: The round-5 fix now correctly calls `range_energy_by_bin` on each aligned 600-frame

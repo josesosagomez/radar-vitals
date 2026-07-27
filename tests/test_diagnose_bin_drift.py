@@ -345,9 +345,10 @@ def test_trailing_leading_centroid_medians_selects_exact_block_counts():
     blocks = _blocks_from_argmax([8] * 15)
     blocks.centroid[:] = seq  # give each block a distinct, known centroid value
     cfg = diag_cfg()
-    trailing, leading = dbd.trailing_leading_centroid_medians(blocks, cfg, FS)
+    trailing, leading, n_blocks_used = dbd.trailing_leading_centroid_medians(blocks, cfg, FS)
     assert trailing == pytest.approx(np.median(seq[-10:]))
     assert leading == pytest.approx(np.median(seq[:10]))
+    assert n_blocks_used == 10
 
 
 def test_trailing_leading_centroid_medians_matches_real_capture_arithmetic():
@@ -365,24 +366,26 @@ def test_trailing_leading_centroid_medians_matches_real_capture_arithmetic():
     blocks = _blocks_from_argmax([8] * n_blocks)
     blocks.centroid[:] = seq
     cfg = diag_cfg()
-    trailing, _ = dbd.trailing_leading_centroid_medians(blocks, cfg, FS)
+    trailing, _, n_blocks_used = dbd.trailing_leading_centroid_medians(blocks, cfg, FS)
     # last 10 entries of a 0..149 arange -> 140..149, median 144.5
     assert trailing == pytest.approx(np.median(seq[-10:]))
     assert trailing == pytest.approx(144.5)
+    assert n_blocks_used == 10
 
 
 def test_trailing_leading_centroid_medians_degrades_gracefully_with_few_blocks():
     blocks = _blocks_from_argmax([8, 9, 10])  # only 3 blocks, fewer than N=10
     cfg = diag_cfg()
-    trailing, leading = dbd.trailing_leading_centroid_medians(blocks, cfg, FS)
+    trailing, leading, _ = dbd.trailing_leading_centroid_medians(blocks, cfg, FS)
     assert np.isfinite(trailing) and np.isfinite(leading)
 
 
 def test_trailing_leading_centroid_medians_empty_series_is_nan():
     blocks = _blocks_from_argmax([])
     cfg = diag_cfg()
-    trailing, leading = dbd.trailing_leading_centroid_medians(blocks, cfg, FS)
+    trailing, leading, n_blocks_used = dbd.trailing_leading_centroid_medians(blocks, cfg, FS)
     assert np.isnan(trailing) and np.isnan(leading)
+    assert n_blocks_used == 10  # the configured support, even with no data to apply it to
 
 
 def test_trailing_leading_centroid_medians_support_is_config_bound():
@@ -394,15 +397,69 @@ def test_trailing_leading_centroid_medians_support_is_config_bound():
     blocks.centroid[:] = seq
 
     cfg_10s = diag_cfg(centroid_summary_span_s=10.0)
-    trailing_10s, leading_10s = dbd.trailing_leading_centroid_medians(blocks, cfg_10s, FS)
+    trailing_10s, leading_10s, n_10s = dbd.trailing_leading_centroid_medians(blocks, cfg_10s, FS)
     assert trailing_10s == pytest.approx(np.median(seq[-10:]))
     assert leading_10s == pytest.approx(np.median(seq[:10]))
+    assert n_10s == 10
 
     cfg_5s = diag_cfg(centroid_summary_span_s=5.0)
-    trailing_5s, leading_5s = dbd.trailing_leading_centroid_medians(blocks, cfg_5s, FS)
+    trailing_5s, leading_5s, n_5s = dbd.trailing_leading_centroid_medians(blocks, cfg_5s, FS)
     assert trailing_5s == pytest.approx(np.median(seq[-5:]))
     assert leading_5s == pytest.approx(np.median(seq[:5]))
     assert trailing_5s != pytest.approx(trailing_10s)
+    assert n_5s == 5
+
+
+# ── BDR-23 R2: positive-span validation and truthful serialized labels ──────
+
+def test_load_diagnostic_config_rejects_non_positive_summary_span(tmp_path: Path):
+    bad_cfg_path = tmp_path / "diagnose_bin_drift_config.yaml"
+    bad_cfg_path.write_text(
+        """
+calibration: {stratum_frames: [0, 599], settled_start_frame: 100}
+blocks: {block_frames: 20, trailing_block_policy: discard}
+episodes: {gap_rule: no_bridging}
+centroid: {summary_span_s: 0}
+offsets: {phases: [0,1,2,3,4,5,6,7,8,9]}
+sensitivity_grid: {duration_s: [2,5,10], centroid_drift_bins: [0.3,0.5,1.0]}
+provenance: {require_clean_tree: true}
+memory: {preflight_min_available_gb: 0.1}
+approved_replays: {}
+""",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError):
+        dbd.load_diagnostic_config(bad_cfg_path)
+
+
+def test_load_diagnostic_config_rejects_negative_summary_span(tmp_path: Path):
+    bad_cfg_path = tmp_path / "diagnose_bin_drift_config.yaml"
+    bad_cfg_path.write_text(
+        """
+calibration: {stratum_frames: [0, 599], settled_start_frame: 100}
+blocks: {block_frames: 20, trailing_block_policy: discard}
+episodes: {gap_rule: no_bridging}
+centroid: {summary_span_s: -5.0}
+offsets: {phases: [0,1,2,3,4,5,6,7,8,9]}
+sensitivity_grid: {duration_s: [2,5,10], centroid_drift_bins: [0.3,0.5,1.0]}
+provenance: {require_clean_tree: true}
+memory: {preflight_min_available_gb: 0.1}
+approved_replays: {}
+""",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError):
+        dbd.load_diagnostic_config(bad_cfg_path)
+
+
+def test_trailing_leading_centroid_medians_rejects_span_rounding_to_zero_blocks():
+    """BDR-23 R2: a positive but tiny span that rounds to fewer than one
+    complete block must raise, not silently select the whole series
+    (`centroid[-0:]`) or an empty/NaN slice (`centroid[:0]`)."""
+    blocks = _blocks_from_argmax([8] * 15)
+    cfg = diag_cfg(centroid_summary_span_s=0.1)  # 0.1*20/20 = 0.1 -> rounds to 0
+    with pytest.raises(ValueError):
+        dbd.trailing_leading_centroid_medians(blocks, cfg, FS)
 
 
 # ── centroid_drift_at_grid (a separate SESSION-LEVEL statistic, never a
@@ -439,10 +496,12 @@ def test_centroid_drift_at_grid_nan_input_is_false_everywhere():
     assert grid == {0.3: False, 0.5: False, 1.0: False}
 
 
-# ── window classification ────────────────────────────────────────────────────
+# ── window classification (BDR-02 R2: fail-closed on evidence the strict_v1
+# producer can never actually emit) ─────────────────────────────────────────
 
 def test_classify_window_outcome_covered():
-    codes = np.array([2, -1, -1])
+    # Accepted slot 0 is coded PASSED (0); the real producer invariant.
+    codes = np.array([0, -1, -1])
     assert dbd.classify_window_outcome(0, codes, 1.2) == "covered"
 
 
@@ -454,6 +513,43 @@ def test_classify_window_outcome_gate_not_run():
 def test_classify_window_outcome_other_rejected():
     codes = np.array([2, 3, -1])
     assert dbd.classify_window_outcome(-1, codes, 1.2) == "other_rejected"
+
+
+def test_classify_window_outcome_rejects_out_of_domain_rank():
+    """BDR-02 R2: rank 5 exceeds AHET_MAX_CANDIDATES=3's valid {-1,0,1,2}."""
+    codes = np.array([0, -1, -1])
+    with pytest.raises(ValueError):
+        dbd.classify_window_outcome(5, codes, 1.2)
+
+
+def test_classify_window_outcome_rejects_below_domain_rank():
+    codes = np.array([-1, -1, -1])
+    with pytest.raises(ValueError):
+        dbd.classify_window_outcome(-2, codes, float("nan"))
+
+
+def test_classify_window_outcome_rejects_accepted_with_nonfinite_f_r_hz():
+    """BDR-02 R2: accepted_rank>=0 can never legitimately pair with a
+    non-finite f_r_hz under strict_v1 -- ECA/AHET only runs when f_r_hz is
+    finite; the no-ECA branch that yields non-finite f_r_hz always hardcodes
+    accepted_rank=-1."""
+    codes = np.array([0, -1, -1])
+    with pytest.raises(ValueError):
+        dbd.classify_window_outcome(0, codes, float("nan"))
+
+
+def test_classify_window_outcome_rejects_accepted_with_all_not_run_codes():
+    codes = np.array([-1, -1, -1])
+    with pytest.raises(ValueError):
+        dbd.classify_window_outcome(0, codes, 1.2)
+
+
+def test_classify_window_outcome_rejects_accepted_slot_not_coded_passed():
+    """The accepted rank's OWN slot must be coded PASSED (0); here rank 1 is
+    "accepted" but slot 1's own code is 2 (a rejection code), contradictory."""
+    codes = np.array([-1, 2, -1])
+    with pytest.raises(ValueError):
+        dbd.classify_window_outcome(1, codes, 1.2)
 
 
 # ── validate_frame_idx_grid (BDR-19, BDR-19 R2) ─────────────────────────────
@@ -543,6 +639,47 @@ def test_validate_frame_idx_grid_empty_is_ok():
     rank, codes, f_r = _outcome_arrays(0)
     dbd.validate_frame_idx_grid(np.array([], dtype=int), WINDOW_FRAMES, HOP_S, FS, 0,
                                  rank, codes, f_r)
+
+
+# ── validate_frame_idx_grid exact-shape checks (BDR-19 R3: row-count alone
+# still passed a wrong-width/2-D array) ─────────────────────────────────────
+
+def test_validate_frame_idx_grid_rejects_2d_accepted_rank():
+    frame_idx = np.array([599, 659, 719], dtype=int)
+    _, codes, f_r = _outcome_arrays(3)
+    rank_2d = np.full((3, 1), -1, dtype=int)  # right row count, wrong shape
+    with pytest.raises(ValueError):
+        dbd.validate_frame_idx_grid(frame_idx, WINDOW_FRAMES, HOP_S, FS, 720, rank_2d, codes, f_r)
+
+
+def test_validate_frame_idx_grid_rejects_2d_f_r_hz():
+    frame_idx = np.array([599, 659, 719], dtype=int)
+    rank, codes, _ = _outcome_arrays(3)
+    f_r_2d = np.full((3, 1), np.nan)
+    with pytest.raises(ValueError):
+        dbd.validate_frame_idx_grid(frame_idx, WINDOW_FRAMES, HOP_S, FS, 720, rank, codes, f_r_2d)
+
+
+def test_validate_frame_idx_grid_rejects_1d_rejection_codes():
+    frame_idx = np.array([599, 659, 719], dtype=int)
+    rank, _, f_r = _outcome_arrays(3)
+    codes_1d = np.full(3, -1, dtype=int)  # missing the per-slot axis entirely
+    with pytest.raises(ValueError):
+        dbd.validate_frame_idx_grid(frame_idx, WINDOW_FRAMES, HOP_S, FS, 720, rank, codes_1d, f_r)
+
+
+def test_validate_frame_idx_grid_rejects_wrong_rejection_code_column_count():
+    """A (n, 1) or (n, 2) candidate_rejection_codes has the right row count
+    but the wrong number of AHET candidate slots (must be
+    AHET_MAX_CANDIDATES=3) -- passing this would silently reinterpret which
+    slots exist and could change gate_not_run classification."""
+    frame_idx = np.array([599, 659, 719], dtype=int)
+    rank, _, f_r = _outcome_arrays(3)
+    for n_cols in (1, 2, 4):
+        codes_wrong_width = np.full((3, n_cols), -1, dtype=int)
+        with pytest.raises(ValueError):
+            dbd.validate_frame_idx_grid(frame_idx, WINDOW_FRAMES, HOP_S, FS, 720,
+                                         rank, codes_wrong_width, f_r)
 
 
 # ── align_windows (window-scale energy computed DIRECTLY on the cube, BDR-14;
@@ -746,11 +883,14 @@ def test_write_window_energy_npz_recomputes_saved_argmax_and_centroid(tmp_path: 
 # ── stratify_by_outcome (the primary report; normalized fraction, BDR-17) ──
 
 def _window_row(idx, cls, dur, longest, observed_s=30.0):
+    # accepted_candidate_rank/rejection_codes/f_r_hz here are placeholders --
+    # these tests exercise report functions that operate on the already-
+    # classified `outcome_class` string, not `classify_window_outcome` itself.
     return dbd.WindowRow(
         window_index=idx, frame_start=0, frame_end=0, is_warmup_window=False,
         post_calibration_observed_s=observed_s, window_argmax_bin=8, window_centroid=8.0,
         off_baseline_duration_s=dur, longest_excursion_s=longest,
-        rejection_codes=(-1, -1, -1), f_r_hz=1.2, outcome_class=cls,
+        accepted_candidate_rank=-1, rejection_codes=(-1, -1, -1), f_r_hz=1.2, outcome_class=cls,
     )
 
 
@@ -1340,3 +1480,80 @@ def test_run_session_validates_geometry_against_capture_not_replay_metadata(tmp_
     assert result["session_id"] == "cap"
     assert result["replay_run_metadata_path"] is not None
     assert result["replay_run_metadata_sha256"] is not None
+
+
+def test_window_audit_csv_persists_rank_and_outcome_recomputes_from_raw_fields(tmp_path: Path):
+    """BDR-02 R2: window_audit.csv must persist accepted_candidate_rank (not
+    just the derived outcome_class), and every saved outcome_class must be
+    exactly recomputable from that row's own persisted rank/codes/f_r_hz --
+    run through the real run_session pipeline end to end, one window per
+    outcome class, each satisfying the real strict_v1 producer invariants."""
+    capture_dir = tmp_path / "cap_outcomes"
+    n_frames = 720
+    _write_tiny_capture(capture_dir, n_frames)
+    (capture_dir / "warmup_bin_selection.json").write_text(
+        json.dumps({"selected_bin": 4,
+                    "candidates": [{"bin": b, "energy": 1.0, "energy_rank": i + 1}
+                                    for i, b in enumerate([3, 4, 5])]}),
+        encoding="utf-8",
+    )
+    (capture_dir / "run_metadata.json").write_text(
+        json.dumps(_tiny_capture_metadata()), encoding="utf-8"
+    )
+
+    replay_dir = tmp_path / "replay_outcomes"
+    replay_dir.mkdir()
+    raw_hash = dbd.sha256_file(capture_dir / "adc_stream.bin")
+    replay_metadata = _tiny_capture_metadata()
+    replay_metadata["replay_file_hashes"] = {"path": raw_hash}
+    (replay_dir / "run_metadata.json").write_text(json.dumps(replay_metadata), encoding="utf-8")
+    (replay_dir / "warmup_bin_selection.json").write_text(
+        json.dumps({"selected_bin": 4,
+                    "candidates": [{"bin": b, "energy": 1.0, "energy_rank": i + 1}
+                                    for i, b in enumerate([3, 4, 5])]}),
+        encoding="utf-8",
+    )
+    # Window 0: gate_not_run. Window 1: covered (slot 0 coded PASSED).
+    # Window 2: other_rejected. Each satisfies the real strict_v1 invariants
+    # BDR-02 R2 now enforces.
+    frame_idx = np.array([599, 659, 719], dtype=int)
+    accepted_rank = np.array([-1, 0, -1])
+    rejection_codes = np.array([
+        [-1, -1, -1],
+        [0, -1, -1],
+        [2, 3, -1],
+    ])
+    f_r_hz = np.array([np.nan, 1.2, 1.5])
+    np.savez(replay_dir / "live_intermediates.npz", frame_idx=frame_idx,
+             accepted_candidate_rank=accepted_rank,
+             candidate_rejection_codes=rejection_codes, f_r_hz=f_r_hz)
+
+    session = dbd.load_session_inputs("cap_outcomes", capture_dir, replay_dir=replay_dir)
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    result = dbd.run_session(session, _tiny_live_cfg(), diag_cfg(), _dummy_run_ctx(), out_dir)
+
+    # BDR-22 R2: the exact raw input path, not just its hash.
+    assert result["raw_path"] == str(capture_dir / "adc_stream.bin")
+
+    # BDR-23 R2: the WRITTEN summary uses the neutral, truthful field names
+    # (not the retired "trailing_10s_median"/"first_post_calibration_10s_median"
+    # literals, which would mislabel any non-10s configured span).
+    assert result["centroid_drift"]["summary_span_s"] == diag_cfg().centroid_summary_span_s
+    assert "n_blocks_used" in result["centroid_drift"]
+    assert "trailing_median" in result["centroid_drift"]
+    assert "leading_median" in result["centroid_drift"]
+    assert "trailing_10s_median" not in result["centroid_drift"]
+
+    import csv
+    audit_path = out_dir / "cap_outcomes" / "window_audit.csv"
+    with audit_path.open(newline="", encoding="utf-8") as fh:
+        rows = list(csv.DictReader(fh))
+    assert len(rows) == 3
+    assert [r["outcome_class"] for r in rows] == ["gate_not_run", "covered", "other_rejected"]
+    for row in rows:
+        rank = int(row["accepted_candidate_rank"])
+        codes = np.array([int(c) for c in row["rejection_codes"].split(";")])
+        f_r = float(row["f_r_hz"])
+        recomputed = dbd.classify_window_outcome(rank, codes, f_r)
+        assert recomputed == row["outcome_class"]

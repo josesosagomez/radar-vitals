@@ -1,23 +1,33 @@
 # Plan: Range-bin drift measurement (`scripts/diagnose_bin_drift.py`)
 
-> **Implemented, run on all 4 real captures, and committed.** Review has gone through 6 rounds
-> (`plans/bin_drift_diagnostic_cross_review.md`, BDR-01…23), reopening three times after
-> implementation as Codex found real gaps between the shipped code and what the plan claimed:
+> **Implemented, run on all 4 real captures, and committed.** Review has gone through 7 rounds
+> (`plans/bin_drift_diagnostic_cross_review.md`, BDR-01…23 plus round-7 R2/R3 reopenings),
+> reopening four times after implementation as Codex found real gaps between the shipped code
+> and what the plan claimed:
 > round 4 (BDR-11…13) found the decided centroid-drift grid was never wired up, plus a stale
 > table and a scope-text inconsistency; round 5 (BDR-11 R2, BDR-14…19) found the window-scale
 > energy measurement was approximated from 1 s blocks rather than computed directly, an exact
 > "trailing 10 s" arithmetic bug, decode geometry validated against the wrong metadata file, an
 > unnormalized transitional statistic, motion energy computed for the whole capture instead of
 > per window, and several config values that were hashed but never actually governed behavior;
-> **round 6 (BDR-14 R2, BDR-19 R2, BDR-20…23) found the round-5 window-scale energy fix computed
+> round 6 (BDR-14 R2, BDR-19 R2, BDR-20…23) found the round-5 window-scale energy fix computed
 > the profile but still discarded it before persisting, the NPZ frame-grid validator still
 > accepted a misanchored/truncated grid and never checked outcome-array shapes, replay-to-capture
 > matching bound only raw bytes (not the estimator generation that produced the recorded
 > outcomes), `baseline_rank_of_locked_bin` was sourced from the full-buffer warmup-JSON rank
 > instead of the diagnostic's own settled baseline, per-session summaries lacked their own
 > run_id/git-commit/config-hash provenance, and the centroid-drift support span was a hardcoded
-> 10.0 literal outside the bound config.** All fixed below. Both prior escalations (**BDR-04
-> Option A, BDR-07 Option A**) remain decided — see **§8**. No new escalations this round.
+> 10.0 literal outside the bound config; **round 7 (BDR-02 R2, BDR-19 R3, BDR-22 R2, BDR-23 R2)
+> found the per-window outcome classifier accepted contradictory or out-of-domain evidence
+> without error (an accepted rank paired with a non-finite `f_r_hz`, all-not-run rejection codes,
+> or a rank outside the generation's 3-slot domain) and dropped its own input
+> (`accepted_candidate_rank`) instead of persisting it in `window_audit.csv`; the round-6
+> shape/row-count check for the NPZ outcome arrays still passed a wrong-shaped (e.g. `(n,1)`/
+> `(n,2)`) array; the raw ADC path was still absent from every session summary (only its hash
+> was recorded); and the config-bound centroid support (round 6) had no
+> positive-block validation and still serialized hardcoded "10s" field names regardless of the
+> configured span.** All fixed below. Both prior escalations (**BDR-04 Option A, BDR-07 Option A**)
+> remain decided — see **§8**. No new escalations this round.
 
 ## Context
 
@@ -113,7 +123,7 @@ Verified: NPZ `frame_idx` is the window's **end frame** (599, 659, … ) → win
 complete 20-frame block are massimo1=10, massimo2=11, sweep=11, live_test1=15 frames — all
 non-zero, so §7.1's trailing-block policy is exercised on real data, not a hypothetical.
 
-### 1.1 Every config value governs behavior, or the run fails closed (BDR-19, BDR-19 R2, BDR-23)
+### 1.1 Every config value governs behavior, or the run fails closed (BDR-19, BDR-19 R2, BDR-19 R3, BDR-23, BDR-23 R2)
 
 Round 4 hashed the config file; round 5 found two of its values (`trailing_block_policy`,
 `episodes.gap_rule`) were loaded and then never consulted — the discard/no-bridging behavior was
@@ -132,19 +142,46 @@ effect on the run's behavior despite the sensitivity grid's centroid axis depend
 `trailing_leading_centroid_medians` reads `cfg.centroid_summary_span_s` instead. A mutation test
 confirms changing this field changes the selected leading/trailing block count.
 
+**Round 7 (BDR-23 R2) found the config binding itself was unvalidated and its output mislabeled:**
+`load_diagnostic_config` accepted any `summary_span_s`, including `0` or negative — with
+`summary_span_s: 0`, `round(...)` yields `n_window_blocks=0`, and `blocks.centroid[-0:]` selects
+the **whole** series while `blocks.centroid[:0]` is empty/NaN, so the result was neither a
+rejected config nor a genuine zero-span statistic. Fixed: `load_diagnostic_config` rejects a
+non-finite or non-positive `summary_span_s` at load time; `trailing_leading_centroid_medians`
+additionally rejects (raises `ValueError`) any span that rounds to fewer than one complete block
+at the session's actual `fs`/`block_frames` (a config-level check alone cannot catch this, since
+it depends on `fs`, which lives in `live_demo_config.yaml`, not the diagnostic config). Separately,
+`summary.json`'s `centroid_drift` object hardcoded the field names `trailing_10s_median`/
+`first_post_calibration_10s_median` regardless of the configured span — a run configured for 5 s
+would still label its statistics "10s". Fixed: the keys are now neutral (`trailing_median`,
+`leading_median`) plus two new fields recording what was actually used:
+`summary_span_s` (the configured value) and `n_blocks_used` (the resolved block count) —
+`trailing_leading_centroid_medians` now returns `n_window_blocks` as a third value precisely so
+callers can serialize it truthfully. The BDR-23 mutation test now asserts through the return
+value's block count, not just the numeric medians.
+
 A malformed NPZ hop grid is rejected before alignment (`validate_frame_idx_grid`). Round 5's
 version (BDR-19) rejected a first endpoint *below* the first valid window end, non-monotonic
-ordering, and off-`hop_s × fs` spacing. **Round 6 (BDR-19 R2) found this was still incomplete:**
+ordering, and off-`hop_s × fs` spacing. Round 6 (BDR-19 R2) found this was still incomplete:
 a first endpoint *above* 599 (e.g. `[659, 719]`) passed and mislabeled row 0 as the warmup window
 even though it actually spans frames 60–659; the validator had no cube length with which to
 reject a regularly spaced grid whose last endpoint runs past the last complete frame (NumPy
 silently truncates such a slice); and `accepted_candidate_rank`/`candidate_rejection_codes`/
 `f_r_hz` were never checked against `frame_idx`'s own length, so a short or over-long outcome
 array would fail only by incidental indexing, or silently ignore extra rows. Fixed:
-`validate_frame_idx_grid` now takes the cube's frame count and all three outcome arrays, requires
-`frame_idx[0] == window_frames - 1` **exactly** (not just `>=`), requires every endpoint
-`< n_cube_frames`, and requires every outcome array's row count to equal `len(frame_idx)` —
-checked before any slicing or classification, all raising `ValueError`.
+`validate_frame_idx_grid` took the cube's frame count and all three outcome arrays, required
+`frame_idx[0] == window_frames - 1` **exactly** (not just `>=`), required every endpoint
+`< n_cube_frames`, and required every outcome array's row count to equal `len(frame_idx)`.
+
+**Round 7 (BDR-19 R3) found row-count checking alone was still insufficient:** a
+`candidate_rejection_codes` array shaped `(n, 1)` or `(n, 2)` — the wrong number of AHET candidate
+slots — passed the round-6 check, as did a `(n, 1)` `accepted_candidate_rank`/`f_r_hz` (all three
+reproduced directly). A wrong-width code row would then either fail incidentally downstream or
+silently change `gate_not_run` classification. Fixed: `validate_frame_idx_grid` now checks the
+**exact declared shape** of every array — `frame_idx`, `accepted_candidate_rank`, and `f_r_hz`
+must each be `(n,)`; `candidate_rejection_codes` must be `(n, AHET_MAX_CANDIDATES)` (imported from
+`src.vitals`, not a duplicated literal `3`) — before any slicing or classification, all raising
+`ValueError`.
 
 ## 2. Reused components (nothing reimplemented)
 
@@ -306,8 +343,11 @@ directory already exists; `summary.json` records its own `run_id`.
   (**directly computed on the window's own slice, BDR-14** — renamed from
   `dominant_argmax_mode`/`mean_centroid` to make that explicit), off-baseline duration and
   longest excursion within the window (still block-derived — see §3.2), the raw
-  `candidate_rejection_codes` row, `f_r_hz`, and the derived outcome class. This is the audit
-  trail the aggregate report is computed from.
+  `accepted_candidate_rank` (BDR-02 R2, restored — round 6 computed the outcome class from it but
+  never persisted the input itself), `candidate_rejection_codes` row, `f_r_hz`, and the derived
+  outcome class. This is the audit trail the aggregate report is computed from — every saved
+  `outcome_class` is exactly recomputable from that same row's own `accepted_candidate_rank`/
+  `candidate_rejection_codes`/`f_r_hz` (tested end to end, BDR-02 R2).
 - `motion_energy_windows.npz` — real `(n_windows, n_bins)` matrix (`window_indices`, `bins`,
   `matrix`) — BDR-18, replacing the round-4 single-vector-per-capture file.
 - `window_energy_windows.npz` — the ordinary (non-motion) per-window per-bin energy profile
@@ -337,11 +377,19 @@ directory already exists; `summary.json` records its own `run_id`.
     count × 1 s. Each episode: `{start_s, end_s (exclusive), bin_sequence, modal_bin,
     max_displacement_bins}`. All episodes ≥ 1 block are listed with duration — episode
     *detection* needs no threshold.
-  - `centroid_drift` — trailing/leading 10 s medians (§3.1, corrected exact-block-count
-    selection) — `centroid_drift_at_grid`: whether the displacement meets each of
-    `{0.3, 0.5, 1.0}` bin. **Session-level only.**
+  - `centroid_drift` — `summary_span_s` (the configured centroid support, BDR-23 R2),
+    `n_blocks_used` (the resolved block count actually applied), and neutral `trailing_median`/
+    `leading_median` fields (§3.1, corrected exact-block-count selection; renamed from
+    `trailing_10s_median`/`first_post_calibration_10s_median`, which hardcoded "10s" regardless
+    of the configured span — BDR-23 R2) — `centroid_drift_at_grid`: whether the displacement
+    meets each of `{0.3, 0.5, 1.0}` bin. **Session-level only.**
   - **window-outcome classifier** — mutually exclusive: `covered`, `gate_not_run`,
-    `other_rejected`.
+    `other_rejected`, and **fail-closed on evidence the producer can never legitimately emit**
+    (BDR-02 R2): an `accepted_candidate_rank` outside `{-1, 0, ..., AHET_MAX_CANDIDATES-1}`;
+    `accepted_candidate_rank >= 0` paired with a non-finite `f_r_hz` (ECA/AHET only runs when
+    `f_r_hz` is finite); `accepted_candidate_rank >= 0` paired with all-not-run rejection codes;
+    or an accepted rank whose own slot is not coded "passed" — each raises rather than silently
+    landing in `"covered"`.
   - **`outcome_stratified_report`** (full_exposure / transitional) — for each outcome class:
     count, mean off-baseline duration (raw seconds), mean longest excursion, **and
     `mean_off_baseline_fraction`** (`off_baseline_duration_s / post_calibration_observed_s`,
@@ -380,8 +428,10 @@ directory already exists; `summary.json` records its own `run_id`.
 
 ## 5. Provenance
 
-`summary.json`'s run manifest records **path + SHA-256** for every input actually used: the raw
-`adc_stream.bin`, the `warmup_bin_selection.json` used, the `live_intermediates.npz` used (where
+`summary.json`'s run manifest records **path + SHA-256** for every input actually used: `raw_path`
++ `raw_sha256` for `adc_stream.bin` (BDR-22 R2, corrected — round 6 recorded only the hash; a
+`session_id` basename is not the exact CLI input path and the manifest was not self-contained
+without it), the `warmup_bin_selection.json` used, the `live_intermediates.npz` used (where
 applicable), **the capture's own `run_metadata.json` AND, separately, the replay's own
 `run_metadata.json` when one is matched** (`capture_run_metadata_sha256` /
 `replay_run_metadata_sha256` — BDR-16, previously a single conflated field), the diagnostic's own
@@ -453,11 +503,11 @@ measurement is available.
 |---|---|
 | `scripts/diagnose_bin_drift.py` | CLI: `--config scripts/live_demo_config.yaml --diagnostic-config scripts/diagnose_bin_drift_config.yaml --captures <4 dirs> --replays <matched-generation dirs, per §8> --out results/diagnose/bin_drift` |
 | `scripts/diagnose_bin_drift_config.yaml` | The diagnostic's own bound parameters (§1.1, §5) |
-| `tests/test_diagnose_bin_drift.py` | 79 tests (§7.1) |
+| `tests/test_diagnose_bin_drift.py` | 92 tests (§7.1) |
 
 Nothing else is touched. `data/raw/` not involved (empty); originals opened read-only.
 
-### 7.1 Test plan (expanded across rounds 4–6)
+### 7.1 Test plan (expanded across rounds 4–7)
 
 - Synthetic reflector stepped bin 25→27 mid-session: argmax series shows the step at the right
   block; occupancy fractions exact (`test_compute_occupancy_fractions`).
@@ -530,6 +580,26 @@ Nothing else is touched. `data/raw/` not involved (empty); originals opened read
   capture's raw hash raise; a capture with no `approved_replays` entry rejects any replay offered
   for it; a replay matching a capture's raw bytes but not the approved `run_metadata.json` hash
   is rejected; the correctly approved pairing is accepted.
+- **Outcome classifier is fail-closed on contradictory/out-of-domain evidence (BDR-02 R2):**
+  `accepted_candidate_rank` of 5 (or -2) raises (outside `{-1,0,1,2}`); an accepted rank paired
+  with a non-finite `f_r_hz` raises; an accepted rank paired with all-not-run rejection codes
+  raises; an accepted rank whose own slot is not coded "passed" raises. An end-to-end integration
+  test runs three real windows (one per outcome class, each satisfying the real invariants)
+  through `run_session`, then reads back the written `window_audit.csv` and recomputes each row's
+  `outcome_class` from that row's own persisted `accepted_candidate_rank`/`rejection_codes`/
+  `f_r_hz` via `classify_window_outcome` directly, confirming it matches what was saved.
+- **`validate_frame_idx_grid` checks exact declared shape, not just row count (BDR-19 R3):** a
+  `(n,1)` `accepted_candidate_rank`, a `(n,1)` `f_r_hz`, a `(n,)` `candidate_rejection_codes`
+  (missing its slot axis entirely), and `candidate_rejection_codes` with 1, 2, or 4 columns
+  (instead of `AHET_MAX_CANDIDATES=3`) all raise.
+- **`raw_path` is persisted in every session summary (BDR-22 R2):** asserted directly against
+  `run_session`'s result in the same end-to-end integration test above.
+- **Centroid-support validation and truthful serialization (BDR-23 R2):** `load_diagnostic_config`
+  raises on `summary_span_s <= 0` (tested for both `0` and a negative value);
+  `trailing_leading_centroid_medians` raises when a positive span still rounds to fewer than one
+  complete block; the BDR-23 mutation test now also asserts the returned block count
+  (`n_window_blocks`) changes between a 10 s and a 5 s configured span, not just the numeric
+  medians.
 
 ## 8. Design decisions (both escalations resolved by the user, 2026-07-27)
 
@@ -555,9 +625,9 @@ entries are `correlation_not_available`; no replay is generated for it.
 
 ## 9. Verification
 
-1. `conda run -n radar-vitals python -m pytest tests/test_diagnose_bin_drift.py -q` — all 79
+1. `conda run -n radar-vitals python -m pytest tests/test_diagnose_bin_drift.py -q` — all 92
    cases pass.
-2. Full suite still green (script is additive; expect 1616 baseline + 79 = 1695 passed, 1
+2. Full suite still green (script is additive; expect 1616 baseline + 92 = 1708 passed, 1
    skipped).
 3. Run on all 4 captures **from a clean committed tree**; confirm all output files exist
    (including the widened `bin_energy_blocks.csv`, the real `motion_energy_windows.npz` matrix,
@@ -578,7 +648,12 @@ entries are `correlation_not_available`; no replay is generated for it.
    present and distinct fields (BDR-21); confirm the real run's three replays are each accepted
    under `scripts/diagnose_bin_drift_config.yaml`'s `approved_replays` mapping (BDR-20) — a run
    with an unregistered or wrong-generation replay must fail before decoding.
-7. Session end: HISTORY.md append + HANDOFF.md rewrite (per CLAUDE.md §10) — including the
+7. **Round 7:** confirm `window_audit.csv` has an `accepted_candidate_rank` column and every row's
+   `outcome_class` recomputes from its own persisted rank/codes/`f_r_hz` (BDR-02 R2); confirm
+   `summary.json` carries `raw_path` beside `raw_sha256` (BDR-22 R2); confirm `centroid_drift`
+   uses the neutral `summary_span_s`/`n_blocks_used`/`trailing_median`/`leading_median` keys, not
+   the retired `trailing_10s_median`/`first_post_calibration_10s_median` names (BDR-23 R2).
+8. Session end: HISTORY.md append + HANDOFF.md rewrite (per CLAUDE.md §10) — including the
    evidence summary, its evidence paths, and this round's fixes.
 
 ## 10. Explicitly out of scope

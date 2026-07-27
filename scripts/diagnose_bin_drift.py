@@ -45,6 +45,7 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from src.radar_io import ChirpConfig, read_adc_bin  # noqa: E402
 from src.warmup_select import derive_candidate_bins, range_energy_by_bin  # noqa: E402
+from src.vitals import AHET_MAX_CANDIDATES  # noqa: E402
 
 
 # ── Provenance ────────────────────────────────────────────────────────────────
@@ -202,6 +203,12 @@ class DiagnosticConfig:
 def load_diagnostic_config(path: Path) -> DiagnosticConfig:
     raw_bytes = path.read_bytes()
     cfg = yaml.safe_load(raw_bytes)
+    centroid_summary_span_s = float(cfg["centroid"]["summary_span_s"])
+    if not np.isfinite(centroid_summary_span_s) or centroid_summary_span_s <= 0:
+        raise ValueError(
+            f"centroid.summary_span_s={centroid_summary_span_s!r} must be finite and "
+            "positive (BDR-23 R2)."
+        )
     return DiagnosticConfig(
         path=path,
         sha256=sha256_bytes(raw_bytes),
@@ -213,7 +220,7 @@ def load_diagnostic_config(path: Path) -> DiagnosticConfig:
         offset_phases=tuple(int(p) for p in cfg["offsets"]["phases"]),
         duration_grid_s=tuple(float(x) for x in cfg["sensitivity_grid"]["duration_s"]),
         centroid_grid_bins=tuple(float(x) for x in cfg["sensitivity_grid"]["centroid_drift_bins"]),
-        centroid_summary_span_s=float(cfg["centroid"]["summary_span_s"]),
+        centroid_summary_span_s=centroid_summary_span_s,
         require_clean_tree=bool(cfg["provenance"]["require_clean_tree"]),
         preflight_min_available_gb=float(cfg["memory"]["preflight_min_available_gb"]),
         approved_replays=dict(cfg.get("approved_replays") or {}),
@@ -486,7 +493,7 @@ def compute_occupancy(blocks: BlockSeries, baseline_bin: int) -> dict[str, float
 
 
 def trailing_leading_centroid_medians(blocks: BlockSeries, cfg: DiagnosticConfig,
-                                       fs: float) -> tuple[float, float]:
+                                       fs: float) -> tuple[float, float, int]:
     """Robust centroid-drift inputs (plan §3.1): median centroid over the last
     N complete 1s blocks vs. the first N complete post-calibration blocks,
     N = round(cfg.centroid_summary_span_s / block duration) -- selected by
@@ -495,16 +502,34 @@ def trailing_leading_centroid_medians(blocks: BlockSeries, cfg: DiagnosticConfig
     remainder, 10-15 frames on every real capture, so a threshold in raw
     frames does not land on a block boundary and silently drops one block
     from the "last N s"). The support itself is config-bound, not a hardcoded
-    10.0 literal (BDR-23)."""
-    n_blocks = len(blocks.block_start_frame)
+    10.0 literal (BDR-23).
+
+    Returns `(trailing_median, leading_median, n_window_blocks)` -- the block
+    count is returned (not just used internally) so callers can serialize it
+    alongside the configured span (BDR-23 R2), rather than a hardcoded "10s"
+    label that would lie for any other configured value.
+
+    Raises `ValueError` if the configured span rounds to fewer than one
+    complete block (BDR-23 R2) -- e.g. `summary_span_s` too small relative to
+    `fs`/`block_frames` -- rather than silently degrading (`blocks.centroid[-0:]`
+    selects the WHOLE series while `blocks.centroid[:0]` is empty/NaN, so an
+    unvalidated zero-block support is neither a rejected config nor a genuine
+    zero-span statistic)."""
     n_window_blocks = int(round(cfg.centroid_summary_span_s * fs / cfg.block_frames))
+    if n_window_blocks < 1:
+        raise ValueError(
+            f"centroid.summary_span_s={cfg.centroid_summary_span_s} rounds to "
+            f"{n_window_blocks} blocks at fs={fs}, block_frames={cfg.block_frames} -- "
+            "must resolve to at least one complete block (BDR-23 R2)."
+        )
+    n_blocks = len(blocks.block_start_frame)
     if n_blocks == 0:
-        return float("nan"), float("nan")
+        return float("nan"), float("nan"), n_window_blocks
     n_trailing = min(n_window_blocks, n_blocks)
     n_leading = min(n_window_blocks, n_blocks)
     trailing_median = float(np.median(blocks.centroid[-n_trailing:]))
     leading_median = float(np.median(blocks.centroid[:n_leading]))
-    return trailing_median, leading_median
+    return trailing_median, leading_median, n_window_blocks
 
 
 def centroid_drift_at_grid(trailing_median: float, leading_median: float,
@@ -525,15 +550,59 @@ def centroid_drift_at_grid(trailing_median: float, leading_median: float,
 # ── Window audit (NPZ hop grid) ─────────────────────────────────────────────
 
 REJECTION_CODE_NOT_ATTEMPTED = -1
+REJECTION_CODE_PASSED = 0
 
 
 def classify_window_outcome(accepted_rank: int, rejection_codes: np.ndarray,
                              f_r_hz: float) -> str:
-    """Mutually exclusive classifier (plan §4)."""
-    if accepted_rank >= 0:
-        return "covered"
+    """Mutually exclusive classifier (plan §4). Fail-closed on evidence the
+    producer (scripts/live_demo.py, the strict_v1 AHET gate mode production
+    runs use) can never actually emit (BDR-02 R2):
+
+    - `accepted_rank` outside the domain `{-1, 0, ..., AHET_MAX_CANDIDATES-1}`
+      this generation's 3 candidate slots allow.
+    - `accepted_rank >= 0` (a candidate accepted) paired with a non-finite
+      `f_r_hz` -- impossible under strict_v1: ECA/AHET evaluation, the only
+      path that can produce a non-negative rank, runs only when `f_r_hz` is
+      finite; the no-ECA early return that yields a non-finite `f_r_hz`
+      always hardcodes `accepted_rank=-1`.
+    - `accepted_rank >= 0` paired with all-not-run (`-1`) rejection codes --
+      also impossible: an executed strict_v1 gate always assigns concrete
+      codes, including `REJECTION_CODE_PASSED` (0) for the accepted slot.
+    - `accepted_rank >= 0` whose own slot's rejection code is not
+      `REJECTION_CODE_PASSED` -- the accepted-slot-passed invariant the
+      generation guarantees.
+
+    A malformed or replaced NPZ that violates any of these raises `ValueError`
+    rather than silently landing in `"covered"`."""
+    if accepted_rank < -1 or accepted_rank >= AHET_MAX_CANDIDATES:
+        raise ValueError(
+            f"accepted_candidate_rank={accepted_rank} is outside the valid domain "
+            f"{{-1, 0, ..., {AHET_MAX_CANDIDATES - 1}}} for AHET_MAX_CANDIDATES="
+            f"{AHET_MAX_CANDIDATES}."
+        )
     all_not_run = bool(np.all(rejection_codes == REJECTION_CODE_NOT_ATTEMPTED))
     f_r_invalid = not np.isfinite(f_r_hz)
+    if accepted_rank >= 0:
+        if f_r_invalid:
+            raise ValueError(
+                f"accepted_candidate_rank={accepted_rank} (a candidate was accepted) is "
+                "contradictory with a non-finite f_r_hz -- ECA/AHET evaluation only runs "
+                "when f_r_hz is finite."
+            )
+        if all_not_run:
+            raise ValueError(
+                f"accepted_candidate_rank={accepted_rank} is contradictory with all-"
+                "not-run rejection codes -- an executed AHET gate always assigns "
+                "concrete codes, including 'passed' for the accepted slot."
+            )
+        if int(rejection_codes[accepted_rank]) != REJECTION_CODE_PASSED:
+            raise ValueError(
+                f"accepted_candidate_rank={accepted_rank}'s own rejection_codes entry "
+                f"is {int(rejection_codes[accepted_rank])}, not the 'passed' code "
+                f"({REJECTION_CODE_PASSED})."
+            )
+        return "covered"
     if all_not_run and f_r_invalid:
         return "gate_not_run"
     return "other_rejected"
@@ -544,27 +613,37 @@ def validate_frame_idx_grid(frame_idx: np.ndarray, window_frames: int, hop_s: fl
                              accepted_rank: np.ndarray, rejection_codes: np.ndarray,
                              f_r_hz: np.ndarray) -> None:
     """Reject a malformed NPZ hop grid before alignment (plan §7.1, BDR-19,
-    BDR-19 R2) -- a misanchored first endpoint, an endpoint beyond the last
-    complete frame, non-monotonic or off-hop spacing, or an outcome array
-    whose row count does not match frame_idx. Raises ValueError; never
-    silently proceeds on bad input.
+    BDR-19 R2, BDR-19 R3) -- a misanchored first endpoint, an endpoint beyond
+    the last complete frame, non-monotonic or off-hop spacing, or an outcome
+    array whose declared SHAPE (not just row count) does not match what the
+    generation guarantees. Raises ValueError; never silently proceeds on bad
+    input.
 
     BDR-19 R2 found the round-1 fix only rejected a first endpoint BELOW
     599 (`[659, 719]` passed, mislabeling row 0 -- which actually spans frames
     60-659 -- as the warmup window), had no cube length with which to reject
     an endpoint past the last complete frame (NumPy silently truncates an
-    out-of-range slice), and never checked that accepted_candidate_rank /
-    candidate_rejection_codes / f_r_hz have exactly one row per frame_idx
-    entry (extra rows silently ignored, short arrays fail only by incidental
-    indexing)."""
+    out-of-range slice), and only checked row COUNT for the outcome arrays.
+
+    BDR-19 R3 found that row-count checking alone still passed a
+    `candidate_rejection_codes` array shaped `(n, 1)` or `(n, 2)` instead of
+    the generation's true `(n, AHET_MAX_CANDIDATES)`, and a `(n, 1)`
+    `accepted_candidate_rank`/`f_r_hz` too (direct testing reproduced all
+    three) -- a 2-D scalar field or a wrong-width code row would then either
+    fail incidentally downstream or silently change `gate_not_run`
+    classification. Every array's exact declared shape is now checked."""
     n = len(frame_idx)
-    for name, arr in (("accepted_candidate_rank", accepted_rank),
-                       ("candidate_rejection_codes", rejection_codes),
-                       ("f_r_hz", f_r_hz)):
-        if len(arr) != n:
+    for name, arr, expected_shape in (
+        ("frame_idx", frame_idx, (n,)),
+        ("accepted_candidate_rank", accepted_rank, (n,)),
+        ("f_r_hz", f_r_hz, (n,)),
+        ("candidate_rejection_codes", rejection_codes, (n, AHET_MAX_CANDIDATES)),
+    ):
+        if tuple(arr.shape) != expected_shape:
             raise ValueError(
-                f"{name} has {len(arr)} rows but frame_idx has {n} entries; "
-                "every NPZ outcome array must have exactly one row per window."
+                f"{name} has shape {tuple(arr.shape)}, expected {expected_shape}; every "
+                "NPZ outcome array must be exactly shaped, not just row-count-matched "
+                "(BDR-19 R3)."
             )
     if n == 0:
         return
@@ -611,6 +690,7 @@ class WindowRow:
     window_centroid: Optional[float]
     off_baseline_duration_s: float
     longest_excursion_s: float
+    accepted_candidate_rank: int
     rejection_codes: tuple[int, ...]
     f_r_hz: float
     outcome_class: str
@@ -680,6 +760,7 @@ def align_windows(cube: np.ndarray, candidate_bins: list[int], frame_idx: np.nda
             window_centroid=window_centroid,
             off_baseline_duration_s=off_duration,
             longest_excursion_s=longest,
+            accepted_candidate_rank=int(accepted_rank[i]),
             rejection_codes=tuple(int(c) for c in rejection_codes[i]),
             f_r_hz=float(f_r_hz[i]),
             outcome_class=classify_window_outcome(int(accepted_rank[i]), rejection_codes[i], float(f_r_hz[i])),
@@ -984,8 +1065,8 @@ def run_session(session: SessionInputs, live_cfg: dict, diag_cfg: DiagnosticConf
                                 diag_cfg.gap_rule)
     episode_grid = episodes_at_grid(episodes, diag_cfg.duration_grid_s)
 
-    trailing_centroid_median, leading_centroid_median = trailing_leading_centroid_medians(
-        blocks, diag_cfg, fs
+    trailing_centroid_median, leading_centroid_median, centroid_n_blocks_used = (
+        trailing_leading_centroid_medians(blocks, diag_cfg, fs)
     )
     centroid_grid = centroid_drift_at_grid(trailing_centroid_median, leading_centroid_median,
                                             diag_cfg.centroid_grid_bins)
@@ -1047,6 +1128,10 @@ def run_session(session: SessionInputs, live_cfg: dict, diag_cfg: DiagnosticConf
         "live_demo_config_path": run_ctx.live_demo_config_path,
         "live_demo_config_sha256": run_ctx.live_demo_config_sha256,
         "session_id": session.session_id,
+        # BDR-22 R2: the exact raw input path, not just its hash -- a session
+        # summary is not a self-contained manifest without it (session_id is
+        # only the capture directory's basename, not the CLI input path).
+        "raw_path": str(session.capture_dir / "adc_stream.bin"),
         "raw_sha256": session.raw_sha256,
         "warmup_json_path": str(session.warmup_json_path),
         "warmup_json_sha256": sha256_file(session.warmup_json_path),
@@ -1066,8 +1151,15 @@ def run_session(session: SessionInputs, live_cfg: dict, diag_cfg: DiagnosticConf
         "occupancy": occupancy,
         "warmup_recompute_check": recompute,
         "centroid_drift": {
-            "trailing_10s_median": trailing_centroid_median,
-            "first_post_calibration_10s_median": leading_centroid_median,
+            # Neutral field names + the configured span/block count actually
+            # used (BDR-23 R2) -- "trailing_10s_median" hardcoded "10s"
+            # regardless of the configured summary_span_s, so a run with a
+            # different (validly configured) span would have mislabeled its
+            # own statistic.
+            "summary_span_s": diag_cfg.centroid_summary_span_s,
+            "n_blocks_used": centroid_n_blocks_used,
+            "trailing_median": trailing_centroid_median,
+            "leading_median": leading_centroid_median,
         },
         "n_blocks": int(len(blocks.block_start_frame)),
         "trailing_discarded_frames": blocks.trailing_discarded_frames,
@@ -1184,12 +1276,14 @@ def _write_session_outputs(out_dir: Path, session_id: str, blocks: BlockSeries,
         w = csv.writer(fh)
         w.writerow(["window_index", "frame_start", "frame_end", "is_warmup_window",
                      "post_calibration_observed_s", "window_argmax_bin", "window_centroid",
-                     "off_baseline_duration_s", "longest_excursion_s", "rejection_codes",
+                     "off_baseline_duration_s", "longest_excursion_s",
+                     "accepted_candidate_rank", "rejection_codes",
                      "f_r_hz", "outcome_class"])
         for r in window_rows:
             w.writerow([r.window_index, r.frame_start, r.frame_end, r.is_warmup_window,
                         r.post_calibration_observed_s, r.window_argmax_bin, r.window_centroid,
                         r.off_baseline_duration_s, r.longest_excursion_s,
+                        r.accepted_candidate_rank,
                         ";".join(str(c) for c in r.rejection_codes), r.f_r_hz, r.outcome_class])
 
     # Real (n_windows, n_bins) motion-energy matrix (BDR-18), not one scalar
