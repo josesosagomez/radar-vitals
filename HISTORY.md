@@ -6608,3 +6608,94 @@ opened at the end of the previous session, and get it far enough that Stage 3 is
 - Then Stage 3 (raw-ADC exact-grid reprocessing) alone, then Stage 4 (reference aggregation +
   gates), which triggers a mandatory CLAUDE.md §6 Masimo-parser review.
 
+
+## 2026-07-27 (later) - M4 Stage 1: Codex's verification pass, 12 more findings
+
+**Set out to do:** run the Stages 1+2 review through its verification pass — Codex checking
+whether the seven-finding redesign it had ordered was actually correct — and fix what came back.
+
+**Worked (with evidence):**
+
+- **Rewrote the Codex prompt for a verification pass** (`c5ade69`). The opening prompt had
+  decayed across five rounds: it named three predicates that no longer exist, described a §6
+  item-6 gap that had been closed, and pointed at a diff eleven commits stale. The revision
+  states the base rate that actually matters — *fixes to findings are where this codebase has
+  been weakest* — lists the five defined-not-transcribed rules for challenge, discloses the
+  harness incident with an invitation to re-verify the tree, and continues IDs from S12R-15.
+- **Codex returned 12 items** (S12R-16…25 plus reopenings of 05 and 12). **All 12 reproduced**;
+  none rejected. Seven are fixed across three commits:
+  - `1c1c6fb` — **S12R-16, 17, 21 (rule half)**: the eligibility gate.
+  - `bf7826f` — **S12R-19, 25**: acquisition derived from the record's content.
+  - `1429dfd` — **S12R-20, 23**: the replacement graph.
+- **Suite 1572 → 1616 passed, 1 skipped, 0 failed**; targeted two-file suite 508. Round-6
+  mutation: 8/8, 11/11, 13/13.
+- **One eligibility base now gates every scorability question** — SCORING ∧ captured session ∧
+  ADMITTED ∧ bindings verified. `is_agreement_scorable` was deleted rather than fixed, and §6
+  item 6's radar-only capability got its own name.
+- **Verification became a capability rather than a boolean.** `_VerifiedBindings` is
+  identity-checked against a module-private token only `verify_bound_files` holds.
+- **The acquisition record is parsed, not just hashed**, under a versioned schema, with all
+  three legs reconciled: record claim, manifest binding, and the expected path's actual state.
+- **`retry_status` became a checked summary of the links**, and the replacement graph is walked
+  in both directions with self-links rejected, cycles detected, and §6's "same subject, same
+  protocol" enforced across every edge.
+
+**Failed / did not work, and why:**
+
+- **The redesign I reported as ready in round 5 had a hole straight through it.** **S12R-16:**
+  I built the entire `SessionDisposition` partition over three rounds and then **gated nothing
+  on it** — an EXCLUDED protocol-abort session, with its §6 reason correctly recomputed,
+  reported `is_scorable=True` and passed both output guards. Every Stage-1 exclusion predicate
+  could be derived perfectly and ignored downstream. A pre-capture attempt passed too.
+- **"Verification is unavoidable" was false** (**S12R-17**). It was only *non-omittable*:
+  `raw_digest_ok` was an ordinary public argument, so a caller could assert `True` for a file
+  that does not exist and get a scorable record, and the public constructor bypassed everything.
+  I had reported S12R-03/07 as closed on the strength of a test that only covered omission.
+  **Fixing it exposed the same forgery one level down** — my first patch stored
+  `bindings_verified: bool`, a plain field settable by a direct constructor call.
+- **My own fixture contradicted itself** (**S12R-19**). `materialise` wrote `{"acquired": true}`,
+  the no-reference fixture deleted the Masimo file, and `NO_AGREEMENT` was derived anyway,
+  because the record was hashed and never read. Absence at scoring time cannot distinguish
+  never-acquired from acquired-then-lost — the exact distinction S12R-07 R3 had required.
+- **I had §3.1 backwards on evaluation data** (**S12R-21**). The leakage check ran only for
+  `collision`, so an evaluation session a method declared itself fit on stayed scorable — and
+  my test asserted that, reasoning that evaluation data is the confirmatory base "regardless of
+  method". M6 is *evaluation only, never tuning*: such a declaration is evidence of a design
+  violation, not permission.
+- **A second harness incident, worse than the first.** The slice-9 mutation run **timed out and
+  was killed, leaving the cycle-detection mutant live in `src/m4/manifest.py`**. The cause is
+  instructive: disabling that check makes the chain walk loop forever on the cyclic fixture, so
+  the mutant *hangs* rather than fails. Caught by inspection, restored, verified three ways
+  (zero stray `if False:`, suite back to its expected count, scripted audit of every mutant
+  string). The verified-restore added after the slice-6 incident worked correctly — what it
+  could not survive was being killed externally.
+- **Two more redundant guards found by their surviving mutants** — reason-presence checks in
+  `validate_retry_policy` that `parse_session` already enforces on every path. Deleted rather
+  than tested, on the now well-established principle that a line no test can fail on is not a
+  rule.
+
+**Retired / no longer used:**
+
+- **`is_agreement_scorable`** — it existed only because `is_scorable` answered True for records
+  that were not scorable, which is the defect rather than a mitigation of it. Replaced by one
+  eligibility base plus the separately named `is_radar_only_describable`.
+- **`raw_digest_ok` as a public parameter of `parse_session`** — an assertable boolean cannot
+  be a capability. Replaced by `_VerifiedBindings`.
+- **Two reason-presence checks in `validate_retry_policy`** — unreachable, since `parse_session`
+  runs first on every path.
+- **The mutation-harness pattern of a bare `write_text` in a `finally` block** — it has now
+  damaged the working tree twice. Harnesses must verify the restore *and* impose a per-run
+  timeout, treating a hang as a caught mutant.
+
+**Next:**
+
+- **Four findings plus one artifact binding remain unbuilt:** S12R-22 (paced attempts lose
+  their assigned rate), S12R-24 (validity-map polarity is an unbound private convention),
+  S12R-05 R3 (an abort before warmup cannot be logged without fabricating
+  `selected_confidence`), S12R-12 R3 (one pre-capture shape conflates protocol steps 3 and 3a),
+  and S12R-21's canonical method-provenance artifact.
+- **Two escalations now wait on the M0 freeze**, both by user decision (2026-07-27): S12R-01's
+  item-4 truncation limb, and S12R-18's settle-criterion reduction rule. Neither may be decided
+  in code.
+- Then Stage 3 (raw-ADC exact-grid reprocessing), which is still gated on this review closing.
+

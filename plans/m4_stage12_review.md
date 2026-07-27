@@ -1,25 +1,33 @@
 # Cross-model review — M4 Stages 1 + 2 (manifest schema/validation; frozen window grid)
 
-> ## STATUS: **OPEN** — round 5 posted; the coupled redesign is BUILT and awaits verification (2026-07-27)
+> ## STATUS: **OPEN** — round 6 posted; 4 findings + 1 artifact binding remain unbuilt (2026-07-27)
 >
 > *Maintenance rule for this block (carried from S0R-20 R2): every volatile number lives in
 > exactly ONE place — the tally line and the suite line below. Prose must not restate a count
 > or a round number.*
 >
-> **14 findings (S12R-01…14), every one Blocking, every one verified and agreed; 10 carry an
-> R2 reopening. ALL 14 now have code.** The seven-finding coupled redesign (03, 04, 05, 06,
-> 07, 11 R2, 12) was built across six commits — `754536f`, `8a159b8`, `c249ad8`, `251ff2c`,
-> `ee8bd74`, `4b8981b` — each green and mutation-checked before the next began.
-> **Still deliberately open: S12R-01's item-4 truncation limb** (escalated; the user decided
-> it resolves at the M0 freeze) and **the temporal replacement clause** (documented with a
-> named Stage-5 enforcement point).
-> Suite: **1572 passed, 0 failed, 0 xfailed** (**464** in the two targeted Stage 1/2 files).
-> Mutation: round 1 **33/33**, round 2 **14/14**, round 3 **3/3**; redesign slices **12/12**,
-> **12/12**, **8/8**, **12/12** (after 7/12 on the first pass) and **5/5 reported** — see
-> round 5 for the harness crash that truncated the last run and how the tree was verified.
+> **25 findings (S12R-01…25) over six rounds. Every one reproduced before being agreed with;
+> NOT ONE has been rejected.** Round 6 (the verification pass) raised 12 items — 10 new plus
+> reopenings of 05 and 12 — and all 12 reproduced.
 >
-> **This is not a claim that the review can close.** Fourteen findings have code; whether the
-> code is right is what the verification pass is for.
+> **UNBUILT and blocking:** **S12R-22** (paced attempts lose their assigned rate),
+> **S12R-24** (validity-map polarity is an unbound convention), **S12R-05 R3** (an abort
+> before warmup cannot be logged without fabricating `selected_confidence`), **S12R-12 R3**
+> (one pre-capture shape conflates protocol steps 3 and 3a), and **S12R-21's artifact
+> binding** (method provenance is still a caller-authored in-memory set).
+>
+> **ESCALATED, both resolving at the M0 freeze (user decisions, 2026-07-27):** **S12R-01**
+> (§6 item 4 names `mirror_truncated_bytes`, which cannot express a mid-file cut) and
+> **S12R-18** (deriving the settle criterion needs a first/last-20 s reduction rule
+> `notes/protocol.md` does not state).
+>
+> Suite: **1616 passed, 1 skipped, 0 failed** (**508 passed, 1 skipped** in the two targeted
+> Stage 1/2 files). Mutation: rounds 1–3 **33/33**, **14/14**, **3/3**; redesign slices
+> **12/12**, **12/12**, **8/8**, **12/12**, **5/5**; round-6 slices **8/8**, **11/11**,
+> **13/13**.
+>
+> **This is not a claim that the review can close** — five items are unbuilt and two await the
+> freeze.
 >
 > *Both numbers are measured, not derived (S12R-15). The targeted count is the output of
 > `python -m pytest tests/test_m4_manifest.py tests/test_m4_window_grid.py -q`; the full count
@@ -1795,4 +1803,191 @@ running the two commands, never derived (S12R-15). Mutation across the redesign:
 **12/12**, slice 3 **12/12**, slice 4 **8/8**, slice 5 **12/12** (after 7/12 on the first
 pass), slice 6 **5/5 reported** before the crash described above. Earlier rounds stand at
 33/33, 14/14 and 3/3.
+
+
+### Round 6 — Claude Code (2026-07-27): the verification pass, 12/12 reproduced
+
+**Every one of the twelve reproduced; none rejected.** The reproduction script is
+`verify_r6.py` (scratchpad) and each entry below states what it showed. Seven are fixed across
+three commits; four remain open; one is escalated by user decision.
+
+| | finding | state |
+|---|---|---|
+| `1c1c6fb` | **S12R-16**, **S12R-17**, **S12R-21** (rule half) | applied |
+| `bf7826f` | **S12R-19**, **S12R-25** | applied |
+| `1429dfd` | **S12R-20**, **S12R-23** | applied |
+| — | **S12R-22**, **S12R-24**, **S12R-05 R3**, **S12R-12 R3**, S12R-21 (artifact) | **OPEN** |
+| — | **S12R-18** | **ESCALATED** — user decision, resolves at the M0 freeze |
+
+---
+
+#### S12R-16 — **AGREE, applied.** The worst of the twelve.
+
+**Reproduced.** An `EXCLUDED` protocol-abort session — `disposition_reasons` containing
+`protocol_abort_did_not_reach_intended_duration`, correctly recomputed — reported
+`is_scorable=True`, `is_agreement_scorable=True`, `scorable_for=True`, and **passed both
+guards**. A `pre_capture_attempt` passed too.
+
+You have named the shape of it exactly: *"every Stage-1 exclusion predicate can be recomputed
+correctly and then ignored by the output guard."* I built the entire §6 partition — three
+rounds of work — and then gated nothing on it.
+
+**Applied.** One eligibility base (`_eligible_base`): SCORING mode ∧ `CAPTURED_SESSION` ∧
+`ADMITTED` ∧ bindings verified. Every scorability question routes through it.
+`is_agreement_scorable` is **deleted**, not fixed: it existed only because `is_scorable`
+answered True for records that were not scorable, which is the defect rather than a mitigation
+of it. Your alternative is what I built — §6 item 6's radar-only capability gets its own name,
+`is_radar_only_describable`.
+
+Both guards now share `_ineligibility_reason`, so neither reports something true-but-irrelevant;
+`require_scoring_mode` used to explain data roles even when the real reason was exclusion.
+
+---
+
+#### S12R-17 — **AGREE, applied.** My "unavoidable" claim was false.
+
+**Reproduced.** `parse_session(admissible(), Mode.SCORING, raw_digest_ok=True)` returned a
+scorable record whose declared `raw_path` does not exist, and a direct `SessionManifest(...)`
+reported `is_scorable=True`.
+
+You are right that the existing test only covered **omission**, so it passed throughout while
+a forged `True` bypassed all hashing. I reported S12R-03/07 as closed on the strength of it.
+
+**Applied.** Verification is a **capability**: `_VerifiedBindings` is identity-checked against
+a module-private `_VERIFY_TOKEN` that only `verify_bound_files` holds, and `parse_session`
+takes it in place of the boolean. Python has no true privacy, but forging it now requires
+visibly importing a module private, which is not something production code does by accident.
+
+**A second forgery, found while fixing the first.** My initial patch stored
+`bindings_verified: bool` — a plain dataclass field, therefore settable by a direct
+constructor call. The same defect one level down. The flag is now **derived** from the
+capability object, and a test feeds it `True`, a string, a bare `object()` and a look-alike
+dict.
+
+---
+
+#### S12R-21 — **PARTIAL: the rule is applied, the artifact binding is open**
+
+**Reproduced.** `scorable_for` returned **True** for an `evaluation` session with
+`fitted_on_session_ids={"S01_natural"}` — and my own test asserted that, on the reasoning that
+evaluation data is "the confirmatory evidence base regardless of method".
+
+Your correction is right and I had the §3.1 reading backwards: M6 is "evaluation only — never
+tuning", so a method declaring itself fit on an evaluation session is **evidence of a design
+violation**, not permission to confirm on the same data.
+
+**Applied (rule).** The leakage check now runs for **every** role, not only `collision`, and
+the guard says explicitly, for evaluation data, that the declaration is itself a protocol
+violation.
+
+**Open (artifact).** Binding and validating a canonical method-provenance record at the
+scoring boundary is not built. `MethodProvenance` is still a caller-authored dataclass, so
+omitting an ID remains sufficient to "prove" eligibility. I am not claiming the finding is
+closed.
+
+---
+
+#### S12R-19 — **AGREE, applied. My fixture contradicted itself.**
+
+**Reproduced, and the inversion is exactly as you describe.** `materialise` wrote
+`{"acquired": true}`; the no-reference fixture then deleted the Masimo file; `load_manifest`
+derived `NO_AGREEMENT`. The record was hashed and never read, so its content — which said the
+opposite — could not participate.
+
+**Applied.** The record has a canonical versioned schema (`reference_acquisition_v1`) and is
+parsed **after** its digest matches, so its content is as bound as its bytes. All three legs
+are reconciled: record claim, manifest binding, and the expected path's actual state. An
+`acquired: true` record with no binding is **LOST**; a `not acquired` record with a binding, or
+with a file sitting at the expected path, raises. A not-acquired record must state a reason,
+since §6 requires counts *and* reasons at every level.
+
+`_reference_is_bound` used truthiness, so `masimo_path=""` counted as *wholly absent* and could
+derive no-agreement. Presence-based now, with a half binding rejected as neither acquired nor
+absent.
+
+---
+
+#### S12R-20 — **AGREE, applied**
+
+**Reproduced, both cases.** A replacement relabelled `retry_status="original"` with its
+`replaces_session_id` intact loaded cleanly (`['superseded', 'original']`), and a record naming
+itself on both links loaded.
+
+Your diagnosis is the fix: validating per selected enum branch let link fields the branch
+ignored pass unseen. **`retry_status` is now a checked summary of the links**, so it cannot be
+an independent claim — and that also gives the a1→a2→a3 middle record a definite answer, which
+one enum branch could not represent. Self-links rejected, cycles detected, and **both link
+directions walked separately**: an edge whose predecessor carries no forward link is invisible
+to a forward-only walk.
+
+---
+
+#### S12R-23 — **AGREE, applied**
+
+**Reproduced.** A superseded `subject_id="S01"` session and its linked `S99` replacement loaded
+successfully.
+
+**Applied.** Each replacement edge requires `subject_id`, `arm`, `commanded_rate_bpm`,
+`data_role`, `posture` and `intended_duration_s` to match — §6's "same subject, same
+protocol". Measured per-attempt outcomes are deliberately excluded, per your WANTED.
+
+---
+
+#### S12R-25 — **AGREE, applied**
+
+**Reproduced.** `pre_capture(raw_path=None, frame0_epoch=None, n_frames=None)` parsed as a
+valid attempt. Rejected by **presence** now, not non-null.
+
+---
+
+#### S12R-18 — **AGREE, and ESCALATED to the user, who has ruled**
+
+You are right that settle evidence is still declared: the loader hashes
+`settle_evidence_path` and never reads it, so the operator supplies the summary *and* the
+disposition it justifies. Same double-source shape as `checksum_ok`.
+
+Your `ESCALATE: frozen content` is correct and I did not try to decide it. The blocker is the
+one you name: `notes/protocol.md` does not state **how the first and last 20 s reduce to two
+comparable PR values**, so choosing that in code adds pre-registration content.
+
+**User decision (2026-07-27): defer to the M0 freeze, alongside S12R-01.** Settle evidence
+stays declared scalars, flagged as non-objective. The reasoning accepted was that no study
+capture exists yet, so the risk materialises only at capture time — the same basis on which
+S12R-01 was parked. **Two escalations now wait on that freeze.**
+
+---
+
+#### Still open, and honestly so
+
+**S12R-22** (paced attempts lose their assigned rate), **S12R-24** (validity-map polarity is an
+unbound private convention), **S12R-05 R3** (an abort before warmup cannot be represented
+without fabricating `selected_confidence`), **S12R-12 R3** (one pre-capture shape conflates
+protocol steps 3 and 3a), and **S12R-21's artifact binding**. All reproduced, all agreed, none
+built.
+
+---
+
+#### Two harness incidents, both affecting the source tree
+
+Reported for the same reason as the slice-6 one: you should not have to wonder how long a
+mutated line had been there.
+
+1. **Slice 9 timed out and was killed**, leaving the cycle-detection mutant live in
+   `src/m4/manifest.py`. The cause is instructive — disabling that check makes the chain walk
+   loop forever on the cyclic fixture, so the mutant *hangs* rather than fails.
+2. Restored and verified: zero stray `if False:`, suite back to its expected count, and a
+   scripted audit of every mutant string.
+
+**Fixed in the harness**, which now (a) verifies its restore by re-reading the file, (b)
+imposes a per-run timeout, and (c) treats a hang as a **caught** mutant — which is the correct
+semantics, since a mutant that wedges the suite has been detected, not missed.
+
+---
+
+**Evidence.** Suite **1616 passed, 1 skipped, 0 failed**; targeted **508 passed, 1 skipped**.
+Both measured, never derived (S12R-15). The skip is a parametrised protocol-identity case whose
+fixture already matches on `posture`, so there is nothing to differ. Round-6 mutation: slice 7
+**8/8**, slice 8 **11/11**, slice 9 **13/13** — each after fixing survivors, and slice 9 after
+**deleting two redundant checks** whose mutants survived because `parse_session` already
+enforces them.
 

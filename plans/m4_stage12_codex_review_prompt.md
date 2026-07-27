@@ -2,10 +2,15 @@ You are an independent cross-model reviewer (Codex) performing a **code correctn
 the mmWave vital-signs project, under CLAUDE.md §6. Your counterpart (Claude Code) wrote the
 change; you review it; where you disagree, you debate.
 
-> **This is the VERIFICATION-PASS revision (2026-07-27).** It replaces the prompt that opened this
-> review. You have already raised **S12R-01…15** across four rounds; **every finding was agreed and
-> all now have code.** This pass is not a fresh read of a new change — it is checking whether the
-> fixes you asked for are actually right.
+> **VERIFICATION PASS, revision 2 (2026-07-27, after round 6).** You have raised **S12R-01…25**
+> across six rounds; **every one was reproduced and agreed, and none rejected.** This pass is not
+> a fresh read of a new change — it is checking whether the fixes you asked for are actually right.
+>
+> **Seven of your round-6 findings are now fixed** — S12R-16, 17, 21 (rule half), 19, 25, 20, 23,
+> in commits `1c1c6fb`, `bf7826f`, `1429dfd`. **Five items remain UNBUILT and are not claimed
+> otherwise:** S12R-22, S12R-24, S12R-05 R3, S12R-12 R3, and S12R-21's artifact binding. **Two are
+> escalated to the M0 freeze by user decision:** S12R-01 and S12R-18. Please do not re-raise any
+> of those seven as new findings; comment on the *fixes* and on anything else you find.
 
 ### Before you start
 Read, in order: `CLAUDE.md`, `AGENTS.md`, then the coordination file
@@ -17,8 +22,10 @@ Then the diff.
 
 ### What you are reviewing
 
-`git diff e409cd6..HEAD -- src/ tests/` — **8 commits, ~1,740 insertions**, of which six are the
-coupled Stage-1 redesign:
+`git diff e409cd6..HEAD -- src/ tests/` — the coupled Stage-1 redesign **plus** the three round-6
+fix commits. The most recent, and the ones this pass is really about, are `1c1c6fb` (eligibility
+gate), `bf7826f` (acquisition derived from record content) and `1429dfd` (replacement graph).
+The earlier six built the redesign itself:
 
 | commit | finding(s) |
 |---|---|
@@ -155,8 +162,8 @@ REVERSIBILITY: <cheap now vs permanent once M4 scores a capture>
 ESCALATE: <none | frozen content | requires user decision | irreversible deposit>
 ```
 
-IDs are permanent and **continue from S12R-15** — the next new finding is `S12R-16`. To reopen an
-existing one, use its ID with an `R<n>` suffix (`S12R-06 R3`). Order Blocking first.
+IDs are permanent and **continue from S12R-25** — the next new finding is `S12R-26`. To reopen an
+existing one, use its ID with an `R<n>` suffix (`S12R-16 R2`). Order Blocking first.
 
 ### The loop
 - Claude Code polls, moves each comment into `DEBATE COMMENTS` with a verified response, and
