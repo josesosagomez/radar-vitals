@@ -1,0 +1,127 @@
+# scripts/live_demo_config.yaml
+# Live / replay demo configuration.
+# Heart settings copied verbatim from steps/step_6/config_hop1_win30_safe.yaml.
+# Hardware profile / frame settings copied from steps/step_1/capture_config.yaml.
+
+paths:
+  manifest: data/manifest.local.csv
+  results_dir: results/live_demo
+
+session:
+  default_session_id: test3      # used for replay defaults only
+  locked_bin: null               # null = load from manifest by session_id
+  frame_rate_hz: 20.0
+  window_s: 30.0
+  hop_s: 3.0
+  display_history_s: 120
+
+protocol:
+  subject_distance_m: [0.8, 1.4] # seated chest distance; warmup searches bins ~19-32 at 0.0436 m/bin
+
+bin_selection:
+  enabled: true
+  candidate_bins: null                      # null = derive from protocol.subject_distance_m + profile.range_resolution_m
+  energy_eligibility_min_settled_db: -12.0   # a bin's hr_valid pass is only eligible to win if its settled energy is within this many dB of the strongest candidate; ineligible bins can win only if no eligible candidate's DSP succeeds. Empirical, validated on 4 sessions / 1 subject (2026-07-14/15) under the protocol scene (single seated subject = dominant in-gate reflector) — re-validate against the 10-subject study, not yet tested with competing reflectors (chair, second person, moving object) inside the gate.
+  settle_skip_s: 5.0                        # eligibility energy measured on warmup frames after this many seconds, so a settling transient cannot inflate a skirt bin past the gate
+
+display:
+  matplotlib_backend: QtAgg      # pyside6 is pinned in environment.yml
+  backend_fallbacks: [TkAgg]
+
+capture:
+  continuous_num_frames: 0       # TI frameCfg: 0 = continuous until stopped
+  record_raw_stream: true
+  raw_stream_format: adc_bytes_no_packet_headers
+  intermediates_checkpoint_windows: 20   # 20 hops x 3 s = NPZ flushed every 60 s
+  max_live_duration_s: null      # null = run until Ctrl-C
+  replay_shard_limit: 20
+
+# Minimal profile used by ChirpConfig and DSP (range resolution, IQ convention).
+profile:
+  num_adc_samples: 256
+  num_rx: 4
+  num_chirps_per_frame: 32
+  range_resolution_m: 0.0436
+  iq_swap: true                  # SDK adcbufCfg SampleSwap=1 (Python captures)
+
+# Full hardware profile for IWR1642.configure() — must match capture_config.yaml exactly.
+hw_profile:
+  start_freq_ghz:      77.0
+  idle_time_us:        7.0
+  adc_start_time_us:   5.0
+  ramp_end_time_us:    57.0
+  freq_slope_mhz_us:   70.006
+  num_adc_samples:     256
+  dig_out_sample_rate: 5209      # ksps
+  rx_gain_db:          30
+  rx_channel_en:       15        # 0xF = all 4 RX
+  tx_channel_en:       1         # TX0 only
+  num_rx:              4
+
+# Frame config for IWR1642.configure().
+hw_frame:
+  num_loops: 32                  # chirps per frame
+  period_ms: 50.0                # 20 Hz frame rate
+
+phase:
+  method: delta_before_mean
+  impulse_clip_rad: 1.5
+
+respiration:
+  band_hz: [0.10, 0.50]
+  max_harmonics: 3
+  harmonic_max_hz: null
+  detrend: linear
+  stft_subwindow_s: 10
+  stft_overlap: 0.5
+  fft_ha_agree_bpm_high: 2.0
+  fft_ha_agree_bpm_medium: 4.0
+  stft_std_high_bpm: 2.0
+  stft_std_medium_bpm: 4.0
+  fft_fallback_snr_db: 6.0
+  # M2 STFT-consistency gate (plans/m2_respiration_fix.md §2.3): STFT stability may
+  # support a fusion branch only if its median matches the selected value within
+  # stft_match_bpm (= one 10 s-subwindow FFT bin, 60/stft_subwindow_s) and covers at
+  # least stft_min_valid_fraction of subwindows.
+  stft_match_bpm: 6.0
+  stft_min_valid_fraction: 0.5
+  emit_low_confidence: false
+
+# Validated hop-1, 30 s configuration — copied from config_hop1_win30_safe.yaml.
+heart:
+  band_hz: [0.8, 2.0]
+  k_max: 6
+  ahet_deviation_hz: 0.1
+  # EXPERIMENT ARM B (exp_eca_modes). This is the treatment config: the only
+  # intended difference from scripts/live_demo_config.yaml is eca_mode below.
+  # Arm A is the production config unchanged (skip_forbidden_harmonics_v1), whose
+  # inertness is now MEASURED, not assumed: across 1001 in-band respiratory
+  # harmonics in the three 2026-07-26 replays, median attenuation was 0.000 dB and
+  # the largest single attenuation was 0.018 dB.
+  eca_mode: guard_cardiac_candidate_v1
+  eca_forbidden_guard_hz: 0.0
+  eca_cardiac_guard_hz: 0.10   # guard_cardiac_candidate_v1: spare harmonics within this
+                               # distance of the cardiac candidate; cancel all others
+  k_max_cap: 10                # upper bound on the per-window derived k_max
+                               # (k_max_eff = min(k_max_cap, floor(band_hi / f_r)))
+  ahet_gate_mode: strict_v1
+  candidate_min_second_harmonic_ratio_db: 1.0
+  candidate_min_prominence: 3.0
+  low_candidate_hz: 1.20
+  high_candidate_preference_hz: 1.25
+  high_competitor_min_mag_ratio: 0.80
+  candidate_min_peak_to_floor_db: 2.0
+  low_candidate_min_peak_to_floor_db: 4.0
+  online_smoother_n: 5
+
+network:
+  dca1000_ip: "192.168.33.180"
+  host_ip: "192.168.33.30"
+  cmd_port: 4096
+  data_port: 4098
+
+uart:
+  port: "COM7"                   # verify in Windows Device Manager before demo
+  baud: 115200
+
+seed: 42
