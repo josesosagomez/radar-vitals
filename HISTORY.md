@@ -6699,3 +6699,127 @@ whether the seven-finding redesign it had ordered was actually correct — and f
   in code.
 - Then Stage 3 (raw-ADC exact-grid reprocessing), which is still gated on this review closing.
 
+## 2026-07-27 (evening) - Scope pivot away from M4/M0; ECA coverage root-cause measured;
+bin-drift diagnostic built, reviewed, and run
+
+**Set out to do:** the user does not have time to complete the M4 manifest/M0 Zenodo-freeze
+path. Re-scoped the remaining work to two things: (1) implement and compare the two theoretical
+reference papers (M8 Ahmed harmonic accumulation, M9 Kotte), (2) raise HR coverage. A capture
+plan for 3-5 more subjects was agreed (still to be executed — no new subjects captured this
+session). **M4 Stage 1's review (S12R-01...25) is explicitly deprioritized, not closed** — the
+open items in the entry above are unchanged and still unbuilt.
+
+**Worked (with evidence):**
+
+- **Production ECA (`skip_forbidden_harmonics_v1`) confirmed inert, measured not inferred.**
+  Across 1001 in-band respiratory harmonics (k·f_r landing in the 0.8-2.0 Hz cardiac band) over
+  the three 2026-07-26 post-filter-fix replays (massimo1/massimo2/sweep): median attenuation
+  **0.000 dB**, worst single case 0.018 dB, 0/1001 harmonics attenuated by more than 1 dB.
+  Matches the config comment's own claim ("cancels nothing in the cardiac band") but this is the
+  first direct measurement of it.
+- **`guard_cardiac_candidate_v1` genuinely cancels and improves coverage, promotion still
+  blocked by its own precondition.** Created `experiments/exp_eca_modes/config_guard_v1.yaml`
+  (the exact directory the production config comment names as the blocker) and replayed all
+  three Masimo-referenced captures with `eca_mode: guard_cardiac_candidate_v1`, bin **pinned**
+  to the production lock (27/26/26) so `eca_mode` was the only variable (a free-warmup replay of
+  massimo1 under the new mode moved the lock 27->25, confirming the "estimator changes can move
+  the lock" HANDOFF gotcha live). Result: attenuation -2.7 to -6.0 dB (real cancellation) and
+  coverage up in all three sessions (17.6%->21.6%, 54.9%->70.6%, 23.2%->27.8%). **Not yet
+  promoted to `scripts/live_demo_config.yaml`** — selected on mechanism + coverage only, never
+  on Masimo agreement (CLAUDE.md §4), so the coverage gain is not yet verified as *correct*; that
+  needs an offline scoring script that does not exist yet.
+- **The dominant coverage bottleneck is AHET's `ratio_db_low` gate, and it is not a threshold
+  problem.** 35-67% of all attempted candidate slots fail there across the three sessions, with
+  a median shortfall of 4.2-6.6 dB below the 1.0 dB requirement (p90 up to 11.6 dB) — too far to
+  recover by relaxing the threshold without disabling the gate outright. Fixing ECA barely moved
+  this (massimo1: 48->48 slots unchanged; others dropped ~13%), refuting the hypothesis that
+  uncancelled respiration was inflating the noise floor driving this gate. massimo1's other
+  major loss (52% of dead windows, `gate_not_run`) is upstream of AHET entirely (`f_r_hz`
+  invalid) and untouched by either fix.
+- **Range-bin drift diagnostic designed, cross-reviewed (3 rounds, Codex, CLOSED with
+  `NO MORE COMMENTS`), implemented, and run on all 4 captures.** Plan at
+  `plans/bin_drift_diagnostic.md`; review record at `plans/bin_drift_diagnostic_cross_review.md`
+  (BDR-01...10 plus R2/R3 reopenings, every finding verified against code/data before being
+  agreed or escalated — several rounds caught real defects in the *previous* round's own fix,
+  including a circular baseline check, an impossible two-resolution warmup validation for a
+  legacy-schema session, an understated memory claim later corrected by direct measurement, and
+  a geometrically-unachievable test premise caught only once actually implemented and run). Two
+  genuine design choices were escalated rather than decided in review and resolved by the user
+  (2026-07-27): **BDR-04 Option A** (purely exploratory — a frozen sensitivity grid, duration
+  `{2,5,10}s` x centroid `{0.3,0.5,1.0} bin`, never a single automatic threshold) and **BDR-07
+  Option A** (`live_test1` gets a baseline-only measurement; no replay generated for it, since
+  the three existing comparison replays were made at commit `5537df5` with an unrecoverable
+  dirty diff and current HEAD had already moved past it).
+  - Implemented as `scripts/diagnose_bin_drift.py` + `scripts/diagnose_bin_drift_config.yaml`
+    (a real tracked, hashed input — not a post-hoc output record) + `tests/test_diagnose_bin_drift.py`
+    (34 new tests, all passing; full suite 1650 passed / 1 skipped, no regressions).
+  - **Run on all 4 real captures from a clean tree** (`results/diagnose/bin_drift/20260727T192643Z/`).
+    Every internal sanity check passed: the warmup-recompute check matched the persisted
+    `warmup_bin_selection.json` exactly at every resolution each session's own JSON schema
+    supports (`live_test1`'s legacy JSON correctly reported
+    `not_available_legacy_schema` rather than a fabricated match); trailing-block discard counts
+    matched the independently-verified remainders (10/11/11/15 frames) exactly; the diagnostic's
+    own recomputed baseline argmax/rank reproduced this session's earlier ad-hoc coverage-attribution
+    numbers exactly (massimo1 rank 6, live_test1 rank 5, massimo2/sweep rank 1); the sweep
+    session's logged peak working set (7.05 GB) independently reproduced the earlier one-off
+    scratch measurement (6.96 GB) to within ~1%, promoting that figure from preliminary to bound
+    evidence per the plan.
+  - **Evidence (not a verdict, by design):** all four sessions show frequent short (mostly <2s)
+    argmax flicker between the baseline bin and immediate neighbours (episode counts at the 2s
+    grid point: 13-15 for the three sessions where baseline != lock, 3 for the one where they
+    agree), essentially none survive at 5s (0 of 4 sessions, except massimo2's 2), and none reach
+    10s in any session. Trailing-vs-leading centroid drift is small everywhere (<1 bin in all
+    four sessions). This is temporal association evidence only, exposure-stratified and
+    non-pooled across sessions (n=1 subject) — whether it justifies building the 5-bin relock
+    tracker is left to the user to read and decide, not automated.
+- **Two generic, reusable cross-review prompt templates written**, generalizing the
+  plan/session-specific ones this project had accumulated: `plans/codex_review_prompt_template.md`
+  and `plans/claude_review_loop_prompt_template.md` (placeholder-driven, same COMMENTS OF
+  CODEX/DEBATE COMMENTS coordination-file convention, same hard constraints — CLAUDE.md §4,
+  conda/matplotlib gotchas, escalate-vs-decide). Proven out this session by instantiating them
+  for the bin-drift review, which ran three real rounds to closure.
+
+**Failed / did not work, and why:**
+
+- **My own round-1 and round-2 fixes to the bin-drift plan each introduced a new defect that
+  round 2/3 caught.** Round 1's "block 0" warmup sanity check compared a 20-frame block against
+  600- and 500-frame JSON statistics (couldn't match either); the settling-interval exclusion
+  (frames 0-99) left frames 100-599 — used to fit the very baseline being tested — eligible to
+  register as "drift" against themselves. Round 2's fix to that introduced its own gap: the new
+  "diagnostic run configuration" was hashed into the *output* `summary.json` after the fact,
+  which documents what happened, not what was prospectively bound to happen — not reproducibility
+  in any sense that matters. Round 2 also stated a "~2.5 GB peak memory" precondition that was
+  the decoded cube's size, not the decode peak; direct measurement showed the true peak is ~3x
+  higher (6.96 GB). Recorded here, not just fixed, because CLAUDE.md's own working-method lesson
+  from the M4 review ("building a rule is not enforcing it," "a first sign-off is provisional")
+  applied again, on a much smaller review.
+- **My own §7.1 test-plan text asserted a geometrically impossible claim**, only caught while
+  writing the actual test: "an episode confined to windows 2-4 is excluded from the
+  full-exposure primary report." Given the frozen 30s-window/3s-hop grid, the first
+  full-exposure window (index 10) necessarily spans *exactly* the first 30 post-calibration
+  seconds by construction, so it always also observes any early excursion. Fixed the test to
+  assert what the exposure-stratification fix actually guarantees (a normalized fraction, not
+  raw-second comparability) rather than an unachievable exclusion, and corrected the plan text
+  to match — not a new Codex finding, a self-caught error during implementation.
+
+**Retired / no longer used:** nothing removed this session; M4 Stage 1's unbuilt items
+(S12R-22/24/05 R3/12 R3/21) and its two frozen escalations (S12R-01, S12R-18) are untouched and
+still open, just not the active focus.
+
+**Next:**
+
+- Read the bin-drift evidence (`results/diagnose/bin_drift/20260727T192643Z/*/summary.json` +
+  `drift_overview.png`) and decide whether it justifies building the 5-bin relock tracker.
+- Capture the agreed 3-5 additional subjects.
+- Build the minimal offline scoring script (replaces M4 Stages 3-8 for this narrower scope) —
+  needed both to verify whether `guard_cardiac_candidate_v1`'s coverage gain is actually correct,
+  and for every M8/M9 comparison.
+- M8 step 1a: implement the Ahmed et al. paper's own signal model (single TX/RX, 2f_h/2f_b
+  harmonic indexing) faithfully, before step 1b's adaptation to this project's all-harmonic
+  phase formulation.
+- M9: the 1x20-RX/N_c=16 reproduction control, then the 4-RX rank-deficiency ablation — cheap,
+  and the rank-deficiency argument (`rank(R_t) <= 4` at `n_R=4`, R_t singular) is already a
+  strong candidate negative result.
+- None of this session's new files are committed yet (`experiments/`, `plans/bin_drift_*`,
+  `plans/*_prompt_template.md`, `scripts/diagnose_bin_drift*`, `tests/test_diagnose_bin_drift.py`).
+
