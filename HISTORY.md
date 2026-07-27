@@ -6411,3 +6411,69 @@ with a named negative test per rule (M4R-04), and development mode separated so 
 scoring output. Then stages 2–7, then the stage-8 development-mode smoke run on the 3 captures.
 Still open and unchanged: the "34 % of hops" paced-16 decoy figure, M2 done-when #5, and the fact
 that no frozen scoring number can come from the 4 existing captures (no persisted `frame0_epoch`).
+
+---
+
+## 2026-07-27 - M4 Stages 1 + 2 built; three of my admission rules contradicted a frozen doc
+
+**Set out to do:** begin M4 proper. Batch Stages 1 (manifest schema + validation) and 2 (the
+frozen window grid), then open their CLAUDE.md §6 review before Stage 3.
+
+**Worked (with evidence):**
+
+- **`src/m4/manifest.py` (Stage 1, plan §4/§4.1/§7 row 1).** All six §4 field groups, controlled
+  vocabularies (arm, data role per `analysis_prespec.md` §3.1, admission, retry status), and the
+  M4R-04 headline: M4 recomputes the admission disposition from the primitive fields and **raises
+  if it disagrees with the operator verdict in either direction**. Operator-excluded-but-M4-admitted
+  is equally a disagreement — silently accepting it would drop a session for an unrecorded reason.
+- **`src/m4/window_grid.py` (Stage 2, plan §6.1).** Transcribed from the FROZEN
+  `notes/analysis_prespec.md` §7, which I re-read before coding and confirmed the plan matches.
+  Half-open frame intervals `[k·600, (k+1)·600)`; `k = 0` scored; complete windows only;
+  reference span `E(i) = frame0_epoch + i/fs`, half-open at the upper end.
+- **Yields hand-checked against the frozen arithmetic**: 180 s → 6, 480 s → 16, 600 s → exactly
+  20, and the three real captures' frame counts → 6 / 6 / 16. Fractional `frame0_epoch` tested
+  explicitly, including a sweep asserting the partition property (no integer second lands in two
+  windows; none inside the grid lands in none).
+- **Every rule mutation-checked before opening the review**, not after being asked: 29 mutants,
+  each disabling exactly one rule, **all 29 caught by a failing test** — including flipping the
+  reference span from half-open to closed, the window count from floor to ceiling, and two
+  *regression* mutants restoring the pre-fix admission behaviour.
+- Suite **1108 → 1240**, 0 failed. Commits `b5f6b1e` (build), `1a3e2d3` (correction), `415416c`
+  (review opened).
+
+**Failed / did not work, and why:**
+
+- **Three of roughly nine admission predicates contradicted the FROZEN `analysis_prespec.md` §6.**
+  I wrote them from plan §7 row 1, which enumerates the *causes* to check; §6 defines what each
+  cause *decides*. Found only when I read §6 line by line while preparing the review brief:
+  - *Packet loss*: I excluded on any loss. §6 item 4 says loss above `n_dropped/n_received > 5 %`
+    **flags** the session and "does not by itself exclude it; the per-frame validity map decides
+    which windows are radar-NaN."
+  - *Truncation*: I excluded on any truncation. §6 item 4 retains a session that reached its
+    intended duration "with all complete windows plus an incomplete trailing partial window —
+    that tail window is simply unscored."
+  - *Early stop vs duration*: I had two overlapping reasons. The M3R-37 discriminator is a single
+    question — did the run reach its intended duration?
+  **All three erred in the same direction: more aggressive than the frozen rule.** That is the
+  dangerous direction. An over-exclusion looks like caution while silently removing sessions from
+  a pre-registered analysis for a reason nobody recorded. I also had invented an exclusion rule
+  (`validity_map_inconsistent_with_packet_loss`) that appears nowhere in §6.
+- **The mutation harness did not catch any of this, and could not.** All 22 mutants passed
+  against the wrong rules. Mutation testing proves each rule has *a* test that depends on it; it
+  says nothing about whether the test asserts the *right* semantics. Three rules were confidently,
+  thoroughly tested against the wrong specification.
+- **One test was wrong rather than the code**: I asserted `30.0 × 20.5` must be rejected as a
+  non-integer frame grid, but 615.0 is an integer. Kept 20.5 as an accepted case and used
+  genuinely non-integral ones.
+
+**Retired / no longer used:** the `packet_loss_frames` manifest field (replaced by
+`packets_received` / `packets_dropped`, the ratio §6 actually names); the exclusion rules
+`raw_truncated`, `packet_loss_detected`, `actual_duration_below_intended`, `early_stop` and
+`validity_map_inconsistent_with_packet_loss`, all superseded by the §6-faithful predicates.
+
+**Next:** the Stages 1+2 cross-review (`plans/m4_stage12_review.md`) must close before Stage 3.
+Open question raised there rather than guessed: §6 item 6 makes a wholly missing Masimo file a
+separately-logged **no-agreement** session, but the schema requires `masimo_path` in scoring mode,
+so such a session cannot be loaded at all — Stage 1 defect, or correctly deferred to Stage 4/5?
+Then Stage 3 (raw-ADC exact-grid reprocessing) alone, then Stage 4 (reference aggregation + gates),
+which triggers a mandatory §6 Masimo review.
