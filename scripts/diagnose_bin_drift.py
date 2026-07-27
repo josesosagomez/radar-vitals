@@ -185,8 +185,17 @@ class DiagnosticConfig:
     offset_phases: tuple[int, ...]
     duration_grid_s: tuple[float, ...]
     centroid_grid_bins: tuple[float, ...]
+    #: Support (seconds) for the trailing/leading centroid-drift statistic
+    #: (BDR-23) -- governs `trailing_leading_centroid_medians`; was a hardcoded
+    #: 10.0 literal until this field existed.
+    centroid_summary_span_s: float
     require_clean_tree: bool
     preflight_min_available_gb: float
+    #: Maps a capture's raw adc_stream.bin SHA-256 to the SHA-256 of the ONE
+    #: approved replay's run_metadata.json for that capture (BDR-20). Checked
+    #: by `match_replays_to_captures` before any replay's DSP outcomes are
+    #: used -- a replay matching raw bytes but not this hash is rejected.
+    approved_replays: dict
     raw: dict = field(repr=False)
 
 
@@ -204,8 +213,10 @@ def load_diagnostic_config(path: Path) -> DiagnosticConfig:
         offset_phases=tuple(int(p) for p in cfg["offsets"]["phases"]),
         duration_grid_s=tuple(float(x) for x in cfg["sensitivity_grid"]["duration_s"]),
         centroid_grid_bins=tuple(float(x) for x in cfg["sensitivity_grid"]["centroid_drift_bins"]),
+        centroid_summary_span_s=float(cfg["centroid"]["summary_span_s"]),
         require_clean_tree=bool(cfg["provenance"]["require_clean_tree"]),
         preflight_min_available_gb=float(cfg["memory"]["preflight_min_available_gb"]),
+        approved_replays=dict(cfg.get("approved_replays") or {}),
         raw=cfg,
     )
 
@@ -274,6 +285,15 @@ def compute_centroid(power_by_bin: dict[int, float]) -> float:
     if total <= 0:
         return float("nan")
     return sum(b * p for b, p in power_by_bin.items()) / total
+
+
+def rank_of_bin_in_profile(profile: dict[int, float], bin_id: int) -> int:
+    """1-indexed rank of `bin_id` by descending energy within `profile`
+    (BDR-21) -- ties broken by ascending bin index for a deterministic order.
+    Used to rank the locked bin within the diagnostic's OWN settled baseline
+    profile, not the full-buffer warmup-JSON rank (a different quantity)."""
+    ordered = sorted(profile.keys(), key=lambda b: (-profile[b], b))
+    return ordered.index(bin_id) + 1
 
 
 def compute_baseline(cube: np.ndarray, candidate_bins: list[int],
@@ -469,13 +489,15 @@ def trailing_leading_centroid_medians(blocks: BlockSeries, cfg: DiagnosticConfig
                                        fs: float) -> tuple[float, float]:
     """Robust centroid-drift inputs (plan §3.1): median centroid over the last
     N complete 1s blocks vs. the first N complete post-calibration blocks,
-    N = round(10s / block duration) -- selected by POSITION in the block
-    series, not by a frame-count threshold (BDR-15: `cube.shape[0]` includes
-    the session's non-block-aligned trailing remainder, 10-15 frames on every
-    real capture, so a threshold in raw frames does not land on a block
-    boundary and silently drops one block from the "last 10 s")."""
+    N = round(cfg.centroid_summary_span_s / block duration) -- selected by
+    POSITION in the block series, not by a frame-count threshold (BDR-15:
+    `cube.shape[0]` includes the session's non-block-aligned trailing
+    remainder, 10-15 frames on every real capture, so a threshold in raw
+    frames does not land on a block boundary and silently drops one block
+    from the "last N s"). The support itself is config-bound, not a hardcoded
+    10.0 literal (BDR-23)."""
     n_blocks = len(blocks.block_start_frame)
-    n_window_blocks = int(round(10.0 * fs / cfg.block_frames))
+    n_window_blocks = int(round(cfg.centroid_summary_span_s * fs / cfg.block_frames))
     if n_blocks == 0:
         return float("nan"), float("nan")
     n_trailing = min(n_window_blocks, n_blocks)
@@ -518,17 +540,41 @@ def classify_window_outcome(accepted_rank: int, rejection_codes: np.ndarray,
 
 
 def validate_frame_idx_grid(frame_idx: np.ndarray, window_frames: int, hop_s: float,
-                             fs: float) -> None:
-    """Reject a malformed NPZ hop grid before alignment (plan §7.1, BDR-19) --
-    below the first valid window end, non-monotonic, or off the expected hop
-    spacing. Raises ValueError; never silently proceeds on bad input."""
-    if len(frame_idx) == 0:
+                             fs: float, n_cube_frames: int,
+                             accepted_rank: np.ndarray, rejection_codes: np.ndarray,
+                             f_r_hz: np.ndarray) -> None:
+    """Reject a malformed NPZ hop grid before alignment (plan §7.1, BDR-19,
+    BDR-19 R2) -- a misanchored first endpoint, an endpoint beyond the last
+    complete frame, non-monotonic or off-hop spacing, or an outcome array
+    whose row count does not match frame_idx. Raises ValueError; never
+    silently proceeds on bad input.
+
+    BDR-19 R2 found the round-1 fix only rejected a first endpoint BELOW
+    599 (`[659, 719]` passed, mislabeling row 0 -- which actually spans frames
+    60-659 -- as the warmup window), had no cube length with which to reject
+    an endpoint past the last complete frame (NumPy silently truncates an
+    out-of-range slice), and never checked that accepted_candidate_rank /
+    candidate_rejection_codes / f_r_hz have exactly one row per frame_idx
+    entry (extra rows silently ignored, short arrays fail only by incidental
+    indexing)."""
+    n = len(frame_idx)
+    for name, arr in (("accepted_candidate_rank", accepted_rank),
+                       ("candidate_rejection_codes", rejection_codes),
+                       ("f_r_hz", f_r_hz)):
+        if len(arr) != n:
+            raise ValueError(
+                f"{name} has {len(arr)} rows but frame_idx has {n} entries; "
+                "every NPZ outcome array must have exactly one row per window."
+            )
+    if n == 0:
         return
     first_valid_end = window_frames - 1
-    if int(frame_idx[0]) < first_valid_end:
+    if int(frame_idx[0]) != first_valid_end:
         raise ValueError(
-            f"frame_idx[0]={int(frame_idx[0])} is below the first valid window end "
-            f"({first_valid_end}) for a {window_frames}-frame window."
+            f"frame_idx[0]={int(frame_idx[0])} does not equal the warmup "
+            f"window's own end frame ({first_valid_end}) for a "
+            f"{window_frames}-frame window; row 0 would be mislabeled as the "
+            f"warmup window over the wrong frame span."
         )
     diffs = np.diff(frame_idx.astype(np.int64))
     if np.any(diffs <= 0):
@@ -539,6 +585,13 @@ def validate_frame_idx_grid(frame_idx: np.ndarray, window_frames: int, hop_s: fl
         raise ValueError(
             f"frame_idx hop spacing does not match hop_s*fs={expected_hop} frames at "
             f"index/indices {bad.tolist()}: diffs={diffs[bad].tolist()}."
+        )
+    last_end = int(frame_idx[-1])
+    if last_end >= n_cube_frames:
+        raise ValueError(
+            f"frame_idx[-1]={last_end} is beyond the last complete frame index "
+            f"({n_cube_frames - 1}) in a {n_cube_frames}-frame cube; NumPy would "
+            "silently return a truncated slice for this window."
         )
 
 
@@ -561,6 +614,12 @@ class WindowRow:
     rejection_codes: tuple[int, ...]
     f_r_hz: float
     outcome_class: str
+    #: The full per-bin power profile this window's argmax/centroid were
+    #: derived from (BDR-14 R2) -- persisted separately so the diagnostic's
+    #: central "per-bin energy at the window time scale" measurement can be
+    #: independently audited, not just its two derived scalars. Default empty
+    #: so existing WindowRow construction sites (tests) are unaffected.
+    window_energy_by_bin: dict = field(default_factory=dict)
 
 
 def align_windows(cube: np.ndarray, candidate_bins: list[int], frame_idx: np.ndarray,
@@ -574,8 +633,9 @@ def align_windows(cube: np.ndarray, candidate_bins: list[int], frame_idx: np.nda
     duration and longest excursion still use the finer 1 s-block series
     (a different, correctly-scoped sub-window statistic). Window 0 (the
     calibration stratum itself) is flagged is_warmup_window with zero
-    exposure. Raises on a malformed frame_idx grid (BDR-19)."""
-    validate_frame_idx_grid(frame_idx, window_frames, hop_s, fs)
+    exposure. Raises on a malformed frame_idx grid (BDR-19, BDR-19 R2)."""
+    validate_frame_idx_grid(frame_idx, window_frames, hop_s, fs, cube.shape[0],
+                             accepted_rank, rejection_codes, f_r_hz)
     block_s = block_frames / fs
     rows: list[WindowRow] = []
     off = blocks.argmax_bin != baseline_bin
@@ -623,6 +683,7 @@ def align_windows(cube: np.ndarray, candidate_bins: list[int], frame_idx: np.nda
             rejection_codes=tuple(int(c) for c in rejection_codes[i]),
             f_r_hz=float(f_r_hz[i]),
             outcome_class=classify_window_outcome(int(accepted_rank[i]), rejection_codes[i], float(f_r_hz[i])),
+            window_energy_by_bin=dict(window_energies),
         ))
     return rows
 
@@ -761,16 +822,36 @@ class SessionInputs:
     replay_run_metadata_path: Optional[Path]
 
 
-def match_replays_to_captures(capture_dirs: list[Path], replay_dirs: list[Path]) -> dict[Path, Optional[Path]]:
+def match_replays_to_captures(
+    capture_dirs: list[Path], replay_dirs: list[Path],
+    approved_replays: Optional[dict[str, str]] = None,
+) -> dict[Path, Optional[Path]]:
     """Pair each capture to the (at most one) replay whose recorded
     replay_file_hashes matches the capture's raw SHA-256 -- never by CLI
-    position (plan §5)."""
+    position (plan §5).
+
+    Raw-hash equality proves only that a replay used the same BYTES; it does
+    not prove the replay was produced by an approved estimator GENERATION
+    (BDR-20 -- at least six replay directories share massimo1's raw hash
+    across generations from 2026-07-15 through 2026-07-27). Two additional
+    checks, both fail-closed:
+
+    - Two different replay dirs matching the same capture's raw hash is
+      rejected outright (never silently keeps whichever came last on the CLI).
+    - If `approved_replays` is given (maps a capture's raw SHA-256 to the
+      SHA-256 of that capture's ONE approved replay `run_metadata.json`), the
+      matched replay's own `run_metadata.json` hash must equal the approved
+      value; a capture with no approval entry at all rejects any replay
+      offered for it, and a matching-raw-bytes-but-wrong-generation replay is
+      rejected even though its content hash matches.
+    """
     capture_hashes = {c: sha256_file(c / "adc_stream.bin") for c in capture_dirs}
     mapping: dict[Path, Optional[Path]] = {c: None for c in capture_dirs}
-    matched_replay_hashes: set[str] = set()
+    claimed_by_capture: dict[Path, Path] = {}
 
     for r in replay_dirs:
-        meta = json.loads((r / "run_metadata.json").read_text(encoding="utf-8"))
+        meta_path = r / "run_metadata.json"
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
         hashes = list((meta.get("replay_file_hashes") or {}).values())
         if not hashes:
             raise ValueError(f"replay {r} has no replay_file_hashes recorded.")
@@ -785,8 +866,30 @@ def match_replays_to_captures(capture_dirs: list[Path], replay_dirs: list[Path])
                 f"replay {r} (source hash {replay_hash}) does not match any "
                 f"--captures entry."
             )
+        if found in claimed_by_capture:
+            raise ValueError(
+                f"capture {found} matches more than one replay by raw hash: "
+                f"{claimed_by_capture[found]} and {r}. Pass exactly one "
+                f"replay per capture (BDR-20)."
+            )
+        if approved_replays is not None:
+            approved_meta_hash = approved_replays.get(replay_hash)
+            replay_meta_hash = sha256_file(meta_path)
+            if approved_meta_hash is None:
+                raise ValueError(
+                    f"capture {found} (raw hash {replay_hash}) has no approved "
+                    f"replay registered in diagnose_bin_drift_config.yaml: "
+                    f"approved_replays; refusing to pair replay {r} without an "
+                    f"explicit approval (BDR-20)."
+                )
+            if replay_meta_hash != approved_meta_hash:
+                raise ValueError(
+                    f"replay {r} (run_metadata.json sha256 {replay_meta_hash}) "
+                    f"is not the approved generation for capture {found} "
+                    f"(expected {approved_meta_hash}) (BDR-20)."
+                )
+        claimed_by_capture[found] = r
         mapping[found] = r
-        matched_replay_hashes.add(replay_hash)
     return mapping
 
 
@@ -834,10 +937,24 @@ def load_session_inputs(session_id: str, capture_dir: Path, replay_dir: Optional
     )
 
 
+@dataclass(frozen=True)
+class RunContext:
+    """The one run-level manifest, embedded into EVERY session's own
+    summary.json (BDR-22), not just the parent run_summary.json -- so a
+    session directory cited or copied apart from its parent is still
+    independently bound to the commit/config/run that produced it."""
+    run_id: str
+    git_commit: str
+    diagnostic_config_path: str
+    diagnostic_config_sha256: str
+    live_demo_config_path: str
+    live_demo_config_sha256: str
+
+
 # ── Per-session pipeline ─────────────────────────────────────────────────────
 
 def run_session(session: SessionInputs, live_cfg: dict, diag_cfg: DiagnosticConfig,
-                 out_dir: Path) -> dict:
+                 run_ctx: "RunContext", out_dir: Path) -> dict:
     chirp_cfg = validate_decode_geometry(live_cfg, session.capture_run_metadata, session.session_id)
     candidate_bins = derive_candidate_bins(live_cfg)
 
@@ -851,9 +968,14 @@ def run_session(session: SessionInputs, live_cfg: dict, diag_cfg: DiagnosticConf
 
     locked_bin = int(session.warmup_json["selected_bin"])
     lock_candidates = {int(c["bin"]): c for c in session.warmup_json["candidates"]}
-    baseline_rank_of_lock = None
+    # Rank the locked bin within the diagnostic's OWN settled baseline profile
+    # (frames 100-599), not the full-buffer warmup-JSON energy_rank (BDR-21 --
+    # those are different quantities; the full-buffer rank happens to agree on
+    # all four real sessions today, but is not what this field's name claims).
+    baseline_rank_of_lock = rank_of_bin_in_profile(baseline["settled_energy_by_bin"], locked_bin)
+    full_buffer_warmup_rank_of_lock = None
     if "energy_rank" in lock_candidates.get(locked_bin, {}):
-        baseline_rank_of_lock = int(lock_candidates[locked_bin]["energy_rank"])
+        full_buffer_warmup_rank_of_lock = int(lock_candidates[locked_bin]["energy_rank"])
 
     blocks = compute_block_series(cube, candidate_bins, diag_cfg)
     fs = float(live_cfg["session"]["frame_rate_hz"])
@@ -914,6 +1036,16 @@ def run_session(session: SessionInputs, live_cfg: dict, diag_cfg: DiagnosticConf
     reproducible = is_tree_clean() if diag_cfg.require_clean_tree else None
 
     result = {
+        # Own run manifest (BDR-22) -- previously only the parent
+        # run_summary.json carried these; a session directory cited or copied
+        # apart from its parent had no independent binding to the commit,
+        # config, or run that produced it.
+        "run_id": run_ctx.run_id,
+        "git_commit": run_ctx.git_commit,
+        "diagnostic_config_path": run_ctx.diagnostic_config_path,
+        "diagnostic_config_sha256": run_ctx.diagnostic_config_sha256,
+        "live_demo_config_path": run_ctx.live_demo_config_path,
+        "live_demo_config_sha256": run_ctx.live_demo_config_sha256,
         "session_id": session.session_id,
         "raw_sha256": session.raw_sha256,
         "warmup_json_path": str(session.warmup_json_path),
@@ -929,6 +1061,7 @@ def run_session(session: SessionInputs, live_cfg: dict, diag_cfg: DiagnosticConf
         "baseline_argmax_bin": baseline["baseline_argmax_bin"],
         "baseline_centroid": baseline["baseline_centroid"],
         "baseline_rank_of_locked_bin": baseline_rank_of_lock,
+        "full_buffer_warmup_rank_of_locked_bin": full_buffer_warmup_rank_of_lock,
         "baseline_profile": {str(b): e for b, e in baseline["settled_energy_by_bin"].items()},
         "occupancy": occupancy,
         "warmup_recompute_check": recompute,
@@ -965,6 +1098,57 @@ def run_session(session: SessionInputs, live_cfg: dict, diag_cfg: DiagnosticConf
                                           motion_energy_per_window, result)
     plot_drift_overview(session_dir, blocks, baseline["baseline_argmax_bin"], window_rows, fs)
     return result
+
+
+# ── Window-scale ordinary energy (BDR-14 R2) ────────────────────────────────
+
+def build_window_energy_matrix(
+    window_rows: list[WindowRow], candidate_bins: list[int],
+    baseline_by_bin: dict[int, float],
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """The ordinary (non-motion) per-window per-bin power profile, raw +
+    baseline-relative dB (BDR-14 R2). `align_windows` already computes this
+    profile directly on each window's own 600-frame slice to derive
+    `window_argmax_bin`/`window_centroid`, but previously discarded it --
+    `bin_energy_blocks.csv` only ever carried the 1 s-block-scale matrix, and
+    `motion_energy_windows.npz` is a different statistic (a channel-preserving
+    temporal-variance measure) that cannot audit this one. Returns
+    `(window_indices, matrix, matrix_rel_baseline_db)`."""
+    window_indices = np.array([r.window_index for r in window_rows], dtype=int)
+    n = len(window_rows)
+    matrix = np.full((n, len(candidate_bins)), np.nan, dtype=float)
+    matrix_rel_db = np.full((n, len(candidate_bins)), np.nan, dtype=float)
+    for i, r in enumerate(window_rows):
+        for j, b in enumerate(candidate_bins):
+            e = r.window_energy_by_bin.get(b, float("nan"))
+            matrix[i, j] = e
+            base = baseline_by_bin.get(b, 0.0)
+            matrix_rel_db[i, j] = 10.0 * np.log10(e / base) if (e > 0 and base > 0) else float("-inf")
+    return window_indices, matrix, matrix_rel_db
+
+
+def write_window_energy_npz(
+    session_dir: Path, window_rows: list[WindowRow], candidate_bins: list[int],
+    baseline_by_bin: dict[int, float],
+) -> Path:
+    """Persist the per-window ordinary energy profile (BDR-14 R2): explicit
+    `window_indices`, `bins`, a real `(n_windows, n_bins)` power matrix, and
+    its baseline-relative dB counterpart -- so the window-scale statistic can
+    be independently audited (every saved `window_argmax_bin`/`window_centroid`
+    must be exactly recomputable from this file) without re-decoding the raw
+    capture."""
+    window_indices, matrix, matrix_rel_db = build_window_energy_matrix(
+        window_rows, candidate_bins, baseline_by_bin
+    )
+    path = session_dir / "window_energy_windows.npz"
+    np.savez(
+        path,
+        window_indices=window_indices,
+        bins=np.array(candidate_bins, dtype=int),
+        matrix=matrix,
+        matrix_rel_baseline_db=matrix_rel_db,
+    )
+    return path
 
 
 # ── Output writers ───────────────────────────────────────────────────────────
@@ -1023,6 +1207,11 @@ def _write_session_outputs(out_dir: Path, session_id: str, blocks: BlockSeries,
         bins=np.array(me_bins, dtype=int),
         matrix=me_matrix,
     )
+
+    # The ordinary per-window per-bin energy profile (BDR-14 R2) -- separate
+    # from motion energy above, and separate from the 1 s-block matrix in
+    # bin_energy_blocks.csv.
+    write_window_energy_npz(session_dir, window_rows, blocks.candidate_bins, baseline_by_bin)
 
     with (session_dir / "summary.json").open("w", encoding="utf-8") as fh:
         json.dump(summary_fragment, fh, indent=2, default=str)
@@ -1133,7 +1322,11 @@ def main() -> None:
         )
         sys.exit(1)
 
-    mapping = match_replays_to_captures(args.captures, args.replays)
+    # diag_cfg.approved_replays is always a dict (possibly empty) once loaded
+    # from a real config file, so the approved-generation check is always
+    # enforced for a production run -- a replay for a capture with no
+    # registered entry is rejected, not silently permitted (BDR-20).
+    mapping = match_replays_to_captures(args.captures, args.replays, diag_cfg.approved_replays)
 
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     out_dir = args.out / run_id
@@ -1142,20 +1335,28 @@ def main() -> None:
         sys.exit(1)
     out_dir.mkdir(parents=True)
 
+    run_ctx = RunContext(
+        run_id=run_id,
+        git_commit=get_git_commit(),
+        diagnostic_config_path=str(args.diagnostic_config),
+        diagnostic_config_sha256=diag_cfg.sha256,
+        live_demo_config_path=str(args.config),
+        live_demo_config_sha256=sha256_file(args.config),
+    )
     run_manifest = {
-        "run_id": run_id,
-        "git_commit": get_git_commit(),
-        "diagnostic_config_path": str(args.diagnostic_config),
-        "diagnostic_config_sha256": diag_cfg.sha256,
-        "live_demo_config_path": str(args.config),
-        "live_demo_config_sha256": sha256_file(args.config),
+        "run_id": run_ctx.run_id,
+        "git_commit": run_ctx.git_commit,
+        "diagnostic_config_path": run_ctx.diagnostic_config_path,
+        "diagnostic_config_sha256": run_ctx.diagnostic_config_sha256,
+        "live_demo_config_path": run_ctx.live_demo_config_path,
+        "live_demo_config_sha256": run_ctx.live_demo_config_sha256,
         "sessions": {},
     }
 
     for capture_dir, replay_dir in mapping.items():
         session_id = capture_dir.name
         session = load_session_inputs(session_id, capture_dir, replay_dir)
-        result = run_session(session, live_cfg, diag_cfg, out_dir)
+        result = run_session(session, live_cfg, diag_cfg, run_ctx, out_dir)
         run_manifest["sessions"][session_id] = result
         print(f"{session_id}: baseline_argmax_bin={result['baseline_argmax_bin']} "
               f"locked_bin={result['locked_bin']} "

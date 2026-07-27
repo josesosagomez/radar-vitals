@@ -42,8 +42,10 @@ def diag_cfg(**overrides) -> dbd.DiagnosticConfig:
         offset_phases=tuple(range(10)),
         duration_grid_s=(2.0, 5.0, 10.0),
         centroid_grid_bins=(0.3, 0.5, 1.0),
+        centroid_summary_span_s=10.0,
         require_clean_tree=True,
         preflight_min_available_gb=7.0,
+        approved_replays=None,
         raw={},
     )
     base.update(overrides)
@@ -153,6 +155,46 @@ def test_warmup_recompute_check_legacy_schema_reports_not_available():
     # regardless of what the legacy JSON does or doesn't record.
     baseline = dbd.compute_baseline(cube, CANDIDATE_BINS, cfg)
     assert baseline["baseline_argmax_bin"] == 8
+
+
+def test_rank_of_bin_in_profile_basic():
+    profile = {5: 10.0, 6: 100.0, 7: 50.0}
+    assert dbd.rank_of_bin_in_profile(profile, 6) == 1
+    assert dbd.rank_of_bin_in_profile(profile, 7) == 2
+    assert dbd.rank_of_bin_in_profile(profile, 5) == 3
+
+
+def test_baseline_rank_of_locked_bin_uses_settled_profile_not_full_buffer_json():
+    """BDR-21: a settling-transient fixture where the locked bin's rank
+    within the FULL buffer (frames 0-599) genuinely differs from its rank
+    within the SETTLED baseline (100-599) -- `baseline_rank_of_locked_bin`
+    must be computed from the settled profile `compute_baseline` produces,
+    not copied from warmup_bin_selection.json's full-buffer `energy_rank`."""
+    # A large-amplitude tone at bin 10 exists ONLY during the settling
+    # transient (frames 0-99); bin 8 (the locked bin) carries a much smaller
+    # tone throughout frames 100-599 only. Time-averaged over the FULL
+    # 600-frame buffer, bin 10's huge amplitude outweighs its fewer frames and
+    # outranks bin 8 -- but bin 10 is entirely absent from the SETTLED
+    # 100-599 slice, where bin 8 dominates outright.
+    rng = np.random.default_rng(0)
+    n_adc, n_chirps, n_rx = 32, 2, 2
+    cube = (0.01 * (rng.standard_normal((600, n_chirps, n_rx, n_adc))
+                    + 1j * rng.standard_normal((600, n_chirps, n_rx, n_adc)))).astype(np.complex64)
+    n = np.arange(n_adc)
+    for f in range(600):
+        k, amp = (10, 50.0) if f < 100 else (8, 5.0)
+        tone = amp * np.exp(2j * np.pi * k * n / n_adc)
+        cube[f, :, :, :] += tone.astype(np.complex64)
+
+    cfg = diag_cfg()
+    baseline = dbd.compute_baseline(cube, CANDIDATE_BINS, cfg)
+    assert baseline["baseline_argmax_bin"] == 8
+
+    full = dbd._energy_by_bin_from_slice(cube, 0, 600, CANDIDATE_BINS)
+    full_rank_of_8 = dbd.rank_of_bin_in_profile(full, 8)
+    settled_rank_of_8 = dbd.rank_of_bin_in_profile(baseline["settled_energy_by_bin"], 8)
+    assert settled_rank_of_8 == 1  # bin 8 dominates the settled profile outright
+    assert full_rank_of_8 != settled_rank_of_8  # the fixture's whole point (BDR-21)
 
 
 def test_warmup_recompute_check_detects_mismatch():
@@ -343,6 +385,26 @@ def test_trailing_leading_centroid_medians_empty_series_is_nan():
     assert np.isnan(trailing) and np.isnan(leading)
 
 
+def test_trailing_leading_centroid_medians_support_is_config_bound():
+    """BDR-23: `centroid.summary_span_s` must actually govern the number of
+    blocks selected, not be a hardcoded 10.0 literal -- mutating the config
+    field must change the result."""
+    seq = list(range(15))
+    blocks = _blocks_from_argmax([8] * 15)
+    blocks.centroid[:] = seq
+
+    cfg_10s = diag_cfg(centroid_summary_span_s=10.0)
+    trailing_10s, leading_10s = dbd.trailing_leading_centroid_medians(blocks, cfg_10s, FS)
+    assert trailing_10s == pytest.approx(np.median(seq[-10:]))
+    assert leading_10s == pytest.approx(np.median(seq[:10]))
+
+    cfg_5s = diag_cfg(centroid_summary_span_s=5.0)
+    trailing_5s, leading_5s = dbd.trailing_leading_centroid_medians(blocks, cfg_5s, FS)
+    assert trailing_5s == pytest.approx(np.median(seq[-5:]))
+    assert leading_5s == pytest.approx(np.median(seq[:5]))
+    assert trailing_5s != pytest.approx(trailing_10s)
+
+
 # ── centroid_drift_at_grid (a separate SESSION-LEVEL statistic, never a
 # per-window joint classifier with the duration grid, BDR-11/BDR-11 R2) ────
 
@@ -394,33 +456,93 @@ def test_classify_window_outcome_other_rejected():
     assert dbd.classify_window_outcome(-1, codes, 1.2) == "other_rejected"
 
 
-# ── validate_frame_idx_grid (BDR-19) ────────────────────────────────────────
+# ── validate_frame_idx_grid (BDR-19, BDR-19 R2) ─────────────────────────────
+
+def _outcome_arrays(n: int):
+    return (np.full(n, -1, dtype=int), np.full((n, 3), -1, dtype=int), np.full(n, np.nan))
+
 
 def test_validate_frame_idx_grid_accepts_well_formed_grid():
     frame_idx = np.array([599, 659, 719], dtype=int)
-    dbd.validate_frame_idx_grid(frame_idx, WINDOW_FRAMES, HOP_S, FS)  # must not raise
+    rank, codes, f_r = _outcome_arrays(3)
+    dbd.validate_frame_idx_grid(frame_idx, WINDOW_FRAMES, HOP_S, FS, 720,
+                                 rank, codes, f_r)  # must not raise
 
 
 def test_validate_frame_idx_grid_rejects_below_first_valid_end():
     frame_idx = np.array([500, 659, 719], dtype=int)
+    rank, codes, f_r = _outcome_arrays(3)
     with pytest.raises(ValueError):
-        dbd.validate_frame_idx_grid(frame_idx, WINDOW_FRAMES, HOP_S, FS)
+        dbd.validate_frame_idx_grid(frame_idx, WINDOW_FRAMES, HOP_S, FS, 720, rank, codes, f_r)
+
+
+def test_validate_frame_idx_grid_rejects_late_first_endpoint():
+    """BDR-19 R2: `[659, 719]` (first endpoint ABOVE 599, not just below) must
+    also raise -- row 0 would otherwise be mislabeled the warmup window while
+    actually spanning frames 60-659, not 0-599."""
+    frame_idx = np.array([659, 719], dtype=int)
+    rank, codes, f_r = _outcome_arrays(2)
+    with pytest.raises(ValueError):
+        dbd.validate_frame_idx_grid(frame_idx, WINDOW_FRAMES, HOP_S, FS, 720, rank, codes, f_r)
 
 
 def test_validate_frame_idx_grid_rejects_non_monotonic():
     frame_idx = np.array([599, 719, 659], dtype=int)
+    rank, codes, f_r = _outcome_arrays(3)
     with pytest.raises(ValueError):
-        dbd.validate_frame_idx_grid(frame_idx, WINDOW_FRAMES, HOP_S, FS)
+        dbd.validate_frame_idx_grid(frame_idx, WINDOW_FRAMES, HOP_S, FS, 1000, rank, codes, f_r)
 
 
 def test_validate_frame_idx_grid_rejects_wrong_hop_spacing():
     frame_idx = np.array([599, 659, 800], dtype=int)  # last hop is 141 frames, not 60
+    rank, codes, f_r = _outcome_arrays(3)
     with pytest.raises(ValueError):
-        dbd.validate_frame_idx_grid(frame_idx, WINDOW_FRAMES, HOP_S, FS)
+        dbd.validate_frame_idx_grid(frame_idx, WINDOW_FRAMES, HOP_S, FS, 1000, rank, codes, f_r)
+
+
+def test_validate_frame_idx_grid_rejects_endpoint_beyond_cube():
+    """BDR-19 R2: a regularly spaced, correctly anchored grid whose last
+    endpoint is at or past the cube's last complete frame must raise --
+    NumPy would otherwise silently return a truncated slice for that window."""
+    frame_idx = np.array([599, 659, 719], dtype=int)
+    rank, codes, f_r = _outcome_arrays(3)
+    with pytest.raises(ValueError):
+        dbd.validate_frame_idx_grid(frame_idx, WINDOW_FRAMES, HOP_S, FS, 700, rank, codes, f_r)
+
+
+def test_validate_frame_idx_grid_rejects_short_outcome_array():
+    """BDR-19 R2: accepted_candidate_rank with fewer rows than frame_idx must
+    raise before any slicing/classification, not fail later by incidental
+    indexing."""
+    frame_idx = np.array([599, 659, 719], dtype=int)
+    _, codes, f_r = _outcome_arrays(3)
+    short_rank = np.full(2, -1, dtype=int)
+    with pytest.raises(ValueError):
+        dbd.validate_frame_idx_grid(frame_idx, WINDOW_FRAMES, HOP_S, FS, 720, short_rank, codes, f_r)
+
+
+def test_validate_frame_idx_grid_rejects_extra_rejection_code_rows():
+    """BDR-19 R2: candidate_rejection_codes with MORE rows than frame_idx must
+    raise, not silently ignore the extra rows."""
+    frame_idx = np.array([599, 659, 719], dtype=int)
+    rank, _, f_r = _outcome_arrays(3)
+    extra_codes = np.full((4, 3), -1, dtype=int)
+    with pytest.raises(ValueError):
+        dbd.validate_frame_idx_grid(frame_idx, WINDOW_FRAMES, HOP_S, FS, 720, rank, extra_codes, f_r)
+
+
+def test_validate_frame_idx_grid_rejects_short_f_r_hz():
+    frame_idx = np.array([599, 659, 719], dtype=int)
+    rank, codes, _ = _outcome_arrays(3)
+    short_f_r = np.full(1, np.nan)
+    with pytest.raises(ValueError):
+        dbd.validate_frame_idx_grid(frame_idx, WINDOW_FRAMES, HOP_S, FS, 720, rank, codes, short_f_r)
 
 
 def test_validate_frame_idx_grid_empty_is_ok():
-    dbd.validate_frame_idx_grid(np.array([], dtype=int), WINDOW_FRAMES, HOP_S, FS)
+    rank, codes, f_r = _outcome_arrays(0)
+    dbd.validate_frame_idx_grid(np.array([], dtype=int), WINDOW_FRAMES, HOP_S, FS, 0,
+                                 rank, codes, f_r)
 
 
 # ── align_windows (window-scale energy computed DIRECTLY on the cube, BDR-14;
@@ -558,6 +680,67 @@ def test_offset_phase_subsets_all_ten_independent():
     assert total == n_windows
     for k, subset in phases.items():
         assert all(r.window_index % 10 == k for r in subset)
+
+
+# ── window energy npz (BDR-14 R2: the window-scale ordinary energy profile
+# align_windows already computes but previously discarded, now persisted) ──
+
+def test_build_window_energy_matrix_shape_and_argmax_agrees_with_row():
+    n_adc, n_rx, n_chirps = 32, 2, 2
+    cube = make_cube(600, n_adc=n_adc, n_rx=n_rx, n_chirps=n_chirps,
+                      bin_by_frame=lambda f: 8, amplitude=5.0)
+    frame_idx = np.array([599], dtype=int)
+    accepted_rank = np.array([-1])
+    rejection_codes = np.array([[-1, -1, -1]])
+    f_r_hz = np.array([np.nan])
+    blocks = _blocks_from_argmax([8] * 30)
+    rows = dbd.align_windows(cube, CANDIDATE_BINS, frame_idx, blocks, 8, accepted_rank,
+                              rejection_codes, f_r_hz, FS, WINDOW_FRAMES, HOP_S, 600, BLOCK_FRAMES)
+    baseline_by_bin = {b: 1.0 for b in CANDIDATE_BINS}
+    window_indices, matrix, matrix_rel_db = dbd.build_window_energy_matrix(
+        rows, CANDIDATE_BINS, baseline_by_bin
+    )
+    assert window_indices.tolist() == [0]
+    assert matrix.shape == (1, len(CANDIDATE_BINS))
+    assert matrix_rel_db.shape == (1, len(CANDIDATE_BINS))
+    bin_idx_of_argmax = CANDIDATE_BINS.index(rows[0].window_argmax_bin)
+    assert int(matrix[0].argmax()) == bin_idx_of_argmax
+
+
+def test_write_window_energy_npz_recomputes_saved_argmax_and_centroid(tmp_path: Path):
+    """BDR-14 R2's own WANTED: an artifact-level test that opens the WRITTEN
+    file and recomputes every saved window argmax/centroid from the matrix it
+    contains -- the whole point of persisting this profile is that it can be
+    audited without redecoding the raw capture."""
+    n_adc, n_rx, n_chirps = 32, 2, 2
+    cube = make_cube(600, n_adc=n_adc, n_rx=n_rx, n_chirps=n_chirps, bin_by_frame=lambda f: None)
+    n = np.arange(n_adc)
+    for block_i in range(30):
+        lo, hi = block_i * BLOCK_FRAMES, (block_i + 1) * BLOCK_FRAMES
+        k, amp = (8, 1.0) if block_i < 16 else (9, 3.0)
+        tone = amp * np.exp(2j * np.pi * k * n / n_adc)
+        cube[lo:hi, :, :, :] += tone.astype(np.complex64)
+
+    frame_idx = np.array([599], dtype=int)
+    accepted_rank = np.array([-1])
+    rejection_codes = np.array([[-1, -1, -1]])
+    f_r_hz = np.array([np.nan])
+    blocks = _blocks_from_argmax([8] * 16 + [9] * 14)
+    rows = dbd.align_windows(cube, CANDIDATE_BINS, frame_idx, blocks, 8, accepted_rank,
+                              rejection_codes, f_r_hz, FS, WINDOW_FRAMES, HOP_S, 600, BLOCK_FRAMES)
+
+    baseline_by_bin = {b: 1.0 for b in CANDIDATE_BINS}
+    path = dbd.write_window_energy_npz(tmp_path, rows, CANDIDATE_BINS, baseline_by_bin)
+    loaded = np.load(path)
+    window_indices, bins, matrix = loaded["window_indices"], loaded["bins"], loaded["matrix"]
+    assert "matrix_rel_baseline_db" in loaded
+
+    for i, widx in enumerate(window_indices):
+        row = next(r for r in rows if r.window_index == widx)
+        recomputed_argmax = int(bins[matrix[i].argmax()])
+        recomputed_centroid = float(np.sum(bins * matrix[i]) / np.sum(matrix[i]))
+        assert recomputed_argmax == row.window_argmax_bin  # must be 9, not the block-mode 8
+        assert recomputed_centroid == pytest.approx(row.window_centroid, rel=1e-9)
 
 
 # ── stratify_by_outcome (the primary report; normalized fraction, BDR-17) ──
@@ -757,6 +940,10 @@ def test_load_diagnostic_config_reads_real_file_and_hashes_it():
     assert cfg.duration_grid_s == (2.0, 5.0, 10.0)
     assert cfg.centroid_grid_bins == (0.3, 0.5, 1.0)
     assert cfg.offset_phases == tuple(range(10))
+    assert cfg.centroid_summary_span_s == 10.0
+    # The three 2026-07-26 replays used by the current canonical run (BDR-20).
+    assert len(cfg.approved_replays) == 3
+    assert all(len(k) == 64 and len(v) == 64 for k, v in cfg.approved_replays.items())
     import hashlib
     assert cfg.sha256 == hashlib.sha256(cfg_path.read_bytes()).hexdigest()
 
@@ -846,6 +1033,83 @@ def test_match_replays_to_captures_unmatched_replay_raises(tmp_path: Path):
         dbd.match_replays_to_captures([cap_a], [replay])
 
 
+# ── replay-generation binding (BDR-20: raw-hash equality alone does not bind
+# which ESTIMATOR GENERATION produced a replay's recorded outcomes) ─────────
+
+def _make_replay(tmp_path: Path, name: str, raw_hash: str, tag: bytes) -> Path:
+    """A replay dir with a distinguishable run_metadata.json (so two replays
+    of the SAME raw capture still hash to different run_metadata.json SHA-256
+    values, as real distinct generations would)."""
+    d = tmp_path / name
+    d.mkdir()
+    (d / "run_metadata.json").write_text(
+        json.dumps({"replay_file_hashes": {"path": raw_hash}, "generation_tag": tag.decode()}),
+        encoding="utf-8",
+    )
+    return d
+
+
+def test_match_replays_to_captures_rejects_duplicate_replay_for_same_capture(tmp_path: Path):
+    """BDR-20: two different replay directories both matching the same
+    capture's raw hash must raise, never silently keep whichever appears
+    last on the CLI (`matched_replay_hashes` was computed but never checked
+    before this fix)."""
+    cap_a = tmp_path / "cap_a"
+    cap_a.mkdir()
+    (cap_a / "adc_stream.bin").write_bytes(b"AAAA")
+    raw_hash = dbd.sha256_file(cap_a / "adc_stream.bin")
+
+    replay_1 = _make_replay(tmp_path, "replay_gen1", raw_hash, b"gen1")
+    replay_2 = _make_replay(tmp_path, "replay_gen2", raw_hash, b"gen2")
+
+    with pytest.raises(ValueError):
+        dbd.match_replays_to_captures([cap_a], [replay_1, replay_2])
+
+
+def test_match_replays_to_captures_rejects_replay_with_no_approval_entry(tmp_path: Path):
+    """BDR-20: a capture whose raw hash has NO entry at all in
+    `approved_replays` must reject any replay offered for it, not silently
+    accept an unregistered generation."""
+    cap_a = tmp_path / "cap_a"
+    cap_a.mkdir()
+    (cap_a / "adc_stream.bin").write_bytes(b"AAAA")
+    raw_hash = dbd.sha256_file(cap_a / "adc_stream.bin")
+    replay = _make_replay(tmp_path, "replay_1", raw_hash, b"gen1")
+
+    with pytest.raises(ValueError):
+        dbd.match_replays_to_captures([cap_a], [replay], approved_replays={})
+
+
+def test_match_replays_to_captures_rejects_unapproved_generation(tmp_path: Path):
+    """BDR-20: a replay matching a capture's raw BYTES but not the approved
+    run_metadata.json hash for that capture must be rejected -- proving raw
+    equality is not sufficient."""
+    cap_a = tmp_path / "cap_a"
+    cap_a.mkdir()
+    (cap_a / "adc_stream.bin").write_bytes(b"AAAA")
+    raw_hash = dbd.sha256_file(cap_a / "adc_stream.bin")
+    replay = _make_replay(tmp_path, "replay_wrong_gen", raw_hash, b"gen1")
+
+    approved = {raw_hash: "0" * 64}  # a hash that does NOT match replay's own metadata
+    with pytest.raises(ValueError):
+        dbd.match_replays_to_captures([cap_a], [replay], approved_replays=approved)
+
+
+def test_match_replays_to_captures_accepts_approved_generation(tmp_path: Path):
+    """BDR-20: the approved-generation check must actually let the correct,
+    registered pairing through."""
+    cap_a = tmp_path / "cap_a"
+    cap_a.mkdir()
+    (cap_a / "adc_stream.bin").write_bytes(b"AAAA")
+    raw_hash = dbd.sha256_file(cap_a / "adc_stream.bin")
+    replay = _make_replay(tmp_path, "replay_approved", raw_hash, b"gen1")
+    approved_meta_hash = dbd.sha256_file(replay / "run_metadata.json")
+
+    approved = {raw_hash: approved_meta_hash}
+    mapping = dbd.match_replays_to_captures([cap_a], [replay], approved_replays=approved)
+    assert mapping[cap_a] == replay
+
+
 # ── clean-tree gate ──────────────────────────────────────────────────────────
 
 def _run_git(args, cwd):
@@ -929,6 +1193,19 @@ def _tiny_capture_metadata(num_rx: int = _TINY_RX) -> dict:
     }
 
 
+def _dummy_run_ctx(run_id: str = "20260101T000000Z") -> "dbd.RunContext":
+    """A stand-in run manifest (BDR-22) for tests that exercise run_session
+    directly without going through main()'s CLI."""
+    return dbd.RunContext(
+        run_id=run_id,
+        git_commit="d" * 40,
+        diagnostic_config_path="scripts/diagnose_bin_drift_config.yaml",
+        diagnostic_config_sha256="1" * 64,
+        live_demo_config_path="scripts/live_demo_config.yaml",
+        live_demo_config_sha256="2" * 64,
+    )
+
+
 def test_replayless_session_produces_zero_windows_and_no_outcome_leakage(tmp_path: Path):
     """A session with no matched replay (live_test1's real situation, plan §8
     BDR-07 Option A) must never consume or leak an outcome array -- run
@@ -959,7 +1236,8 @@ def test_replayless_session_produces_zero_windows_and_no_outcome_leakage(tmp_pat
     out_dir = tmp_path / "out"
     out_dir.mkdir()
     cfg = diag_cfg()
-    result = dbd.run_session(session, _tiny_live_cfg(), cfg, out_dir)
+    run_ctx = _dummy_run_ctx()
+    result = dbd.run_session(session, _tiny_live_cfg(), cfg, run_ctx, out_dir)
 
     assert result["n_windows"] == 0
     assert result["n_full_exposure_windows"] == 0
@@ -969,6 +1247,29 @@ def test_replayless_session_produces_zero_windows_and_no_outcome_leakage(tmp_pat
     assert result["npz_sha256"] is None
     assert result["replay_run_metadata_path"] is None
     assert result["replay_run_metadata_sha256"] is None
+
+    # BDR-22: the session's OWN summary carries the full run manifest, not
+    # just the parent run_summary.json -- independently bound even if this
+    # session directory is later cited or copied apart from its parent.
+    assert result["run_id"] == run_ctx.run_id
+    assert result["git_commit"] == run_ctx.git_commit
+    assert result["diagnostic_config_path"] == run_ctx.diagnostic_config_path
+    assert result["diagnostic_config_sha256"] == run_ctx.diagnostic_config_sha256
+    assert result["live_demo_config_path"] == run_ctx.live_demo_config_path
+    assert result["live_demo_config_sha256"] == run_ctx.live_demo_config_sha256
+
+    # BDR-21: the locked bin's rank must come from the settled baseline
+    # profile this run computed, not the full-buffer warmup-JSON energy_rank.
+    assert result["baseline_rank_of_locked_bin"] == dbd.rank_of_bin_in_profile(
+        {int(b): e for b, e in result["baseline_profile"].items()}, result["locked_bin"]
+    )
+    assert result["full_buffer_warmup_rank_of_locked_bin"] == 2  # bin 4's energy_rank in the fixture JSON
+
+    # BDR-14 R2: the window-scale ordinary energy profile is now persisted
+    # separately from motion energy, even for a replay-less (zero-window)
+    # session -- an empty (0, n_bins) matrix, not a missing file.
+    we = np.load(out_dir / "cap_no_replay" / "window_energy_windows.npz")
+    assert we["matrix"].shape == (0, 3)
     for cls in dbd.OUTCOME_CLASSES:
         assert result["outcome_stratified_report"]["full_exposure"][cls]["n"] == 0
         assert result["outcome_stratified_report"]["transitional"][cls]["n"] == 0
@@ -1035,7 +1336,7 @@ def test_run_session_validates_geometry_against_capture_not_replay_metadata(tmp_
     cfg = diag_cfg()
     # Must NOT raise: geometry validation uses capture_run_metadata (num_rx=1,
     # matching the active config), never the replay's num_rx=99.
-    result = dbd.run_session(session, _tiny_live_cfg(), cfg, out_dir)
+    result = dbd.run_session(session, _tiny_live_cfg(), cfg, _dummy_run_ctx(), out_dir)
     assert result["session_id"] == "cap"
     assert result["replay_run_metadata_path"] is not None
     assert result["replay_run_metadata_sha256"] is not None

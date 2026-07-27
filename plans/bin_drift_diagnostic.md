@@ -1,16 +1,23 @@
 # Plan: Range-bin drift measurement (`scripts/diagnose_bin_drift.py`)
 
-> **Implemented, run on all 4 real captures, and committed.** Review has gone through 5 rounds
-> (`plans/bin_drift_diagnostic_cross_review.md`, BDR-01…19), reopening twice after
+> **Implemented, run on all 4 real captures, and committed.** Review has gone through 6 rounds
+> (`plans/bin_drift_diagnostic_cross_review.md`, BDR-01…23), reopening three times after
 > implementation as Codex found real gaps between the shipped code and what the plan claimed:
 > round 4 (BDR-11…13) found the decided centroid-drift grid was never wired up, plus a stale
-> table and a scope-text inconsistency; **round 5 (BDR-11 R2, BDR-14…19) found the window-scale
+> table and a scope-text inconsistency; round 5 (BDR-11 R2, BDR-14…19) found the window-scale
 > energy measurement was approximated from 1 s blocks rather than computed directly, an exact
 > "trailing 10 s" arithmetic bug, decode geometry validated against the wrong metadata file, an
 > unnormalized transitional statistic, motion energy computed for the whole capture instead of
-> per window, and several config values that were hashed but never actually governed behavior.**
-> All fixed below. Both prior escalations (**BDR-04 Option A, BDR-07 Option A**) remain decided
-> — see **§8**. No new escalations this round.
+> per window, and several config values that were hashed but never actually governed behavior;
+> **round 6 (BDR-14 R2, BDR-19 R2, BDR-20…23) found the round-5 window-scale energy fix computed
+> the profile but still discarded it before persisting, the NPZ frame-grid validator still
+> accepted a misanchored/truncated grid and never checked outcome-array shapes, replay-to-capture
+> matching bound only raw bytes (not the estimator generation that produced the recorded
+> outcomes), `baseline_rank_of_locked_bin` was sourced from the full-buffer warmup-JSON rank
+> instead of the diagnostic's own settled baseline, per-session summaries lacked their own
+> run_id/git-commit/config-hash provenance, and the centroid-drift support span was a hardcoded
+> 10.0 literal outside the bound config.** All fixed below. Both prior escalations (**BDR-04
+> Option A, BDR-07 Option A**) remain decided — see **§8**. No new escalations this round.
 
 ## Context
 
@@ -63,6 +70,18 @@ replay is matched) purely for provenance pairing (`replay_file_hashes`) and to s
 outcomes. Both are hashed into `summary.json` (§5) under distinct keys
 (`capture_run_metadata_sha256`, `replay_run_metadata_sha256`).
 
+**Raw-hash equality does not bind the estimator generation (BDR-20):** a replay's raw-file hash
+proves only that it replayed the same *bytes* — it says nothing about which code/config
+*generation* produced the recorded DSP outcomes. Direct inspection found at least six replay
+directories sharing massimo1's raw hash across generations from 2026-07-15 through 2026-07-27,
+including the explicitly non-interchangeable 2026-07-25/2026-07-26 pair. `scripts/diagnose_bin_drift_config.yaml`'s
+`approved_replays` section maps each capture's raw `adc_stream.bin` SHA-256 to the SHA-256 of
+that capture's ONE approved replay `run_metadata.json`; `match_replays_to_captures` enforces it
+before any replay's outcomes are used — a capture with no approval entry rejects any replay
+offered for it, a replay whose own `run_metadata.json` hash does not match the approved value is
+rejected even though its raw bytes match, and two different replay directories matching the same
+capture's raw hash are rejected outright (never silently keeping whichever came last on the CLI).
+
 `scripts/diagnose_bin_drift_config.yaml` is a **prospective input**, not a record of what the
 script happened to do — it is read at the start of every run and its own content is hashed into
 `summary.json` (§5), never reconstructed from the run's own output.
@@ -94,7 +113,7 @@ Verified: NPZ `frame_idx` is the window's **end frame** (599, 659, … ) → win
 complete 20-frame block are massimo1=10, massimo2=11, sweep=11, live_test1=15 frames — all
 non-zero, so §7.1's trailing-block policy is exercised on real data, not a hypothetical.
 
-### 1.1 Every config value governs behavior, or the run fails closed (BDR-19)
+### 1.1 Every config value governs behavior, or the run fails closed (BDR-19, BDR-19 R2, BDR-23)
 
 Round 4 hashed the config file; round 5 found two of its values (`trailing_block_policy`,
 `episodes.gap_rule`) were loaded and then never consulted — the discard/no-bridging behavior was
@@ -106,9 +125,26 @@ default. `window_frames` (was `int(round(30.0 * fs))`) and the plot's time axis 
 `/ 20.0`) are now traced from `live_demo_config.yaml`'s own `session.window_s` /
 `session.frame_rate_hz`, not hardcoded literals duplicating those config values.
 
-A malformed NPZ hop grid is now rejected before alignment (`validate_frame_idx_grid`, BDR-19):
-below the first valid window end, non-monotonic, or off the expected `hop_s × fs` spacing all
-raise `ValueError` rather than silently producing a wrong alignment.
+**Round 6 found one more:** the robust centroid-drift statistic's support (`10.0` seconds) was
+also a hardcoded literal, not traced to any config value (BDR-23) — mutating it would have no
+effect on the run's behavior despite the sensitivity grid's centroid axis depending on it.
+`scripts/diagnose_bin_drift_config.yaml` now has `centroid.summary_span_s: 10.0`, and
+`trailing_leading_centroid_medians` reads `cfg.centroid_summary_span_s` instead. A mutation test
+confirms changing this field changes the selected leading/trailing block count.
+
+A malformed NPZ hop grid is rejected before alignment (`validate_frame_idx_grid`). Round 5's
+version (BDR-19) rejected a first endpoint *below* the first valid window end, non-monotonic
+ordering, and off-`hop_s × fs` spacing. **Round 6 (BDR-19 R2) found this was still incomplete:**
+a first endpoint *above* 599 (e.g. `[659, 719]`) passed and mislabeled row 0 as the warmup window
+even though it actually spans frames 60–659; the validator had no cube length with which to
+reject a regularly spaced grid whose last endpoint runs past the last complete frame (NumPy
+silently truncates such a slice); and `accepted_candidate_rank`/`candidate_rejection_codes`/
+`f_r_hz` were never checked against `frame_idx`'s own length, so a short or over-long outcome
+array would fail only by incidental indexing, or silently ignore extra rows. Fixed:
+`validate_frame_idx_grid` now takes the cube's frame count and all three outcome arrays, requires
+`frame_idx[0] == window_frames - 1` **exactly** (not just `>=`), requires every endpoint
+`< n_cube_frames`, and requires every outcome array's row count to equal `len(frame_idx)` —
+checked before any slicing or classification, all raising `ValueError`.
 
 ## 2. Reused components (nothing reimplemented)
 
@@ -146,13 +182,22 @@ not be conflated:
   away from the baseline, tracked over time.
 - **Composite-lock-vs-baseline-energy agreement** is reported **once per session**, separately,
   as a labeled fact (e.g. "locked bin is baseline rank 6") — never merged into the drift time
-  series.
+  series. **`baseline_rank_of_locked_bin` is the locked bin's rank within the diagnostic's OWN
+  settled baseline profile (BDR-21, corrected)** — round 5 sourced this field from
+  `warmup_bin_selection.json`'s full-buffer (frames 0–599) `energy_rank`, a different quantity
+  than what the field's name and §3.1's own definition claim (most starkly for legacy
+  `live_test1`, whose JSON has no settled profile at all). The four real sessions' displayed
+  numbers happen not to change (the two ranks agree on today's data), but the field is now
+  actually computed from `baseline["settled_energy_by_bin"]` via `rank_of_bin_in_profile`. The
+  full-buffer JSON rank remains available under its own explicit name,
+  `full_buffer_warmup_rank_of_locked_bin`, rather than silently dropped.
 - **Centroid formula:** weights are **power** (`|FFT|²`, matching `range_energy_by_bin`'s own
   units): `centroid = Σ(bin_index · power[bin]) / Σ(power[bin])` over the candidate gate bins.
 - **Robust centroid-drift statistic, corrected (BDR-15):** median centroid over the **last N
   complete 1 s blocks** vs. the **first N complete post-calibration blocks**, where
-  `N = round(10 s / block duration) = 10`, selected **by position in the block series**, not by
-  a frame-count threshold. The round-4 implementation computed the trailing window as
+  `N = round(cfg.centroid_summary_span_s / block duration)`, `centroid_summary_span_s = 10.0 s`
+  by default (BDR-23, config-bound — see §1.1), selected **by position in the block series**, not
+  by a frame-count threshold. The round-4 implementation computed the trailing window as
   `cube.shape[0] - 10·fs` and selected blocks whose start frame was `>=` that value — but
   `cube.shape[0]` includes the session's non-block-aligned trailing remainder (10–15 frames on
   every real capture), so the threshold does not land on a block boundary. Verified on
@@ -178,9 +223,19 @@ not be conflated:
    aggregate: a synthetic regression test (§7.1) constructs a 600-frame window where 16 of 30
    blocks (320 frames) have a low-amplitude tone at bin 8 and 14 blocks (280 frames) have a
    3×-amplitude (9× power) tone at bin 9 — the block-mode shortcut picks bin 8 (majority of
-   blocks), the correct aggregate argmax is bin 9 (9× the energy). Off-baseline duration and
-   longest excursion **still use the finer 1 s-block series** — a genuinely different, correctly
-   -scoped sub-window statistic, unaffected by this fix — plus:
+   blocks), the correct aggregate argmax is bin 9 (9× the energy). **The full per-bin profile
+   this computation produces is now persisted, not discarded (BDR-14 R2):** round 5 computed
+   `window_energies` directly on the window's slice but reduced it immediately to the two derived
+   scalars (`window_argmax_bin`/`window_centroid`) and discarded the profile — `bin_energy_blocks.csv`
+   only ever carried the 1 s-**block**-scale matrix, and `motion_energy_windows.npz` is a
+   different statistic (channel-preserving temporal variance) that cannot audit this one. Each
+   `WindowRow` now carries `window_energy_by_bin` (the full per-bin power dict), and
+   `write_window_energy_npz` persists it as `window_energy_windows.npz` (§4) — an
+   artifact-level test opens the written file and recomputes every saved window's argmax and
+   centroid directly from its stored matrix, confirming they match the values computed during
+   alignment exactly. Off-baseline duration and longest excursion **still use the finer 1 s-block
+   series** — a genuinely different, correctly-scoped sub-window statistic, unaffected by this
+   fix — plus:
    - `post_calibration_observed_s` — the window's actual seconds of eligible (post-frame-600)
      drift evidence: `min(30, i · 3)` for window index *i* (hop = 3 s). Window 0 has 0 s (it *is*
      the calibration stratum, §3.4); windows 1–9 have 3, 6, …, 27 s; window 10 onward has 30 s.
@@ -255,11 +310,24 @@ directory already exists; `summary.json` records its own `run_id`.
   trail the aggregate report is computed from.
 - `motion_energy_windows.npz` — real `(n_windows, n_bins)` matrix (`window_indices`, `bins`,
   `matrix`) — BDR-18, replacing the round-4 single-vector-per-capture file.
-- `summary.json` — run manifest (§5) plus:
+- `window_energy_windows.npz` — the ordinary (non-motion) per-window per-bin energy profile
+  (BDR-14 R2): `window_indices`, `bins`, a real `(n_windows, n_bins)` power `matrix`, and
+  `matrix_rel_baseline_db` (baseline-relative dB, matching `bin_energy_blocks.csv`'s convention)
+  — separate from motion energy above and from the 1 s-block matrix in `bin_energy_blocks.csv`.
+  Empty `(0, n_bins)` for a session with no NPZ-defined windows (`live_test1`, BDR-07 Option A),
+  same as every other window-level artifact.
+- `summary.json` — **its own run manifest, not just the parent's (BDR-22, corrected)**:
+  `run_id`, `git_commit`, `diagnostic_config_path`/`diagnostic_config_sha256`,
+  `live_demo_config_path`/`live_demo_config_sha256` — round 5 recorded these only in the parent
+  `run_summary.json`; a session directory cited or copied apart from its parent had no
+  independent binding to the commit/config/run that produced it. Plus:
   - `baseline_profile` — the full per-bin settled-energy dict (BDR-14; previously only the
     derived argmax/centroid were kept), `baseline_argmax_bin`, `baseline_centroid`,
-    `baseline_rank_of_locked_bin`, `settled_warmup_json_validation` status (§3.1), and the
-    composite-lock-vs-baseline-energy fact
+    `baseline_rank_of_locked_bin` (BDR-21, corrected — now the locked bin's rank **within this
+    settled profile**, via `rank_of_bin_in_profile`, not copied from
+    `warmup_bin_selection.json`'s full-buffer `energy_rank`), `full_buffer_warmup_rank_of_locked_bin`
+    (the full-buffer JSON rank, kept under its own explicit name rather than dropped),
+    `settled_warmup_json_validation` status (§3.1), and the composite-lock-vs-baseline-energy fact
   - `occupancy` — fraction of post-calibration blocks with argmax at baseline / within 1 bin /
     within 2 bins / outside 2 bins (BDR-14; promised in earlier rounds, never actually computed
     until now)
@@ -332,6 +400,24 @@ a wrong `num_rx` and confirms the run still succeeds (because it never consults 
 capture, the diagnostic checks that replay's own recorded `replay_file_hashes` entry against the
 SHA-256 of the raw capture file being used, and raises on mismatch.
 
+**Fail-closed validation, before pairing a GENERATION (BDR-20):** raw-byte equality alone does
+not prove which estimator generation produced a replay's recorded outcomes — direct inspection
+found six replay directories sharing massimo1's raw hash across generations from 2026-07-15
+through 2026-07-27. `scripts/diagnose_bin_drift_config.yaml`'s `approved_replays` maps each
+capture's raw SHA-256 to the SHA-256 of that capture's one approved replay `run_metadata.json`;
+`match_replays_to_captures` checks this before any outcome is loaded, and separately rejects two
+different replay directories that both match the same capture's raw hash (previously computed
+but never checked). A capture with no `approved_replays` entry rejects any replay offered for it
+— a production run always enforces this (`diag_cfg.approved_replays` is never `None` once loaded
+from a real config file); the function accepts an explicit `None` only for callers that
+deliberately want unrestricted raw-hash matching (e.g. tests of the matching logic itself).
+
+**Every session's own summary carries the full run manifest (BDR-22):** `run_id`, `git_commit`,
+both config paths/hashes are embedded in each session's `summary.json`, not only in the parent
+`run_summary.json` — HANDOFF directs the decision-maker to read individual session
+`summary.json` files, which previously had no independent binding to the commit/config/run that
+produced them.
+
 **Clean-tree requirement:** the canonical evidence-generating run (the one whose `summary.json`
 is cited anywhere) **requires a clean, committed working tree** — the script checks and refuses
 to run otherwise. A dirty-tree run is still permitted for iteration but is stamped
@@ -367,11 +453,11 @@ measurement is available.
 |---|---|
 | `scripts/diagnose_bin_drift.py` | CLI: `--config scripts/live_demo_config.yaml --diagnostic-config scripts/diagnose_bin_drift_config.yaml --captures <4 dirs> --replays <matched-generation dirs, per §8> --out results/diagnose/bin_drift` |
 | `scripts/diagnose_bin_drift_config.yaml` | The diagnostic's own bound parameters (§1.1, §5) |
-| `tests/test_diagnose_bin_drift.py` | 65 tests (§7.1) |
+| `tests/test_diagnose_bin_drift.py` | 79 tests (§7.1) |
 
 Nothing else is touched. `data/raw/` not involved (empty); originals opened read-only.
 
-### 7.1 Test plan (expanded across rounds 4–5)
+### 7.1 Test plan (expanded across rounds 4–6)
 
 - Synthetic reflector stepped bin 25→27 mid-session: argmax series shows the step at the right
   block; occupancy fractions exact (`test_compute_occupancy_fractions`).
@@ -420,6 +506,30 @@ Nothing else is touched. `data/raw/` not involved (empty); originals opened read
   `load_session_inputs` path end to end:** zero windows, zero outcome-class counts in every
   stratum and every offset phase, header-only `window_audit.csv`.
 - Packet-layout helper reused from `tests/test_radar_io_layout.py`.
+- **Window-scale energy is persisted, not just computed (BDR-14 R2):** an artifact-level test
+  writes `window_energy_windows.npz` for a real `align_windows` output, loads it back, and
+  recomputes every saved window's argmax/centroid directly from the stored matrix — confirming
+  they match the values `align_windows` itself computed, not merely that the file exists.
+- **`validate_frame_idx_grid` rejects a late-anchored, beyond-cube, or shape-mismatched grid
+  (BDR-19 R2):** a first endpoint above `window_frames - 1` (not just below), an otherwise
+  well-formed grid whose last endpoint reaches or exceeds the cube's frame count, and each of
+  `accepted_candidate_rank`/`candidate_rejection_codes`/`f_r_hz` too short or too long relative to
+  `frame_idx` all raise.
+- **`baseline_rank_of_locked_bin` is sourced from the settled baseline, not the full-buffer
+  warmup JSON (BDR-21):** a settling-transient fixture where a large-amplitude tone exists only
+  in frames 0–99 and a smaller tone (at the locked bin) exists only in frames 100–599 — the
+  locked bin's rank differs between the full 0–599 buffer and the settled 100–599 slice, and the
+  diagnostic's reported value must equal the latter.
+- **Every session summary carries its own run manifest (BDR-22):** an integration test asserts
+  `run_id`, `git_commit`, and both config paths/hashes appear in `run_session`'s result, matching
+  the `RunContext` passed in, not only in the parent `run_summary.json`.
+- **The centroid-drift support span is config-bound, not hardcoded (BDR-23):** a mutation test
+  confirms changing `centroid_summary_span_s` from 10.0 s to 5.0 s changes the number of
+  leading/trailing blocks selected and the resulting median.
+- **Replay-generation binding (BDR-20):** two different replay directories matching the same
+  capture's raw hash raise; a capture with no `approved_replays` entry rejects any replay offered
+  for it; a replay matching a capture's raw bytes but not the approved `run_metadata.json` hash
+  is rejected; the correctly approved pairing is accepted.
 
 ## 8. Design decisions (both escalations resolved by the user, 2026-07-27)
 
@@ -445,15 +555,16 @@ entries are `correlation_not_available`; no replay is generated for it.
 
 ## 9. Verification
 
-1. `conda run -n radar-vitals python -m pytest tests/test_diagnose_bin_drift.py -q` — all 65
+1. `conda run -n radar-vitals python -m pytest tests/test_diagnose_bin_drift.py -q` — all 79
    cases pass.
-2. Full suite still green (script is additive; expect 1616 baseline + 65).
+2. Full suite still green (script is additive; expect 1616 baseline + 79 = 1695 passed, 1
+   skipped).
 3. Run on all 4 captures **from a clean committed tree**; confirm all output files exist
    (including the widened `bin_energy_blocks.csv`, the real `motion_energy_windows.npz` matrix,
-   and the heatmap `drift_overview.png`), the warmup-recompute check passes at every resolution
-   each session's own JSON provides, `summary.json` parses and includes `baseline_profile`,
-   `occupancy`, `duration_grid_by_outcome`, and both `mem_peak_working_set_after_decode` /
-   `mem_peak_working_set_after_session`.
+   the new `window_energy_windows.npz` matrix, and the heatmap `drift_overview.png`), the
+   warmup-recompute check passes at every resolution each session's own JSON provides,
+   `summary.json` parses and includes `baseline_profile`, `occupancy`, `duration_grid_by_outcome`,
+   and both `mem_peak_working_set_after_decode` / `mem_peak_working_set_after_session`.
 4. Confirm `summary.json` records both `capture_run_metadata_sha256` and
    `replay_run_metadata_sha256` (the latter `None` for `live_test1`), and that
    `trailing_block_policy`/`gap_rule` values other than the supported ones raise rather than
@@ -461,7 +572,13 @@ entries are `correlation_not_available`; no replay is generated for it.
 5. Load the `dataviz` skill before writing the plotting code (chart-code trigger) — done; the
    heatmap uses a perceptually uniform sequential colormap and the outcome strip uses fixed
    categorical colors + distinct marker shapes.
-6. Session end: HISTORY.md append + HANDOFF.md rewrite (per CLAUDE.md §10) — including the
+6. **Round 6:** confirm each session's own `summary.json` (not just the parent `run_summary.json`)
+   carries `run_id`/`git_commit`/`diagnostic_config_sha256`/`live_demo_config_sha256` (BDR-22);
+   confirm `baseline_rank_of_locked_bin` and `full_buffer_warmup_rank_of_locked_bin` are both
+   present and distinct fields (BDR-21); confirm the real run's three replays are each accepted
+   under `scripts/diagnose_bin_drift_config.yaml`'s `approved_replays` mapping (BDR-20) — a run
+   with an unregistered or wrong-generation replay must fail before decoding.
+7. Session end: HISTORY.md append + HANDOFF.md rewrite (per CLAUDE.md §10) — including the
    evidence summary, its evidence paths, and this round's fixes.
 
 ## 10. Explicitly out of scope

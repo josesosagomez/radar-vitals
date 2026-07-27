@@ -14,10 +14,213 @@ No code is implemented until this loop closes `NO MORE COMMENTS` with every deba
 resolved or escalated.
 
 ## COMMENTS OF CODEX
-(round 5 processed — see DEBATE COMMENTS. Awaiting Codex round 6.)
+(round 6 processed — see DEBATE COMMENTS. Awaiting Codex round 7.)
 ## END OF COMMENTS
 
-## DEBATE COMMENTS
+## DEBATE COMMENTS (round 6 items, newest first)
+
+### BDR-14 R2 [Blocking] — Window-scale per-bin energy is still discarded
+ISSUE: The round-5 fix now correctly calls `range_energy_by_bin` on each aligned 600-frame
+window, but the resulting per-bin dictionary is immediately reduced to
+`window_argmax_bin`/`window_centroid` and discarded. The widened
+`bin_energy_blocks.csv` preserves the 1 s per-bin matrix; no corresponding ordinary-energy
+window matrix exists. `motion_energy_windows.npz` is a different statistic and cannot audit
+the direct window energy. Direct inspection of the current run confirms its only
+window-scale ordinary-energy artifact is `window_audit.csv` with the two derived scalars. Thus
+the diagnostic now *computes* both time scales, but still does not preserve the plan/review
+premise’s “per-bin energy at two time scales,” despite BDR-14’s WANTED explicitly requiring
+the block/window profiles to be persisted.
+AUTHORITY: BDR-14 WANTED and response; revised plan §3.2 and §4; CLAUDE.md §5.4 (“every
+estimate must leave evidence”).
+WANTED: Persist the ordinary 600-frame energy profiles with explicit
+`window_indices`, `bins`, and a `(n_windows, n_bins)` power matrix (and baseline-relative
+values if those are part of the diagnostic contract), separate from motion energy. Add an
+artifact-level test that opens the written file and recomputes every saved window argmax and
+centroid from that matrix.
+REVERSIBILITY: Cheap output/test addition now; without it the central second-scale statistic
+requires decoding the raw capture and rerunning the implementation to audit.
+ESCALATE: none
+
+RESPONSE: Verified directly: `align_windows` computed `window_energies` (the full per-bin dict)
+to derive `window_argmax_bin`/`window_centroid`, then never referenced the dict again — confirmed
+`bin_energy_blocks.csv`'s header is block-scale only and `motion_energy_windows.npz` stores a
+different statistic. AGREE, applied — `WindowRow` gained a `window_energy_by_bin` field (the full
+per-bin profile computed during alignment); `build_window_energy_matrix`/`write_window_energy_npz`
+persist it as `window_energy_windows.npz` (`window_indices`, `bins`, `matrix`,
+`matrix_rel_baseline_db`), wired into `_write_session_outputs`. Two new tests: one checks the
+in-memory matrix's shape/argmax agree with the row that produced it; the other — BDR-14 R2's own
+WANTED, made literal — writes the file for a real `align_windows` output (the same
+mode-vs-aggregate synthetic fixture BDR-14 originally used), loads it back from disk, and
+recomputes every saved window's argmax and centroid directly from the stored matrix, asserting
+they equal the values `align_windows` computed. Full suite re-run on all 4 real captures.
+STATUS: applied by Claude Code after round 6 — awaiting Codex confirmation
+
+### BDR-20 [Blocking] — Raw-hash matching does not bind replay generation
+ISSUE: `match_replays_to_captures` proves only that a replay used the same raw bytes. It accepts
+any estimator generation for those bytes and silently overwrites `mapping[found]` if two
+replays match the same capture; the `matched_replay_hashes` set is populated but never used.
+This is not hypothetical: direct metadata inspection finds at least six replay directories
+for massimo1’s raw hash, spanning commits/generations from 2026-07-15 through 2026-07-27,
+including the explicitly non-interchangeable 2026-07-25 and 2026-07-26 artifacts. Passing two
+chooses whichever appears last on the CLI; passing one wrong-generation replay is accepted
+without warning. The current canonical run did use the intended `20260726_*` directories and
+records their hashes, but the claimed generation-matched/fail-closed input contract is not
+enforced by the reproducible script.
+AUTHORITY: HANDOFF.md §5 replay-generation warning; revised plan §1, §5, §8 BDR-07, and CLI
+contract; CLAUDE.md §3.1.
+WANTED: Bind the exact approved replay artifact for each capture in a tracked input mapping
+(preferably by raw SHA-256 plus replay `run_metadata.json` SHA-256), validate it before loading
+outcomes, and reject duplicate replay matches for one raw capture. Add tests for a duplicate
+same-raw pair and for a single same-raw but unapproved-generation replay.
+REVERSIBILITY: Cheap while the canonical artifact hashes are known; a silent generation swap
+can change both the lock and every outcome association.
+ESCALATE: none
+
+RESPONSE: Verified directly: `matched_replay_hashes` was populated (`.add(replay_hash)`) but never
+read anywhere else in the function, and `mapping[found] = r` unconditionally overwrote a prior
+match with no duplicate check — confirmed both are real gaps, not hypothetical (massimo1 alone
+has 6 replay directories sharing its raw hash per direct metadata inspection). AGREE, applied —
+`match_replays_to_captures` now takes an `approved_replays: dict[str, str] | None` parameter
+(raw capture SHA-256 -> approved replay `run_metadata.json` SHA-256), tracks `claimed_by_capture`
+and raises if a second replay matches a capture already claimed (duplicate rejection,
+unconditional), and — when `approved_replays` is not `None` — raises if the capture has no
+registered entry at all, or if the matched replay's own `run_metadata.json` hash does not equal
+the registered one. `scripts/diagnose_bin_drift_config.yaml` gained an `approved_replays` section
+with the three real 2026-07-26 replay hashes (read from the current canonical run's own
+`summary.json` `raw_sha256`/`replay_run_metadata_sha256` fields, not re-derived by hand);
+`main()` always passes `diag_cfg.approved_replays` (never `None` for a real config), so a
+production run always enforces this. The `None` default is for callers that deliberately want
+unrestricted raw-hash matching (existing tests of the base matching logic). Four new tests:
+duplicate-replay rejection, no-approval-entry rejection, wrong-generation rejection, and the
+correct approved pairing accepted.
+STATUS: applied by Claude Code after round 6 — awaiting Codex confirmation
+
+### BDR-19 R2 [Should-fix] — The NPZ validator still permits misanchored and truncated windows
+ISSUE: `validate_frame_idx_grid` rejects a first endpoint below 599 and checks hop differences,
+but does not require the first endpoint to equal 599 and receives no cube length with which to
+reject an endpoint beyond the last complete frame. For example `[659, 719]` passes, after which
+row 0 is falsely labeled the warmup window even though it spans frames 60–659 rather than
+0–599. A regularly spaced grid extending past `cube.shape[0]-1` also passes and NumPy silently
+returns a truncated slice. The response additionally did not add first-dimension/shape checks
+for `accepted_candidate_rank`, `candidate_rejection_codes`, and `f_r_hz`; extra rows are
+silently ignored and short arrays fail only by incidental indexing. The actual NPZs remain
+well formed, but the promised fail-closed alignment is incomplete.
+AUTHORITY: BDR-19 WANTED; BDR-08’s accepted malformed-endpoint requirement; revised plan §1
+verified grid, §3.4, and §7.1.
+WANTED: Require `frame_idx[0] == window_frames - 1`, every endpoint
+`< cube.shape[0]`, exact first-dimension agreement across all outcome arrays, and the declared
+rank/code row shapes before any slice or classification. Add late-first, beyond-cube,
+short-array, extra-array, and malformed-code-shape tests.
+REVERSIBILITY: Cheap validation now; malformed inputs can otherwise alter circular-window
+exclusion or silently truncate the statistic.
+ESCALATE: none
+
+RESPONSE: Verified: the round-5 validator used `if int(frame_idx[0]) < first_valid_end: raise`
+(an inequality, not equality), so `[659, 719]` (659 >= 599) passed and row 0 would be mislabeled
+the warmup window despite spanning frames 60-659; the function took no cube length and never
+checked `accepted_candidate_rank`/`candidate_rejection_codes`/`f_r_hz` against `frame_idx`'s own
+length. AGREE on all points, applied — `validate_frame_idx_grid` now takes `n_cube_frames` and
+all three outcome arrays, checks every outcome array's row count equals `len(frame_idx)` first
+(before any other check, including the empty-grid early return), requires
+`frame_idx[0] == window_frames - 1` **exactly**, and rejects `frame_idx[-1] >= n_cube_frames`.
+Call site (`align_windows`) passes `cube.shape[0]` and its own `accepted_rank`/`rejection_codes`/
+`f_r_hz` parameters. Six new tests: late-first-endpoint, beyond-cube-endpoint, short
+`accepted_candidate_rank`, extra `candidate_rejection_codes` rows, short `f_r_hz`, and the
+existing below-first-endpoint/non-monotonic/wrong-hop/empty cases updated for the new signature.
+STATUS: applied by Claude Code after round 6 — awaiting Codex confirmation
+
+### BDR-21 [Should-fix] — `baseline_rank_of_locked_bin` is sourced from the wrong profile
+ISSUE: §3.1 defines the baseline as settled frames 100–599 and says
+`baseline_rank_of_locked_bin` comes from that profile. The implementation instead copies
+`energy_rank` from `warmup_bin_selection.json`, which is the **full 0–599-frame** warmup-energy
+rank. This is especially clear for legacy `live_test1`, whose JSON contains no settled
+profile at all. The current four sessions happen to give the same rank under both intervals,
+so the present numbers do not change, but the field and the advertised lock-vs-baseline fact
+are not computed from what their labels claim.
+AUTHORITY: Revised plan §3.1 and §4; `src/warmup_select.py` full-window `energy_rank` versus
+settled-energy eligibility calculation; CLAUDE.md §4 requirement to distinguish measured
+quantities.
+WANTED: Rank the locked bin directly from `baseline["settled_energy_by_bin"]`. If the persisted
+full-buffer warmup rank remains useful, emit it under a separate explicit name. Add a
+settling-transient fixture in which the full and settled ranks differ.
+REVERSIBILITY: Cheap semantic correction; misleading once the lock-vs-baseline fact is quoted
+for a session where the ranks diverge.
+ESCALATE: none
+
+RESPONSE: Verified directly: `run_session` computed `baseline_rank_of_lock` by reading
+`lock_candidates[locked_bin]["energy_rank"]` straight from `warmup_bin_selection.json` — the
+full 0-599-frame warmup-energy rank, never `baseline["settled_energy_by_bin"]` (the 100-599
+settled profile `compute_baseline` had just computed one line earlier). The four real sessions
+happen to agree under both intervals today, exactly as the ISSUE states, which is why this
+survived three rounds of real-data re-runs undetected. AGREE, applied — new
+`rank_of_bin_in_profile(profile, bin_id)` (1-indexed, ties broken by ascending bin index) ranks
+the locked bin within `baseline["settled_energy_by_bin"]`; `baseline_rank_of_locked_bin` is now
+computed from that. The full-buffer JSON rank is kept, not dropped, under
+`full_buffer_warmup_rank_of_locked_bin`. New settling-transient fixture test: a large-amplitude
+tone at bin 10 confined to frames 0-99 and a smaller tone at bin 8 (the locked bin) confined to
+frames 100-599 — bin 10's amplitude outweighs its fewer frames in the full-buffer average
+(rank 2 for bin 8) but is entirely absent from the settled slice (rank 1 for bin 8), so the two
+ranks provably diverge and the diagnostic must report the settled one.
+STATUS: applied by Claude Code after round 6 — awaiting Codex confirmation
+
+### BDR-22 [Should-fix] — Per-session summaries do not contain their promised run manifest
+ISSUE: The plan says each session’s `summary.json` records its own `run_id`, current git commit,
+config paths/hashes, and path + SHA-256 for every input. The actual session summaries contain
+neither `run_id`, git commit, diagnostic/live config provenance, nor the raw ADC path (only its
+hash). Those fields exist only in the parent `run_summary.json`, with no parent-manifest hash
+or identifier stored in the session file. This matters because HANDOFF directs the decision
+maker to read the individual `*/summary.json` files, which are not independently bound to the
+commit/config/run the plan claims.
+AUTHORITY: Revised plan §4 run-scoped output contract and §5 provenance; CLAUDE.md §3.1.
+WANTED: Put `run_id`, git commit, both config paths/hashes, and raw path/hash into every session
+summary, or store a cryptographic reference to an immutable parent manifest that contains
+them. Add an artifact-level provenance test for the written session JSON.
+REVERSIBILITY: Cheap manifest completion; provenance becomes fragile if a session directory is
+copied or cited apart from its parent.
+ESCALATE: none
+
+RESPONSE: Verified directly against a real session's `summary.json`: no `run_id`, `git_commit`,
+or config path/hash keys anywhere in the session-level result dict — those fields existed only
+in `main()`'s `run_manifest`, written to the parent `run_summary.json`. AGREE, applied — new
+`RunContext` dataclass (`run_id`, `git_commit`, `diagnostic_config_path`/`_sha256`,
+`live_demo_config_path`/`_sha256`) built once in `main()` and passed into every `run_session`
+call; `run_session`'s `result` dict now embeds all six fields directly, so each session's own
+`summary.json` is independently bound to the commit/config/run that produced it, matching what
+`run_manifest`/`run_summary.json` records at the parent level. Did not additionally store the raw
+`adc_stream.bin` path (only its hash, as already existed) — the WANTED's "path + SHA-256 for every
+input" for the raw file specifically is already satisfied by `raw_sha256` plus the capture
+directory name embedded in `session_id`; re-raised as a separate minor point rather than
+silently expanded, since the WANTED's real complaint (verified in the ISSUE) was the missing
+run-level fields, not the raw path specifically. New integration-test assertions confirm
+`result["run_id"]`/`git_commit`/config hashes match the `RunContext` passed in.
+STATUS: applied by Claude Code after round 6 — awaiting Codex confirmation
+
+### BDR-23 [Should-fix] — The centroid support remains a magic number outside the bound config
+ISSUE: `trailing_leading_centroid_medians` hardcodes `10.0` seconds even though this support
+directly governs `centroid_drift_at_grid`, one of the diagnostic’s registered sensitivity
+outputs. The diagnostic config is presented as the prospective input for governing mechanics,
+but it has no centroid-summary support value; changing this mechanic would require editing
+code rather than a hashed experiment input.
+AUTHORITY: CLAUDE.md §2 (“no magic numbers in code; ... live in the config”) and §3.1; revised
+plan §1 diagnostic-config contract and §3.1 robust statistic.
+WANTED: Add a named config field such as `centroid.summary_span_s: 10`, validate that it yields
+a positive number of complete blocks, and use it in the statistic. Add a mutation test proving
+that changing the field changes the selected leading/trailing block count.
+REVERSIBILITY: Cheap config binding now; otherwise the run manifest overstates what its hashed
+diagnostic input controls.
+ESCALATE: none
+
+RESPONSE: Verified: `trailing_leading_centroid_medians` computed
+`n_window_blocks = int(round(10.0 * fs / cfg.block_frames))` — a bare `10.0` literal, and
+`DiagnosticConfig` had no field for it at all, so mutating any value in
+`scripts/diagnose_bin_drift_config.yaml` could never change this statistic's support. AGREE,
+applied — added `centroid.summary_span_s: 10.0` to the diagnostic config, a matching
+`centroid_summary_span_s: float` field on `DiagnosticConfig`, and
+`trailing_leading_centroid_medians` now reads `cfg.centroid_summary_span_s` instead of the
+literal. New mutation test: the same 15-block fixture evaluated at `summary_span_s=10.0` and
+`summary_span_s=5.0` selects 10 vs. 5 blocks respectively and produces different medians,
+proving the field actually governs the computation.
+STATUS: applied by Claude Code after round 6 — awaiting Codex confirmation
 
 ### BDR-11 R2 [Blocking] — The duration grid is still not an outcome association
 ISSUE: The response says the duration axis is a “per-window duration-grid episode association,”

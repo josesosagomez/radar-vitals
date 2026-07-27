@@ -23,6 +23,31 @@ blocks:
 episodes:
   gap_rule: no_bridging         # a single on-baseline block ends an off-baseline episode
 
+centroid:
+  # Support (seconds) for the robust trailing/leading centroid-drift statistic
+  # (plans/bin_drift_diagnostic.md §3.1, BDR-23): the number of complete 1 s
+  # blocks used is round(summary_span_s / block_duration). Governs
+  # `centroid_drift_at_grid` directly -- was a hardcoded 10.0 literal until
+  # BDR-23, so mutating this value previously would not have changed anything.
+  summary_span_s: 10.0
+
+approved_replays:
+  # Maps each capture's raw adc_stream.bin SHA-256 to the SHA-256 of the ONE
+  # approved replay's run_metadata.json for that capture (BDR-20). Raw-hash
+  # equality alone proves only which BYTES were replayed; this additionally
+  # pins which ESTIMATOR GENERATION produced the recorded DSP outcomes. A
+  # replay matching a capture's raw bytes but not this hash is REJECTED, even
+  # though `--replays` would otherwise accept it by content match alone --
+  # direct inspection found at least six replay directories sharing massimo1's
+  # raw hash across generations from 2026-07-15 through 2026-07-27, including
+  # the non-interchangeable 2026-07-25/2026-07-26 pair (HANDOFF.md §5).
+  # The three entries below are the 2026-07-26 replays used by the current
+  # canonical run (results/diagnose/bin_drift/20260727T210936Z); live_test1 has
+  # no entry by design (BDR-07 Option A -- no replay is ever approved for it).
+  dc2be2d008b48227c4bebde9bb5974133d3cf60196b4216e1ba630d175203f18: dc0c5938469f39ee4077ea0e7a3e54ed915910d1b311c0b3bd9bcbfddd813c50  # massimo1 -> 20260726_173434_replay_unknown
+  112a64bf3cfc820868ad46df19a9dbfba7b0ce2612547e4dd3e5131bec1f88bf: b10509cd84d2cb6df5469bf62976e3ee3e55a14762ba24722ce5b664009f83f9  # massimo2 -> 20260726_173653_replay_unknown
+  91bc422d9f33bbde0fc1549018692d008dee4f9c04ca374e04f153bb80a7a96d: 2fb8336402dacf97ccc38eec7ece59646eb9d019efd3bd5908b4945dc37888ab  # sweep    -> 20260726_173914_replay_unknown
+
 offsets:
   # All 10 disjoint non-overlapping hop-offset phases {k, k+10, k+20, ...} for k in phases.
   phases: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
