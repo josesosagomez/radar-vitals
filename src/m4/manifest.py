@@ -24,6 +24,7 @@ cannot be mistaken for scoring output: it carries `mode: DEVELOPMENT`, and
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import re
@@ -31,6 +32,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import Any
+
+import numpy as np
 
 # ── Controlled vocabularies ───────────────────────────────────────────────────
 
@@ -265,7 +268,12 @@ _REQUIRED_SCORING_FIELDS: tuple[tuple[str, str], ...] = (
     ("raw_path", "Integrity"),
     ("raw_sha256", "Integrity"),
     ("truncation_bytes", "Integrity"),
-    ("checksum_ok", "Integrity"),
+    # `checksum_ok` is GONE (S12R-03 R2). It was an operator-supplied boolean, so the operator
+    # supplied both the verdict and the fact that made M4's "objective recomputation" agree
+    # with it — the exact double-source M4R-04 exists to remove. Retaining it and
+    # cross-checking would have kept two independently editable declarations of one fact, and
+    # a mismatch would still need someone to decide which one controls the frozen disposition.
+    # The digest is now DERIVED by `verify_bound_files` from the bytes on disk.
     ("packets_received", "Integrity"),
     ("packets_dropped", "Integrity"),
     ("n_frames", "Integrity"),
@@ -368,7 +376,8 @@ class SessionManifest:
     raw_path: str | None = None
     raw_sha256: str | None = None
     truncation_bytes: int | None = None
-    checksum_ok: bool | None = None
+    #: DERIVED by `verify_bound_files`, never declared in the manifest (S12R-03 R2).
+    raw_digest_ok: bool | None = None
     packets_received: int | None = None
     packets_dropped: int | None = None
     n_frames: int | None = None
@@ -436,7 +445,7 @@ def derive_settle_result(fields: dict, session_id: str) -> tuple[bool, tuple[str
 
 
 def recompute_disposition(
-    fields: dict, session_id: str
+    fields: dict, session_id: str, *, raw_digest_ok: bool
 ) -> tuple[SessionDisposition, tuple[str, ...], tuple[str, ...]]:
     """Derive `(verdict, exclusion_reasons, flags)` from the primitive fields alone.
 
@@ -502,7 +511,6 @@ def recompute_disposition(
     intended = _finite_number(fields, "intended_duration_s", session_id, minimum=0.0)
     actual = _finite_number(fields, "actual_duration_s", session_id, minimum=0.0)
     early_stop = _exact_bool(fields, "early_stop", session_id)
-    checksum_ok = _exact_bool(fields, "checksum_ok", session_id)
     truncation = _exact_int(fields, "truncation_bytes", session_id, minimum=0)
     received = _exact_int(fields, "packets_received", session_id, minimum=0)
     dropped = _exact_int(fields, "packets_dropped", session_id, minimum=0)
@@ -561,7 +569,17 @@ def recompute_disposition(
         reasons.extend(settle_reasons)
 
     # ── §6 item 4: corrupt raw — checksum limb only (truncation limb: see docstring) ──
-    if not checksum_ok:
+    #
+    # `raw_digest_ok` is DERIVED from the bytes on disk by `verify_bound_files`, never read
+    # from the manifest (S12R-03 R2). It is a required keyword with no default: a caller that
+    # has not verified the file cannot accidentally get an "admitted" verdict by omission.
+    if type(raw_digest_ok) is not bool:
+        raise ManifestError(
+            f"session {session_id!r}: raw_digest_ok must be a derived bool, got "
+            f"{raw_digest_ok!r}. It comes from hashing the bound raw file — if you are "
+            "calling this directly, verification has not run."
+        )
+    if not raw_digest_ok:
         reasons.append("stored_checksum_failed")
     if truncation > 0:
         flags.append("raw_truncated_trailing")
@@ -764,7 +782,9 @@ def _validate_rate_schedule(
     return tuple(raw)
 
 
-def parse_session(fields: dict, mode: Mode) -> SessionManifest:
+def parse_session(
+    fields: dict, mode: Mode, *, raw_digest_ok: bool | None = None
+) -> SessionManifest:
     """Validate one session's fields and return the manifest record.
 
     In SCORING mode every §4 required field must be present and every §4.1 rule must hold,
@@ -925,7 +945,16 @@ def parse_session(fields: dict, mode: Mode) -> SessionManifest:
                 f"{', '.join(reasons)}). A logged pre-capture attempt is not admitted."
             )
     elif mode is Mode.SCORING:
-        recomputed, reasons, flags = recompute_disposition(fields, session_id)
+        if raw_digest_ok is None:
+            raise ManifestError(
+                f"session {session_id!r}: scoring-mode parsing needs the DERIVED raw-digest "
+                "result, which comes from hashing the bound raw file. Use `load_manifest`, "
+                "which verifies every binding before returning a session — verification is "
+                "not an optional caller convention (S12R-07 R2)."
+            )
+        recomputed, reasons, flags = recompute_disposition(
+            fields, session_id, raw_digest_ok=raw_digest_ok
+        )
         if recomputed is not disposition:
             raise ManifestError(
                 f"session {session_id!r}: operator recorded disposition="
@@ -960,7 +989,7 @@ def parse_session(fields: dict, mode: Mode) -> SessionManifest:
         raw_path=fields.get("raw_path"),
         raw_sha256=fields.get("raw_sha256"),
         truncation_bytes=fields.get("truncation_bytes"),
-        checksum_ok=fields.get("checksum_ok"),
+        raw_digest_ok=raw_digest_ok,
         packets_received=fields.get("packets_received"),
         packets_dropped=fields.get("packets_dropped"),
         n_frames=fields.get("n_frames"),
@@ -982,7 +1011,127 @@ def parse_session(fields: dict, mode: Mode) -> SessionManifest:
     )
 
 
-def load_manifest(path: str | Path, mode: Mode) -> list[SessionManifest]:
+def _sha256_file(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def verify_bound_files(fields: dict, session_id: str, root: Path) -> bool:
+    """Hash every bound artifact and return the DERIVED raw-digest result (S12R-03, S12R-07).
+
+    **The disposition split is the load-bearing part**, confirmed by Codex in S12R-07 R3 and
+    implemented exactly as stated there:
+
+    * **raw file present and readable, digest != `raw_sha256`** → this is the §6 item-4
+      "stored file checksum fails" *capture disposition*. It is **returned**, not raised, so
+      the caller feeds it into `recompute_disposition` and the session becomes EXCLUDED with
+      a §6 reason that belongs in the study's counts.
+    * **config / validity-map / reference digest mismatch** → a **provenance failure**.
+      `ManifestError`, never a §6 reason: no binding authority assigns these a session
+      disposition, so counting one as an exclusion would put a cause that never happened
+      into a published table (S12R-10's principle, applied to the I/O layer).
+    * **a bound file missing at scoring time** → also a provenance failure. A reference that
+      was previously bound by path + digest and is gone has been **LOST, not never-acquired**;
+      turning that into §6 item 6 `NO_AGREEMENT` would let the filesystem supply both the
+      fact and the verdict. `NO_AGREEMENT` derives only from bound acquisition evidence.
+
+    Paths resolve against one documented `root` so a manifest cannot reach outside the study
+    tree or depend on the process working directory. **Hash before reading** for content: the
+    validity map is only interpreted once its digest matches.
+    """
+    def resolve(key: str) -> Path:
+        rel = fields.get(key)
+        if type(rel) is not str or not rel.strip():
+            raise ManifestError(
+                f"session {session_id!r}: binding {key!r}={rel!r} must be a non-empty "
+                "string before it can be verified."
+            )
+        p = (root / rel).resolve()
+        if root.resolve() not in p.parents and p != root.resolve():
+            raise ManifestError(
+                f"session {session_id!r}: {key}={rel!r} resolves outside the manifest root "
+                f"{root}. Every bound artifact lives under one documented root."
+            )
+        return p
+
+    def require_digest(key_path: str, key_hash: str, what: str) -> bool:
+        _sha256(fields, key_hash, session_id)
+        p = resolve(key_path)
+        if not p.is_file():
+            raise ManifestError(
+                f"session {session_id!r}: {what} bound at {key_path}={fields[key_path]!r} "
+                f"does not exist under {root}. It was bound by path + SHA-256, so it was "
+                "acquired and is now LOST — that is a provenance failure, not a capture "
+                "disposition, and never a no-agreement session (S12R-07 R3)."
+            )
+        return _sha256_file(p) == fields[key_hash]
+
+    # Raw: a mismatch is a §6 item-4 DISPOSITION, returned to the caller.
+    raw_digest_ok = require_digest("raw_path", "raw_sha256", "the raw capture")
+
+    # Everything else: a mismatch is a PROVENANCE FAILURE.
+    for key_path, key_hash, what in (
+        ("capture_config_path", "capture_config_sha256", "the capture config"),
+        ("masimo_path", "masimo_sha256", "the Masimo reference"),
+        ("settle_evidence_path", "settle_evidence_sha256", "the settle evidence"),
+        ("frame_validity_map_path", "frame_validity_map_sha256", "the frame validity map"),
+    ):
+        if not require_digest(key_path, key_hash, what):
+            raise ManifestError(
+                f"session {session_id!r}: {what} at {fields[key_path]!r} does not match its "
+                f"bound {key_hash}. No binding authority gives this a §6 session "
+                "disposition, so it is a provenance failure and not an exclusion reason — "
+                "counting it as one would report a cause that never happened."
+            )
+
+    _verify_validity_map(fields, session_id, resolve("frame_validity_map_path"))
+    return raw_digest_ok
+
+
+def _verify_validity_map(fields: dict, session_id: str, path: Path) -> None:
+    """Plan §7's per-frame validity map: exactly one entry per frame, counts agreeing.
+
+    Only reached once the file's digest matches (hash before read). **Convention, defined
+    here and not transcribed:** the map is a 1-D boolean array in which `True` marks a
+    **valid** frame, so `n_invalid_frames` is the count of `False`. §7 requires "a per-frame
+    validity / zero-fill map" without fixing its dtype or polarity — flagged for review
+    rather than buried.
+    """
+    try:
+        arr = np.load(path, allow_pickle=False)
+    except Exception as exc:                                  # noqa: BLE001 - reported as-is
+        raise ManifestError(
+            f"session {session_id!r}: the frame validity map at {path} could not be read as "
+            f"a NumPy array ({type(exc).__name__}: {exc})."
+        ) from None
+
+    if arr.dtype != np.bool_ or arr.ndim != 1:
+        raise ManifestError(
+            f"session {session_id!r}: the frame validity map must be a 1-D boolean array, "
+            f"got dtype={arr.dtype} ndim={arr.ndim}."
+        )
+    n_frames = fields["n_frames"]
+    if arr.size != n_frames:
+        raise ManifestError(
+            f"session {session_id!r}: the frame validity map has {arr.size} entries but "
+            f"n_frames={n_frames}. Plan §7 requires exactly one entry per frame — without "
+            "that, the map cannot say WHICH windows are affected, which is the whole reason "
+            "it is bound rather than the aggregate n_dropped."
+        )
+    n_invalid = int((~arr).sum())
+    if n_invalid != fields["n_invalid_frames"]:
+        raise ManifestError(
+            f"session {session_id!r}: the frame validity map marks {n_invalid} invalid "
+            f"frames but n_invalid_frames={fields['n_invalid_frames']}."
+        )
+
+
+def load_manifest(
+    path: str | Path, mode: Mode, *, root: str | Path | None = None
+) -> list[SessionManifest]:
     """Load and validate a manifest JSON file: `{"sessions": [ … ]}`.
 
     `mode` is supplied by the caller, not read from the file, so a manifest cannot promote
@@ -1017,7 +1166,21 @@ def load_manifest(path: str | Path, mode: Mode) -> list[SessionManifest]:
     if not isinstance(sessions, list):
         raise ManifestError(f"{p}: 'sessions' must be an array, got {type(sessions).__name__}")
 
-    parsed = [parse_session(s, mode) for s in sessions]
+    # Verification is part of the load path, not a helper a future caller might forget
+    # (S12R-07 R2). Paths resolve against `root`, which defaults to the manifest's own
+    # directory so the document and the artifacts it binds travel together.
+    base = Path(root).resolve() if root is not None else p.parent.resolve()
+
+    parsed = []
+    for s in sessions:
+        digest_ok = None
+        if mode is Mode.SCORING and isinstance(s, dict) and s.get("record_kind") != (
+            RecordKind.PRE_CAPTURE_ATTEMPT.value
+        ):
+            # A pre-capture attempt binds no capture artifacts; its settle evidence is
+            # verified inside `parse_session`'s own contract.
+            digest_ok = verify_bound_files(s, s.get("session_id", "<unnamed>"), base)
+        parsed.append(parse_session(s, mode, raw_digest_ok=digest_ok))
 
     seen: set[str] = set()
     for s in parsed:
