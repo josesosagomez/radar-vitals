@@ -36,20 +36,20 @@ should be read with this pivot in mind, not treated as current without cross-che
 
 ## 2. Current state
 
-**Branch `vital_signs_v9c`, HEAD `f41b018`, pushed — `origin/vital_signs_v9c` is up to date.**
-Suite **1681 passed, 1 skipped, 0 failed** (`conda run -n radar-vitals python -m pytest tests/ -q`,
-2026-07-28) — 1616 baseline + 65 (the bin-drift diagnostic's own tests, grown across two
-post-implementation review rounds: 34 shipped initially, +8 in round 4, +31 in round 5 [BDR-11
-R2, BDR-14…19] after the review found the window-scale energy measurement had been approximated
-rather than computed — see HISTORY.md 2026-07-28 for the full account). v9 UI work remains
-parked in `git stash@{0}`; relocking/display-holdover stay reverted (HISTORY.md 2026-07-09).
+**Branch `vital_signs_v9c`, HEAD `81c1a9f`, being pushed as part of this update —
+`origin/vital_signs_v9c` should match after this session's push completes.**
+Suite **1695 passed, 1 skipped, 0 failed** (`conda run -n radar-vitals python -m pytest tests/ -q`,
+2026-07-28) — 1616 baseline + 79 (the bin-drift diagnostic's own tests, grown across three
+post-implementation review rounds: 34 shipped initially, +8 in round 4, +31 in round 5, +14 in
+round 6 [BDR-14 R2, BDR-19 R2, BDR-20…23] — see HISTORY.md 2026-07-28 entries for the full
+account). v9 UI work remains parked in `git stash@{0}`; relocking/display-holdover stay reverted
+(HISTORY.md 2026-07-09).
 
-**This session's work is committed and pushed** (8 commits since `accfd53`: the ECA experiment
-config, the reusable review templates, the bin-drift diagnostic's initial build, a HISTORY/HANDOFF
-update, a round-4 review-driven fix, a round-4 HISTORY/HANDOFF update, a round-5 review-driven
-fix, a round-5 HISTORY/HANDOFF update — see HISTORY.md for details). `results/` (gitignored, as
-always) gained several new replay directories from this session's work (2026-07-26/27
-timestamps) plus `results/diagnose/bin_drift/` — not tracked, not part of these commits.
+**This session's work is committed** (one commit, `81c1a9f`, on top of the previous session's
+`8379a87`: the round-6 review-driven fix — code + tests + plan doc + cross-review debate log, all
+together — plus this HISTORY/HANDOFF update as a second commit). `results/` (gitignored, as
+always) gained one new run directory this session, `results/diagnose/bin_drift/20260727T215319Z/`
+— not tracked, not part of these commits.
 
 ### M4 (deprioritized, not touched this session — state unchanged from before the pivot)
 
@@ -71,52 +71,60 @@ exists from M4.
 
 **This is almost certainly the immediate next action for a new chat.** The Codex cross-review
 (`plans/bin_drift_diagnostic_cross_review.md`) is an active, ongoing loop — it has already
-reopened twice *after* implementation (rounds 4 and 5) and found real code bugs each time, not
-just wording issues. Do not assume the loop is closed without checking:
+reopened three times *after* implementation (rounds 4, 5, and 6) and found real code bugs each
+time, not just wording issues. Do not assume the loop is closed without checking:
 
 1. Read `plans/bin_drift_diagnostic_cross_review.md`'s `COMMENTS OF CODEX` section (near the
-   top). **Round 6 already landed (2026-07-28, end of the previous session) and is UNPROCESSED**
-   — 6 findings: `BDR-14 R2` and `BDR-19 R2` (reopened — the round-5 fixes for window-scale
-   energy persistence and the frame_idx validator were each incomplete) plus 4 new
-   (`BDR-20`: replay-generation binding is hash-only, doesn't reject a wrong-generation replay
-   with a matching raw hash — verified live_test1... no, massimo1's raw hash actually matches
-   *six* different replay directories spanning 2026-07-15 through 2026-07-27; `BDR-21`:
-   `baseline_rank_of_locked_bin` is sourced from the full-buffer warmup rank, not the settled
-   profile §3.1 claims; `BDR-22`: per-session `summary.json` lacks its own `run_id`/git-commit/
-   config-hash provenance, only the parent `run_summary.json` has it; `BDR-23`: the 10 s
-   centroid-support window is hardcoded, not config-bound). **This is the actual next task** —
-   process it before anything else in §3.2–3.4.
+   top). **As of this writing it reads `(round 6 processed — see DEBATE COMMENTS. Awaiting Codex
+   round 7.)`** — round 6's 6 findings (`BDR-14 R2`, `BDR-19 R2` reopened; `BDR-20`...`BDR-23`
+   new) were verified against the shipped code, all confirmed real, fixed, tested, committed
+   (`81c1a9f`), and re-run on all 4 real captures — see HISTORY.md 2026-07-28 for the full
+   account. **If Codex has posted round 7 findings by the time you read this, `COMMENTS OF CODEX`
+   will show them instead of the placeholder above — process them before anything else in
+   §3.2–3.4.** If it still shows the placeholder, round 7 has not landed yet; check again before
+   assuming the loop is closed.
 2. **Process a new round** using
-   `plans/bin_drift_diagnostic_claude_review_loop_prompt.md` as the procedure — it was updated at
-   the end of this session to reflect that this is now a **post-implementation** loop: findings
-   can be real bugs in `scripts/diagnose_bin_drift.py`, not just plan text, and processing one
-   means verify against the actual running code/real output → apply the code fix → add a test
-   that would have caught it → run `tests/test_diagnose_bin_drift.py` then the full suite → once
-   the round's batch is done, **commit** (the diagnostic's own clean-tree gate requires this) →
-   **re-run on all 4 real captures** (paths in §6 below) → spot-check the changed `summary.json`
-   fields against real output → append `HISTORY.md` + rewrite `HANDOFF.md` (new `run_id`, new
-   commit hash) → commit and push. This exact cycle has already happened twice (rounds 4, 5) —
-   follow the same pattern, don't improvise a lighter one.
+   `plans/bin_drift_diagnostic_claude_review_loop_prompt.md` as the procedure — this is a
+   **post-implementation** loop: findings can be real bugs in `scripts/diagnose_bin_drift.py`, not
+   just plan text, and processing one means verify against the actual running code/real output →
+   apply the code fix → add a test that would have caught it → run
+   `tests/test_diagnose_bin_drift.py` then the full suite → once the round's batch is done,
+   **commit** (the diagnostic's own clean-tree gate requires this) → **re-run on all 4 real
+   captures** (paths in §6 below) → spot-check the changed `summary.json` fields against real
+   output → append `HISTORY.md` + rewrite `HANDOFF.md` (new `run_id`, new commit hash) → commit
+   and push. This exact cycle has now happened three times (rounds 4, 5, 6) — follow the same
+   pattern, don't improvise a lighter one.
 3. **If `COMMENTS OF CODEX` says `NO MORE COMMENTS`** with no open items in `DEBATE COMMENTS`,
    the review is closed. Do **not** treat that as a cue to build something new — implementation is
    already done. The remaining task becomes the human decision in the paragraph below, which is
    not part of the review loop.
 
-A range-bin drift diagnostic was designed, cross-reviewed with Codex (5 real rounds — the review
-reopened **twice** after implementation: round 4 found the decided centroid-drift grid was never
-wired up; round 5 found the diagnostic's stated core measurement — per-bin energy at two time
-scales — had been approximated (mode/mean of 1 s blocks) rather than computed directly at the
-600-frame window scale, plus a "trailing 10 s" arithmetic bug, decode geometry validated against
-the wrong metadata file, and motion energy computed for the whole capture instead of per window.
-All fixed and re-verified against real data; `plans/bin_drift_diagnostic_cross_review.md`),
-implemented (`scripts/diagnose_bin_drift.py`), and **run on all 4 real captures three times** as
-each round's fixes changed what was actually being measured.
+A range-bin drift diagnostic was designed, cross-reviewed with Codex (6 real rounds — the review
+reopened **three times** after implementation: round 4 found the decided centroid-drift grid was
+never wired up; round 5 found the diagnostic's stated core measurement — per-bin energy at two
+time scales — had been approximated (mode/mean of 1 s blocks) rather than computed directly at
+the 600-frame window scale, plus a "trailing 10 s" arithmetic bug, decode geometry validated
+against the wrong metadata file, and motion energy computed for the whole capture instead of per
+window; round 6 found the round-5 window-scale energy fix still discarded the profile before
+persisting it, replay-to-capture matching bound only raw bytes (not the estimator generation),
+the frame_idx validator still accepted a misanchored/truncated grid, `baseline_rank_of_locked_bin`
+was sourced from the wrong profile, per-session summaries lacked their own provenance, and the
+centroid-drift support span was hardcoded outside the config. All fixed and re-verified against
+real data; `plans/bin_drift_diagnostic_cross_review.md`), implemented
+(`scripts/diagnose_bin_drift.py`), and **run on all 4 real captures four times** as each round's
+fixes changed what was actually being measured (or, in round 6's case, what was persisted and
+provenanced).
 
-**Current evidence: `results/diagnose/bin_drift/20260727T210936Z/`** — both earlier runs
-(`20260727T192643Z`, `20260727T195535Z`) are superseded (kept on disk, do not cite either; the
-second used the block-aggregation shortcut round 5 replaced with direct window-scale
-computation). It measures whether the in-gate radar energy profile drifts away from its settled
-warmup baseline over a session, and whether that's associated with `gate_not_run` outcomes —
+**Current evidence: `results/diagnose/bin_drift/20260727T215319Z/`** — all three earlier runs
+(`20260727T192643Z`, `20260727T195535Z`, `20260727T210936Z`) are superseded (kept on disk, do not
+cite any of them; round 6 changed persistence/validation/provenance, not the underlying
+measurement — every top-level statistic printed to console (`baseline_argmax_bin`, `locked_bin`,
+`episode_count_at_grid`, `centroid_drift_at_grid`) is numerically identical between the round-5
+and round-6 runs, confirmed by direct comparison. Cite the round-6 run: it is the only one whose
+`summary.json` carries the round-6 provenance/rank fields, and the only one produced under the
+now-enforced `approved_replays` generation binding). It measures whether the in-gate radar energy
+profile drifts away from its settled warmup baseline over a session, and whether that's
+associated with `gate_not_run` outcomes —
 **deliberately an evidence summary, not an automatic verdict** (both open design choices from
 review — sensitivity-grid framing and the `live_test1`-has-no-matched-replay scope question —
 were resolved by the user as Option A on both: purely exploratory, no single threshold;
@@ -138,7 +146,7 @@ covered/gate_not_run/other_rejected windows interspersed rather than temporally 
 leans toward "no sustained postural drift in these 4 single-subject sessions, and where drift
 exists it doesn't cleanly track DSP outcome" but is n=1-subject evidence — **the next step is a
 human decision, not more code**: read
-`results/diagnose/bin_drift/20260727T210936Z/*/summary.json` and `drift_overview.png`, then
+`results/diagnose/bin_drift/20260727T215319Z/*/summary.json` and `drift_overview.png`, then
 decide go/no-go on the 5-bin relock tracker.
 
 ### 3.2 Coverage: the mechanism is identified, the fix is not yet verified correct
@@ -194,13 +202,18 @@ change from `notes/protocol.md`.
 - **BDR-07 (bin-drift): Option A** — `live_test1` gets baseline-only evidence;
   `correlation_not_available` for its outcome table; **no replay of it was generated**, because
   the three existing comparison replays were made at commit `5537df5` with an unrecoverable
-  dirty diff, and HEAD has moved well past that commit since (now `f41b018`) — re-running
-  `scripts/live_demo.py` now would **not** reproduce a matched generation.
+  dirty diff, and HEAD has moved well past that commit since (now `81c1a9f`) — re-running
+  `scripts/live_demo.py` now would **not** reproduce a matched generation. **This is also now
+  enforced in code, not just documented**: `scripts/diagnose_bin_drift_config.yaml`'s
+  `approved_replays` pins each of the three real captures' raw SHA-256 to its one approved
+  replay's `run_metadata.json` SHA-256 (BDR-20, HISTORY.md 2026-07-28 round-6 entry) — a
+  regenerated replay with a different generation hash will be rejected by
+  `match_replays_to_captures` until `approved_replays` is updated to the new hash.
 - **The bin-drift diagnostic requires a clean tree** to produce citable evidence
   (`scripts/diagnose_bin_drift_config.yaml: provenance.require_clean_tree`) — a dirty-tree run is
   permitted (`--allow-dirty`) but is stamped `reproducible: false` in its own `summary.json` and
-  must not be cited. The current `20260727T210936Z` run was from a clean tree (`reproducible: true`
-  in every session's summary) — committed at `f41b018` before the run, per the diagnostic's own
+  must not be cited. The current `20260727T215319Z` run was from a clean tree (`reproducible: true`
+  in every session's summary) — committed at `81c1a9f` before the run, per the diagnostic's own
   gate.
 - **`PeakWorkingSetSize` is a process-lifetime high-water mark, and round 5 found the round-4
   memory figure was sampled at the wrong point** — before the (then whole-capture) motion-energy
@@ -362,7 +375,7 @@ exist yet.
 |---|---|
 | Project rules (read first) | `CLAUDE.md` |
 | Whole-project milestone plan (pre-pivot — read against §3) | `plans/implementation_plan.md` |
-| **Bin-drift diagnostic — plan, review (round 5, awaiting Codex), run output** | `plans/bin_drift_diagnostic.md`, `plans/bin_drift_diagnostic_cross_review.md`, `results/diagnose/bin_drift/20260727T210936Z/` (current — `20260727T192643Z` and `20260727T195535Z` are both superseded, kept but not citable) |
+| **Bin-drift diagnostic — plan, review (round 6 processed, awaiting Codex round 7), run output** | `plans/bin_drift_diagnostic.md`, `plans/bin_drift_diagnostic_cross_review.md`, `results/diagnose/bin_drift/20260727T215319Z/` (current — `20260727T192643Z`, `20260727T195535Z`, `20260727T210936Z` are all superseded, kept but not citable) |
 | **Bin-drift review-loop procedure (start here to resume the loop, §3.1)** | `plans/bin_drift_diagnostic_claude_review_loop_prompt.md` (your side), `plans/bin_drift_diagnostic_codex_review_prompt.md` (Codex's side — for reference / re-sending fresh, not something you run) |
 | Bin-drift diagnostic code + tests | `scripts/diagnose_bin_drift.py`, `scripts/diagnose_bin_drift_config.yaml`, `tests/test_diagnose_bin_drift.py` |
 | **Reusable cross-review prompt templates** (Codex + Claude loop sides) | `plans/codex_review_prompt_template.md`, `plans/claude_review_loop_prompt_template.md` |
@@ -398,15 +411,30 @@ evidence), `live_estimates.csv` (diagnostic only, never a scoring input),
 - `window_audit.csv` — per-window, `window_argmax_bin`/`window_centroid` computed directly on
   each window's own 600-frame slice (not derived from blocks, since round 5)
 - `motion_energy_windows.npz` — real `(n_windows, n_bins)` matrix, empty for `live_test1`
-- `summary.json` — baseline profile + `occupancy`, warmup-recompute check, episodes,
-  `episode_count_at_grid` (session-level, outcome-blind) + `centroid_drift_at_grid`
-  (session-level) + `duration_grid_by_outcome` (per-window, per-outcome-class, round 5),
-  `outcome_stratified_report` (full-exposure + transitional, with normalized fraction),
-  `offset_phase_report` (all 10 hop-offset phases), provenance (`capture_run_metadata_sha256` /
-  `replay_run_metadata_sha256` as two distinct hashes), `reproducible` flag, and three memory
-  fields (`mem_available_preflight`, `mem_peak_working_set_after_decode`,
+- `window_energy_windows.npz` — **new in round 6 (BDR-14 R2)** — the ordinary (non-motion)
+  per-window per-bin energy profile `align_windows` computes to derive `window_argmax_bin`/
+  `window_centroid`, persisted as its own `(n_windows, n_bins)` matrix (`window_indices`, `bins`,
+  `matrix`, `matrix_rel_baseline_db`) rather than discarded — every saved
+  `window_argmax_bin`/`window_centroid` is exactly recomputable from this file, verified against
+  the real 2026-07-28 round-6 run
+- `summary.json` — **each session's own copy of the run manifest, new in round 6 (BDR-22)**:
+  `run_id`, `git_commit`, `diagnostic_config_path`/`_sha256`, `live_demo_config_path`/`_sha256`
+  (previously only `run_summary.json` at the parent level had these). Plus: baseline profile +
+  `occupancy`, warmup-recompute check, episodes, `episode_count_at_grid` (session-level,
+  outcome-blind) + `centroid_drift_at_grid` (session-level, support now config-bound via
+  `centroid.summary_span_s`, round 6 BDR-23) + `duration_grid_by_outcome` (per-window,
+  per-outcome-class, round 5), `outcome_stratified_report` (full-exposure + transitional, with
+  normalized fraction), `offset_phase_report` (all 10 hop-offset phases), provenance
+  (`capture_run_metadata_sha256` / `replay_run_metadata_sha256` as two distinct hashes),
+  `baseline_rank_of_locked_bin` (round 6 BDR-21: now sourced from the settled baseline profile,
+  not the full-buffer warmup-JSON rank) alongside `full_buffer_warmup_rank_of_locked_bin` (the
+  full-buffer rank, kept under its own name), `reproducible` flag, and three memory fields
+  (`mem_available_preflight`, `mem_peak_working_set_after_decode`,
   `mem_peak_working_set_after_session`)
 - `drift_overview.png` — a real heatmap (dB rel. per-block max) with baseline/argmax/centroid
   overlay and a window-outcome strip (since round 5; was a 2-line plot before)
 
-`<run_id>/run_summary.json` aggregates all sessions in that run.
+`<run_id>/run_summary.json` aggregates all sessions in that run. As of round 6, a replay is only
+accepted for a capture if its `run_metadata.json` SHA-256 matches the entry registered for that
+capture's raw hash in `scripts/diagnose_bin_drift_config.yaml`'s `approved_replays` (BDR-20) — see
+the gotcha in §5 above before regenerating any replay.

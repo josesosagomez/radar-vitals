@@ -7024,3 +7024,83 @@ read, `plans/bin_drift_diagnostic_cross_review.md`'s `COMMENTS OF CODEX` section
 findings instead of the "awaiting Codex round 6" placeholder — process them per
 `plans/bin_drift_diagnostic_claude_review_loop_prompt.md`.
 
+## 2026-07-28 - Bin-drift diagnostic round 6: window-energy persistence, replay-generation
+binding, and per-session provenance
+
+**Set out to do:** process round 6 of the bin-drift diagnostic's post-implementation cross-review
+(`plans/bin_drift_diagnostic_cross_review.md`), which had landed at the end of the prior session
+but was unprocessed. Six findings: two reopened items (`BDR-14 R2`, `BDR-19 R2` — round-5's fixes
+for window-scale energy and the frame_idx validator were each incomplete) plus four new
+(`BDR-20`...`BDR-23`).
+
+**Worked (with evidence):** verified all six findings directly against the shipped code (not from
+memory) before accepting any of them — every one held up as a real gap, not a wording dispute.
+Fixed all six:
+- **BDR-14 R2** — `align_windows` computed the full per-bin window-scale energy profile to derive
+  `window_argmax_bin`/`window_centroid`, then discarded it; neither `bin_energy_blocks.csv`
+  (block-scale only) nor `motion_energy_windows.npz` (a different statistic) could audit it.
+  Added `WindowRow.window_energy_by_bin`, `build_window_energy_matrix`/`write_window_energy_npz`,
+  and a new `window_energy_windows.npz` output per session. Verified on the real re-run: loading
+  massimo1's `window_energy_windows.npz` and recomputing window 0's argmax/centroid from the
+  stored matrix reproduces `window_audit.csv`'s own recorded values exactly (23, 24.27324...).
+- **BDR-20** — `match_replays_to_captures` bound only raw-byte equality; a `matched_replay_hashes`
+  set was computed but never checked, so two replays matching the same capture silently kept
+  whichever came last, and any replay sharing a capture's raw bytes was accepted regardless of
+  which estimator generation produced its recorded outcomes (direct inspection found six replay
+  directories sharing massimo1's raw hash across 2026-07-15...2026-07-27 generations). Added an
+  `approved_replays` mapping (capture raw SHA-256 -> approved replay `run_metadata.json` SHA-256)
+  to `scripts/diagnose_bin_drift_config.yaml`, populated with the three real 2026-07-26 replay
+  hashes read from the prior run's own `summary.json` (not re-derived by hand); duplicate-match
+  and wrong/unregistered-generation rejection are now enforced, unconditionally for duplicates and
+  whenever `approved_replays` is not `None` (always true for a real config, so every production
+  run enforces it). The real re-run's three replays all matched their registered approvals on the
+  first try, confirming the hashes were captured correctly.
+- **BDR-19 R2** — `validate_frame_idx_grid` rejected a first endpoint *below* 599 but not above it
+  (`[659, 719]` passed, mislabeling row 0 as the warmup window), had no cube length to reject an
+  endpoint past the last complete frame, and never checked that
+  `accepted_candidate_rank`/`candidate_rejection_codes`/`f_r_hz` had exactly one row per
+  `frame_idx` entry. Now requires `frame_idx[0] == window_frames - 1` exactly, every endpoint
+  `< n_cube_frames`, and exact row-count agreement across all three outcome arrays, all raising
+  `ValueError` before any slicing.
+- **BDR-21** — `baseline_rank_of_locked_bin` was copied from `warmup_bin_selection.json`'s
+  full-buffer (frames 0-599) `energy_rank`, not computed from the diagnostic's own settled
+  (100-599) baseline profile — a different quantity that happened to agree on all four real
+  sessions today. Added `rank_of_bin_in_profile`; the field is now computed from
+  `baseline["settled_energy_by_bin"]`, with the full-buffer JSON rank kept under its own name
+  (`full_buffer_warmup_rank_of_locked_bin`) rather than dropped. A new settling-transient fixture
+  test (large tone at one bin confined to frames 0-99, smaller tone at the locked bin confined to
+  100-599) proves the two ranks can genuinely diverge (2 vs. 1). On the real re-run both fields
+  still read 6 for massimo1, confirming the fix is a semantic correction, not a value change.
+- **BDR-22** — per-session `summary.json` files carried none of `run_id`/`git_commit`/config
+  paths+hashes; only the parent `run_summary.json` did, so a session directory cited or copied
+  apart from its parent had no independent provenance binding. Added a `RunContext` dataclass
+  built once in `main()` and passed into every `run_session` call; all six fields are now embedded
+  in every session's own `summary.json`. Verified on the real re-run: massimo1's session summary
+  now carries `run_id=20260727T215319Z`, `git_commit=81c1a9f5...` (this round's own commit).
+- **BDR-23** — the robust centroid-drift statistic's support was a hardcoded `10.0` (seconds)
+  literal, not traced to any config value, so mutating the config could never change it despite
+  the sensitivity grid's centroid axis depending on it. Added `centroid.summary_span_s: 10.0` to
+  `scripts/diagnose_bin_drift_config.yaml` and a matching `DiagnosticConfig` field; a mutation test
+  confirms changing it from 10.0s to 5.0s changes both the block count selected and the resulting
+  median.
+
+14 new tests added (65 -> 79 for the diagnostic; full suite 1616 baseline + 79 = 1695 passed, 1
+skipped, matching exactly). Committed at `81c1a9f`. Re-ran on all 4 real captures from that clean
+commit (`results/diagnose/bin_drift/20260727T215319Z/`); every session's `episode_count_at_grid`,
+`centroid_drift_at_grid`, `baseline_argmax_bin`, and `locked_bin` are numerically identical to the
+prior (round-5) run — expected, since round 6's fixes were persistence/validation/provenance
+additions, not changes to the underlying measurement. All six round-6 comments moved into
+`DEBATE COMMENTS` with responses; `COMMENTS OF CODEX` reset to await round 7.
+
+**Failed / did not work, and why:** nothing failed. No design decisions were escalated this round
+(all six were implementation-correctness fixes, not user-decision points).
+
+**Retired / no longer used:** nothing.
+
+**Next:** check `plans/bin_drift_diagnostic_cross_review.md`'s `COMMENTS OF CODEX` for round 7
+before doing anything else with the diagnostic — this loop has reopened after implementation
+three times running (rounds 4, 5, 6), each time finding real code defects, so do not assume it is
+closed without checking. If round 7 lands `NO MORE COMMENTS` with every debate item resolved, stop
+touching the diagnostic and hand the evidence to the user for the go/no-go decision on the 5-bin
+relock tracker (HANDOFF.md §3.1) — that decision is not part of this review loop.
+
