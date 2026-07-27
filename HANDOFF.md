@@ -1,7 +1,7 @@
 # Handoff — radar-vitals
 
-> **Read this + `CLAUDE.md` and you can resume the project.** State **as of 2026-07-27
-> (evening)**. Rewritten, not appended (CLAUDE.md §10). For *what happened and why*, read
+> **Read this + `CLAUDE.md` and you can resume the project.** State **as of 2026-07-28**.
+> Rewritten, not appended (CLAUDE.md §10). For *what happened and why*, read
 > `HISTORY.md`. Every claim below was re-verified against the repo at the time of writing.
 >
 > **Scope pivoted this session.** The user does not have time to finish the M4
@@ -44,12 +44,12 @@ R2, BDR-14…19] after the review found the window-scale energy measurement had 
 rather than computed — see HISTORY.md 2026-07-28 for the full account). v9 UI work remains
 parked in `git stash@{0}`; relocking/display-holdover stay reverted (HISTORY.md 2026-07-09).
 
-**This session's work is committed and pushed** (7 commits: the ECA experiment config, the
-reusable review templates, the bin-drift diagnostic's initial build, a HISTORY/HANDOFF update, a
-round-4 review-driven fix, a round-5 review-driven fix, another HISTORY/HANDOFF update — see
-HISTORY.md for details). `results/` (gitignored, as always) gained several new replay
-directories from this session's work (2026-07-26/27
-timestamps) plus `results/diagnose/bin_drift/` — not tracked, not part of the 5 commits.
+**This session's work is committed and pushed** (8 commits since `accfd53`: the ECA experiment
+config, the reusable review templates, the bin-drift diagnostic's initial build, a HISTORY/HANDOFF
+update, a round-4 review-driven fix, a round-4 HISTORY/HANDOFF update, a round-5 review-driven
+fix, a round-5 HISTORY/HANDOFF update — see HISTORY.md for details). `results/` (gitignored, as
+always) gained several new replay directories from this session's work (2026-07-26/27
+timestamps) plus `results/diagnose/bin_drift/` — not tracked, not part of these commits.
 
 ### M4 (deprioritized, not touched this session — state unchanged from before the pivot)
 
@@ -67,7 +67,40 @@ exists from M4.
 
 ## 3. Active task / next steps
 
-### 3.1 Decide whether the bin-drift evidence justifies a relock tracker
+### 3.1 Bin-drift diagnostic: check the review loop FIRST, before anything else
+
+**This is almost certainly the immediate next action for a new chat.** The Codex cross-review
+(`plans/bin_drift_diagnostic_cross_review.md`) is an active, ongoing loop — it has already
+reopened twice *after* implementation (rounds 4 and 5) and found real code bugs each time, not
+just wording issues. Do not assume the loop is closed without checking:
+
+1. Read `plans/bin_drift_diagnostic_cross_review.md`'s `COMMENTS OF CODEX` section (near the
+   top). **Round 6 already landed (2026-07-28, end of the previous session) and is UNPROCESSED**
+   — 6 findings: `BDR-14 R2` and `BDR-19 R2` (reopened — the round-5 fixes for window-scale
+   energy persistence and the frame_idx validator were each incomplete) plus 4 new
+   (`BDR-20`: replay-generation binding is hash-only, doesn't reject a wrong-generation replay
+   with a matching raw hash — verified live_test1... no, massimo1's raw hash actually matches
+   *six* different replay directories spanning 2026-07-15 through 2026-07-27; `BDR-21`:
+   `baseline_rank_of_locked_bin` is sourced from the full-buffer warmup rank, not the settled
+   profile §3.1 claims; `BDR-22`: per-session `summary.json` lacks its own `run_id`/git-commit/
+   config-hash provenance, only the parent `run_summary.json` has it; `BDR-23`: the 10 s
+   centroid-support window is hardcoded, not config-bound). **This is the actual next task** —
+   process it before anything else in §3.2–3.4.
+2. **Process a new round** using
+   `plans/bin_drift_diagnostic_claude_review_loop_prompt.md` as the procedure — it was updated at
+   the end of this session to reflect that this is now a **post-implementation** loop: findings
+   can be real bugs in `scripts/diagnose_bin_drift.py`, not just plan text, and processing one
+   means verify against the actual running code/real output → apply the code fix → add a test
+   that would have caught it → run `tests/test_diagnose_bin_drift.py` then the full suite → once
+   the round's batch is done, **commit** (the diagnostic's own clean-tree gate requires this) →
+   **re-run on all 4 real captures** (paths in §6 below) → spot-check the changed `summary.json`
+   fields against real output → append `HISTORY.md` + rewrite `HANDOFF.md` (new `run_id`, new
+   commit hash) → commit and push. This exact cycle has already happened twice (rounds 4, 5) —
+   follow the same pattern, don't improvise a lighter one.
+3. **If `COMMENTS OF CODEX` says `NO MORE COMMENTS`** with no open items in `DEBATE COMMENTS`,
+   the review is closed. Do **not** treat that as a cue to build something new — implementation is
+   already done. The remaining task becomes the human decision in the paragraph below, which is
+   not part of the review loop.
 
 A range-bin drift diagnostic was designed, cross-reviewed with Codex (5 real rounds — the review
 reopened **twice** after implementation: round 4 found the decided centroid-drift grid was never
@@ -267,7 +300,25 @@ change from `notes/protocol.md`.
 **4 real captures, ~2.52 GB raw, all with saved `adc_stream.bin`** in `results/live_demo/`.
 **Only 3 carry a Masimo reference**: `..._live_test1` (no Masimo, 120 s), `..._massimo1`
 (natural, 180 s), `..._massimo2` (paced 16 bpm, 180 s), `..._sweep` (stepped 12→15→18→21 bpm,
-480 s). **All from one subject, all exploratory.** `data/raw/` is **empty**;
+480 s). **All from one subject, all exploratory.**
+
+**Exact paths for re-running the bin-drift diagnostic** (§3.1) — 4 captures, 3 matched-generation
+replays (`live_test1` has none, by design, BDR-07 Option A):
+```
+--captures results/live_demo/20260713_170323_live_demo_live_test1
+           results/live_demo/20260713_172042_live_demo_massimo1
+           results/live_demo/20260713_182002_live_demo_massimo2
+           results/live_demo/20260714_180523_live_demo_sweep
+--replays  results/live_demo/20260726_173434_replay_unknown
+           results/live_demo/20260726_173653_replay_unknown
+           results/live_demo/20260726_173914_replay_unknown
+```
+Full invocation: `conda run -n radar-vitals python -X utf8 scripts/diagnose_bin_drift.py --config
+scripts/live_demo_config.yaml --diagnostic-config scripts/diagnose_bin_drift_config.yaml
+--captures <4 paths above> --replays <3 paths above> --out results/diagnose/bin_drift`. Requires
+a clean committed tree (§4) and ~7 GB available memory for the sweep session (§4).
+
+`data/raw/` is **empty**;
 `data/manifest.local.csv` is header-only (0 sessions); `figures/` does not exist.
 **3–5 more subjects agreed, not yet captured (§3.4).**
 
@@ -312,6 +363,7 @@ exist yet.
 | Project rules (read first) | `CLAUDE.md` |
 | Whole-project milestone plan (pre-pivot — read against §3) | `plans/implementation_plan.md` |
 | **Bin-drift diagnostic — plan, review (round 5, awaiting Codex), run output** | `plans/bin_drift_diagnostic.md`, `plans/bin_drift_diagnostic_cross_review.md`, `results/diagnose/bin_drift/20260727T210936Z/` (current — `20260727T192643Z` and `20260727T195535Z` are both superseded, kept but not citable) |
+| **Bin-drift review-loop procedure (start here to resume the loop, §3.1)** | `plans/bin_drift_diagnostic_claude_review_loop_prompt.md` (your side), `plans/bin_drift_diagnostic_codex_review_prompt.md` (Codex's side — for reference / re-sending fresh, not something you run) |
 | Bin-drift diagnostic code + tests | `scripts/diagnose_bin_drift.py`, `scripts/diagnose_bin_drift_config.yaml`, `tests/test_diagnose_bin_drift.py` |
 | **Reusable cross-review prompt templates** (Codex + Claude loop sides) | `plans/codex_review_prompt_template.md`, `plans/claude_review_loop_prompt_template.md` |
 | ECA-mode coverage experiment (unpromoted) | `experiments/exp_eca_modes/config_guard_v1.yaml` |
@@ -341,7 +393,20 @@ evidence), `live_estimates.csv` (diagnostic only, never a scoring input),
 `adc_stream.bin` (raw mirror — this is every diagnostic's and M4's radar input).
 
 ### Run artifacts written per bin-drift diagnostic run
-`results/diagnose/bin_drift/<run_id>/<session>/` contains `bin_energy_blocks.csv`,
-`window_audit.csv`, `motion_energy_windows.npz`, `summary.json` (baseline, warmup-recompute
-check, episodes, sensitivity grid, provenance, `reproducible` flag) and `drift_overview.png`;
+`results/diagnose/bin_drift/<run_id>/<session>/` contains:
+- `bin_energy_blocks.csv` — per-block, full per-bin energy matrix (raw + baseline-relative dB)
+- `window_audit.csv` — per-window, `window_argmax_bin`/`window_centroid` computed directly on
+  each window's own 600-frame slice (not derived from blocks, since round 5)
+- `motion_energy_windows.npz` — real `(n_windows, n_bins)` matrix, empty for `live_test1`
+- `summary.json` — baseline profile + `occupancy`, warmup-recompute check, episodes,
+  `episode_count_at_grid` (session-level, outcome-blind) + `centroid_drift_at_grid`
+  (session-level) + `duration_grid_by_outcome` (per-window, per-outcome-class, round 5),
+  `outcome_stratified_report` (full-exposure + transitional, with normalized fraction),
+  `offset_phase_report` (all 10 hop-offset phases), provenance (`capture_run_metadata_sha256` /
+  `replay_run_metadata_sha256` as two distinct hashes), `reproducible` flag, and three memory
+  fields (`mem_available_preflight`, `mem_peak_working_set_after_decode`,
+  `mem_peak_working_set_after_session`)
+- `drift_overview.png` — a real heatmap (dB rel. per-block max) with baseline/argmax/centroid
+  overlay and a window-outcome strip (since round 5; was a 2-line plot before)
+
 `<run_id>/run_summary.json` aggregates all sessions in that run.

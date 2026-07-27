@@ -6987,3 +6987,40 @@ block-aggregation shortcut BDR-14 replaced.
 `results/diagnose/bin_drift/20260727T210936Z/`. The coordination file is at round 5 with
 responses awaiting Codex confirmation.
 
+## 2026-07-28 - Handoff prep while Codex reviews round 6: fixed two stale review-loop prompts
+
+**Set out to do:** the user asked to update the project's md files and prepare `HANDOFF.md` for
+a new chat to resume, while Codex worked on a round-6 pass of the bin-drift review in the
+background.
+
+**Worked (with evidence):** found and fixed real staleness in both
+`plans/bin_drift_diagnostic_codex_review_prompt.md` and
+`plans/bin_drift_diagnostic_claude_review_loop_prompt.md` — both still said "do not implement
+code yet, this loop reviews the PLAN only," which has been false since implementation shipped
+three rounds ago and rounds 4-5 fixed real bugs in the running code, not plan wording. Left as
+written, a fresh Codex or Claude context reading either file literally would misunderstand the
+current phase and either refuse to look at the code or refuse to apply a fix. Updated both:
+writable scope now includes the actual source/test files; "Evidence you may use" now includes
+the real run output under `results/diagnose/bin_drift/`; the closing "building begins only after
+this closes" line is replaced with the actual post-implementation meaning of a closed loop
+(evidence is trustworthy, not "start building"). Rewrote `HANDOFF.md` §3.1 to lead with an
+explicit, numbered procedure for resuming the review loop (check `COMMENTS OF CODEX` first;
+process a new round using the updated loop-prompt file; treat `NO MORE COMMENTS` as "stop
+touching the diagnostic," not "build something new") and added the exact capture/replay CLI
+paths to §6 so a fresh chat does not have to reconstruct them from `results/live_demo/` by hand.
+Fixed a stale commit count (was "5"/"7", actually 8 commits since the session's starting
+`accfd53`) and the top-of-file date stamp. Verified every file path newly referenced in
+`HANDOFF.md` actually exists before committing.
+
+**Failed / did not work, and why:** nothing failed this pass; this was documentation-only, no
+code touched, no tests run beyond the pre-existing suite (re-verified green: 1681 passed, 1
+skipped, matching the prior commit's figure exactly — confirms nothing drifted while this pass
+was in progress).
+
+**Retired / no longer used:** nothing.
+
+**Next:** unchanged from the previous entry. If Codex's round 6 has landed by the time this is
+read, `plans/bin_drift_diagnostic_cross_review.md`'s `COMMENTS OF CODEX` section will show real
+findings instead of the "awaiting Codex round 6" placeholder — process them per
+`plans/bin_drift_diagnostic_claude_review_loop_prompt.md`.
+

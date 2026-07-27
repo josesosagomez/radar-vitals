@@ -25,11 +25,24 @@ coordination file `plans/bin_drift_diagnostic_cross_review.md` (holds prior find
 Code's responses — do not re-raise anything already resolved there unless you have new grounds).
 
 ### What you are reviewing
-`plans/bin_drift_diagnostic.md` — a proposed read-only diagnostic that computes per-bin energy at
+> **Updated after round 5 (2026-07-28) — this is no longer a pre-implementation plan review.**
+> `scripts/diagnose_bin_drift.py` is implemented, tested, and has been run on all 4 real captures
+> three times as rounds 4–5 found and fixed real defects in the shipped code (not just the plan
+> text) — a decided sensitivity-grid axis that was never wired up (round 4), and a core
+> measurement (window-scale energy) that was approximated rather than computed, an arithmetic bug
+> in the "trailing 10 s" statistic, decode geometry validated against the wrong metadata file, and
+> more (round 5). **Review the plan AND the implementation AND real run output together** — a
+> plan-only read will miss exactly the class of defect this loop has found twice already. Read
+> `plans/bin_drift_diagnostic_cross_review.md` in full for what every round found and fixed before
+> raising something that may already be resolved.
+
+`plans/bin_drift_diagnostic.md` describes a read-only diagnostic that computes per-bin energy at
 two time scales (1 s blocks and 600-frame DSP windows) across the 0.8–1.4 m gate for all 4
 existing captures, to measure whether the locked bin's occupancy holds, and whether excursions
 correlate with the `gate_not_run` rejection code. No production code, config, or `src/` change; no
-Masimo data used anywhere.
+Masimo data used anywhere. Verify claims against `scripts/diagnose_bin_drift.py`,
+`tests/test_diagnose_bin_drift.py`, and the real output under
+`results/diagnose/bin_drift/<run_id>/` — not just the plan's prose description of what it does.
 
 ### What to scrutinise (raise anything else too)
 1. **Frame/window arithmetic.** The plan asserts NPZ `frame_idx` is each window's *end* frame
@@ -81,11 +94,16 @@ Masimo data used anywhere.
 and `src/radar_io.py` (read the actual implementations, don't infer from the plan's summary);
 `git log`/`git show` on the 2026-07-02 and 2026-07-09 relocking commits if useful; the test suite
 via `conda run -n radar-vitals python -m pytest tests/ -q` only if a claim depends on current suite
-state. Do NOT read or reference any Masimo `.csv` file.
+state. **Now also in scope, read-only:** `scripts/diagnose_bin_drift.py`,
+`scripts/diagnose_bin_drift_config.yaml`, `tests/test_diagnose_bin_drift.py`, and the real output
+under `results/diagnose/bin_drift/<run_id>/` (`summary.json`, `bin_energy_blocks.csv`,
+`window_audit.csv`, `motion_energy_windows.npz`, `drift_overview.png` — `HANDOFF.md` §3.1 names
+the current, citable `run_id`; do not read a superseded one without checking HANDOFF first). Do
+NOT read or reference any Masimo `.csv` file.
 
 ### Hard constraints on you
-- This is a review, not a rewrite. Do not implement `scripts/diagnose_bin_drift.py` or its test —
-  this loop reviews the PLAN only.
+- This is a review, not a rewrite — **you never edit code**, regardless of phase. Claude Code
+  applies every fix; you only raise findings.
 - Do NOT edit any source file, test, the plan, frozen specs, `HISTORY.md`, or `HANDOFF.md`. Your
   ONLY write target is the `COMMENTS OF CODEX` section of
   `plans/bin_drift_diagnostic_cross_review.md`.
@@ -134,5 +152,10 @@ ID with an `R<n>` suffix (e.g. `BDR-03 R2`). Order Blocking findings first.
 - Work in reasonably sized batches and save as you go, so the file is consistent whenever it's
   polled.
 - When you have no further findings, replace the `COMMENTS OF CODEX` body with the exact string
-  `NO MORE COMMENTS` plus a one-paragraph closing assessment. **Building
-  `scripts/diagnose_bin_drift.py` begins only after this loop closes.**
+  `NO MORE COMMENTS` plus a one-paragraph closing assessment. **This is no longer a gate on
+  starting implementation — that already happened.** A closing `NO MORE COMMENTS` means: the
+  diagnostic's evidence (`results/diagnose/bin_drift/<run_id>/`, `run_id` current per
+  `HANDOFF.md`) is trustworthy as shipped, and the open question shifts from "is this code
+  correct" to "does the evidence justify building the 5-bin relock tracker" — a decision for the
+  user, not for either reviewer. If you reopen the review later (as happened twice already) after
+  further changes to the code, say so explicitly rather than silently continuing a closed loop.

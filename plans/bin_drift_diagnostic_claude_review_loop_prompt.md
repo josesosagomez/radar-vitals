@@ -1,30 +1,45 @@
-An independent reviewer (Codex) is reviewing `plans/bin_drift_diagnostic.md` — a proposed
-**read-only** diagnostic (`scripts/diagnose_bin_drift.py`) that measures whether the dominant
-radar reflector drifts across range bins during a session, using the 4 existing captures. Its
-feedback appears in a section starting `COMMENTS OF CODEX` and ending `END OF COMMENTS` inside
-`plans/bin_drift_diagnostic_cross_review.md`. Process every comment.
+An independent reviewer (Codex) is reviewing `plans/bin_drift_diagnostic.md` and its
+implementation (`scripts/diagnose_bin_drift.py`) — a **read-only** diagnostic that measures
+whether the dominant radar reflector drifts across range bins during a session, using the 4
+existing captures. Its feedback appears in a section starting `COMMENTS OF CODEX` and ending
+`END OF COMMENTS` inside `plans/bin_drift_diagnostic_cross_review.md`. Process every comment.
 
-This is a **plan review before implementation** (CLAUDE.md §6). The diagnostic's verdict decides
-whether a 5-bin relock tracker is worth building — a similar feature was already built once
-(`vital_signs_v9` relocking, HISTORY.md 2026-07-02) and reverted 2026-07-09 as "not worth its
-complexity/risk for now," a call made without this measurement. A flawed diagnostic either sends
-the project chasing a tracker for drift that isn't real, or wrongly rules out the leading
-candidate explanation for massimo1's `gate_not_run = 66` (52% of that session's dead windows).
+> **Phase, as of round 5 (2026-07-28):** this is **no longer a pre-implementation plan review.**
+> The diagnostic is implemented, tested, and has been run on all 4 real captures three times.
+> Rounds 4–5 reopened the review AFTER implementation and found real defects in the shipped code
+> — a decided sensitivity-grid axis never wired up (round 4); a core measurement (window-scale
+> energy) approximated rather than computed, an arithmetic bug, geometry validated against the
+> wrong file, motion energy computed for the whole capture instead of per window, and config
+> values that were hashed but never enforced (round 5). **Treat every new finding as potentially
+> a real code bug, not a wording issue — verify against the actual running code and real output,
+> not just the plan's prose, every time.** Check `HANDOFF.md` §3.1 for the current `run_id` before
+> reading any `results/diagnose/bin_drift/` output — two earlier runs are superseded.
+
+This is a review under CLAUDE.md §6. The diagnostic's evidence informs whether a 5-bin relock
+tracker is worth building — a similar feature was already built once (`vital_signs_v9`
+relocking, HISTORY.md 2026-07-02) and reverted 2026-07-09 as "not worth its complexity/risk for
+now," a call made without this measurement. A flawed diagnostic either sends the project chasing
+a tracker for drift that isn't real, or wrongly rules out the leading candidate explanation for
+massimo1's `gate_not_run = 66` (52% of that session's dead windows).
 
 ### Hard constraints
-- **Do not implement code yet.** This loop reviews the PLAN only. Do not write
-  `scripts/diagnose_bin_drift.py` or its test until the loop closes.
-- Your only writable files are `plans/bin_drift_diagnostic.md` and the `DEBATE COMMENTS` section of
-  `plans/bin_drift_diagnostic_cross_review.md`. Do not edit Codex's comment text. Do not edit
-  `HANDOFF.md`, `HISTORY.md`, `notes/*_prespec.md`, or any file outside this review's scope.
+- Your writable files are `plans/bin_drift_diagnostic.md`, `scripts/diagnose_bin_drift.py`,
+  `scripts/diagnose_bin_drift_config.yaml`, `tests/test_diagnose_bin_drift.py`, the
+  `DEBATE COMMENTS` section of `plans/bin_drift_diagnostic_cross_review.md`, and — **only at the
+  end of a processed round**, per the propagation steps below — `HISTORY.md` (append) and
+  `HANDOFF.md` (rewrite). Do not edit Codex's comment text. Do not edit `notes/*_prespec.md` or
+  any file outside this review's scope.
 - **No tuning to the reference** (CLAUDE.md §4): every accepted fix must be justified from radar
   signal properties or measurement correctness — never from anything that would let Masimo
   agreement influence bin selection, even indirectly. If a comment (or your own change) would do
   that, reject it and say so.
-- Verification is read-only: reading files, `git log`/`git show`, running the test suite
-  (`conda run -n radar-vitals python -m pytest tests/ -q`) if a claim depends on suite state,
-  inspecting NPZ/JSON evidence directly. Do NOT run capture, replay, hardware, or any script that
-  mutates tracked outputs.
+- Verification is read-only for INSPECTION (reading files, `git log`/`git show`, inspecting
+  NPZ/JSON/CSV evidence) but **applying an agreed fix means editing the real code**, running
+  `tests/test_diagnose_bin_drift.py` then the full suite
+  (`conda run -n radar-vitals python -m pytest tests/ -q`), and — once a batch of fixes is
+  applied and tested — **committing** (the diagnostic's own clean-tree gate requires a commit
+  before a citable re-run) and **re-running the diagnostic on all 4 real captures** (see
+  Propagating a fix, below). Never run capture, live hardware, or anything touching `data/raw/`.
 
 ### Before you start
 Re-read `CLAUDE.md`, then `HANDOFF.md` (current state; note §5's "Two replay generations exist and
@@ -71,12 +86,28 @@ Mark and stop (do not decide) on:
   user decision` — no new data is authorized without the user's sign-off.
 
 ### Propagating a fix
-After each applied change, check and update every other part of `plans/bin_drift_diagnostic.md`
-that references it — the Inputs table, the Computation section, the Outputs section, the Files
-table, the Interpretation gates, and the Verification steps. Keep it internally consistent (e.g. if
-you change which replay generation is canonical, update every session row in the Inputs table). If
-a comment reveals a defect in `HANDOFF.md`'s own claims (not just this plan), do **not** silently
-edit `HANDOFF.md` — surface it to the user as a separate item.
+A finding that changes CODE behavior needs more than a plan edit:
+1. Apply the code fix (`scripts/diagnose_bin_drift.py` and/or
+   `scripts/diagnose_bin_drift_config.yaml`), add/update tests in
+   `tests/test_diagnose_bin_drift.py` that would have caught the defect.
+2. Update `plans/bin_drift_diagnostic.md` to match — every section that references the changed
+   behavior (Inputs table, Computation, Outputs, Files, Verification), not just the one Codex
+   pointed at.
+3. Run `conda run -n radar-vitals python -m pytest tests/test_diagnose_bin_drift.py -q`, then the
+   full suite. Both must pass before moving to the next finding.
+4. **After the whole batch for this round is applied and tested:** commit (the diagnostic's own
+   `provenance.require_clean_tree` gate blocks a citable run otherwise), then re-run on all 4 real
+   captures — `python -X utf8 scripts/diagnose_bin_drift.py --config scripts/live_demo_config.yaml
+   --diagnostic-config scripts/diagnose_bin_drift_config.yaml --captures <4 dirs, see HANDOFF §6
+   for paths> --replays <3 matched-generation dirs, see HANDOFF> --out results/diagnose/bin_drift`
+   — and spot-check the changed/new `summary.json` fields against the real output before trusting
+   them. Append a `HISTORY.md` entry and rewrite `HANDOFF.md` (new `run_id`, new commit hash, any
+   new evidence the round's fixes surfaced), then commit and push both together with the code.
+   This has happened after every round so far (rounds 4 and 5) — it is the expected pattern, not
+   an exception.
+
+If a comment reveals a defect in `HANDOFF.md`'s own claims that is NOT a consequence of a fix you
+just made, do not silently edit it — surface it to the user as a separate item.
 
 ### The debate loop
 On each pass, re-read `DEBATE COMMENTS` from disk (never from cache — Codex edits the same file)
@@ -98,12 +129,15 @@ is always consistent when polled. After a pass, wait 180 seconds, then re-read
 exact string `NO MORE COMMENTS` **and** every `DEBATE COMMENTS` item is resolved/conceded/
 escalated. If nothing changes for 10 consecutive polls, stop and report.
 
-### When you're done
-`plans/bin_drift_diagnostic.md` should read cleanly and be internally consistent, with all accepted
-fixes integrated and propagated; `COMMENTS OF CODEX` holding only the closing note; only escalated
-items left in `DEBATE COMMENTS`. Then summarise in chat: comments applied by severity; comments
+### When you're done (per round, not just at final closure)
+`plans/bin_drift_diagnostic.md` should read cleanly and be internally consistent with the shipped
+code, with all accepted fixes integrated, propagated, tested, and re-run on real data;
+`COMMENTS OF CODEX` reset to await the next round (or holding `NO MORE COMMENTS`); only escalated
+items left in `DEBATE COMMENTS`. Summarise in chat: comments applied by severity; comments
 disputed and how each resolved; every escalated item with the decision needed and your
-recommendation; anything the plan still leaves risky; and a proposed `HISTORY.md` entry text (for
-the user to approve — do not append it yourself). Then, once the loop is closed and no escalations
-block it, proceed to implement `scripts/diagnose_bin_drift.py` and its test from the reviewed plan
-— or stop and ask if an escalation must be resolved first.
+recommendation; anything the diagnostic still leaves risky; confirmation the fix was committed,
+pushed, and re-verified on all 4 real captures. **Do not treat `NO MORE COMMENTS` as a trigger to
+build something new** — implementation is already done. A closing `NO MORE COMMENTS` with no open
+escalations means: stop touching the diagnostic, and hand the evidence
+(`results/diagnose/bin_drift/<run_id>/`) to the user for the actual go/no-go decision on the
+5-bin relock tracker — that decision is not part of this loop.
