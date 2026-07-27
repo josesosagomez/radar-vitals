@@ -36,21 +36,17 @@ should be read with this pivot in mind, not treated as current without cross-che
 
 ## 2. Current state
 
-**Branch `vital_signs_v9c`, HEAD `accfd53` (17 commits ahead of `origin/vital_signs_v9c`).**
-Suite **1650 passed, 1 skipped, 0 failed** (`conda run -n radar-vitals python -m pytest tests/ -q`,
-2026-07-27 evening) — 1616 baseline + 34 new (the bin-drift diagnostic's own tests). v9 UI work
-remains parked in `git stash@{0}`; relocking/display-holdover stay reverted (HISTORY.md
-2026-07-09).
+**Branch `vital_signs_v9c`, HEAD `9f19c8e`, pushed — `origin/vital_signs_v9c` is up to date.**
+Suite **1658 passed, 1 skipped, 0 failed** (`conda run -n radar-vitals python -m pytest tests/ -q`,
+2026-07-27 night) — 1616 baseline + 42 (the bin-drift diagnostic's own tests, after the round-4
+review fixes added 8 more to the 34 first shipped). v9 UI work remains parked in `git stash@{0}`;
+relocking/display-holdover stay reverted (HISTORY.md 2026-07-09).
 
-**Nothing from this session is committed.** Untracked: `experiments/`,
-`plans/bin_drift_diagnostic.md`, `plans/bin_drift_diagnostic_cross_review.md`,
-`plans/bin_drift_diagnostic_codex_review_prompt.md`,
-`plans/bin_drift_diagnostic_claude_review_loop_prompt.md`,
-`plans/codex_review_prompt_template.md`, `plans/claude_review_loop_prompt_template.md`,
-`scripts/diagnose_bin_drift.py`, `scripts/diagnose_bin_drift_config.yaml`,
-`tests/test_diagnose_bin_drift.py`. `results/live_demo/` also gained several new replay
-directories from this session's work (2026-07-26/27 timestamps) and `results/diagnose/bin_drift/`
-is new.
+**This session's work is committed and pushed** (5 commits: the ECA experiment config, the
+reusable review templates, the bin-drift diagnostic's initial build, the HISTORY/HANDOFF update,
+and a round-4 review-driven fix — see HISTORY.md for details). `results/` (gitignored, as
+always) gained several new replay directories from this session's work (2026-07-26/27
+timestamps) plus `results/diagnose/bin_drift/` — not tracked, not part of the 5 commits.
 
 ### M4 (deprioritized, not touched this session — state unchanged from before the pivot)
 
@@ -70,24 +66,32 @@ exists from M4.
 
 ### 3.1 Decide whether the bin-drift evidence justifies a relock tracker
 
-A range-bin drift diagnostic was designed, cross-reviewed with Codex (3 real rounds, closed
-`NO MORE COMMENTS`, `plans/bin_drift_diagnostic_cross_review.md`), implemented
-(`scripts/diagnose_bin_drift.py`), and **run on all 4 real captures**
-(`results/diagnose/bin_drift/20260727T192643Z/`). It measures whether the in-gate radar energy
-profile drifts away from its settled warmup baseline over a session, and whether that's
-associated with `gate_not_run` outcomes — **deliberately an evidence summary, not an automatic
-verdict** (both open design choices from review — sensitivity-grid framing and the
-`live_test1`-has-no-matched-replay scope question — were resolved by the user as Option A on
-both: purely exploratory, no single threshold; `live_test1` gets baseline-only evidence, no
-replay generated).
+A range-bin drift diagnostic was designed, cross-reviewed with Codex (4 real rounds — the review
+reopened once after implementation and caught two real gaps in the shipped code, both fixed;
+`plans/bin_drift_diagnostic_cross_review.md`), implemented (`scripts/diagnose_bin_drift.py`),
+and **run on all 4 real captures**. **Current evidence: `results/diagnose/bin_drift/20260727T195535Z/`**
+— the earlier `20260727T192643Z` run is superseded (missing `centroid_drift_at_grid`,
+`outcome_stratified_report`, `offset_phase_report`; kept on disk, do not cite it). It measures
+whether the in-gate radar energy profile drifts away from its settled warmup baseline over a
+session, and whether that's associated with `gate_not_run` outcomes — **deliberately an evidence
+summary, not an automatic verdict** (both open design choices from review — sensitivity-grid
+framing and the `live_test1`-has-no-matched-replay scope question — were resolved by the user as
+Option A on both: purely exploratory, no single threshold; `live_test1` gets baseline-only
+evidence, no replay generated).
 
 **What the evidence shows (read the summaries yourself before deciding):** all four sessions
 show frequent short (<2 s) argmax flicker between the baseline bin and its neighbours; almost
 none of that survives as a ≥5 s sustained episode (0 of 4 sessions except massimo2's 2); none
 reach ≥10 s in any session; centroid drift (trailing-10s vs. first-post-calibration-10s median)
-is under 1 bin everywhere. This leans toward "no sustained postural drift in these 4
-single-subject sessions" but is n=1-subject evidence — **the next step is a human decision, not
-more code**: read `results/diagnose/bin_drift/20260727T192643Z/*/summary.json` and
+meets the 0.3-bin grid point in massimo1 and sweep, the 0.5-bin point in massimo1 only, and no
+session reaches 1.0 bin. **New in the current run:** massimo1's outcome-stratified report shows
+*all three* outcome classes (`covered`, `gate_not_run`, `other_rejected`) carry substantial mean
+off-baseline duration among full-exposure windows (13.0 s / 8.4 s / 10.1 s out of 30 s) — drift
+does not cleanly separate `covered` from `gate_not_run` in this session, which cuts against drift
+being *the* explanation for that session's coverage loss. This leans toward "no sustained
+postural drift in these 4 single-subject sessions, and where drift exists it doesn't cleanly
+track DSP outcome" but is n=1-subject evidence — **the next step is a human decision, not more
+code**: read `results/diagnose/bin_drift/20260727T195535Z/*/summary.json` and
 `drift_overview.png`, then decide go/no-go on the 5-bin relock tracker.
 
 ### 3.2 Coverage: the mechanism is identified, the fix is not yet verified correct
@@ -143,13 +147,14 @@ change from `notes/protocol.md`.
 - **BDR-07 (bin-drift): Option A** — `live_test1` gets baseline-only evidence;
   `correlation_not_available` for its outcome table; **no replay of it was generated**, because
   the three existing comparison replays were made at commit `5537df5` with an unrecoverable
-  dirty diff, and current HEAD (`accfd53`) has already moved past that commit — re-running
+  dirty diff, and HEAD has moved well past that commit since (now `9f19c8e`) — re-running
   `scripts/live_demo.py` now would **not** reproduce a matched generation.
 - **The bin-drift diagnostic requires a clean tree** to produce citable evidence
   (`scripts/diagnose_bin_drift_config.yaml: provenance.require_clean_tree`) — a dirty-tree run is
   permitted (`--allow-dirty`) but is stamped `reproducible: false` in its own `summary.json` and
-  must not be cited. The 2026-07-27T19:26:43Z run was from a clean tree (`reproducible: true`
-  in every session's summary).
+  must not be cited. The current `20260727T195535Z` run was from a clean tree (`reproducible: true`
+  in every session's summary) — committed at `9f19c8e` before the run, per the diagnostic's own
+  gate.
 - **Sweep-capture memory is ~7 GB peak working set, not ~2.5 GB** — the smaller figure is the
   decoded cube's size, not the decode peak. Measured twice (a one-off scratch script: 6.96 GB;
   the committed diagnostic's own logger on a real run: 7.05 GB) — treat ~7 GB as the real
@@ -286,7 +291,7 @@ exist yet.
 |---|---|
 | Project rules (read first) | `CLAUDE.md` |
 | Whole-project milestone plan (pre-pivot — read against §3) | `plans/implementation_plan.md` |
-| **Bin-drift diagnostic — plan, CLOSED review, run output** | `plans/bin_drift_diagnostic.md`, `plans/bin_drift_diagnostic_cross_review.md`, `results/diagnose/bin_drift/20260727T192643Z/` |
+| **Bin-drift diagnostic — plan, review (round 4, awaiting Codex), run output** | `plans/bin_drift_diagnostic.md`, `plans/bin_drift_diagnostic_cross_review.md`, `results/diagnose/bin_drift/20260727T195535Z/` (current — `20260727T192643Z` is superseded, kept but not citable) |
 | Bin-drift diagnostic code + tests | `scripts/diagnose_bin_drift.py`, `scripts/diagnose_bin_drift_config.yaml`, `tests/test_diagnose_bin_drift.py` |
 | **Reusable cross-review prompt templates** (Codex + Claude loop sides) | `plans/codex_review_prompt_template.md`, `plans/claude_review_loop_prompt_template.md` |
 | ECA-mode coverage experiment (unpromoted) | `experiments/exp_eca_modes/config_guard_v1.yaml` |

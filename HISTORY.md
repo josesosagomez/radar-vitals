@@ -6823,3 +6823,70 @@ still open, just not the active focus.
 - None of this session's new files are committed yet (`experiments/`, `plans/bin_drift_*`,
   `plans/*_prompt_template.md`, `scripts/diagnose_bin_drift*`, `tests/test_diagnose_bin_drift.py`).
 
+## 2026-07-27 (night) - Bin-drift diagnostic: review reopened post-implementation, found and
+fixed two real gaps in already-shipped/already-run code, committed and pushed
+
+**Set out to do:** the previous entry's work (bin-drift diagnostic, plan, review, implementation)
+was committed and pushed. Codex's review coordination file then reopened with three new findings
+(BDR-11/12/13) after re-reading the plan once §8 was updated with the user's Option A/Option A
+decisions — this entry covers processing those and the resulting correction.
+
+**Worked (with evidence):**
+
+- **BDR-11 (Blocking) was a real gap in shipped code, not just plan text.** `DiagnosticConfig`
+  loaded `centroid_grid_bins` (the decided `{0.3,0.5,1.0} bin` sensitivity-grid axis) but nothing
+  in `scripts/diagnose_bin_drift.py` ever referenced it — verified directly with `grep` before
+  believing the finding. Fixed by adding `centroid_drift_at_grid()` as a session-level statistic,
+  deliberately kept separate from the per-window duration-grid episode association rather than
+  invented as a per-window joint classifier (Codex's own recommended resolution — no per-window
+  centroid-displacement statistic is defined, so a Cartesian join would have been post hoc).
+- **Found two more of the same class of gap while fixing BDR-11, not flagged by Codex:**
+  `offset_phase_subsets` (the "all 10 offset phases" the plan promised) and the primary
+  "outcome-stratified" report were both computed into local variables and never written to any
+  output — only derivable by a reader doing their own groupby on `window_audit.csv`. Added
+  `stratify_by_outcome()` and `offset_phase_report`, wired into `summary.json`.
+- **BDR-12 (Blocking) verified NOT a code defect** — checked the real
+  `20260727T192643Z/live_test1/summary.json` directly: `n_windows=0`, `correlation_available=false`,
+  `npz_path=null`, confirming `load_session_inputs` never touches the legacy NPZ when there's no
+  matched replay. The actual defect was the plan's own §1 table still showing the raw artifact's
+  `n_windows=30`/`covered=1` as if the diagnostic consumed it. Corrected the table and added an
+  end-to-end regression test that runs a real synthetic no-replay session through the actual
+  `run_session`/`load_session_inputs` code path and asserts zero leakage at every level.
+- **BDR-13 (Should-fix):** Context still said "no config changes" after the diagnostic-only
+  config already existed as a committed file. Reworded, and documented
+  `scripts/diagnose_bin_drift_config.yaml`'s placement beside its script (rather than under
+  `experiments/<name>/config.yaml`) as following the existing `scripts/live_demo_config.yaml`
+  precedent, rather than moving an already-shipped file for a naming-convention question.
+- **8 new tests (42 total for this diagnostic).** Full suite 1658 passed / 1 skipped, no
+  regressions. Committed (`9f19c8e`).
+- **Re-ran the diagnostic on all 4 real captures from the now-clean tree**
+  (`results/diagnose/bin_drift/20260727T195535Z/`, `reproducible: true`). Episode/argmax/centroid
+  numbers are unchanged from the superseded `20260727T192643Z` run (as expected — only the
+  previously-missing report fields were added); verified `centroid_drift_at_grid` against the
+  already-known trailing/leading centroid figures by hand (massimo1: 0.78 bin displacement meets
+  the 0.3 and 0.5 grid points, not 1.0 — matches). **New evidence the first run never
+  surfaced:** massimo1's outcome-stratified report shows *all three* outcome classes carry
+  substantial mean off-baseline duration among full-exposure windows (`covered`: 13.0 s,
+  `gate_not_run`: 8.4 s, `other_rejected`: 10.1 s, out of 30 s) — off-baseline duration does not
+  cleanly separate `covered` from `gate_not_run` in this session. Reported as evidence, not
+  interpreted further (n=1 subject, no causal claim).
+
+**Failed / did not work, and why:**
+
+- **Made the exact same coordination-file mistake as round 3, again.** While moving BDR-13's
+  response into `DEBATE COMMENTS`, inserted a second `## END OF DEBATE` marker mid-document
+  (immediately before the still-existing round 1-3 debate history), which would have broken the
+  file for the next Codex read (two open `DEBATE COMMENTS` blocks, one truncated). Caught and
+  fixed in the same turn before writing anything else. Worth naming twice: this project's
+  "building a rule is not enforcing it" lesson applies to the reviewer's own tooling
+  conventions, not just the code under review.
+
+**Retired / no longer used:** the `20260727T192643Z` bin-drift run is superseded by
+`20260727T195535Z` — not deleted (raw evidence, kept), but do not cite it going forward; it is
+missing `centroid_drift_at_grid`, `outcome_stratified_report`, and `offset_phase_report`.
+
+**Next:** unchanged from the previous entry, except the bin-drift evidence path is now
+`results/diagnose/bin_drift/20260727T195535Z/`. The coordination file is at round 4 with
+responses awaiting Codex confirmation (or a round 5) — not blocking, since everything Blocking
+this round was independently verified and fixed rather than deferred.
+
