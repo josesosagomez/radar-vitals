@@ -173,3 +173,51 @@ def test_grid_is_generated_not_selected():
 
     params = set(inspect.signature(build_window_grid).parameters)
     assert params == {"n_frames", "frame0_epoch", "fs", "frames_per_win"}
+
+
+# ── The grid API is FROZEN, not parameterised (S12R-08) ───────────────────────
+
+@pytest.mark.parametrize("fs", [10.0, 20.5, 19.999, 40.0, 1.0])
+def test_the_scoring_grid_refuses_a_non_frozen_frame_rate(fs):
+    """`build_window_grid(1200, 1000.0, fs=10.0)` silently returned two 600-frame windows
+    whose reference spans were **60 s each**, while every docstring still said 30 s. The
+    estimand changed and nothing raised.
+
+    The parameters exist so the frozen values are visible at the call site, not so a
+    different grid can be built: `notes/analysis_prespec.md` §7 freezes 30 s = 600 frames at
+    20 Hz and `E(i) = frame0_epoch + i/20`, and changing either shifts every window boundary
+    and every reference span with it.
+    """
+    with pytest.raises(WindowGridError, match="FROZEN"):
+        build_window_grid(1200, 1000.0, fs=fs)
+    with pytest.raises(WindowGridError, match="FROZEN"):
+        window_reference_span(0, 1000.0, fs=fs)
+    with pytest.raises(WindowGridError, match="FROZEN"):
+        reference_sample_mask([1000.0], 0, 1000.0, fs=fs)
+
+
+@pytest.mark.parametrize("n", [1, 599, 601, 300, 1200])
+def test_the_scoring_grid_refuses_a_non_frozen_window_length(n):
+    with pytest.raises(WindowGridError, match="FROZEN"):
+        build_window_grid(12000, 1000.0, frames_per_win=n)
+    with pytest.raises(WindowGridError, match="FROZEN"):
+        window_frame_span(0, frames_per_win=n)
+    with pytest.raises(WindowGridError, match="FROZEN"):
+        n_complete_windows(12000, frames_per_win=n)
+
+
+def test_a_capture_shorter_than_one_window_still_validates_the_grid():
+    """The gap that made this worth an explicit check: with `n_frames < 600` the comprehension
+    body never runs, so a non-frozen `fs` would have slipped through and returned `[]`."""
+    with pytest.raises(WindowGridError, match="FROZEN"):
+        build_window_grid(100, 1000.0, fs=10.0)
+    assert build_window_grid(100, 1000.0) == []
+
+
+def test_the_frozen_defaults_are_still_accepted_everywhere():
+    """The guard must not break the real path: passing the frozen values explicitly is
+    exactly how the plan wants call sites to read."""
+    explicit = build_window_grid(12000, 1000.0, fs=20.0, frames_per_win=600)
+    assert explicit == build_window_grid(12000, 1000.0)
+    assert len(explicit) == 20
+    assert explicit[0].epoch_end - explicit[0].epoch_start == pytest.approx(30.0)

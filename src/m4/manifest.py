@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -86,9 +87,107 @@ PACKET_LOSS_FLAG_RATIO = 0.05
 #: Commanded paced rates, frozen by the M3R-31 rotation (12 -> 15 -> 18).
 PACED_RATES_BPM = (12, 15, 18)
 
+#: Plan §4 calls for a **versioned** manifest (S12R-09). The version is a property of the
+#: manifest document, not of a session, so `load_manifest` enforces it. Bump only with a
+#: migration: this is the root provenance record for every session.
+MANIFEST_SCHEMA_VERSION = 1
+
+#: `notes/analysis_prespec.md` §3.1 decides which data roles may ever produce a
+#: frozen-comparator number (S12R-11). Everything absent from this set is barred from
+#: SCORING mode at parse time — mode alone was not a control, because mode is supplied
+#: out-of-band by the caller and a fully-populated `development` manifest passed as SCORING.
+#:
+#: * `evaluation` — "the confirmatory evidence base" (§3.1).
+#: * `collision`  — "role is method-specific"; confirmatory *only* for an estimator not fit,
+#:   tuned or selected on M7, so it is admissible here and the per-method exclusion is the
+#:   pooling table's job (§3.2), not the schema's.
+#:
+#: Barred: `development` ("never confirmatory/headline"), `engineering` ("never scored, never
+#: evaluation"), `pilot` ("excluded from confirmatory metrics").
+_SCORING_ALLOWED_ROLES = frozenset({DataRole.EVALUATION, DataRole.COLLISION})
+
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+
 
 class ManifestError(ValueError):
     """A manifest that cannot be used as given. Always names the session and the field."""
+
+
+# ── Strict primitive validation (S12R-10) ─────────────────────────────────────
+#
+# Presence-only checking plus `bool()`/`int()` coercion let malformed manifests become
+# admission *decisions*: `checksum_ok="false"` was admitted because `bool("false")` is True,
+# and `commanded_rate_bpm=12.9` silently became 12. Types are therefore checked **exactly**,
+# by `type(...) is`, never `isinstance` — the same rule Stage 0 arrived at for the estimator
+# adapter (S0R-02, S0R-18), and for the same reason: `isinstance` admits `np.bool_`, and
+# `bool` is a subclass of `int`, so a boolean would satisfy an integer counter.
+#
+# A malformed primitive is a **`ManifestError`**, never an exclusion reason. Exclusion
+# reasons are reported study-wide (§6: "counts and reasons at every level"), so a schema
+# defect logged as a §6 disposition would put a fabricated cause into a published table.
+
+
+def _exact_bool(fields: dict, key: str, session_id: str) -> bool:
+    v = fields.get(key)
+    if type(v) is not bool:
+        raise ManifestError(
+            f"session {session_id!r}: {key}={v!r} must be a JSON boolean (true/false), got "
+            f"{type(v).__name__}. The string \"false\" is truthy and would have been read as "
+            "a pass; nothing here coerces."
+        )
+    return v
+
+
+def _exact_int(fields: dict, key: str, session_id: str, *, minimum: int | None = None) -> int:
+    v = fields.get(key)
+    if type(v) is not int:   # `type(True) is bool`, so booleans are rejected here too
+        raise ManifestError(
+            f"session {session_id!r}: {key}={v!r} must be an integer, got "
+            f"{type(v).__name__}. Counts are never rounded or truncated — a fractional count "
+            "means the producer is wrong, and silently flooring it hides that."
+        )
+    if minimum is not None and v < minimum:
+        raise ManifestError(
+            f"session {session_id!r}: {key}={v!r} must be >= {minimum}. A negative count is "
+            "not a capture disposition, it is a malformed manifest."
+        )
+    return v
+
+
+def _finite_number(
+    fields: dict, key: str, session_id: str, *, minimum: float | None = None
+) -> float:
+    v = fields.get(key)
+    if type(v) not in (int, float):
+        raise ManifestError(
+            f"session {session_id!r}: {key}={v!r} must be a number, got {type(v).__name__}."
+        )
+    f = float(v)
+    if not math.isfinite(f):
+        raise ManifestError(f"session {session_id!r}: {key}={v!r} must be finite.")
+    if minimum is not None and f < minimum:
+        raise ManifestError(f"session {session_id!r}: {key}={v!r} must be >= {minimum}.")
+    return f
+
+
+def _non_empty_str(fields: dict, key: str, session_id: str) -> str:
+    v = fields.get(key)
+    if type(v) is not str or not v.strip():
+        raise ManifestError(
+            f"session {session_id!r}: {key}={v!r} must be a non-empty string."
+        )
+    return v
+
+
+def _sha256(fields: dict, key: str, session_id: str) -> str:
+    v = _non_empty_str(fields, key, session_id)
+    if not _SHA256_RE.match(v):
+        raise ManifestError(
+            f"session {session_id!r}: {key}={v!r} is not a SHA-256 digest "
+            "(64 lowercase hex characters). Provenance that cannot be checked is not "
+            "provenance (CLAUDE.md §3.1)."
+        )
+    return v
 
 
 # ── Schema ────────────────────────────────────────────────────────────────────
@@ -116,6 +215,9 @@ _REQUIRED_SCORING_FIELDS: tuple[tuple[str, str], ...] = (
     ("n_invalid_frames", "Integrity"),
     ("frame_validity_map_path", "Integrity"),
     ("frame_validity_map_sha256", "Integrity"),
+    # §4's opening sentence binds every artifact "by path + SHA-256". The capture config had
+    # only a hash, so nothing said *which file* the hash was of (S12R-09).
+    ("capture_config_path", "Provenance"),
     ("capture_config_sha256", "Provenance"),
     ("capture_git_commit", "Provenance"),
     ("masimo_path", "Provenance"),
@@ -166,6 +268,7 @@ class SessionManifest:
     frame_validity_map_sha256: str | None = None
 
     # Provenance
+    capture_config_path: str | None = None
     capture_config_sha256: str | None = None
     capture_git_commit: str | None = None
     masimo_path: str | None = None
@@ -183,15 +286,23 @@ class SessionManifest:
 
     @property
     def is_scorable(self) -> bool:
-        """Only a SCORING-mode manifest may produce a frozen-comparator number."""
-        return self.mode is Mode.SCORING
+        """Only a SCORING-mode manifest **in a scoring-eligible data role** may produce a
+        frozen-comparator number.
+
+        Mode alone was not a control (S12R-11): mode is supplied by the caller, so a fully
+        populated `data_role="development"` session passed as `Mode.SCORING` reported
+        `is_scorable=True`. `parse_session` now rejects that combination outright, but this
+        property is the second lock — `SessionManifest` is directly constructible, and
+        §3.1's "never scored" is too load-bearing to rest on one check.
+        """
+        return self.mode is Mode.SCORING and self.data_role in _SCORING_ALLOWED_ROLES
 
 
 # ── Admission recomputation (M4R-04) ──────────────────────────────────────────
 
 
 def recompute_admission(
-    fields: dict, session_id: str, fs: float = 20.0, frames_per_window: int = 600
+    fields: dict, session_id: str
 ) -> tuple[Admission, tuple[str, ...], tuple[str, ...]]:
     """Derive `(verdict, exclusion_reasons, flags)` from the primitive fields alone.
 
@@ -207,9 +318,8 @@ def recompute_admission(
       end". The M3R-37 discriminator is one question: *did the run reach its intended
       duration?* If not, item 3, not admitted. A run that DID reach its intended end but
       whose stored file has an incomplete trailing window is item 4 and is **retained**.
-    * **§6 item 4 — corrupt raw.** Not admitted iff a stored checksum fails, **or** the raw
-      is truncated so a **non-final** window is lost. Losing only the trailing partial window
-      is explicitly retained ("that tail window is simply unscored").
+    * **§6 item 4 — corrupt raw.** Not admitted iff a stored checksum fails. The truncation
+      limb is **deliberately unimplemented** — see the S12R-01 note below.
     * **§6 item 5 — epoch-sync failure.** |offset| > 1 s at either end.
     * **§6 item 7 / plan §4** — a session superseded by its one permitted re-run: its windows
       "do not enter the coverage denominator".
@@ -218,82 +328,103 @@ def recompute_admission(
 
     * **§6 item 4 — packet loss** above `n_dropped / n_received > 5 %`: "flags the session
       (reported) but does not by itself exclude it; the per-frame validity map decides which
-      windows are radar-NaN". The first draft excluded on *any* packet loss, which
-      contradicts this outright.
+      windows are radar-NaN".
+    * **§6 item 4 — a trailing truncation fragment**, which §6 explicitly **retains**.
 
-    Deliberately **not** checked here: that `raw_sha256` matches the bytes on disk, and that
-    the validity map's length and invalid-count match its file. Both need the files, which
-    Stage 3 opens; this function is pure and works from the manifest alone. `checksum_ok` is
-    the recorded outcome of that verification, not a substitute for it.
+    **S12R-01 — the item-4 truncation limb is OPEN and escalated, not silently decided.**
+    §6 item 4 excludes a session "truncated so that a **non-final** window is incomplete
+    (`mirror_truncated_bytes` cuts into a mid-recording window)". But the only producer of
+    that primitive sets it to `file_size % bytes_per_frame` and truncates those bytes from
+    the end (`scripts/live_demo.py` `LiveFrameSource._loop`): it is a **sub-frame remainder**,
+    strictly less than one frame, so it can never locate a mid-file cut and can never
+    represent a lost window. The frozen text names a mechanism that cannot detect the
+    condition the text defines.
+
+    The first implementation bridged that gap by inferring a mid-file cut from
+    `floor(n_frames/600) < floor(intended*20/600)` — which excluded exactly the case §6
+    orders **retained** (a completed run whose stored file ends in a partial window). That
+    predicate is removed. Nothing replaces it pending the user's resolution of the conflict
+    at the M0 freeze, so a truncation is **flagged and retained** here. If the capture path
+    later persists positional integrity evidence, the limb becomes implementable; until then
+    an exclusion on this ground would rest on a primitive that cannot support it.
+
+    **Not checked here, and NOT YET CHECKED ANYWHERE** (S12R-03, S12R-07 — open): that
+    `raw_sha256` matches the bytes on disk, and that the validity map's length and
+    invalid-count match its file. Both need file access and this function is pure, but plan
+    §7 row 1 names checksum *and* "validity-map consistency" in the **Stage 1** done-when, so
+    deferring them to Stage 3 was a done-when violation rather than a scoping choice. Until
+    an I/O-backed verification exists, `checksum_ok` is an operator-supplied boolean and the
+    integrity limb of this recomputation is **not** objective.
     """
     reasons: list[str] = []
     flags: list[str] = []
 
+    # Strict primitives first: a malformed value is a ManifestError, never an exclusion
+    # reason (S12R-10). Everything below can therefore assume exact types.
+    offsets = {
+        key: _finite_number(fields, key, session_id)
+        for key in ("clock_offset_start_s", "clock_offset_end_s")
+    }
+    intended = _finite_number(fields, "intended_duration_s", session_id, minimum=0.0)
+    actual = _finite_number(fields, "actual_duration_s", session_id, minimum=0.0)
+    early_stop = _exact_bool(fields, "early_stop", session_id)
+    checksum_ok = _exact_bool(fields, "checksum_ok", session_id)
+    truncation = _exact_int(fields, "truncation_bytes", session_id, minimum=0)
+    received = _exact_int(fields, "packets_received", session_id, minimum=0)
+    dropped = _exact_int(fields, "packets_dropped", session_id, minimum=0)
+    n_frames = _exact_int(fields, "n_frames", session_id, minimum=0)
+    n_invalid = _exact_int(fields, "n_invalid_frames", session_id, minimum=0)
+
+    # Internally impossible combinations are malformed manifests, not §6 dispositions.
+    if n_invalid > n_frames:
+        raise ManifestError(
+            f"session {session_id!r}: n_invalid_frames={n_invalid} exceeds n_frames="
+            f"{n_frames}. Impossible, so the manifest is wrong; this is not a capture "
+            "disposition and must not be counted as one."
+        )
+    if dropped > received:
+        raise ManifestError(
+            f"session {session_id!r}: packets_dropped={dropped} exceeds packets_received="
+            f"{received}. Impossible, so the manifest is wrong."
+        )
+
     # ── §6 item 5: epoch-sync failure ────────────────────────────────────────
-    for key in ("clock_offset_start_s", "clock_offset_end_s"):
-        offset = fields.get(key)
-        if offset is None or not math.isfinite(float(offset)):
-            reasons.append(f"{key}_missing_or_non_finite")
-        elif abs(float(offset)) > MAX_CLOCK_OFFSET_S:
+    for key, offset in offsets.items():
+        if abs(offset) > MAX_CLOCK_OFFSET_S:
             reasons.append(f"{key}_exceeds_{MAX_CLOCK_OFFSET_S:g}s")
 
     # ── §6 item 3: protocol abort — did the run reach its intended duration? ─
-    intended, actual = fields.get("intended_duration_s"), fields.get("actual_duration_s")
-    reached_intended: bool | None = None
-    if intended is None or actual is None:
-        reasons.append("duration_fields_missing")
-    else:
-        reached_intended = float(actual) >= float(intended)
-        if not reached_intended:
-            reasons.append("protocol_abort_did_not_reach_intended_duration")
-    if bool(fields.get("early_stop", False)) and reached_intended is not False:
-        # early_stop says the operator halted it, yet the durations say it completed.
-        # Not a silent tiebreak: the manifest contradicts itself and must be fixed.
-        reasons.append("early_stop_contradicts_durations")
+    #
+    # S12R-02: `early_stop=True` with `actual >= intended` is self-contradictory, and the
+    # first draft made that contradiction an *invented* exclusion reason
+    # (`early_stop_contradicts_durations`), which §6 does not name. Worse, it was invisible:
+    # an operator who also wrote `admission: excluded` got agreement, so the contradictory
+    # manifest parsed clean. It is a consistency failure and raises, independent of the
+    # operator's verdict. The frozen M3R-37 discriminator is the duration question alone.
+    reached_intended = actual >= intended
+    if early_stop and reached_intended:
+        raise ManifestError(
+            f"session {session_id!r}: early_stop=True but actual_duration_s={actual!r} >= "
+            f"intended_duration_s={intended!r}. A run cannot be both halted early and "
+            "complete. §6 item 3's discriminator (M3R-37) is the duration question alone, "
+            "so this contradiction has no frozen disposition — fix the manifest."
+        )
+    if not reached_intended:
+        reasons.append("protocol_abort_did_not_reach_intended_duration")
 
-    # ── §6 item 4: corrupt raw (checksum, or a NON-FINAL window lost) ────────
-    checksum_ok = fields.get("checksum_ok")
-    if checksum_ok is None:
-        reasons.append("checksum_ok_missing")
-    elif not bool(checksum_ok):
+    # ── §6 item 4: corrupt raw — checksum limb only (truncation limb: see docstring) ──
+    if not checksum_ok:
         reasons.append("stored_checksum_failed")
-
-    truncation = fields.get("truncation_bytes")
-    n_frames = fields.get("n_frames")
-    if truncation is None:
-        reasons.append("truncation_bytes_missing")
-    elif int(truncation) > 0:
+    if truncation > 0:
         flags.append("raw_truncated_trailing")
-        if n_frames is not None and intended is not None and frames_per_window > 0:
-            stored_windows = int(n_frames) // int(frames_per_window)
-            expected_windows = int(float(intended) * float(fs)) // int(frames_per_window)
-            if stored_windows < expected_windows:
-                # A whole window that should exist is gone: the cut reached a non-final
-                # window, which §6 item 4 makes corrupt. A trailing fragment does not.
-                reasons.append("truncation_lost_a_non_final_window")
 
     # ── §6 item 4: packet loss FLAGS, never excludes ─────────────────────────
-    received, dropped = fields.get("packets_received"), fields.get("packets_dropped")
-    if received is None or dropped is None:
-        reasons.append("packet_counts_missing")
-    elif int(received) < 0 or int(dropped) < 0:
-        reasons.append("packet_counts_negative")
-    elif int(received) > 0:
-        ratio = int(dropped) / int(received)
-        if ratio > PACKET_LOSS_FLAG_RATIO:
-            flags.append(f"packet_loss_above_{PACKET_LOSS_FLAG_RATIO:.0%}")
+    if received > 0 and dropped / received > PACKET_LOSS_FLAG_RATIO:
+        flags.append(f"packet_loss_above_{PACKET_LOSS_FLAG_RATIO:.0%}")
 
     # ── §6 item 7 / plan §4: superseded attempt ──────────────────────────────
     if fields.get("retry_status") == RetryStatus.SUPERSEDED.value:
         reasons.append("superseded_by_retry")
-
-    # ── Internal consistency of the declared frame counts ────────────────────
-    n_invalid = fields.get("n_invalid_frames")
-    if n_frames is not None and n_invalid is not None:
-        if int(n_invalid) < 0 or int(n_frames) < 0:
-            reasons.append("frame_counts_negative")
-        elif int(n_invalid) > int(n_frames):
-            reasons.append("invalid_frames_exceed_total")
 
     verdict = Admission.EXCLUDED if reasons else Admission.ADMITTED
     return verdict, tuple(reasons), tuple(flags)
@@ -351,6 +482,83 @@ def _validate_posture(value, session_id: str) -> str:
     return value
 
 
+def _validate_rate_schedule(
+    fields: dict, arm: Arm | None, session_id: str, mode: Mode
+) -> tuple[dict, ...]:
+    """Validate `commanded_rate_schedule` (plan §4, Provenance row; S12R-09).
+
+    **The entry shape below is DEFINED HERE, not transcribed.** Plan §4 requires the manifest
+    to bind a "commanded-rate schedule" but no binding document states its fields, so this is
+    the one rule in Stage 1 that does not trace to a frozen source. It is written to be the
+    weakest shape that still makes the field checkable, and it is called out rather than
+    buried so the review can reject or replace it — inventing predicates quietly is what went
+    wrong in the first draft.
+
+    Deliberately **not** constrained: the rate *values*. The M3R-31 rotation (12/15/18) binds
+    the paced arm's allocation, but `notes/protocol.md`'s diagnostic sweep steps
+    12 → 15 → 18 → **21**, so requiring membership of `PACED_RATES_BPM` here would reject a
+    legitimate schedule. That constraint belongs to `commanded_rate_bpm`, which is the field
+    the pooling table reads.
+    """
+    raw = fields.get("commanded_rate_schedule")
+
+    if arm is not Arm.PACED:
+        if raw:
+            raise ManifestError(
+                f"session {session_id!r}: arm is {arm.value if arm else None!r} but "
+                f"commanded_rate_schedule={raw!r} is set. Only the paced arm has one."
+            )
+        return ()
+
+    if raw is None:
+        if mode is not Mode.SCORING:
+            return ()
+        raise ManifestError(
+            f"session {session_id!r}: arm is 'paced' but commanded_rate_schedule is missing. "
+            "Plan §4 binds it under Provenance; without it the commanded rate that was "
+            "actually played cannot be reconstructed from the manifest."
+        )
+    if type(raw) is not list or not raw:
+        raise ManifestError(
+            f"session {session_id!r}: commanded_rate_schedule={raw!r} must be a non-empty "
+            "array of entries."
+        )
+
+    last_start: float | None = None
+    for i, entry in enumerate(raw):
+        if type(entry) is not dict:
+            raise ManifestError(
+                f"session {session_id!r}: commanded_rate_schedule[{i}]={entry!r} must be an "
+                "object."
+            )
+        where = f"{session_id}.commanded_rate_schedule[{i}]"
+        _exact_int(entry, "commanded_rate_bpm", where, minimum=1)
+        start = _finite_number(entry, "start_s", where, minimum=0.0)
+        if last_start is not None and start <= last_start:
+            raise ManifestError(
+                f"session {session_id!r}: commanded_rate_schedule[{i}].start_s={start!r} "
+                f"does not increase on the previous entry ({last_start!r}). The schedule is "
+                "an ordered timeline."
+            )
+        last_start = start
+
+    if float(raw[0]["start_s"]) != 0.0:
+        raise ManifestError(
+            f"session {session_id!r}: commanded_rate_schedule[0].start_s must be 0 — the "
+            "schedule is relative to the start of the recording."
+        )
+
+    # A single-rate paced session must agree with its own scalar field; a stepped schedule
+    # has no single scalar to agree with, so the check applies only to the 1-entry case.
+    rate = fields.get("commanded_rate_bpm")
+    if len(raw) == 1 and rate is not None and raw[0]["commanded_rate_bpm"] != rate:
+        raise ManifestError(
+            f"session {session_id!r}: commanded_rate_bpm={rate!r} but the single-entry "
+            f"schedule declares {raw[0]['commanded_rate_bpm']!r}."
+        )
+    return tuple(raw)
+
+
 def parse_session(fields: dict, mode: Mode) -> SessionManifest:
     """Validate one session's fields and return the manifest record.
 
@@ -390,17 +598,21 @@ def parse_session(fields: dict, mode: Mode) -> SessionManifest:
                 f"session {session_id!r}: arm is 'paced' but commanded_rate_bpm is missing; "
                 f"it must be one of {PACED_RATES_BPM}."
             )
-        if int(rate) not in PACED_RATES_BPM:
+        # Exact int (S12R-10): `int(12.9)` silently became 12, turning a producer bug into a
+        # valid frozen rate and mis-filing the session in the M3R-31 rate allocation.
+        rate = _exact_int(fields, "commanded_rate_bpm", session_id)
+        if rate not in PACED_RATES_BPM:
             raise ManifestError(
                 f"session {session_id!r}: commanded_rate_bpm={rate!r} is not one of "
                 f"{PACED_RATES_BPM} (the frozen M3R-31 rotation)."
             )
-        rate = int(rate)
     elif arm is Arm.NATURAL and rate is not None:
         raise ManifestError(
             f"session {session_id!r}: arm is 'natural' but commanded_rate_bpm={rate!r} is "
             "set. A natural session has no commanded rate."
         )
+
+    schedule = _validate_rate_schedule(fields, arm, session_id, mode)
 
     distance = _validate_distance(fields["distance_m"], session_id) if present("distance_m") else None
     posture = _validate_posture(fields["posture"], session_id) if present("posture") else None
@@ -413,6 +625,42 @@ def parse_session(fields: dict, mode: Mode) -> SessionManifest:
                 f"session {session_id!r}: frame0_epoch={frame0!r} is not finite. It is the "
                 "synchronised UTC time at receipt of frame 0 — never start_wall_utc."
             )
+
+    # ── §3.1 role/mode matrix (S12R-11) ──────────────────────────────────────
+    #
+    # Mode is supplied out-of-band so a manifest cannot promote itself; the cost is that
+    # nothing stopped a caller from handing a `development` or `engineering` session to
+    # SCORING. §3.1 makes engineering "never scored, never evaluation", development "never
+    # confirmatory/headline" and the pilot "excluded from confirmatory metrics", so the
+    # binding is between the *role* and the mode, not the mode alone.
+    if mode is Mode.SCORING and role is not None and role not in _SCORING_ALLOWED_ROLES:
+        allowed = ", ".join(sorted(r.value for r in _SCORING_ALLOWED_ROLES))
+        raise ManifestError(
+            f"session {session_id!r}: data_role={role.value!r} may never produce a "
+            f"frozen-comparator number (notes/analysis_prespec.md §3.1); scoring mode "
+            f"accepts only [{allowed}]. Load it in DEVELOPMENT mode, where its output is "
+            "labelled exploratory / apparent / in-sample."
+        )
+
+    # ── Provenance and disposition strings, strictly typed in scoring mode ───
+    if mode is Mode.SCORING:
+        for key in ("raw_path", "frame_validity_map_path", "capture_config_path",
+                    "masimo_path", "capture_git_commit", "subject_id"):
+            _non_empty_str(fields, key, session_id)
+        for key in ("raw_sha256", "frame_validity_map_sha256", "capture_config_sha256",
+                    "masimo_sha256"):
+            _sha256(fields, key, session_id)
+
+    # Plan §4 Disposition binds retry/replacement status **and reason** (S12R-09). A reason
+    # is only meaningful once the status is not `original`, so it is conditionally required
+    # rather than always required.
+    if retry is not None and retry is not RetryStatus.ORIGINAL:
+        _non_empty_str(fields, "retry_reason", session_id)
+    elif retry is RetryStatus.ORIGINAL and fields.get("retry_reason") is not None:
+        raise ManifestError(
+            f"session {session_id!r}: retry_status is 'original' but retry_reason="
+            f"{fields['retry_reason']!r} is set. An original attempt replaced nothing."
+        )
 
     admission = (_as_enum(fields["admission"], Admission, "admission", session_id)
                  if present("admission") else None)
@@ -454,11 +702,12 @@ def parse_session(fields: dict, mode: Mode) -> SessionManifest:
         n_invalid_frames=fields.get("n_invalid_frames"),
         frame_validity_map_path=fields.get("frame_validity_map_path"),
         frame_validity_map_sha256=fields.get("frame_validity_map_sha256"),
+        capture_config_path=fields.get("capture_config_path"),
         capture_config_sha256=fields.get("capture_config_sha256"),
         capture_git_commit=fields.get("capture_git_commit"),
         masimo_path=fields.get("masimo_path"),
         masimo_sha256=fields.get("masimo_sha256"),
-        commanded_rate_schedule=tuple(fields.get("commanded_rate_schedule", ()) or ()),
+        commanded_rate_schedule=schedule,
         intended_duration_s=fields.get("intended_duration_s"),
         actual_duration_s=fields.get("actual_duration_s"),
         early_stop=fields.get("early_stop"),
@@ -473,6 +722,10 @@ def load_manifest(path: str | Path, mode: Mode) -> list[SessionManifest]:
 
     `mode` is supplied by the caller, not read from the file, so a manifest cannot promote
     itself into scoring mode.
+
+    The **schema version is a property of the document**, not of a session (plan §4: "a
+    versioned manifest binds … for each session"), so it is enforced here. `parse_session`
+    validates one session's fields and is deliberately reachable without it.
     """
     p = Path(path)
     doc = json.loads(p.read_text(encoding="utf-8"))
@@ -480,6 +733,21 @@ def load_manifest(path: str | Path, mode: Mode) -> list[SessionManifest]:
         raise ManifestError(
             f"{p}: manifest must be a JSON object with a 'sessions' array."
         )
+
+    # S12R-09: plan §4 calls for a versioned manifest and there was neither a field nor a
+    # check. Without one, a schema migration silently reinterprets every existing session.
+    version = doc.get("manifest_schema_version")
+    if version is None:
+        raise ManifestError(
+            f"{p}: manifest_schema_version is missing. Plan §4 requires a versioned "
+            f"manifest; this reader implements version {MANIFEST_SCHEMA_VERSION}."
+        )
+    if type(version) is not int or version != MANIFEST_SCHEMA_VERSION:
+        raise ManifestError(
+            f"{p}: manifest_schema_version={version!r}, but this reader implements "
+            f"version {MANIFEST_SCHEMA_VERSION}. Refusing to guess how to read it."
+        )
+
     sessions = doc["sessions"]
     if not isinstance(sessions, list):
         raise ManifestError(f"{p}: 'sessions' must be an array, got {type(sessions).__name__}")
@@ -495,16 +763,25 @@ def load_manifest(path: str | Path, mode: Mode) -> list[SessionManifest]:
 
 
 def require_scoring_mode(sessions: list[SessionManifest], what: str) -> None:
-    """Refuse to let development-mode sessions reach a scoring path (§4).
+    """Refuse to let a non-scorable session reach a scoring path (§4).
 
     The separation has to be enforced somewhere executable; a naming convention is not a
     control. Call this at the entry of anything that emits a frozen-comparator number.
+
+    "Non-scorable" is mode **and** data role (S12R-11): a development-role session is barred
+    even if someone hands it in as `Mode.SCORING`.
     """
-    offenders = [s.session_id for s in sessions if not s.is_scorable]
+    offenders = [
+        f"{s.session_id!r} (mode={s.mode.value}, "
+        f"data_role={s.data_role.value if s.data_role else None})"
+        for s in sessions
+        if not s.is_scorable
+    ]
     if offenders:
         raise ManifestError(
-            f"{what} requires SCORING mode, but these sessions are DEVELOPMENT: "
-            f"{', '.join(repr(o) for o in offenders)}. Development output is exploratory / "
-            "apparent / in-sample and can never be a frozen-comparator number "
-            "(plans/m4_offline_harness.md §2.2, §4)."
+            f"{what} requires a SCORING-mode session in a scoring-eligible data role, but "
+            f"these are not: {', '.join(offenders)}. Development, engineering and pilot "
+            "output is exploratory / apparent / in-sample and can never be a "
+            "frozen-comparator number (notes/analysis_prespec.md §3.1; "
+            "plans/m4_offline_harness.md §2.2, §4)."
         )
