@@ -27,6 +27,7 @@ SETTLED_START = 100
 BLOCK_FRAMES = 20
 HOP_S = 3.0
 WINDOW_FRAMES = 600
+WINDOW_S = 30.0
 
 
 def diag_cfg(**overrides) -> dbd.DiagnosticConfig:
@@ -167,7 +168,7 @@ def test_warmup_recompute_check_detects_mismatch():
     assert result["full_buffer_check"] == "mismatch"
 
 
-# ── compute_block_series (trailing-block discard) ───────────────────────────
+# ── compute_block_series (trailing-block discard; config actually governs) ──
 
 def test_block_series_starts_after_calibration_stratum():
     cube = make_cube(600 + 40, bin_by_frame=lambda f: 8, amplitude=5.0)
@@ -189,14 +190,42 @@ def test_block_series_discards_trailing_incomplete_block():
     assert blocks.trailing_discarded_frames == 5
 
 
+def test_block_series_carries_full_per_bin_energy_matrix():
+    """The promised per-bin energy matrix (plan §4), not just the derived
+    argmax/centroid (BDR-14)."""
+    cube = make_cube(600 + 40, bin_by_frame=lambda f: 8, amplitude=5.0)
+    cfg = diag_cfg()
+    blocks = dbd.compute_block_series(cube, CANDIDATE_BINS, cfg)
+    assert blocks.energy_matrix.shape == (2, len(CANDIDATE_BINS))
+    assert blocks.candidate_bins == CANDIDATE_BINS
+    bin8_col = CANDIDATE_BINS.index(8)
+    assert np.all(blocks.energy_matrix[:, bin8_col] == blocks.energy_matrix.max(axis=1))
+
+
+def test_block_series_fails_closed_on_unsupported_trailing_policy():
+    """trailing_block_policy is READ from config and governs behavior, not
+    decorative hashing (BDR-19) -- an unsupported value must raise, not
+    silently fall back to a default."""
+    cube = make_cube(600 + 40, bin_by_frame=lambda f: 8, amplitude=5.0)
+    cfg = diag_cfg(trailing_block_policy="weight_partial")
+    with pytest.raises(NotImplementedError):
+        dbd.compute_block_series(cube, CANDIDATE_BINS, cfg)
+
+
 # ── detect_episodes ──────────────────────────────────────────────────────────
 
-def _blocks_from_argmax(argmax_seq: list[int]) -> dbd.BlockSeries:
+def _blocks_from_argmax(argmax_seq: list[int], candidate_bins: list[int] = CANDIDATE_BINS) -> dbd.BlockSeries:
     n = len(argmax_seq)
+    energy_matrix = np.full((n, len(candidate_bins)), 1.0)
+    for i, b in enumerate(argmax_seq):
+        j = candidate_bins.index(b)
+        energy_matrix[i, j] = 100.0  # the argmax bin clearly dominates
     return dbd.BlockSeries(
         block_start_frame=np.arange(600, 600 + n * BLOCK_FRAMES, BLOCK_FRAMES),
         argmax_bin=np.array(argmax_seq, dtype=int),
         centroid=np.array(argmax_seq, dtype=float),
+        energy_matrix=energy_matrix,
+        candidate_bins=list(candidate_bins),
         trailing_discarded_frames=0,
     )
 
@@ -234,6 +263,14 @@ def test_detect_episodes_no_gap_bridging():
     assert episodes[1].bin_sequence == (9, 9)
 
 
+def test_detect_episodes_fails_closed_on_unsupported_gap_rule():
+    """gap_rule is READ from config and governs behavior (BDR-19)."""
+    blocks = _blocks_from_argmax([9, 9, 8, 9, 9])
+    with pytest.raises(NotImplementedError):
+        dbd.detect_episodes(blocks, baseline_bin=8, fs=FS, block_frames=BLOCK_FRAMES,
+                             gap_rule="bridge_short_gaps")
+
+
 def test_episodes_at_grid_boundary_inclusive():
     # A 5-block (5 s) episode must count at the 2s and 5s grid points, and
     # a 1-block (1 s) episode must not count at any grid point.
@@ -245,20 +282,79 @@ def test_episodes_at_grid_boundary_inclusive():
     assert grid[10.0] == 0  # neither episode reaches 10s
 
 
-# ── centroid_drift_at_grid (BDR-11: a separate SESSION-LEVEL statistic, never a
-# per-window joint classifier with the duration grid) ──────────────────────
+# ── compute_occupancy ────────────────────────────────────────────────────────
+
+def test_compute_occupancy_fractions():
+    # baseline=8; displacements: 0,0,1,1,2,2,3,3 -> 8 blocks
+    blocks = _blocks_from_argmax([8, 8, 9, 7, 10, 6, 11, 5])
+    occ = dbd.compute_occupancy(blocks, baseline_bin=8)
+    assert occ["at_baseline"] == pytest.approx(2 / 8)
+    assert occ["within_1_bin"] == pytest.approx(4 / 8)
+    assert occ["within_2_bins"] == pytest.approx(6 / 8)
+    assert occ["outside_2_bins"] == pytest.approx(2 / 8)
+
+
+# ── trailing_leading_centroid_medians (BDR-15: exact last-10-complete-blocks,
+# not a frame-count threshold that can miss the block grid) ────────────────
+
+def test_trailing_leading_centroid_medians_selects_exact_block_counts():
+    # 15 blocks -> last 10 (N=round(10*20/20)=10) for trailing, first 10 for leading.
+    seq = list(range(15))  # centroid == argmax bin by construction of the helper
+    blocks = _blocks_from_argmax([8] * 15)
+    blocks.centroid[:] = seq  # give each block a distinct, known centroid value
+    cfg = diag_cfg()
+    trailing, leading = dbd.trailing_leading_centroid_medians(blocks, cfg, FS)
+    assert trailing == pytest.approx(np.median(seq[-10:]))
+    assert leading == pytest.approx(np.median(seq[:10]))
+
+
+def test_trailing_leading_centroid_medians_matches_real_capture_arithmetic():
+    """Reproduces the exact BDR-15 regression on real capture numbers:
+    massimo1 has 3610 total frames (a 10-frame trailing remainder past the
+    block grid). A frame-count threshold (`cube.shape[0] - 10*fs`) does not
+    land on a block boundary and silently selects only 9 of the last 10
+    blocks; selecting the last 10 block-series ENTRIES by position must
+    select exactly 10."""
+    n_total_frames = 3610
+    n_available = n_total_frames - 600
+    n_blocks = n_available // BLOCK_FRAMES  # 150, remainder 10 (discarded)
+    assert n_blocks == 150
+    seq = np.arange(n_blocks, dtype=float)
+    blocks = _blocks_from_argmax([8] * n_blocks)
+    blocks.centroid[:] = seq
+    cfg = diag_cfg()
+    trailing, _ = dbd.trailing_leading_centroid_medians(blocks, cfg, FS)
+    # last 10 entries of a 0..149 arange -> 140..149, median 144.5
+    assert trailing == pytest.approx(np.median(seq[-10:]))
+    assert trailing == pytest.approx(144.5)
+
+
+def test_trailing_leading_centroid_medians_degrades_gracefully_with_few_blocks():
+    blocks = _blocks_from_argmax([8, 9, 10])  # only 3 blocks, fewer than N=10
+    cfg = diag_cfg()
+    trailing, leading = dbd.trailing_leading_centroid_medians(blocks, cfg, FS)
+    assert np.isfinite(trailing) and np.isfinite(leading)
+
+
+def test_trailing_leading_centroid_medians_empty_series_is_nan():
+    blocks = _blocks_from_argmax([])
+    cfg = diag_cfg()
+    trailing, leading = dbd.trailing_leading_centroid_medians(blocks, cfg, FS)
+    assert np.isnan(trailing) and np.isnan(leading)
+
+
+# ── centroid_drift_at_grid (a separate SESSION-LEVEL statistic, never a
+# per-window joint classifier with the duration grid, BDR-11/BDR-11 R2) ────
 
 def test_centroid_drift_at_grid_below_all_thresholds():
     grid = dbd.centroid_drift_at_grid(trailing_median=24.1, leading_median=24.0,
                                        centroid_grid_bins=(0.3, 0.5, 1.0))
-    # displacement = 0.1 bin -> below every grid value
     assert grid == {0.3: False, 0.5: False, 1.0: False}
 
 
 def test_centroid_drift_at_grid_exact_boundary_counts():
     grid = dbd.centroid_drift_at_grid(trailing_median=24.3, leading_median=24.0,
                                        centroid_grid_bins=(0.3, 0.5, 1.0))
-    # displacement = exactly 0.3 -> meets the 0.3 threshold (inclusive), below 0.5/1.0
     assert grid[0.3] is True
     assert grid[0.5] is False
     assert grid[1.0] is False
@@ -267,13 +363,10 @@ def test_centroid_drift_at_grid_exact_boundary_counts():
 def test_centroid_drift_at_grid_above_all_thresholds():
     grid = dbd.centroid_drift_at_grid(trailing_median=25.5, leading_median=24.0,
                                        centroid_grid_bins=(0.3, 0.5, 1.0))
-    # displacement = 1.5 bin -> meets every grid value
     assert all(grid.values())
 
 
 def test_centroid_drift_at_grid_direction_independent():
-    # Displacement is |trailing - leading|; a negative-going drift of the same
-    # magnitude must produce the same grid result.
     forward = dbd.centroid_drift_at_grid(24.0, 24.5, (0.3, 0.5, 1.0))
     backward = dbd.centroid_drift_at_grid(24.5, 24.0, (0.3, 0.5, 1.0))
     assert forward == backward
@@ -284,7 +377,7 @@ def test_centroid_drift_at_grid_nan_input_is_false_everywhere():
     assert grid == {0.3: False, 0.5: False, 1.0: False}
 
 
-# ── window classification / exposure stratification ────────────────────────
+# ── window classification ────────────────────────────────────────────────────
 
 def test_classify_window_outcome_covered():
     codes = np.array([2, -1, -1])
@@ -301,7 +394,39 @@ def test_classify_window_outcome_other_rejected():
     assert dbd.classify_window_outcome(-1, codes, 1.2) == "other_rejected"
 
 
-def _npz_fixture(n_windows: int, baseline_bin: int = 8):
+# ── validate_frame_idx_grid (BDR-19) ────────────────────────────────────────
+
+def test_validate_frame_idx_grid_accepts_well_formed_grid():
+    frame_idx = np.array([599, 659, 719], dtype=int)
+    dbd.validate_frame_idx_grid(frame_idx, WINDOW_FRAMES, HOP_S, FS)  # must not raise
+
+
+def test_validate_frame_idx_grid_rejects_below_first_valid_end():
+    frame_idx = np.array([500, 659, 719], dtype=int)
+    with pytest.raises(ValueError):
+        dbd.validate_frame_idx_grid(frame_idx, WINDOW_FRAMES, HOP_S, FS)
+
+
+def test_validate_frame_idx_grid_rejects_non_monotonic():
+    frame_idx = np.array([599, 719, 659], dtype=int)
+    with pytest.raises(ValueError):
+        dbd.validate_frame_idx_grid(frame_idx, WINDOW_FRAMES, HOP_S, FS)
+
+
+def test_validate_frame_idx_grid_rejects_wrong_hop_spacing():
+    frame_idx = np.array([599, 659, 800], dtype=int)  # last hop is 141 frames, not 60
+    with pytest.raises(ValueError):
+        dbd.validate_frame_idx_grid(frame_idx, WINDOW_FRAMES, HOP_S, FS)
+
+
+def test_validate_frame_idx_grid_empty_is_ok():
+    dbd.validate_frame_idx_grid(np.array([], dtype=int), WINDOW_FRAMES, HOP_S, FS)
+
+
+# ── align_windows (window-scale energy computed DIRECTLY on the cube, BDR-14;
+# exposure stratification, BDR-03 R3) ───────────────────────────────────────
+
+def _npz_fixture(n_windows: int):
     frame_idx = np.array([599 + i * 60 for i in range(n_windows)], dtype=int)
     accepted_rank = np.full(n_windows, -1, dtype=int)
     rejection_codes = np.full((n_windows, 3), -1, dtype=int)
@@ -309,12 +434,54 @@ def _npz_fixture(n_windows: int, baseline_bin: int = 8):
     return frame_idx, accepted_rank, rejection_codes, f_r_hz
 
 
+def _uniform_cube_for_windows(n_windows: int, bin_val: int = 8) -> np.ndarray:
+    """A cube long enough to cover n_windows worth of NPZ hops, with a
+    constant tone at bin_val throughout (so direct per-window argmax/centroid
+    come out at bin_val, matching a `_blocks_from_argmax([bin_val] * n)`
+    block fixture passed alongside it)."""
+    last_end_frame = 599 + (n_windows - 1) * 60
+    return make_cube(last_end_frame + 1, bin_by_frame=lambda f: bin_val, amplitude=5.0)
+
+
+def test_align_windows_computes_window_energy_directly_not_from_block_aggregation():
+    """BDR-14's core claim, made concrete: construct a 600-frame window where
+    the MODE of per-block argmax is bin 8 (16 of 30 blocks), but bin 9's
+    aggregate POWER over the whole window is far larger (14 blocks at 3x
+    amplitude = 9x power). The window's OWN argmax must be 9 (the true
+    aggregate), not 8 (the block-mode shortcut this diagnostic shipped
+    with)."""
+    n_adc, n_rx, n_chirps = 32, 2, 2
+    cube = make_cube(600, n_adc=n_adc, n_rx=n_rx, n_chirps=n_chirps, bin_by_frame=lambda f: None)
+    n = np.arange(n_adc)
+    for block_i in range(30):
+        lo, hi = block_i * BLOCK_FRAMES, (block_i + 1) * BLOCK_FRAMES
+        if block_i < 16:
+            k, amp = 8, 1.0
+        else:
+            k, amp = 9, 3.0
+        tone = amp * np.exp(2j * np.pi * k * n / n_adc)
+        cube[lo:hi, :, :, :] += tone.astype(np.complex64)
+
+    frame_idx = np.array([599], dtype=int)
+    accepted_rank = np.array([-1])
+    rejection_codes = np.array([[-1, -1, -1]])
+    f_r_hz = np.array([np.nan])
+    # Blocks passed in still show the mode-losing aggregation (16 blocks @ 8, 14 @ 9)
+    blocks = _blocks_from_argmax([8] * 16 + [9] * 14)
+
+    rows = dbd.align_windows(cube, CANDIDATE_BINS, frame_idx, blocks, 8,
+                              accepted_rank, rejection_codes, f_r_hz, FS, WINDOW_FRAMES,
+                              HOP_S, 600, BLOCK_FRAMES)
+    assert rows[0].window_argmax_bin == 9  # NOT 8 (the block-mode shortcut)
+
+
 def test_align_windows_post_calibration_observed_s():
     n_windows = 12
     frame_idx, accepted_rank, rejection_codes, f_r_hz = _npz_fixture(n_windows)
+    cube = _uniform_cube_for_windows(n_windows)
     blocks = _blocks_from_argmax([8] * 30)
-    rows = dbd.align_windows(frame_idx, blocks, 8, accepted_rank, rejection_codes,
-                              f_r_hz, FS, WINDOW_FRAMES, HOP_S, 600, BLOCK_FRAMES)
+    rows = dbd.align_windows(cube, CANDIDATE_BINS, frame_idx, blocks, 8, accepted_rank,
+                              rejection_codes, f_r_hz, FS, WINDOW_FRAMES, HOP_S, 600, BLOCK_FRAMES)
     assert rows[0].is_warmup_window is True
     assert rows[0].post_calibration_observed_s == pytest.approx(0.0)
     assert rows[1].post_calibration_observed_s == pytest.approx(3.0)
@@ -323,13 +490,25 @@ def test_align_windows_post_calibration_observed_s():
     assert rows[11].post_calibration_observed_s == pytest.approx(30.0)
 
 
+def test_align_windows_rejects_malformed_frame_idx():
+    n_windows = 3
+    _, accepted_rank, rejection_codes, f_r_hz = _npz_fixture(n_windows)
+    cube = _uniform_cube_for_windows(n_windows)
+    blocks = _blocks_from_argmax([8] * 30)
+    bad_frame_idx = np.array([100, 659, 719], dtype=int)  # below first valid end
+    with pytest.raises(ValueError):
+        dbd.align_windows(cube, CANDIDATE_BINS, bad_frame_idx, blocks, 8, accepted_rank,
+                           rejection_codes, f_r_hz, FS, WINDOW_FRAMES, HOP_S, 600, BLOCK_FRAMES)
+
+
 def test_stratify_windows_excludes_warmup_and_splits_transitional():
     n_windows = 12
     frame_idx, accepted_rank, rejection_codes, f_r_hz = _npz_fixture(n_windows)
+    cube = _uniform_cube_for_windows(n_windows)
     blocks = _blocks_from_argmax([8] * 30)
-    rows = dbd.align_windows(frame_idx, blocks, 8, accepted_rank, rejection_codes,
-                              f_r_hz, FS, WINDOW_FRAMES, HOP_S, 600, BLOCK_FRAMES)
-    full, transitional = dbd.stratify_windows(rows)
+    rows = dbd.align_windows(cube, CANDIDATE_BINS, frame_idx, blocks, 8, accepted_rank,
+                              rejection_codes, f_r_hz, FS, WINDOW_FRAMES, HOP_S, 600, BLOCK_FRAMES)
+    full, transitional = dbd.stratify_windows(rows, WINDOW_S)
     assert all(not r.is_warmup_window for r in full + transitional)
     assert all(r.post_calibration_observed_s >= 30.0 - 1e-9 for r in full)
     assert all(r.post_calibration_observed_s < 30.0 - 1e-9 for r in transitional)
@@ -337,40 +516,31 @@ def test_stratify_windows_excludes_warmup_and_splits_transitional():
     assert len(transitional) == 9  # windows 1-9
 
 
-def test_transitional_stratum_reports_normalized_fraction_for_early_excursion():
+def test_transitional_stratum_off_baseline_duration_shape():
     """An off-baseline excursion in the first few post-calibration seconds
-    must be reported by the transitional-stratum windows (index 1-9) as a
-    normalized fraction (off_baseline_duration_s / post_calibration_observed_s),
-    not raw seconds -- so a 3 s window and a 27 s window are comparable
-    (BDR-03 R3). Note window 10 (the first FULL-exposure window) spans
-    exactly the first 30 post-calibration seconds by construction (30-block
-    window, 3-block hop), so it legitimately also observes this excursion --
-    "transitional-only" is not a claim this test makes."""
+    shows up in the transitional stratum's raw duration -- window 1 (3 s
+    exposure) sees a much larger share of it than window 9 (27 s exposure),
+    even though both saw the identical 1 s episode. Window 10 (the first
+    FULL-exposure window) spans exactly the first 30 post-calibration seconds
+    by construction (30-block window, 3-block hop), so it legitimately also
+    observes this excursion -- "transitional-only" is not a claim this test
+    makes (see BDR-03 R3 correction in the plan)."""
     n_windows = 12
     frame_idx, accepted_rank, rejection_codes, f_r_hz = _npz_fixture(n_windows)
+    cube = _uniform_cube_for_windows(n_windows)
     # A 1-block (1 s) excursion at block 0, the very first post-calibration block.
     argmax_seq = [9] + [8] * 29
     blocks = _blocks_from_argmax(argmax_seq)
-    rows = dbd.align_windows(frame_idx, blocks, 8, accepted_rank, rejection_codes,
-                              f_r_hz, FS, WINDOW_FRAMES, HOP_S, 600, BLOCK_FRAMES)
-    full, transitional = dbd.stratify_windows(rows)
+    rows = dbd.align_windows(cube, CANDIDATE_BINS, frame_idx, blocks, 8, accepted_rank,
+                              rejection_codes, f_r_hz, FS, WINDOW_FRAMES, HOP_S, 600, BLOCK_FRAMES)
+    full, transitional = dbd.stratify_windows(rows, WINDOW_S)
 
-    # Window 1 (3 s exposure) sees exactly the 1 s excursion -> fraction 1/3.
     w1 = next(r for r in transitional if r.window_index == 1)
     assert w1.off_baseline_duration_s == pytest.approx(1.0)
-    assert w1.off_baseline_duration_s / w1.post_calibration_observed_s == pytest.approx(1.0 / 3.0)
 
-    # Window 9 (27 s exposure) sees the same 1 s excursion -> a much smaller
-    # fraction than window 1, even though both saw the identical episode.
     w9 = next(r for r in transitional if r.window_index == 9)
     assert w9.off_baseline_duration_s == pytest.approx(1.0)
-    frac9 = w9.off_baseline_duration_s / w9.post_calibration_observed_s
-    assert frac9 == pytest.approx(1.0 / 27.0)
-    assert frac9 < (w1.off_baseline_duration_s / w1.post_calibration_observed_s)
 
-    # Window 10 (first full-exposure window) necessarily also observes the
-    # same excursion -- its 30 s span covers all of blocks 0-29 by
-    # construction -- and reports it as an ordinary (non-transitional) duration.
     w10 = next(r for r in full if r.window_index == 10)
     assert w10.off_baseline_duration_s == pytest.approx(1.0)
 
@@ -378,34 +548,35 @@ def test_transitional_stratum_reports_normalized_fraction_for_early_excursion():
 def test_offset_phase_subsets_all_ten_independent():
     n_windows = 25
     frame_idx, accepted_rank, rejection_codes, f_r_hz = _npz_fixture(n_windows)
+    cube = _uniform_cube_for_windows(n_windows)
     blocks = _blocks_from_argmax([8] * 60)
-    rows = dbd.align_windows(frame_idx, blocks, 8, accepted_rank, rejection_codes,
-                              f_r_hz, FS, WINDOW_FRAMES, HOP_S, 600, BLOCK_FRAMES)
+    rows = dbd.align_windows(cube, CANDIDATE_BINS, frame_idx, blocks, 8, accepted_rank,
+                              rejection_codes, f_r_hz, FS, WINDOW_FRAMES, HOP_S, 600, BLOCK_FRAMES)
     phases = dbd.offset_phase_subsets(rows, tuple(range(10)))
     assert set(phases.keys()) == set(range(10))
-    # Every window belongs to exactly one phase, and phases partition the rows.
     total = sum(len(v) for v in phases.values())
     assert total == n_windows
     for k, subset in phases.items():
         assert all(r.window_index % 10 == k for r in subset)
 
 
-# ── stratify_by_outcome (the primary report; was computed but never persisted
-# until this fix -- found alongside BDR-11/12/13) ──────────────────────────
+# ── stratify_by_outcome (the primary report; normalized fraction, BDR-17) ──
+
+def _window_row(idx, cls, dur, longest, observed_s=30.0):
+    return dbd.WindowRow(
+        window_index=idx, frame_start=0, frame_end=0, is_warmup_window=False,
+        post_calibration_observed_s=observed_s, window_argmax_bin=8, window_centroid=8.0,
+        off_baseline_duration_s=dur, longest_excursion_s=longest,
+        rejection_codes=(-1, -1, -1), f_r_hz=1.2, outcome_class=cls,
+    )
+
 
 def test_stratify_by_outcome_groups_correctly():
-    def row(idx, cls, dur, longest):
-        return dbd.WindowRow(
-            window_index=idx, frame_start=0, frame_end=0, is_warmup_window=False,
-            post_calibration_observed_s=30.0, dominant_argmax_mode=8, mean_centroid=8.0,
-            off_baseline_duration_s=dur, longest_excursion_s=longest,
-            rejection_codes=(-1, -1, -1), f_r_hz=1.2, outcome_class=cls,
-        )
     windows = [
-        row(10, "covered", 1.0, 1.0),
-        row(11, "covered", 3.0, 2.0),
-        row(12, "gate_not_run", 5.0, 5.0),
-        row(13, "other_rejected", 2.0, 1.0),
+        _window_row(10, "covered", 1.0, 1.0),
+        _window_row(11, "covered", 3.0, 2.0),
+        _window_row(12, "gate_not_run", 5.0, 5.0),
+        _window_row(13, "other_rejected", 2.0, 1.0),
     ]
     report = dbd.stratify_by_outcome(windows)
     assert report["covered"]["n"] == 2
@@ -420,30 +591,73 @@ def test_stratify_by_outcome_empty_class_reports_none_not_crash():
     for cls in dbd.OUTCOME_CLASSES:
         assert report[cls]["n"] == 0
         assert report[cls]["mean_off_baseline_duration_s"] is None
+        assert report[cls]["mean_off_baseline_fraction"] is None
+
+
+def test_stratify_by_outcome_emits_normalized_fraction_for_transitional_windows():
+    """BDR-17: the PRODUCTION report function itself must emit a normalized
+    fraction for unequal-exposure windows, not just a value a test author can
+    compute by hand from two raw fields. Window A: 3 s exposure, 3 s
+    off-baseline -> fraction 1.0. Window B: 27 s exposure, 3 s off-baseline
+    -> fraction 1/9. Raw means would show 3.0 for both; the fraction must
+    differ."""
+    windows = [
+        _window_row(1, "covered", dur=3.0, longest=3.0, observed_s=3.0),
+        _window_row(9, "covered", dur=3.0, longest=3.0, observed_s=27.0),
+    ]
+    report = dbd.stratify_by_outcome(windows)
+    assert report["covered"]["mean_off_baseline_duration_s"] == pytest.approx(3.0)
+    # If the fraction field just echoed raw seconds, this would fail.
+    expected_fraction = np.mean([3.0 / 3.0, 3.0 / 27.0])
+    assert report["covered"]["mean_off_baseline_fraction"] == pytest.approx(expected_fraction)
+    assert report["covered"]["mean_off_baseline_fraction"] != pytest.approx(
+        report["covered"]["mean_off_baseline_duration_s"]
+    )
+
+
+# ── duration_grid_by_outcome (BDR-11 R2: the per-window duration-grid <->
+# outcome association the plan's config comment claims but never computed) ──
+
+def test_duration_grid_by_outcome_counts_per_class():
+    windows = [
+        _window_row(1, "covered", dur=1.0, longest=1.0),     # below 2s
+        _window_row(2, "covered", dur=6.0, longest=6.0),     # above 2s and 5s
+        _window_row(3, "gate_not_run", dur=2.0, longest=2.0),  # exactly at 2s
+        _window_row(4, "other_rejected", dur=0.5, longest=0.5),  # below everything
+    ]
+    report = dbd.duration_grid_by_outcome(windows, (2.0, 5.0, 10.0))
+    assert report["covered"]["n"] == 2
+    assert report["covered"]["count_at_grid"]["2.0"] == 1  # only window 2
+    assert report["covered"]["count_at_grid"]["5.0"] == 1
+    assert report["covered"]["count_at_grid"]["10.0"] == 0
+    assert report["gate_not_run"]["count_at_grid"]["2.0"] == 1  # exact boundary -> counted
+    assert report["other_rejected"]["count_at_grid"]["2.0"] == 0
+
+
+def test_duration_grid_by_outcome_empty_class_is_zero():
+    report = dbd.duration_grid_by_outcome([], (2.0, 5.0, 10.0))
+    for cls in dbd.OUTCOME_CLASSES:
+        assert report[cls]["n"] == 0
+        assert all(v == 0 for v in report[cls]["count_at_grid"].values())
 
 
 # ── motion energy (channel-preserving) ──────────────────────────────────────
 
 def test_motion_energy_stationary_reflector_is_near_zero():
     cube = make_cube(100, bin_by_frame=lambda f: 8, amplitude=5.0)
-    me = dbd.compute_motion_energy(cube, CANDIDATE_BINS)
-    # A stationary tone has no slow-time variation once its own per-channel
-    # mean is subtracted; only the small noise floor remains.
+    me = dbd._motion_energy_slice(cube, CANDIDATE_BINS)
     assert me[8] < 0.01
 
 
 def test_motion_energy_phase_modulated_reflector_is_elevated_at_that_bin():
-    def bin_at(f):
-        return 8
-    cube = make_cube(200, bin_by_frame=bin_at, amplitude=5.0)
-    # Modulate bin 8's amplitude sinusoidally over time (a moving reflector).
+    cube = make_cube(200, bin_by_frame=lambda f: 8, amplitude=5.0)
     n = np.arange(cube.shape[-1])
     for f in range(cube.shape[0]):
         mod = 1.0 + 0.5 * np.sin(2 * np.pi * f / 20.0)
         tone = mod * 5.0 * np.exp(2j * np.pi * 8 * n / cube.shape[-1])
         cube[f, :, :, :] = (0.01 * cube[f, :, :, :] / 0.01) * 0  # clear noise for clarity
         cube[f, :, :, :] += tone.astype(np.complex64)
-    me = dbd.compute_motion_energy(cube, CANDIDATE_BINS)
+    me = dbd._motion_energy_slice(cube, CANDIDATE_BINS)
     assert me[8] == max(me.values())
 
 
@@ -455,24 +669,22 @@ def test_motion_energy_channel_preserving_avoids_rx_cancellation():
     n_frames, n_adc, n_rx = 200, 32, 2
     cube = np.zeros((n_frames, 2, n_rx, n_adc), dtype=np.complex64)
     n = np.arange(n_adc)
-    static_phase = [0.0, np.pi]  # opposite static phase across the two RX
+    static_phase = [0.0, np.pi]
     for f in range(n_frames):
         mod = 1.0 + 0.5 * np.sin(2 * np.pi * f / 20.0)
         base_tone = mod * 5.0 * np.exp(2j * np.pi * 8 * n / n_adc)
         for r in range(n_rx):
             cube[f, :, r, :] = (base_tone * np.exp(1j * static_phase[r])).astype(np.complex64)
 
-    me = dbd.compute_motion_energy(cube, [8])
-    assert me[8] > 1.0  # clearly non-zero: motion detected
+    me = dbd._motion_energy_slice(cube, [8])
+    assert me[8] > 1.0
 
-    # Demonstrate the OLD coherent-average-first formula WOULD have cancelled
-    # it, as the regression this fix guards against.
     hann = np.hanning(n_adc).astype(np.float32)
     range_fft = np.fft.fft(cube * hann, axis=-1)
-    X = range_fft[:, :, :, 8]                # (frames, chirps, rx)
-    coherent_mean_first = X.mean(axis=(1, 2))  # average RX BEFORE variance
+    X = range_fft[:, :, :, 8]
+    coherent_mean_first = X.mean(axis=(1, 2))
     old_formula_energy = float(np.mean(np.abs(coherent_mean_first - coherent_mean_first.mean()) ** 2))
-    assert old_formula_energy < 0.05 * me[8]  # the old formula is far weaker: it nearly cancels
+    assert old_formula_energy < 0.05 * me[8]
 
 
 def test_motion_energy_gross_amplitude_step_also_elevates_not_breathing_specific():
@@ -480,11 +692,49 @@ def test_motion_energy_gross_amplitude_step_also_elevates_not_breathing_specific
     cube = make_cube(n_frames, n_adc=n_adc, bin_by_frame=lambda f: None)
     n = np.arange(n_adc)
     for f in range(n_frames):
-        amp = 1.0 if f < 50 else 10.0  # a step, not oscillatory "breathing"
+        amp = 1.0 if f < 50 else 10.0
         cube[f, :, :, :] += (amp * np.exp(2j * np.pi * 8 * n / n_adc)).astype(np.complex64)
-    me = dbd.compute_motion_energy(cube, CANDIDATE_BINS)
+    me = dbd._motion_energy_slice(cube, CANDIDATE_BINS)
     assert me[8] == max(me.values())
-    assert me[8] > 0.5  # the statistic is not specific to oscillatory motion
+    assert me[8] > 0.5
+
+
+def test_compute_motion_energy_per_window_indexed_and_bounded():
+    """BDR-18: a real (window x bin) matrix, one 600-frame slice at a time,
+    not one whole-capture scalar per bin."""
+    n_windows = 2
+    cube = _uniform_cube_for_windows(n_windows, bin_val=8)
+    frame_idx, accepted_rank, rejection_codes, f_r_hz = _npz_fixture(n_windows)
+    blocks = _blocks_from_argmax([8] * 30)
+    rows = dbd.align_windows(cube, CANDIDATE_BINS, frame_idx, blocks, 8, accepted_rank,
+                              rejection_codes, f_r_hz, FS, WINDOW_FRAMES, HOP_S, 600, BLOCK_FRAMES)
+    me = dbd.compute_motion_energy_per_window(cube, CANDIDATE_BINS, rows)
+    assert set(me.keys()) == {0, 1}
+    assert set(me[0].keys()) == set(CANDIDATE_BINS)
+
+
+def test_compute_motion_energy_per_window_empty_for_no_windows():
+    cube = make_cube(600, bin_by_frame=lambda f: 8, amplitude=5.0)
+    me = dbd.compute_motion_energy_per_window(cube, CANDIDATE_BINS, [])
+    assert me == {}
+
+
+# ── memory preflight (BDR-18: loaded config value must actually be enforced) ─
+
+def test_preflight_check_memory_passes_when_bound_trivially_low():
+    cfg = diag_cfg(preflight_min_available_gb=0.0001)
+    # Must not raise -- some available memory certainly exceeds a near-zero bound
+    # (or the check degrades to a no-op if it cannot measure at all).
+    dbd.preflight_check_memory(cfg, "s1")
+
+
+def test_preflight_check_memory_raises_when_bound_absurdly_high():
+    cfg = diag_cfg(preflight_min_available_gb=1e9)  # 1 exabyte -- no real machine has this
+    available = dbd.get_available_memory_bytes()
+    if available is None:
+        pytest.skip("cannot measure available memory on this platform")
+    with pytest.raises(MemoryError):
+        dbd.preflight_check_memory(cfg, "s1")
 
 
 # ── provenance ────────────────────────────────────────────────────────────────
@@ -511,7 +761,7 @@ def test_load_diagnostic_config_reads_real_file_and_hashes_it():
     assert cfg.sha256 == hashlib.sha256(cfg_path.read_bytes()).hexdigest()
 
 
-# ── decode geometry validation ───────────────────────────────────────────────
+# ── decode geometry validation (BDR-16: capture metadata only) ─────────────
 
 def _matching_live_cfg():
     return {
@@ -521,7 +771,7 @@ def _matching_live_cfg():
     }
 
 
-def _matching_run_metadata():
+def _matching_capture_metadata():
     return {
         "config": {
             "profile": {"num_adc_samples": 256, "num_rx": 4, "num_chirps_per_frame": 32,
@@ -533,7 +783,7 @@ def _matching_run_metadata():
 
 
 def test_validate_decode_geometry_matches_returns_chirp_config():
-    cc = dbd.validate_decode_geometry(_matching_live_cfg(), _matching_run_metadata(), "s1")
+    cc = dbd.validate_decode_geometry(_matching_live_cfg(), _matching_capture_metadata(), "s1")
     assert cc.num_adc_samples == 256
     assert cc.iq_swap is True
     assert cc.frame_rate_hz == 20.0
@@ -543,19 +793,19 @@ def test_validate_decode_geometry_profile_mismatch_raises():
     live_cfg = _matching_live_cfg()
     live_cfg["profile"]["num_rx"] = 2  # diverges from the recorded capture
     with pytest.raises(ValueError):
-        dbd.validate_decode_geometry(live_cfg, _matching_run_metadata(), "s1")
+        dbd.validate_decode_geometry(live_cfg, _matching_capture_metadata(), "s1")
 
 
 def test_validate_decode_geometry_frame_rate_field_path():
     """frame_rate_hz lives at config.session.frame_rate_hz, NOT config.profile
     (BDR-05 R3 -- the round-1 fix pointed at the wrong path)."""
-    meta = _matching_run_metadata()
+    meta = _matching_capture_metadata()
     assert "frame_rate_hz" not in meta["config"]["profile"]
     assert meta["config"]["session"]["frame_rate_hz"] == 20.0
 
 
 def test_validate_decode_geometry_hw_frame_cross_check_inconsistent_raises():
-    meta = _matching_run_metadata()
+    meta = _matching_capture_metadata()
     meta["config"]["hw_frame"]["period_ms"] = 33.0  # 1000/33 != 20.0
     with pytest.raises(ValueError):
         dbd.validate_decode_geometry(_matching_live_cfg(), meta, "s1")
@@ -638,7 +888,7 @@ def test_is_tree_clean_true_with_untracked_file_present(tmp_path: Path):
     assert dbd.is_tree_clean(tmp_path) is True
 
 
-# ── end-to-end: a replay-less session cannot leak legacy outcome data (BDR-12) ──
+# ── end-to-end integration tests (real run_session pipeline) ───────────────
 
 _TINY_ADC = 16
 _TINY_RX = 1
@@ -647,7 +897,7 @@ _TINY_CHIRPS = 1
 
 def _write_tiny_capture(capture_dir: Path, n_frames: int) -> None:
     """A minimal but real adc_stream.bin -- random int16 words, decodable by
-    the project's own read_adc_bin. Content doesn't matter for this test;
+    the project's own read_adc_bin. Content doesn't matter for these tests;
     only that run_session runs the real decode + computation path end to end."""
     capture_dir.mkdir(parents=True)
     rng = np.random.default_rng(1)
@@ -663,14 +913,14 @@ def _tiny_live_cfg() -> dict:
         "profile": {"num_adc_samples": _TINY_ADC, "num_rx": _TINY_RX,
                     "num_chirps_per_frame": _TINY_CHIRPS,
                     "range_resolution_m": 0.0436, "iq_swap": True},
-        "session": {"frame_rate_hz": FS, "hop_s": HOP_S},
+        "session": {"frame_rate_hz": FS, "hop_s": HOP_S, "window_s": WINDOW_S},
     }
 
 
-def _tiny_run_metadata() -> dict:
+def _tiny_capture_metadata(num_rx: int = _TINY_RX) -> dict:
     return {
         "config": {
-            "profile": {"num_adc_samples": _TINY_ADC, "num_rx": _TINY_RX,
+            "profile": {"num_adc_samples": _TINY_ADC, "num_rx": num_rx,
                         "num_chirps_per_frame": _TINY_CHIRPS,
                         "range_resolution_m": 0.0436, "iq_swap": True},
             "session": {"frame_rate_hz": FS},
@@ -697,12 +947,14 @@ def test_replayless_session_produces_zero_windows_and_no_outcome_leakage(tmp_pat
         json.dumps(warmup_json), encoding="utf-8"
     )
     (capture_dir / "run_metadata.json").write_text(
-        json.dumps(_tiny_run_metadata()), encoding="utf-8"
+        json.dumps(_tiny_capture_metadata()), encoding="utf-8"
     )
 
     session = dbd.load_session_inputs("cap_no_replay", capture_dir, replay_dir=None)
     assert session.npz is None
     assert session.npz_path is None
+    assert session.replay_run_metadata is None
+    assert session.replay_run_metadata_path is None
 
     out_dir = tmp_path / "out"
     out_dir.mkdir()
@@ -715,6 +967,8 @@ def test_replayless_session_produces_zero_windows_and_no_outcome_leakage(tmp_pat
     assert result["correlation_available"] is False
     assert result["npz_path"] is None
     assert result["npz_sha256"] is None
+    assert result["replay_run_metadata_path"] is None
+    assert result["replay_run_metadata_sha256"] is None
     for cls in dbd.OUTCOME_CLASSES:
         assert result["outcome_stratified_report"]["full_exposure"][cls]["n"] == 0
         assert result["outcome_stratified_report"]["transitional"][cls]["n"] == 0
@@ -726,3 +980,62 @@ def test_replayless_session_produces_zero_windows_and_no_outcome_leakage(tmp_pat
     audit_csv = (out_dir / "cap_no_replay" / "window_audit.csv").read_text(encoding="utf-8")
     lines = [ln for ln in audit_csv.splitlines() if ln.strip()]
     assert len(lines) == 1  # header only
+
+    # Occupancy/baseline profile still computed -- these need only raw bytes.
+    assert result["occupancy"]["at_baseline"] == result["occupancy"]["at_baseline"]  # not NaN-crash
+    assert set(result["baseline_profile"].keys()) == {"3", "4", "5"}
+
+
+def test_run_session_validates_geometry_against_capture_not_replay_metadata(tmp_path: Path):
+    """BDR-16: a replay whose OWN recorded metadata shows a materially
+    different (wrong) geometry must not affect the run -- decode-geometry
+    validation uses only the capture's metadata, which is correct. The
+    replay's raw-file hash still proves which bytes were replayed; its
+    config snapshot is not trusted for geometry."""
+    capture_dir = tmp_path / "cap"
+    n_frames = 660
+    _write_tiny_capture(capture_dir, n_frames)
+    (capture_dir / "warmup_bin_selection.json").write_text(
+        json.dumps({"selected_bin": 4,
+                    "candidates": [{"bin": b, "energy": 1.0, "energy_rank": i + 1}
+                                    for i, b in enumerate([3, 4, 5])]}),
+        encoding="utf-8",
+    )
+    (capture_dir / "run_metadata.json").write_text(
+        json.dumps(_tiny_capture_metadata()), encoding="utf-8"
+    )
+
+    replay_dir = tmp_path / "replay"
+    replay_dir.mkdir()
+    raw_hash = dbd.sha256_file(capture_dir / "adc_stream.bin")
+    # The replay's OWN metadata deliberately shows a WRONG num_rx (99) -- if
+    # validate_decode_geometry used this instead of the capture's own record,
+    # the run would raise. It must not.
+    bad_replay_metadata = _tiny_capture_metadata(num_rx=99)
+    bad_replay_metadata["replay_file_hashes"] = {"path": raw_hash}
+    (replay_dir / "run_metadata.json").write_text(json.dumps(bad_replay_metadata), encoding="utf-8")
+    (replay_dir / "warmup_bin_selection.json").write_text(
+        json.dumps({"selected_bin": 4,
+                    "candidates": [{"bin": b, "energy": 1.0, "energy_rank": i + 1}
+                                    for i, b in enumerate([3, 4, 5])]}),
+        encoding="utf-8",
+    )
+    npz_path = replay_dir / "live_intermediates.npz"
+    np.savez(npz_path, frame_idx=np.array([599], dtype=int),
+              accepted_candidate_rank=np.array([-1]),
+              candidate_rejection_codes=np.array([[-1, -1, -1]]),
+              f_r_hz=np.array([np.nan]))
+
+    session = dbd.load_session_inputs("cap", capture_dir, replay_dir=replay_dir)
+    assert session.replay_run_metadata["config"]["profile"]["num_rx"] == 99
+    assert session.capture_run_metadata["config"]["profile"]["num_rx"] == _TINY_RX
+
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    cfg = diag_cfg()
+    # Must NOT raise: geometry validation uses capture_run_metadata (num_rx=1,
+    # matching the active config), never the replay's num_rx=99.
+    result = dbd.run_session(session, _tiny_live_cfg(), cfg, out_dir)
+    assert result["session_id"] == "cap"
+    assert result["replay_run_metadata_path"] is not None
+    assert result["replay_run_metadata_sha256"] is not None

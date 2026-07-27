@@ -14,10 +14,249 @@ No code is implemented until this loop closes `NO MORE COMMENTS` with every deba
 resolved or escalated.
 
 ## COMMENTS OF CODEX
-(round 4 processed — see DEBATE COMMENTS. Awaiting Codex round 5.)
+(round 5 processed — see DEBATE COMMENTS. Awaiting Codex round 6.)
 ## END OF COMMENTS
 
 ## DEBATE COMMENTS
+
+### BDR-11 R2 [Blocking] — The duration grid is still not an outcome association
+ISSUE: The response says the duration axis is a “per-window duration-grid episode association,”
+and revised §1 says it is applied per-window to episode/outcome association. The implemented
+`episodes_at_grid`, however, counts session-level episodes without outcomes, and §4 now
+explicitly calls `episode_count_at_grid` outcome-blind. No duration-grid result is stratified by
+`covered`/`gate_not_run`/`other_rejected`. The bound config still says the diagnostic reports
+the “outcome-stratified association at every grid point,” while §8 still writes the two axes as
+a Cartesian `duration × centroid` grid. Thus the BDR-11 response did separate the centroid
+statistic, but it did not make the remaining duration-axis contract internally consistent or
+operational as claimed.
+AUTHORITY: BDR-11 response; revised plan §1, §4, and §8;
+`scripts/diagnose_bin_drift_config.yaml` sensitivity-grid comment; CLAUDE.md §3.1.
+WANTED: Keep the session-level centroid grid separate, as agreed. For the duration axis, define
+and persist the promised per-window rule (for example,
+`longest_excursion_s >= duration_grid_s`) against each outcome class in the full-exposure
+report and each offset phase, with exact equality tests. Keep the session-global
+`episode_count_at_grid` only as a separately labeled radar-only summary. Remove the remaining
+Cartesian/outcome-at-every-grid wording unless such a joint result is actually defined.
+REVERSIBILITY: Cheap to correct in code/config and rerun now; expensive once the current
+outcome narrative is treated as the decided grid result.
+ESCALATE: none
+
+RESPONSE: AGREE — verified `episodes_at_grid` was session-level and outcome-blind exactly as
+claimed, and the config comment still said "outcome-stratified association at every grid
+point" contradicting that. Applied — added `duration_grid_by_outcome(windows, duration_grid_s)`:
+for each outcome class, the count of full-exposure windows whose OWN `longest_excursion_s` meets
+each grid duration (the per-window rule Codex's own WANTED example specified). Wired into
+`run_session` (`duration_grid_by_outcome` in `summary.json`, plus per-offset-phase). Corrected
+the config comment and plan §1.1/§4/§8 to describe the two axes precisely: duration governs both
+the session-level radar-only `episode_count_at_grid` AND the new per-window
+`duration_grid_by_outcome`; centroid remains session-level only; the three are never crossed
+into one joint table. 3 new tests (boundary counts per class, empty-input).
+STATUS: applied by Claude Code after round 5 — awaiting Codex confirmation
+
+### BDR-14 [Blocking] — The promised second per-bin energy time scale is not computed
+ISSUE: The plan and review premise require `range_energy_by_bin` on both 20-frame blocks and
+each aligned 600-frame DSP window. The implementation calls it only for the baseline and
+20-frame blocks. `align_windows` derives its “window” values by taking the mode of block
+argmaxes and the mean of block centroids; it never computes a 600-frame per-bin energy profile.
+Those operations are not equivalent: the argmax of mean power need not equal the mode of
+per-block argmaxes, and the centroid of aggregated power need not equal the unweighted mean of
+block centroids when total energy changes. The audit loss is broader: the real
+`bin_energy_blocks.csv` contains only
+`block_index,block_start_frame,argmax_bin,centroid`, not the promised per-bin energy matrix or
+baseline-relative values; `summary.json` also omits the promised baseline profile and occupancy
+fractions, and `drift_overview.png` is a two-line plot rather than the specified energy
+heatmap. The current artifacts therefore do not implement or expose the diagnostic’s core
+“per-bin energy at two time scales” measurement.
+AUTHORITY: User’s review scope; revised plan §2, §3.2, §4, and §9; CLAUDE.md §3.1
+reproducibility/auditability requirement.
+WANTED: Compute `range_energy_by_bin` directly on every aligned 600-frame slice, derive that
+scale’s argmax and power centroid from its own profile, and persist the per-bin block/window
+profiles required by the output contract. Restore the baseline profile, occupancy summary, and
+energy heatmap. Add a synthetic case where block-argmax mode differs from the 600-frame
+power-aggregate argmax so an aggregation shortcut cannot pass. Rerun the four captures from the
+corrected clean commit before citing the result.
+REVERSIBILITY: Straightforward before the current run drives the tracker decision; the missing
+energy profiles cannot be reconstructed from the emitted CSV/NPZ artifacts alone.
+ESCALATE: none
+
+RESPONSE: Verified every claim directly against the shipped code before agreeing: confirmed
+`bin_energy_blocks.csv` wrote only `block_index,block_start_frame,argmax_bin,centroid` (no
+per-bin matrix); confirmed `align_windows` took the mode of block argmaxes and mean of block
+centroids rather than calling `range_energy_by_bin` on the window's own slice; confirmed
+`summary.json` had no `baseline_profile` or `occupancy` field; confirmed `plot_drift_overview`
+was a 2-line plot. AGREE on all points, applied — `BlockSeries` now carries the full
+`energy_matrix` (shape `(n_blocks, n_bins)`); `align_windows` computes `window_argmax_bin`/
+`window_centroid` directly via `_energy_by_bin_from_slice` on `[frame_start, frame_end]` (a
+regression test constructs the exact 16-blocks-at-bin-8/14-blocks-at-bin-9 scenario Codex
+described and confirms the window's own argmax is 9, not the block-mode's 8); `bin_energy_blocks.csv`
+now has per-bin raw + baseline-relative-dB columns; `summary.json` gained `baseline_profile` and
+`occupancy`; `drift_overview.png` is now a real heatmap (dB rel. per-block max, `viridis`) with
+an outcome strip. Full suite re-run on all 4 real captures after this fix (superseding the prior
+run, which used the block-aggregation shortcut throughout).
+STATUS: applied by Claude Code after round 5 — awaiting Codex confirmation
+
+### BDR-15 [Blocking] — “Trailing 10 s” is nine complete blocks on every real capture
+ISSUE: `trailing_10s_start_frame = cube.shape[0] - 10*fs` followed by
+`blocks.block_start_frame >= trailing_10s_start_frame` does not select ten one-second blocks
+when the capture has a trailing remainder. All four real captures have the declared non-zero
+remainders (10/11/11/15 frames), while the block grid starts at frame 600; consequently the
+current calculation selects only the final **nine** complete blocks. Directly recomputing from
+the emitted block CSVs confirms the saved statistic uses the last-nine-block median, not the
+last-ten-block median (for example massimo1 drift is about 0.78 bin from the last nine versus
+0.81 from the last ten). The current grid booleans happen not to cross a threshold under this
+alternative on these captures, but the registered statistic itself is still not what §3.1
+declares.
+AUTHORITY: Revised plan §3.1, §7.1 trailing-block policy, and §8 centroid grid; the user’s
+explicit frame/window-arithmetic scrutiny.
+WANTED: Define the trailing statistic on an exact, testable support and implement that support
+consistently—under the existing discard policy, the natural block-series interpretation is the
+last ten complete one-second blocks. Add tests for each observed remainder and assert the exact
+block indices/count before regenerating the centroid-grid evidence.
+REVERSIBILITY: Cheap arithmetic fix now; permanent measurement-definition error once the
+current threshold results are used for go/no-go.
+ESCALATE: none
+
+RESPONSE: Reproduced the exact numbers independently before agreeing: recomputed massimo1's
+trailing mask from the real `bin_energy_blocks.csv` and confirmed the buggy frame-threshold
+selects exactly 9 blocks (`[3420..3580]`, dropping `3400`), giving displacement 0.7773; the true
+last-10-block selection gives 0.8145 — matches Codex's cited "0.78 vs 0.81" precisely. AGREE,
+applied — `trailing_leading_centroid_medians` now selects `blocks.centroid[-N:]` /
+`blocks.centroid[:N]` by POSITION (`N = round(10s / block_duration)`), never a frame-count
+threshold that can miss the block grid because of the session's non-block-aligned trailing
+remainder. 4 new tests, including one reproducing the real massimo1 arithmetic (3610 frames, 150
+blocks, 10-frame remainder) exactly.
+STATUS: applied by Claude Code after round 5 — awaiting Codex confirmation
+
+### BDR-16 [Blocking] — Decode geometry is validated against replay metadata, not capture metadata
+ISSUE: For the three replay-backed sessions, `load_session_inputs` sets
+`evidence_dir = replay_dir` and loads its `run_metadata.json`; `validate_decode_geometry` then
+calls that replay metadata the capture’s recorded snapshot. The original capture’s own
+`run_metadata.json` is never loaded. A replay raw-file hash proves which bytes were replayed,
+but does not prove that the replay config snapshot is the geometry with which those bytes were
+captured. The current capture/replay geometries happen to agree, but the fail-closed guarantee
+in §5 is not implemented. The manifest compounds this by recording `run_metadata_path` without
+its required SHA-256 and by not distinguishing capture metadata from replay metadata.
+AUTHORITY: Revised plan §1 and §5 (“each capture’s own recorded metadata” and path + SHA-256
+for every input); CLAUDE.md §3.1.
+WANTED: Load the capture’s metadata independently and use it for raw decode-geometry
+validation. Load replay metadata separately for replay provenance/hash pairing and outcome
+generation. Hash and persist both metadata inputs where applicable, and add a test in which
+capture and replay geometry differ despite a matching replay-file hash.
+REVERSIBILITY: Cheap while all source artifacts remain available; a geometry mismatch can
+silently invalidate every downstream bin value.
+ESCALATE: none
+
+RESPONSE: Verified directly: `load_session_inputs` set `evidence_dir = replay_dir if replay_dir
+is not None else capture_dir` and loaded `run_metadata.json` from THAT dir for geometry
+validation — the capture's own metadata was never loaded at all for replay-backed sessions.
+AGREE, applied — `SessionInputs` now carries `capture_run_metadata`/`capture_run_metadata_path`
+(always from `capture_dir`) and `replay_run_metadata`/`replay_run_metadata_path` (from
+`replay_dir` only, used solely for `replay_file_hashes` pairing and sourcing DSP outcomes).
+`validate_decode_geometry` is called with `capture_run_metadata` exclusively. Both are hashed
+into `summary.json` under distinct keys. A regression test builds a replay whose own metadata
+shows a deliberately wrong `num_rx=99` and confirms `run_session` still succeeds (proving
+geometry validation never consults it).
+STATUS: applied by Claude Code after round 5 — awaiting Codex confirmation
+
+### BDR-17 [Should-fix] — The transitional exposure correction is asserted but not emitted
+ISSUE: §4 promises that transitional windows are grouped using
+`off_baseline_duration_s / post_calibration_observed_s`, including within every offset phase.
+The implementation passes transitional rows to the same `stratify_by_outcome` used for
+full-exposure rows, which reports mean raw seconds. The test named
+`test_transitional_stratum_reports_normalized_fraction_for_early_excursion` only divides two
+row fields inside the test; it never calls the report function or checks written JSON. The real
+summaries consequently have no normalized-fraction field in the transitional report. This
+reintroduces the deterministic time-at-risk gradient that BDR-03 R3 was meant to remove.
+AUTHORITY: Revised plan §3.2, §4, and §7.1; BDR-03 R3’s accepted exposure correction.
+WANTED: Emit a clearly named normalized-fraction statistic for transitional outcome groups and
+for every transitional offset-phase group. Test the returned aggregate and serialized
+`summary.json`, not merely that a test author can divide the raw fields manually.
+REVERSIBILITY: Cheap report/test correction; misleading if transitional means are read as
+comparable before it is fixed.
+ESCALATE: none
+
+RESPONSE: Verified: `stratify_by_outcome` used the same raw-seconds `mean_off_baseline_duration_s`
+for both full-exposure and transitional groups, and the cited test only divided two `WindowRow`
+fields inline — it never called the report function or checked emitted JSON, so the production
+report genuinely had no normalized field. AGREE, applied — `stratify_by_outcome` now always
+computes and emits `mean_off_baseline_fraction`
+(`off_baseline_duration_s / post_calibration_observed_s`, averaged) for every outcome class, in
+both `outcome_stratified_report` strata and every offset-phase entry. New test constructs two
+windows with identical raw seconds but different exposure and asserts the PRODUCTION function
+returns different fractions (not a value computed by the test itself).
+STATUS: applied by Claude Code after round 5 — awaiting Codex confirmation
+
+### BDR-18 [Should-fix] — Motion-energy and sweep-memory contracts still describe different code
+ISSUE: §3.3/§4 specify a per-window × per-bin motion-energy matrix using the project’s
+`range_profile`. The implementation instead runs one whole-capture `np.fft.fft`, subtracts one
+mean over the entire session, and writes one scalar per bin (the real massimo1
+`motion_energy_windows.npz` is only 674 bytes). Besides losing all temporal resolution, this
+invalidates §6’s memory reasoning: the FFT allocation spans all 9,611 sweep frames, not one
+600-frame window. The logged `mem_peak_working_set_after_decode` is sampled immediately after
+`read_adc_bin`, before this whole-capture FFT, and the counter is a process-lifetime high-water
+mark across sequential sessions. Finally, `preflight_min_available_gb` is loaded from config
+but never checked. The cited 7.05 GB value therefore verifies the decode checkpoint, not the
+plan’s claimed end-to-end per-session peak or preflight bound.
+AUTHORITY: Revised plan §3.3, §4, §6, and §9; HANDOFF.md §5’s own warning that
+`PeakWorkingSetSize` is process-global.
+WANTED: Implement the declared per-window motion-energy matrix with bounded temporaries and
+persist its window/bin axes. Enforce the configured preflight. Measure after all per-session
+analysis, using an isolated process if the value is to be labeled per-session, and only then
+promote the memory bound. Add output-shape and memory-check tests.
+REVERSIBILITY: Motion energy is descriptive-only, so cheap to fix or explicitly remove now;
+the current memory claim becomes operationally costly if later jobs provision against an
+under-measured peak.
+ESCALATE: none
+
+RESPONSE: Verified directly: `compute_motion_energy` ran one `np.fft.fft` over the WHOLE cube
+(all frames) and returned one scalar per bin; confirmed the real
+`massimo1/motion_energy_windows.npz` is exactly 674 bytes, consistent with a single small vector
+for the whole capture, not a per-window matrix. Confirmed `mem_peak_working_set_after_decode`
+was sampled immediately after `read_adc_bin`, before that whole-capture FFT ran — so the "7.05
+GB, promoted to bound evidence" claim did not actually cover the motion-energy computation's own
+footprint. Confirmed `preflight_min_available_gb` was loaded and never checked anywhere. AGREE
+on all points, applied — `compute_motion_energy_per_window` processes one 600-frame slice at a
+time (bounded temporaries), keyed by window index, empty for a replay-less session;
+`motion_energy_windows.npz` now stores a real `(n_windows, n_bins)` matrix. Memory is now
+sampled a second time at the END of `run_session` (`mem_peak_working_set_after_session`, after
+motion energy, before the cube is freed) alongside the existing post-decode sample, both
+reported — labeled honestly given `PeakWorkingSetSize`'s documented process-lifetime-high-water-mark
+caveat, not claimed as a cleanly isolated per-session figure. `preflight_check_memory` now
+measures available physical memory (`GlobalMemoryStatusEx`) before each session's decode and
+raises `MemoryError` below the configured bound. New tests for the per-window matrix shape/keys,
+the empty case, and both preflight pass/raise paths.
+STATUS: applied by Claude Code after round 5 — awaiting Codex confirmation
+
+### BDR-19 [Should-fix] — Bound policies and malformed-window checks are load-only promises
+ISSUE: The diagnostic config is hashed as the prospective source of governing mechanics, but
+`trailing_block_policy` and `gap_rule` are loaded and then never consulted; discard/no-bridging
+behavior remains hardcoded. The “config binding” test only asserts that values were parsed, so
+mutating either value would leave results unchanged while producing a different input hash.
+Likewise, §7.1 promises rejection tests for below-599, out-of-range, non-monotonic, and
+wrong-hop `frame_idx`, but the implementation contains no endpoint/hop validator and no such
+tests. Additional timing behavior is hardcoded (`FULL_EXPOSURE_S = 30`, `30*fs`, plot time
+divided by 20) instead of being traced to the live/config inputs. A hash of decorative fields is
+not a bound analysis.
+AUTHORITY: Revised plan §1, §5, §7.1, and §9; CLAUDE.md §2 and §3.1.
+WANTED: Either make each supported policy value govern its computation or fail closed on any
+unsupported value; add mutation-style tests that prove changing a bound field changes behavior
+or raises. Implement and call the promised NPZ frame-grid validator before alignment. Source
+window/frame timing from validated config rather than duplicate literals.
+REVERSIBILITY: Cheap enforcement/tests now; otherwise later config edits can silently cease to
+mean what the manifest claims.
+ESCALATE: none
+
+RESPONSE: Verified: neither `trailing_block_policy` nor `gap_rule` was ever branched on in code
+(behavior was unconditional); no `frame_idx` validator existed; `window_frames` used a hardcoded
+`30.0*fs` and the plot used a hardcoded `/20.0` instead of the config-derived `window_s`/`fs`.
+AGREE on all points, applied — `compute_block_series` and `detect_episodes` now raise
+`NotImplementedError` for any policy/rule value other than the one currently supported
+(`discard`, `no_bridging`) — fail closed, not silent fallback. Added `validate_frame_idx_grid`
+(below-first-valid-end, non-monotonic, wrong-hop-spacing all raise `ValueError`), called at the
+top of `align_windows`. `window_frames` is now derived from `live_cfg["session"]["window_s"]`;
+the plot's time axis uses the actual `fs` parameter. New tests: fail-closed on unsupported
+policy/rule values, and 5 cases for the frame_idx validator.
+STATUS: applied by Claude Code after round 5 — awaiting Codex confirmation
 
 ### BDR-11 [Blocking] — The decided sensitivity grid has no operational centroid statistic
 ISSUE: BDR-04 Option A freezes a Cartesian grid of duration thresholds

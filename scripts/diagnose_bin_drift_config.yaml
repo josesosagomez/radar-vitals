@@ -27,9 +27,13 @@ offsets:
   # All 10 disjoint non-overlapping hop-offset phases {k, k+10, k+20, ...} for k in phases.
   phases: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
 
-# BDR-04, decided Option A (2026-07-27): purely exploratory. No single threshold is ever
-# chosen; the diagnostic reports the outcome-stratified association at every grid point and
-# never reduces it to one automatic verdict.
+# BDR-04, decided Option A (2026-07-27): purely exploratory, two INDEPENDENT axes, never a
+# per-window Cartesian join (BDR-11/BDR-11 R2). duration_s governs per-window episode-duration
+# counts, stratified by outcome class (covered/gate_not_run/other_rejected) on full-exposure
+# windows -- radar-only episode DETECTION needs no threshold; this grid only governs how
+# detected episodes are later summarized against outcome data. centroid_drift_bins governs the
+# single SESSION-LEVEL robust centroid statistic only. No single threshold is ever chosen from
+# either axis; the diagnostic never reduces either report to one automatic verdict.
 sensitivity_grid:
   duration_s: [2, 5, 10]
   centroid_drift_bins: [0.3, 0.5, 1.0]

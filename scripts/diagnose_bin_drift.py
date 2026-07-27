@@ -125,6 +125,52 @@ def get_peak_working_set_bytes() -> Optional[int]:
         return None
 
 
+def get_available_memory_bytes() -> Optional[int]:
+    """Best-effort available physical memory (Windows only). None off-Windows
+    or on failure -- the preflight check degrades to a no-op rather than
+    blocking a run it cannot evaluate."""
+    if sys.platform != "win32":
+        return None
+    try:
+        import ctypes
+
+        class _MEMORYSTATUSEX(ctypes.Structure):
+            _fields_ = [
+                ("dwLength", ctypes.c_ulong), ("dwMemoryLoad", ctypes.c_ulong),
+                ("ullTotalPhys", ctypes.c_ulonglong), ("ullAvailPhys", ctypes.c_ulonglong),
+                ("ullTotalPageFile", ctypes.c_ulonglong), ("ullAvailPageFile", ctypes.c_ulonglong),
+                ("ullTotalVirtual", ctypes.c_ulonglong), ("ullAvailVirtual", ctypes.c_ulonglong),
+                ("sullAvailExtendedVirtual", ctypes.c_ulonglong),
+            ]
+
+        stat = _MEMORYSTATUSEX()
+        stat.dwLength = ctypes.sizeof(_MEMORYSTATUSEX)
+        ok = ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(stat))
+        if not ok:
+            return None
+        return int(stat.ullAvailPhys)
+    except Exception:
+        return None
+
+
+def preflight_check_memory(diag_cfg: "DiagnosticConfig", session_id: str) -> Optional[int]:
+    """Enforce `memory.preflight_min_available_gb` (BDR-18 -- previously
+    loaded and never checked). Returns the observed available bytes (for
+    logging) or None if it could not be measured. Raises MemoryError, never
+    silently proceeds, when a measurement IS available and is below bound."""
+    available = get_available_memory_bytes()
+    if available is None:
+        return None
+    required = diag_cfg.preflight_min_available_gb * 1e9
+    if available < required:
+        raise MemoryError(
+            f"session {session_id!r}: preflight check failed -- {available / 1e9:.2f} GB "
+            f"physical memory available, {diag_cfg.preflight_min_available_gb:.2f} GB required "
+            "(scripts/diagnose_bin_drift_config.yaml: memory.preflight_min_available_gb)."
+        )
+    return available
+
+
 # ── Config loading ──────────────────────────────────────────────────────────
 
 @dataclass(frozen=True)
@@ -300,24 +346,36 @@ class BlockSeries:
     block_start_frame: np.ndarray   # (n_blocks,) int
     argmax_bin: np.ndarray          # (n_blocks,) int
     centroid: np.ndarray            # (n_blocks,) float
+    #: Full per-bin energy matrix, shape (n_blocks, len(candidate_bins)) -- the
+    #: promised "per-bin energy matrix" (plan §4), not just the derived
+    #: argmax/centroid summary statistics (BDR-14).
+    energy_matrix: np.ndarray
+    candidate_bins: list[int]
     trailing_discarded_frames: int
 
 
 def compute_block_series(cube: np.ndarray, candidate_bins: list[int],
                           cfg: DiagnosticConfig) -> BlockSeries:
-    """1 s blocks starting at the frame after the calibration stratum. The
-    trailing incomplete block is DISCARDED, never weighted in (plan §3.2,
-    BDR-08 R2)."""
+    """1 s blocks starting at the frame after the calibration stratum
+    (plan §3.2). The trailing-block policy is READ from config and governs
+    behavior, not merely hashed decoration (BDR-19) -- an unsupported policy
+    value fails closed rather than silently falling back to a default."""
+    if cfg.trailing_block_policy != "discard":
+        raise NotImplementedError(
+            f"trailing_block_policy={cfg.trailing_block_policy!r} is not supported; "
+            "only 'discard' is implemented (plan §7.1, BDR-08 R2)."
+        )
     start = cfg.stratum_frames[1] + 1
     n_total = cube.shape[0]
     n_available = n_total - start
     block_frames = cfg.block_frames
     n_blocks = n_available // block_frames
-    trailing = n_available - n_blocks * block_frames
+    trailing = n_available - n_blocks * block_frames  # DISCARDED (see policy check above)
 
     argmax_bin = np.zeros(n_blocks, dtype=int)
     centroid = np.zeros(n_blocks, dtype=float)
     block_start_frame = np.zeros(n_blocks, dtype=int)
+    energy_matrix = np.zeros((n_blocks, len(candidate_bins)), dtype=float)
     for i in range(n_blocks):
         lo = start + i * block_frames
         hi = lo + block_frames
@@ -325,8 +383,10 @@ def compute_block_series(cube: np.ndarray, candidate_bins: list[int],
         energies = _energy_by_bin_from_slice(cube, lo, hi, candidate_bins)
         argmax_bin[i] = max(energies, key=energies.get)
         centroid[i] = compute_centroid(energies)
+        energy_matrix[i, :] = [energies[b] for b in candidate_bins]
 
-    return BlockSeries(block_start_frame, argmax_bin, centroid, trailing)
+    return BlockSeries(block_start_frame, argmax_bin, centroid, energy_matrix,
+                        list(candidate_bins), trailing)
 
 
 # ── Episodes ─────────────────────────────────────────────────────────────────
@@ -341,9 +401,16 @@ class Episode:
 
 
 def detect_episodes(blocks: BlockSeries, baseline_bin: int, fs: float,
-                     block_frames: int) -> list[Episode]:
-    """Maximal runs of consecutive off-baseline blocks. No gap-bridging: a
-    single on-baseline block ends the run (plan §4)."""
+                     block_frames: int, gap_rule: str = "no_bridging") -> list[Episode]:
+    """Maximal runs of consecutive off-baseline blocks. `gap_rule` is READ from
+    config and governs behavior (BDR-19): only `no_bridging` (a single
+    on-baseline block ends the run) is implemented; any other value fails
+    closed rather than silently defaulting."""
+    if gap_rule != "no_bridging":
+        raise NotImplementedError(
+            f"episodes.gap_rule={gap_rule!r} is not supported; only 'no_bridging' is "
+            "implemented (plan §4)."
+        )
     off = blocks.argmax_bin != baseline_bin
     episodes: list[Episode] = []
     i = 0
@@ -371,11 +438,51 @@ def detect_episodes(blocks: BlockSeries, baseline_bin: int, fs: float,
 
 
 def episodes_at_grid(episodes: list[Episode], duration_grid_s: tuple[float, ...]) -> dict[float, int]:
-    """Count of episodes whose duration >= each grid value (plan §8, Option A)."""
+    """Count of episodes whose duration >= each grid value (plan §8, Option A).
+    Session-level, radar-only, deliberately outcome-blind -- episode DETECTION
+    needs no outcome data. See `duration_grid_by_outcome` for the per-window,
+    outcome-stratified association (BDR-11 R2)."""
     return {
         d: sum(1 for e in episodes if (e.end_s - e.start_s) >= d)
         for d in duration_grid_s
     }
+
+
+def compute_occupancy(blocks: BlockSeries, baseline_bin: int) -> dict[str, float]:
+    """Fraction of post-calibration blocks with argmax at the baseline bin /
+    within 1 / within 2 / outside (plan §4) -- promised but never persisted
+    until BDR-14."""
+    n = len(blocks.block_start_frame)
+    if n == 0:
+        return {"at_baseline": float("nan"), "within_1_bin": float("nan"),
+                "within_2_bins": float("nan"), "outside_2_bins": float("nan")}
+    disp = np.abs(blocks.argmax_bin - baseline_bin)
+    return {
+        "at_baseline": float(np.mean(disp == 0)),
+        "within_1_bin": float(np.mean(disp <= 1)),
+        "within_2_bins": float(np.mean(disp <= 2)),
+        "outside_2_bins": float(np.mean(disp > 2)),
+    }
+
+
+def trailing_leading_centroid_medians(blocks: BlockSeries, cfg: DiagnosticConfig,
+                                       fs: float) -> tuple[float, float]:
+    """Robust centroid-drift inputs (plan §3.1): median centroid over the last
+    N complete 1s blocks vs. the first N complete post-calibration blocks,
+    N = round(10s / block duration) -- selected by POSITION in the block
+    series, not by a frame-count threshold (BDR-15: `cube.shape[0]` includes
+    the session's non-block-aligned trailing remainder, 10-15 frames on every
+    real capture, so a threshold in raw frames does not land on a block
+    boundary and silently drops one block from the "last 10 s")."""
+    n_blocks = len(blocks.block_start_frame)
+    n_window_blocks = int(round(10.0 * fs / cfg.block_frames))
+    if n_blocks == 0:
+        return float("nan"), float("nan")
+    n_trailing = min(n_window_blocks, n_blocks)
+    n_leading = min(n_window_blocks, n_blocks)
+    trailing_median = float(np.median(blocks.centroid[-n_trailing:]))
+    leading_median = float(np.median(blocks.centroid[:n_leading]))
+    return trailing_median, leading_median
 
 
 def centroid_drift_at_grid(trailing_median: float, leading_median: float,
@@ -410,6 +517,31 @@ def classify_window_outcome(accepted_rank: int, rejection_codes: np.ndarray,
     return "other_rejected"
 
 
+def validate_frame_idx_grid(frame_idx: np.ndarray, window_frames: int, hop_s: float,
+                             fs: float) -> None:
+    """Reject a malformed NPZ hop grid before alignment (plan §7.1, BDR-19) --
+    below the first valid window end, non-monotonic, or off the expected hop
+    spacing. Raises ValueError; never silently proceeds on bad input."""
+    if len(frame_idx) == 0:
+        return
+    first_valid_end = window_frames - 1
+    if int(frame_idx[0]) < first_valid_end:
+        raise ValueError(
+            f"frame_idx[0]={int(frame_idx[0])} is below the first valid window end "
+            f"({first_valid_end}) for a {window_frames}-frame window."
+        )
+    diffs = np.diff(frame_idx.astype(np.int64))
+    if np.any(diffs <= 0):
+        raise ValueError(f"frame_idx is not strictly monotonic increasing: diffs={diffs.tolist()}")
+    expected_hop = int(round(hop_s * fs))
+    bad = np.where(diffs != expected_hop)[0]
+    if bad.size:
+        raise ValueError(
+            f"frame_idx hop spacing does not match hop_s*fs={expected_hop} frames at "
+            f"index/indices {bad.tolist()}: diffs={diffs[bad].tolist()}."
+        )
+
+
 @dataclass
 class WindowRow:
     window_index: int
@@ -417,8 +549,13 @@ class WindowRow:
     frame_end: int
     is_warmup_window: bool
     post_calibration_observed_s: float
-    dominant_argmax_mode: Optional[int]
-    mean_centroid: Optional[float]
+    #: Directly computed from range_energy_by_bin on THIS window's own
+    #: [frame_start, frame_end] slice (BDR-14) -- not the mode/mean of its
+    #: constituent 1 s blocks. Those are not equivalent: the argmax of a
+    #: 600-frame aggregate's power need not equal the mode of twenty
+    #: 1 s-block argmaxes, and likewise for the centroid.
+    window_argmax_bin: Optional[int]
+    window_centroid: Optional[float]
     off_baseline_duration_s: float
     longest_excursion_s: float
     rejection_codes: tuple[int, ...]
@@ -426,14 +563,19 @@ class WindowRow:
     outcome_class: str
 
 
-def align_windows(frame_idx: np.ndarray, blocks: BlockSeries, baseline_bin: int,
+def align_windows(cube: np.ndarray, candidate_bins: list[int], frame_idx: np.ndarray,
+                   blocks: BlockSeries, baseline_bin: int,
                    accepted_rank: np.ndarray, rejection_codes: np.ndarray,
                    f_r_hz: np.ndarray, fs: float, window_frames: int,
                    hop_s: float, calibration_end_frame: int,
                    block_frames: int) -> list[WindowRow]:
-    """One row per NPZ window, aligned to its constituent post-calibration
-    1 s blocks (plan §3.2/§4). Window 0 (the calibration stratum itself) is
-    flagged is_warmup_window with zero exposure."""
+    """One row per NPZ window (plan §3.2/§4). The window's own argmax/centroid
+    are computed DIRECTLY on its 600-frame slice (BDR-14); off-baseline
+    duration and longest excursion still use the finer 1 s-block series
+    (a different, correctly-scoped sub-window statistic). Window 0 (the
+    calibration stratum itself) is flagged is_warmup_window with zero
+    exposure. Raises on a malformed frame_idx grid (BDR-19)."""
+    validate_frame_idx_grid(frame_idx, window_frames, hop_s, fs)
     block_s = block_frames / fs
     rows: list[WindowRow] = []
     off = blocks.argmax_bin != baseline_bin
@@ -444,17 +586,16 @@ def align_windows(frame_idx: np.ndarray, blocks: BlockSeries, baseline_bin: int,
         is_warmup = (i == 0)
         observed_s = 0.0 if is_warmup else min(float(window_frames) / fs, i * hop_s)
 
+        window_energies = _energy_by_bin_from_slice(cube, start_frame, end_frame + 1, candidate_bins)
+        window_argmax = int(max(window_energies, key=window_energies.get))
+        window_centroid = compute_centroid(window_energies)
+
         mask = (
             (blocks.block_start_frame >= start_frame)
             & (blocks.block_start_frame < end_frame + 1)
             & (blocks.block_start_frame >= calibration_end_frame)
         )
         if mask.any():
-            window_argmax = blocks.argmax_bin[mask]
-            window_centroid = blocks.centroid[mask]
-            vals, counts = np.unique(window_argmax, return_counts=True)
-            dominant = int(vals[np.argmax(counts)])
-            mean_c = float(np.mean(window_centroid))
             off_mask = off[mask]
             off_duration = float(np.sum(off_mask)) * block_s
             longest = 0.0
@@ -466,8 +607,6 @@ def align_windows(frame_idx: np.ndarray, blocks: BlockSeries, baseline_bin: int,
                 else:
                     run = 0.0
         else:
-            dominant = None
-            mean_c = None
             off_duration = 0.0
             longest = 0.0
 
@@ -477,8 +616,8 @@ def align_windows(frame_idx: np.ndarray, blocks: BlockSeries, baseline_bin: int,
             frame_end=end_frame,
             is_warmup_window=is_warmup,
             post_calibration_observed_s=observed_s,
-            dominant_argmax_mode=dominant,
-            mean_centroid=mean_c,
+            window_argmax_bin=window_argmax,
+            window_centroid=window_centroid,
             off_baseline_duration_s=off_duration,
             longest_excursion_s=longest,
             rejection_codes=tuple(int(c) for c in rejection_codes[i]),
@@ -488,15 +627,14 @@ def align_windows(frame_idx: np.ndarray, blocks: BlockSeries, baseline_bin: int,
     return rows
 
 
-FULL_EXPOSURE_S = 30.0
-
-
-def stratify_windows(rows: list[WindowRow]) -> tuple[list[WindowRow], list[WindowRow]]:
+def stratify_windows(rows: list[WindowRow], full_exposure_s: float) -> tuple[list[WindowRow], list[WindowRow]]:
     """Split into (full_exposure, transitional), excluding the warmup window
-    entirely (plan §4, BDR-03 R3)."""
+    entirely (plan §4, BDR-03 R3). `full_exposure_s` is the window duration
+    (window_frames / fs) traced from the live config, not a hardcoded
+    literal (BDR-19)."""
     eligible = [r for r in rows if not r.is_warmup_window]
-    full = [r for r in eligible if r.post_calibration_observed_s >= FULL_EXPOSURE_S - 1e-9]
-    transitional = [r for r in eligible if r.post_calibration_observed_s < FULL_EXPOSURE_S - 1e-9]
+    full = [r for r in eligible if r.post_calibration_observed_s >= full_exposure_s - 1e-9]
+    transitional = [r for r in eligible if r.post_calibration_observed_s < full_exposure_s - 1e-9]
     return full, transitional
 
 
@@ -511,35 +649,67 @@ OUTCOME_CLASSES = ("covered", "gate_not_run", "other_rejected")
 
 def stratify_by_outcome(windows: list[WindowRow]) -> dict[str, dict]:
     """The primary report (plan §4): per-window off-baseline duration and
-    longest excursion, stratified by outcome class, computed only over the
-    windows passed in (the caller restricts to full-exposure windows). Not a
-    per-window Cartesian join with the centroid grid (BDR-11) -- outcome
-    class comes only from the DSP rejection-code classifier."""
+    longest excursion, stratified by outcome class. Always reports BOTH raw
+    seconds and a normalized fraction (`off_baseline_duration_s /
+    post_calibration_observed_s`, BDR-17) -- for full-exposure windows the
+    fraction is a trivial rescaling (all denominators equal), but for
+    transitional windows it is the whole point: raw seconds from a 3 s window
+    and a 27 s window are not comparable, and BDR-03 R3's exposure correction
+    is void unless the emitted report actually carries the normalized value,
+    not just the raw one. Not a per-window Cartesian join with the centroid
+    grid (BDR-11) -- outcome class comes only from the DSP rejection-code
+    classifier."""
     report: dict[str, dict] = {}
     for cls in OUTCOME_CLASSES:
         subset = [r for r in windows if r.outcome_class == cls]
         if not subset:
             report[cls] = {"n": 0, "mean_off_baseline_duration_s": None,
-                            "mean_longest_excursion_s": None}
+                            "mean_longest_excursion_s": None,
+                            "mean_off_baseline_fraction": None}
             continue
+        fractions = [r.off_baseline_duration_s / r.post_calibration_observed_s
+                     for r in subset if r.post_calibration_observed_s > 0]
         report[cls] = {
             "n": len(subset),
             "mean_off_baseline_duration_s": float(np.mean([r.off_baseline_duration_s for r in subset])),
             "mean_longest_excursion_s": float(np.mean([r.longest_excursion_s for r in subset])),
+            "mean_off_baseline_fraction": float(np.mean(fractions)) if fractions else None,
         }
     return report
 
 
-# ── Motion energy (channel-preserving) ──────────────────────────────────────
+def duration_grid_by_outcome(windows: list[WindowRow],
+                              duration_grid_s: tuple[float, ...]) -> dict[str, dict]:
+    """The per-window duration-grid <-> outcome association BDR-11 R2 found
+    missing: for each outcome class, the count of windows (from the set
+    passed in -- caller restricts to full-exposure) whose OWN
+    `longest_excursion_s` meets or exceeds each grid duration. This is the
+    per-window rule the config's sensitivity_grid.duration_s axis actually
+    governs; `episodes_at_grid` remains the separate, outcome-blind,
+    session-level episode count."""
+    report: dict[str, dict] = {}
+    for cls in OUTCOME_CLASSES:
+        subset = [r for r in windows if r.outcome_class == cls]
+        report[cls] = {
+            "n": len(subset),
+            "count_at_grid": {
+                str(d): sum(1 for r in subset if r.longest_excursion_s >= d)
+                for d in duration_grid_s
+            },
+        }
+    return report
 
-def compute_motion_energy(cube: np.ndarray, candidate_bins: list[int]) -> dict[int, float]:
+
+# ── Motion energy (channel-preserving, per-window) ──────────────────────────
+
+def _motion_energy_slice(slice_cube: np.ndarray, candidate_bins: list[int]) -> dict[int, float]:
     """motion_energy(b) = mean_(t,c,r) |X(t,c,r,b) - mean_t' X(t',c,r,b)|^2
-    (plan §3.3). Per-channel mean subtracted BEFORE averaging across
-    chirps/RX, so a genuinely moving reflector cannot destructively cancel
-    across RX channels with different static phases."""
-    n_adc = cube.shape[-1]
+    (plan §3.3) over the given slice. Per-channel mean subtracted BEFORE
+    averaging across chirps/RX, so a genuinely moving reflector cannot
+    destructively cancel across RX channels with different static phases."""
+    n_adc = slice_cube.shape[-1]
     hann = np.hanning(n_adc).astype(np.float32)
-    windowed = cube * hann
+    windowed = slice_cube * hann
     range_fft = np.fft.fft(windowed, axis=-1)  # (frames, chirps, rx, n_adc)
 
     out: dict[int, float] = {}
@@ -548,6 +718,22 @@ def compute_motion_energy(cube: np.ndarray, candidate_bins: list[int]) -> dict[i
         channel_mean = X.mean(axis=0, keepdims=True)     # (1, chirps, rx)
         deviation = X - channel_mean
         out[b] = float(np.mean(np.abs(deviation) ** 2))
+    return out
+
+
+def compute_motion_energy_per_window(cube: np.ndarray, candidate_bins: list[int],
+                                      window_rows: list[WindowRow]) -> dict[int, dict[int, float]]:
+    """Per-window, per-bin motion-energy matrix (plan §3.3/§4, BDR-18) -- one
+    600-frame slice processed at a time, bounded temporaries, not one
+    whole-capture FFT. Keyed by `window_index`; empty for a session with no
+    NPZ-defined windows (`window_rows` empty, e.g. live_test1 under BDR-07
+    Option A -- motion energy is a window-scale statistic and has no
+    equivalent for a replay-less session, same as every other window-level
+    field)."""
+    out: dict[int, dict[int, float]] = {}
+    for r in window_rows:
+        slice_cube = cube[r.frame_start:r.frame_end + 1]
+        out[r.window_index] = _motion_energy_slice(slice_cube, candidate_bins)
     return out
 
 
@@ -563,8 +749,16 @@ class SessionInputs:
     warmup_json_path: Path
     npz: Optional[dict]
     npz_path: Optional[Path]
-    run_metadata: dict
-    run_metadata_path: Path
+    #: The ORIGINAL capture's own recorded run_metadata.json -- always loaded from
+    #: capture_dir, used for decode-geometry validation (BDR-16). A replay's raw-file
+    #: hash proves which BYTES were replayed; it does not prove the replay's config
+    #: snapshot is the geometry those bytes were originally captured with.
+    capture_run_metadata: dict
+    capture_run_metadata_path: Path
+    #: The replay's own run_metadata.json (None if there is no replay). Used only for
+    #: replay provenance / outcome-generation pairing, never for geometry validation.
+    replay_run_metadata: Optional[dict]
+    replay_run_metadata_path: Optional[Path]
 
 
 def match_replays_to_captures(capture_dirs: list[Path], replay_dirs: list[Path]) -> dict[Path, Optional[Path]]:
@@ -600,14 +794,22 @@ def load_session_inputs(session_id: str, capture_dir: Path, replay_dir: Optional
     raw_path = capture_dir / "adc_stream.bin"
     raw_sha256 = sha256_file(raw_path)
 
+    # The capture's OWN metadata -- always loaded from capture_dir, the only input
+    # decode-geometry validation may use (BDR-16).
+    capture_run_metadata_path = capture_dir / "run_metadata.json"
+    capture_run_metadata = json.loads(capture_run_metadata_path.read_text(encoding="utf-8"))
+
+    # Warmup evidence and DSP outcomes come from the replay when one is matched (it
+    # reflects the estimator generation that actually produced those outcomes), else
+    # from the capture's own original run.
     evidence_dir = replay_dir if replay_dir is not None else capture_dir
     warmup_json_path = evidence_dir / "warmup_bin_selection.json"
     warmup_json = json.loads(warmup_json_path.read_text(encoding="utf-8"))
-    run_metadata_path = evidence_dir / "run_metadata.json"
-    run_metadata = json.loads(run_metadata_path.read_text(encoding="utf-8"))
 
     if replay_dir is not None:
-        replay_hashes = list((run_metadata.get("replay_file_hashes") or {}).values())
+        replay_run_metadata_path = replay_dir / "run_metadata.json"
+        replay_run_metadata = json.loads(replay_run_metadata_path.read_text(encoding="utf-8"))
+        replay_hashes = list((replay_run_metadata.get("replay_file_hashes") or {}).values())
         if not replay_hashes or replay_hashes[0] != raw_sha256:
             raise ValueError(
                 f"session {session_id!r}: replay {replay_dir} does not match raw "
@@ -616,13 +818,19 @@ def load_session_inputs(session_id: str, capture_dir: Path, replay_dir: Optional
         npz_path = replay_dir / "live_intermediates.npz"
         npz = dict(np.load(npz_path, allow_pickle=True))
     else:
+        replay_run_metadata_path = None
+        replay_run_metadata = None
         npz_path = None
         npz = None
 
     return SessionInputs(
         session_id=session_id, capture_dir=capture_dir, replay_dir=replay_dir,
         raw_sha256=raw_sha256, warmup_json=warmup_json, warmup_json_path=warmup_json_path,
-        npz=npz, npz_path=npz_path, run_metadata=run_metadata, run_metadata_path=run_metadata_path,
+        npz=npz, npz_path=npz_path,
+        capture_run_metadata=capture_run_metadata,
+        capture_run_metadata_path=capture_run_metadata_path,
+        replay_run_metadata=replay_run_metadata,
+        replay_run_metadata_path=replay_run_metadata_path,
     )
 
 
@@ -630,12 +838,13 @@ def load_session_inputs(session_id: str, capture_dir: Path, replay_dir: Optional
 
 def run_session(session: SessionInputs, live_cfg: dict, diag_cfg: DiagnosticConfig,
                  out_dir: Path) -> dict:
-    chirp_cfg = validate_decode_geometry(live_cfg, session.run_metadata, session.session_id)
+    chirp_cfg = validate_decode_geometry(live_cfg, session.capture_run_metadata, session.session_id)
     candidate_bins = derive_candidate_bins(live_cfg)
 
     mem_before = get_peak_working_set_bytes()
+    mem_available_preflight = preflight_check_memory(diag_cfg, session.session_id)  # BDR-18
     cube = read_adc_bin(session.capture_dir / "adc_stream.bin", chirp_cfg)
-    mem_after = get_peak_working_set_bytes()
+    mem_after_decode = get_peak_working_set_bytes()
 
     baseline = compute_baseline(cube, candidate_bins, diag_cfg)
     recompute = warmup_recompute_check(cube, candidate_bins, diag_cfg, session.warmup_json)
@@ -648,35 +857,36 @@ def run_session(session: SessionInputs, live_cfg: dict, diag_cfg: DiagnosticConf
 
     blocks = compute_block_series(cube, candidate_bins, diag_cfg)
     fs = float(live_cfg["session"]["frame_rate_hz"])
-    episodes = detect_episodes(blocks, baseline["baseline_argmax_bin"], fs, diag_cfg.block_frames)
+    occupancy = compute_occupancy(blocks, baseline["baseline_argmax_bin"])
+    episodes = detect_episodes(blocks, baseline["baseline_argmax_bin"], fs, diag_cfg.block_frames,
+                                diag_cfg.gap_rule)
     episode_grid = episodes_at_grid(episodes, diag_cfg.duration_grid_s)
 
-    trailing_10s_start_frame = cube.shape[0] - int(round(10.0 * fs))
-    trailing_mask = blocks.block_start_frame >= trailing_10s_start_frame
-    leading_10s_end_frame = diag_cfg.stratum_frames[1] + 1 + int(round(10.0 * fs))
-    leading_mask = blocks.block_start_frame < leading_10s_end_frame
-    trailing_centroid_median = float(np.median(blocks.centroid[trailing_mask])) if trailing_mask.any() else float("nan")
-    leading_centroid_median = float(np.median(blocks.centroid[leading_mask])) if leading_mask.any() else float("nan")
+    trailing_centroid_median, leading_centroid_median = trailing_leading_centroid_medians(
+        blocks, diag_cfg, fs
+    )
     centroid_grid = centroid_drift_at_grid(trailing_centroid_median, leading_centroid_median,
                                             diag_cfg.centroid_grid_bins)
-
-    motion_energy = compute_motion_energy(cube, candidate_bins)
 
     window_rows: list[WindowRow] = []
     if session.npz is not None:
         npz = session.npz
-        window_frames = int(round(30.0 * fs))
+        window_s = float(live_cfg["session"]["window_s"])  # traced from config, not hardcoded (BDR-19)
+        window_frames = int(round(window_s * fs))
         hop_s = float(live_cfg["session"]["hop_s"])
         window_rows = align_windows(
-            npz["frame_idx"], blocks, baseline["baseline_argmax_bin"],
+            cube, candidate_bins, npz["frame_idx"], blocks, baseline["baseline_argmax_bin"],
             npz["accepted_candidate_rank"], npz["candidate_rejection_codes"],
             npz["f_r_hz"], fs, window_frames, hop_s, diag_cfg.stratum_frames[1] + 1,
             diag_cfg.block_frames,
         )
+    else:
+        window_s = float(live_cfg["session"]["window_s"])
 
-    full_exposure, transitional = stratify_windows(window_rows)
+    full_exposure, transitional = stratify_windows(window_rows, window_s)
     outcome_stratified_report = stratify_by_outcome(full_exposure)
     outcome_stratified_transitional = stratify_by_outcome(transitional)
+    duration_grid_report = duration_grid_by_outcome(full_exposure, diag_cfg.duration_grid_s)
 
     # All 10 disjoint non-overlapping hop-offset phases, each independently
     # split into its own full-exposure/transitional stratum (plan §4) --
@@ -684,14 +894,21 @@ def run_session(session: SessionInputs, live_cfg: dict, diag_cfg: DiagnosticConf
     phase_subsets = offset_phase_subsets(window_rows, diag_cfg.offset_phases)
     offset_phase_report = {}
     for k, subset in phase_subsets.items():
-        phase_full, phase_transitional = stratify_windows(subset)
+        phase_full, phase_transitional = stratify_windows(subset, window_s)
         offset_phase_report[str(k)] = {
             "n_full_exposure_windows": len(phase_full),
             "n_transitional_windows": len(phase_transitional),
             "full_exposure": stratify_by_outcome(phase_full),
             "transitional": stratify_by_outcome(phase_transitional),
+            "duration_grid_by_outcome": duration_grid_by_outcome(phase_full, diag_cfg.duration_grid_s),
         }
 
+    # Bounded per-window motion energy (BDR-18) -- one 600-frame slice at a time,
+    # computed before the cube is freed, AFTER all other per-session work so the
+    # end-of-session memory sample below reflects the whole pipeline.
+    motion_energy_per_window = compute_motion_energy_per_window(cube, candidate_bins, window_rows)
+
+    mem_after_session = get_peak_working_set_bytes()  # BDR-18: not just post-decode
     del cube  # free the decoded cube before writing output artifacts
 
     reproducible = is_tree_clean() if diag_cfg.require_clean_tree else None
@@ -701,7 +918,10 @@ def run_session(session: SessionInputs, live_cfg: dict, diag_cfg: DiagnosticConf
         "raw_sha256": session.raw_sha256,
         "warmup_json_path": str(session.warmup_json_path),
         "warmup_json_sha256": sha256_file(session.warmup_json_path),
-        "run_metadata_path": str(session.run_metadata_path),
+        "capture_run_metadata_path": str(session.capture_run_metadata_path),
+        "capture_run_metadata_sha256": sha256_file(session.capture_run_metadata_path),
+        "replay_run_metadata_path": str(session.replay_run_metadata_path) if session.replay_run_metadata_path else None,
+        "replay_run_metadata_sha256": sha256_file(session.replay_run_metadata_path) if session.replay_run_metadata_path else None,
         "npz_path": str(session.npz_path) if session.npz_path else None,
         "npz_sha256": sha256_file(session.npz_path) if session.npz_path else None,
         "correlation_available": session.npz is not None,
@@ -709,6 +929,8 @@ def run_session(session: SessionInputs, live_cfg: dict, diag_cfg: DiagnosticConf
         "baseline_argmax_bin": baseline["baseline_argmax_bin"],
         "baseline_centroid": baseline["baseline_centroid"],
         "baseline_rank_of_locked_bin": baseline_rank_of_lock,
+        "baseline_profile": {str(b): e for b, e in baseline["settled_energy_by_bin"].items()},
+        "occupancy": occupancy,
         "warmup_recompute_check": recompute,
         "centroid_drift": {
             "trailing_10s_median": trailing_centroid_median,
@@ -723,7 +945,6 @@ def run_session(session: SessionInputs, live_cfg: dict, diag_cfg: DiagnosticConf
         ],
         "episode_count_at_grid": {str(d): n for d, n in episode_grid.items()},
         "centroid_drift_at_grid": {str(b): met for b, met in centroid_grid.items()},
-        "motion_energy_by_bin": motion_energy,
         "n_windows": len(window_rows),
         "n_full_exposure_windows": len(full_exposure),
         "n_transitional_windows": len(transitional),
@@ -731,49 +952,76 @@ def run_session(session: SessionInputs, live_cfg: dict, diag_cfg: DiagnosticConf
             "full_exposure": outcome_stratified_report,
             "transitional": outcome_stratified_transitional,
         },
+        "duration_grid_by_outcome": duration_grid_report,
         "offset_phase_report": offset_phase_report,
         "reproducible": reproducible,
+        "mem_available_preflight": mem_available_preflight,
         "mem_peak_working_set_before_decode": mem_before,
-        "mem_peak_working_set_after_decode": mem_after,
+        "mem_peak_working_set_after_decode": mem_after_decode,
+        "mem_peak_working_set_after_session": mem_after_session,
     }
 
-    session_dir = _write_session_outputs(out_dir, session.session_id, blocks, window_rows, motion_energy, result)
-    plot_drift_overview(session_dir, blocks, baseline["baseline_argmax_bin"], window_rows)
+    session_dir = _write_session_outputs(out_dir, session.session_id, blocks, window_rows,
+                                          motion_energy_per_window, result)
+    plot_drift_overview(session_dir, blocks, baseline["baseline_argmax_bin"], window_rows, fs)
     return result
 
 
 # ── Output writers ───────────────────────────────────────────────────────────
 
 def _write_session_outputs(out_dir: Path, session_id: str, blocks: BlockSeries,
-                            window_rows: list[WindowRow], motion_energy: dict[int, float],
+                            window_rows: list[WindowRow],
+                            motion_energy_per_window: dict[int, dict[int, float]],
                             summary_fragment: dict) -> Path:
     session_dir = out_dir / session_id
     session_dir.mkdir(parents=True, exist_ok=False)
 
     import csv
+    baseline_by_bin = {int(b): e for b, e in summary_fragment["baseline_profile"].items()}
     with (session_dir / "bin_energy_blocks.csv").open("w", newline="", encoding="utf-8") as fh:
         w = csv.writer(fh)
-        w.writerow(["block_index", "block_start_frame", "argmax_bin", "centroid"])
+        # Full per-bin energy matrix (raw + baseline-relative dB), not just the
+        # derived argmax/centroid summary statistics (BDR-14).
+        header = ["block_index", "block_start_frame", "argmax_bin", "centroid"]
+        for b in blocks.candidate_bins:
+            header += [f"energy_bin_{b}", f"energy_rel_baseline_db_bin_{b}"]
+        w.writerow(header)
         for i in range(len(blocks.block_start_frame)):
-            w.writerow([i, int(blocks.block_start_frame[i]), int(blocks.argmax_bin[i]),
-                        float(blocks.centroid[i])])
+            row = [i, int(blocks.block_start_frame[i]), int(blocks.argmax_bin[i]),
+                   float(blocks.centroid[i])]
+            for j, b in enumerate(blocks.candidate_bins):
+                e = float(blocks.energy_matrix[i, j])
+                base = baseline_by_bin.get(b, 0.0)
+                rel_db = 10.0 * np.log10(e / base) if (e > 0 and base > 0) else float("-inf")
+                row += [e, rel_db]
+            w.writerow(row)
 
     with (session_dir / "window_audit.csv").open("w", newline="", encoding="utf-8") as fh:
         w = csv.writer(fh)
         w.writerow(["window_index", "frame_start", "frame_end", "is_warmup_window",
-                     "post_calibration_observed_s", "dominant_argmax_mode", "mean_centroid",
+                     "post_calibration_observed_s", "window_argmax_bin", "window_centroid",
                      "off_baseline_duration_s", "longest_excursion_s", "rejection_codes",
                      "f_r_hz", "outcome_class"])
         for r in window_rows:
             w.writerow([r.window_index, r.frame_start, r.frame_end, r.is_warmup_window,
-                        r.post_calibration_observed_s, r.dominant_argmax_mode, r.mean_centroid,
+                        r.post_calibration_observed_s, r.window_argmax_bin, r.window_centroid,
                         r.off_baseline_duration_s, r.longest_excursion_s,
                         ";".join(str(c) for c in r.rejection_codes), r.f_r_hz, r.outcome_class])
 
+    # Real (n_windows, n_bins) motion-energy matrix (BDR-18), not one scalar
+    # per bin for the whole capture. Empty (0, n_bins) when there are no
+    # NPZ-defined windows (e.g. live_test1, BDR-07 Option A).
+    window_indices = sorted(motion_energy_per_window.keys())
+    me_bins = blocks.candidate_bins
+    me_matrix = np.zeros((len(window_indices), len(me_bins)), dtype=float)
+    for i, widx in enumerate(window_indices):
+        row = motion_energy_per_window[widx]
+        me_matrix[i, :] = [row.get(b, float("nan")) for b in me_bins]
     np.savez(
         session_dir / "motion_energy_windows.npz",
-        bins=np.array(list(motion_energy.keys())),
-        values=np.array(list(motion_energy.values())),
+        window_indices=np.array(window_indices, dtype=int),
+        bins=np.array(me_bins, dtype=int),
+        matrix=me_matrix,
     )
 
     with (session_dir / "summary.json").open("w", encoding="utf-8") as fh:
@@ -782,8 +1030,19 @@ def _write_session_outputs(out_dir: Path, session_id: str, blocks: BlockSeries,
     return session_dir
 
 
+_OUTCOME_COLORS = {
+    "covered": ("#2a9d5c", "o"),
+    "gate_not_run": ("#d1495b", "s"),
+    "other_rejected": ("#e0a72a", "^"),
+    "warmup": ("#6b6b6b", "D"),
+}
+
+
 def plot_drift_overview(session_dir: Path, blocks: BlockSeries, baseline_bin: int,
-                         window_rows: list[WindowRow]) -> None:
+                         window_rows: list[WindowRow], fs: float) -> None:
+    """Energy heatmap (time x bin, dB rel. per-block max) + baseline line +
+    argmax/centroid overlay + a window-outcome strip (BDR-14 -- the plan's
+    original spec, not the two-line plot this diagnostic shipped with)."""
     import matplotlib
     matplotlib.use("Agg")
     matplotlib.rcParams.update({
@@ -791,18 +1050,57 @@ def plot_drift_overview(session_dir: Path, blocks: BlockSeries, baseline_bin: in
     })
     import matplotlib.pyplot as plt
 
-    fig, ax = plt.subplots(figsize=(11, 4))
-    t = blocks.block_start_frame / 20.0
-    ax.plot(t, blocks.argmax_bin, color="#1f6f8b", linewidth=1.5, label="argmax bin")
-    ax.plot(t, blocks.centroid, color="#e0782f", linewidth=1.0, linestyle="--",
+    t = blocks.block_start_frame / fs
+    n_blocks, n_bins = blocks.energy_matrix.shape
+    has_strip = len(window_rows) > 0
+
+    if has_strip:
+        fig, (ax, ax_strip) = plt.subplots(
+            2, 1, figsize=(11, 5.5), sharex=True, layout="constrained",
+            gridspec_kw={"height_ratios": [4, 1], "hspace": 0.08},
+        )
+    else:
+        fig, ax = plt.subplots(figsize=(11, 4), layout="constrained")
+        ax_strip = None
+
+    if n_blocks > 0:
+        per_block_max = np.maximum(blocks.energy_matrix.max(axis=1, keepdims=True), 1e-30)
+        db_rel = 10.0 * np.log10(np.maximum(blocks.energy_matrix, 1e-30) / per_block_max)
+        block_s = (t[1] - t[0]) if n_blocks > 1 else 1.0
+        extent = [t[0] - block_s / 2, t[-1] + block_s / 2,
+                  blocks.candidate_bins[0] - 0.5, blocks.candidate_bins[-1] + 0.5]
+        im = ax.imshow(db_rel.T, aspect="auto", origin="lower", extent=extent,
+                        cmap="viridis", vmin=-20, vmax=0)
+        cbar = fig.colorbar(im, ax=ax, pad=0.01)
+        cbar.set_label("dB rel. per-block max")
+
+    ax.plot(t, blocks.argmax_bin, color="#f4f4f4", linewidth=1.3, label="argmax bin")
+    ax.plot(t, blocks.centroid, color="#ff8c3b", linewidth=1.0, linestyle="--",
             label="power-weighted centroid")
-    ax.axhline(baseline_bin, color="#444444", linewidth=1.0, linestyle=":",
+    ax.axhline(baseline_bin, color="#ffffff", linewidth=1.0, linestyle=":",
                label=f"baseline (bin {baseline_bin})")
-    ax.set_xlabel("time since capture start (s)")
     ax.set_ylabel("range bin")
-    ax.legend(loc="upper right", frameon=False)
+    ax.legend(loc="upper right", frameon=True, fontsize=8)
     ax.set_title("Bin-drift evidence summary")
-    fig.tight_layout()
+
+    if has_strip and ax_strip is not None:
+        for cls, (color, marker) in _OUTCOME_COLORS.items():
+            if cls == "warmup":
+                rows = [r for r in window_rows if r.is_warmup_window]
+            else:
+                rows = [r for r in window_rows if not r.is_warmup_window and r.outcome_class == cls]
+            if not rows:
+                continue
+            xs = [r.frame_end / fs for r in rows]
+            ax_strip.scatter(xs, [0] * len(xs), color=color, marker=marker, s=22,
+                              label=cls, zorder=3)
+        ax_strip.set_yticks([])
+        ax_strip.set_xlabel("time since capture start (s)")
+        ax_strip.legend(loc="upper right", ncol=4, frameon=True, fontsize=7,
+                         handletextpad=0.3, columnspacing=0.8)
+    else:
+        ax.set_xlabel("time since capture start (s)")
+
     fig.savefig(session_dir / "drift_overview.png", dpi=120)
     plt.close(fig)
 
