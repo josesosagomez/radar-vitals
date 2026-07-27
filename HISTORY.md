@@ -6890,3 +6890,100 @@ missing `centroid_drift_at_grid`, `outcome_stratified_report`, and `offset_phase
 responses awaiting Codex confirmation (or a round 5) — not blocking, since everything Blocking
 this round was independently verified and fixed rather than deferred.
 
+## 2026-07-28 - Bin-drift diagnostic round 5: the core "window-scale energy" measurement was
+approximated, not computed — found, fixed, re-run, committed
+
+**Set out to do:** process round 5 of the bin-drift diagnostic review (BDR-11 R2, BDR-14…19,
+7 findings) the same way as rounds 1-4 — verify each against the real code and real run output
+before applying, since round 4 already showed the review reopening after implementation catches
+real defects, not just wording.
+
+**Worked (with evidence):**
+
+- **BDR-14 (Blocking) was the most consequential finding of the whole review: the diagnostic's
+  stated core measurement — per-bin energy computed at two time scales, 1 s blocks and 600-frame
+  windows — was never actually computed at the window scale.** `align_windows` took the *mode*
+  of the constituent 1 s blocks' argmax and the *mean* of their centroids as the window's own
+  value, silently substituting an aggregation shortcut for the promised direct computation.
+  Verified this is not equivalent, not just asserted it: built a regression test with a
+  600-frame window where 16 of 30 blocks (320 frames) carry a low-amplitude tone at bin 8 and 14
+  blocks (280 frames) carry a 3×-amplitude (9× power) tone at bin 9 — the block-mode shortcut
+  picks bin 8 (majority of blocks), the true aggregate argmax is bin 9 (9× the energy). Also
+  verified the CSV/JSON/plot consequences directly: `bin_energy_blocks.csv` had only 4 columns
+  (no per-bin matrix, despite the plan always promising one); `summary.json` had no
+  `baseline_profile` or `occupancy` field; `drift_overview.png` was a 2-line plot, not the
+  promised heatmap. Fixed all four: `align_windows` now calls `range_energy_by_bin` directly on
+  each window's own frame slice; `BlockSeries` carries a full `(n_blocks, n_bins)` energy
+  matrix; the CSV has per-bin raw + baseline-relative-dB columns; `summary.json` gained
+  `baseline_profile` and `occupancy`; the plot is now a real `viridis` heatmap with an outcome
+  strip below it (rendered and visually inspected — chest energy visibly spans bins ~22-26,
+  consistent with the range-sidelobe note in HANDOFF.md, and the outcome strip shows
+  covered/gate_not_run/other_rejected windows interspersed rather than cleanly separated by
+  drift, reinforcing round 4's finding).
+- **BDR-15 (Blocking): the "trailing 10 s" centroid statistic silently dropped one block on
+  every real capture.** `trailing_10s_start_frame = cube.shape[0] - 10·fs` doesn't land on the
+  block grid, because `cube.shape[0]` includes each session's non-block-aligned trailing
+  remainder (10-15 frames, verified earlier). Reproduced Codex's cited numbers independently
+  from massimo1's own emitted CSV before agreeing: buggy threshold selects 9 blocks
+  (`[3420..3580]`, drops `3400`) giving displacement 0.7773 bin; the true last-10-block selection
+  gives 0.8145 bin — matches Codex's "0.78 vs 0.81" exactly. Fixed by selecting blocks by
+  position in the series (`blocks.centroid[-10:]`), never by a frame-count threshold.
+- **BDR-16 (Blocking): decode-geometry validation used the REPLAY's recorded metadata, not the
+  original capture's.** A replay's raw-file hash proves which *bytes* were replayed; it does not
+  prove the replay's own config snapshot matches the geometry those bytes were captured with.
+  Verified `load_session_inputs` never loaded the capture's own `run_metadata.json` at all for
+  replay-backed sessions. Fixed: capture and replay metadata are now two distinct, separately
+  hashed inputs; geometry validation uses only the capture's. Regression test builds a replay
+  with a deliberately wrong `num_rx=99` in its own metadata and confirms the run still succeeds.
+- **BDR-17 (Should-fix): the transitional-window report silently reintroduced the exposure-time
+  bias BDR-03 R3 existed to remove** — it used the same raw-seconds statistic as full-exposure
+  windows, and the existing test only divided two fields inline without calling the production
+  report function. Fixed: `stratify_by_outcome` now always emits `mean_off_baseline_fraction`.
+- **BDR-18 (Should-fix): motion energy ran one FFT over the whole capture (all 9,611 sweep
+  frames), not per window.** The real `motion_energy_windows.npz` being 674 bytes confirmed this
+  before any code was read. This also meant the reported "peak working set" (7.05 GB, promoted
+  to bound evidence in round 4) was sampled *before* this FFT ran, so it never covered the
+  motion-energy computation's own memory cost, and `preflight_min_available_gb` was loaded and
+  never enforced anywhere. Fixed: motion energy now processes one 600-frame slice at a time
+  (bounded temporaries, real `(n_windows, n_bins)` matrix — verified 51×14 for massimo1's real
+  run); memory is sampled a second time at end-of-session; preflight is now actually checked
+  (`GlobalMemoryStatusEx` via ctypes) and raises `MemoryError` below the configured bound.
+- **BDR-19 (Should-fix): `trailing_block_policy` and `gap_rule` were hashed into the config's
+  provenance but never branched on** — mutating either in the YAML would change the input hash
+  while leaving results identical. Also confirmed no `frame_idx` grid validator existed despite
+  the plan promising one, and `window_frames`/the plot's time axis used hardcoded literals
+  (`30.0*fs`, `/20.0`) instead of the config values they duplicated. Fixed: both policies now
+  raise `NotImplementedError` on any unsupported value (fail closed); `validate_frame_idx_grid`
+  rejects malformed grids before alignment; literals now traced to `live_demo_config.yaml`.
+- 31 new tests (65 total for this diagnostic). Full suite 1681 passed / 1 skipped, no
+  regressions. Committed (`f41b018`). **Re-ran on all 4 real captures from the now-clean tree**
+  (`results/diagnose/bin_drift/20260727T210936Z/`) — verified every new field against the real
+  output (full `baseline_profile`, real `occupancy` fractions summing correctly, distinct
+  capture/replay metadata hashes, the widened 32-column CSV, the real 51×14 motion-energy
+  matrix for massimo1). Episode counts, `baseline_argmax_bin`, and `centroid_drift_at_grid`
+  results are numerically unchanged from the superseded run — expected, since those derive from
+  block-level computation, which BDR-14's fix didn't touch; only window-level fields
+  (`duration_grid_by_outcome`, `outcome_stratified_report`, `window_argmax_bin`/`window_centroid`
+  in `window_audit.csv`) reflect the corrected direct computation.
+- **New evidence this run surfaced:** massimo1's `duration_grid_by_outcome` shows ≥2 s
+  excursions are common across every outcome class (`other_rejected` 26/26 windows,
+  `gate_not_run` 11/13, `covered` 2/2) but none reach 5 s in any class — reinforcing round 4's
+  finding that drift duration does not cleanly separate DSP outcomes in this session.
+
+**Failed / did not work, and why:**
+
+- **Made the exact same coordination-file mistake a third time** (rounds 3, 4, now 5): inserted
+  a premature mid-document `## END OF DEBATE` marker while processing the last finding of the
+  batch. Caught and fixed in the same turn each time, but three recurrences of an identical
+  self-inflicted error is itself worth recording — the fix (write every response first, add the
+  closing marker only once, last) is simple but was not being applied reliably under time
+  pressure at the end of a long batch.
+
+**Retired / no longer used:** the `20260727T195535Z` bin-drift run is superseded by
+`20260727T210936Z` — kept on disk, not cited going forward; its window-level fields used the
+block-aggregation shortcut BDR-14 replaced.
+
+**Next:** unchanged from the previous entry, except the bin-drift evidence path is now
+`results/diagnose/bin_drift/20260727T210936Z/`. The coordination file is at round 5 with
+responses awaiting Codex confirmation.
+
