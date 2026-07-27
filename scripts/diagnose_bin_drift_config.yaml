@@ -1,0 +1,48 @@
+# scripts/diagnose_bin_drift_config.yaml
+# The bin-drift diagnostic's OWN bound parameters (plans/bin_drift_diagnostic.md §1/§5).
+# This is a prospective input, read at the start of every run and hashed into summary.json.
+# It is separate from scripts/live_demo_config.yaml (which is also read, read-only, and
+# validated against each capture's own recorded metadata) so that neither file's parameters
+# are ever hardcoded in scripts/diagnose_bin_drift.py.
+
+calibration:
+  # The session's entire first-buffer interval (frames), matching the ring buffer
+  # run_warmup_selection scores at k=0. Excluded entirely from episode/occupancy stats.
+  stratum_frames: [0, 599]
+  # Frames within the calibration stratum used for the settled baseline (matches
+  # run_warmup_selection's settle_skip_s=5.0s at 20 Hz -> 100 frames skipped).
+  settled_start_frame: 100
+
+blocks:
+  block_frames: 20              # 1 s at 20 Hz
+  # Trailing incomplete block past the last full block_frames boundary: discard it from
+  # block-based occupancy/episode calculations (never weight it in as partial); its frame
+  # count is still recorded (plans/bin_drift_diagnostic.md BDR-08 R2).
+  trailing_block_policy: discard
+
+episodes:
+  gap_rule: no_bridging         # a single on-baseline block ends an off-baseline episode
+
+offsets:
+  # All 10 disjoint non-overlapping hop-offset phases {k, k+10, k+20, ...} for k in phases.
+  phases: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+
+# BDR-04, decided Option A (2026-07-27): purely exploratory. No single threshold is ever
+# chosen; the diagnostic reports the outcome-stratified association at every grid point and
+# never reduces it to one automatic verdict.
+sensitivity_grid:
+  duration_s: [2, 5, 10]
+  centroid_drift_bins: [0.3, 0.5, 1.0]
+
+provenance:
+  # A run whose summary.json may be cited as evidence must come from a tree with no
+  # uncommitted changes to tracked files (plans/bin_drift_diagnostic.md §5, BDR-05 R3 /
+  # BDR-07 lesson). A dirty-tree run is still permitted for iteration but is stamped
+  # reproducible: false in its own summary.json.
+  require_clean_tree: true
+
+memory:
+  # Preliminary, from a one-off scratch measurement (plans/bin_drift_diagnostic.md §6,
+  # BDR-06 R3) -- not yet reproduced by this script's own logger. Promoted to bound evidence
+  # the first time a real run logs an observed peak into summary.json.
+  preflight_min_available_gb: 7.0
