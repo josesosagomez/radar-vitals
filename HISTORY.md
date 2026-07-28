@@ -7254,3 +7254,59 @@ otherwise, not just newly-touched code. If round 9 lands `NO MORE COMMENTS` with
 resolved, stop touching the diagnostic and hand the evidence to the user for the go/no-go decision
 on the 5-bin relock tracker (HANDOFF.md §3.1) — that decision is not part of this review loop.
 
+## 2026-07-28 - Bin-drift diagnostic round 9: the complete strict_v1 rejection-row contract
+
+**Set out to do:** process round 9 of the bin-drift diagnostic's post-implementation cross-review
+— 1 finding: `BDR-25` (Should-fix), the third round in a row to find a gap in the classifier's
+producer-state validation (after BDR-02/BDR-02 R2/BDR-02 R3).
+
+**Worked (with evidence):** verified the finding directly against `src/vitals.py:936-943` before
+accepting it: `candidate_rejection_code[not_attempted] = 5` (line 940) confirms every
+never-attempted slot is overwritten from its initial `-1` to code `5` once an executed strict_v1
+gate returns, and `passed_ranks[0]` (lines 941-943) confirms the accepted rank is always the FIRST
+passed slot. This means a real row can only be in one of two states — ALL codes `-1` (the no-ECA
+branch never touched them) or NO `-1` anywhere (the gate executed and coded every slot) — and a
+nonnegative accepted rank must equal the first, not merely any, code-0 slot. Reproduced all three
+impossible states Codex described exactly: `classify_window_outcome(0, [0,-1,-1], 0.3)` returned
+`"covered"` (a mixed row); `classify_window_outcome(1, [0,0,2], 0.3)` returned `"covered"` (rank 1
+accepted despite slot 0 also passed); `classify_window_outcome(-1, [-1,-1,-1], 0.3)` returned
+`"gate_not_run"` (an in-gate finite `f_r_hz` can never reach the no-ECA all-`-1` branch). Also
+confirmed the diagnostic's own round-8 end-to-end integration test used exactly the invalid
+`[0,-1,-1]` pattern in its "covered" fixture while describing it as satisfying the real
+invariants — a real inconsistency in the test suite itself, not just the production code. Fixed:
+`classify_window_outcome` now rejects a mix of `-1` and concrete codes, requires a nonnegative
+accepted rank to be the FIRST passed slot (not just its own slot), and rejects an all-`-1` row
+paired with an in-gate finite `f_r_hz`. Replaced every fixture using a since-shown-invalid pattern
+(`[0,-1,-1]` etc.) with a producer-valid one (`[0,2,5]`, `[2,3,5]`), including the end-to-end
+integration test's four fixture windows, so each test isolates the single contradiction it names
+rather than accidentally tripping the new mixed-code check first.
+
+3 new tests added (101 -> 104 for the diagnostic; full suite 1616 baseline + 104 = 1720 passed, 1
+skipped, matching exactly). Committed at `d38f7af`. Re-ran on all 4 real captures from that clean
+commit (`results/diagnose/bin_drift/20260728T001042Z/`) and confirmed the outcome counts are
+UNCHANGED from round 8's fix (massimo1 `gate_not_run=22, other_rejected=20, covered=9`; sweep
+`gate_not_run=15`) — exactly as expected, since round 9's new checks only reject malformed/
+replaced-input states the 4 real captures never exercise (Codex's own inspection of all three
+approved NPZs found zero violations of any of the three new invariants before this fix was even
+written). The single round-9 comment moved into `DEBATE COMMENTS` with a response; `COMMENTS OF
+CODEX` reset to await round 10.
+
+**Failed / did not work, and why:** nothing failed.
+
+**Retired / no longer used:** the invalid `[0,-1,-1]`/`[-1,2,-1]`/`[2,3,-1]`/`[-1,0,-1]` rejection
+-code fixtures used across several `classify_window_outcome` unit tests and the round-8 end-to-end
+integration test are retired, replaced with producer-valid patterns — anyone extending these tests
+should use a valid strict_v1 row (all `-1`, or no `-1` with a first-passed accepted rank) as the
+baseline for a new fixture, not copy an old one without checking it against BDR-25's contract.
+
+**Next:** check `plans/bin_drift_diagnostic_cross_review.md`'s `COMMENTS OF CODEX` for round 10
+before doing anything else with the diagnostic — the review has now reopened after implementation
+six times running (rounds 4-9), three of which (BDR-02's own R2/R3 lineage, now joined by BDR-25)
+were about the SAME outcome-classifier function, each finding a real gap the previous round's fix
+left behind. Do not assume this function is now fully validated just because round 9 closes
+cleanly — re-verify its invariants against `src/vitals.py` directly if a future round touches it
+again, rather than trusting the accumulated comments. If round 10 lands `NO MORE COMMENTS` with
+every debate item resolved, stop touching the diagnostic and hand the evidence to the user for the
+go/no-go decision on the 5-bin relock tracker (HANDOFF.md §3.1) — that decision is not part of
+this review loop.
+
