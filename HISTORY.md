@@ -7416,3 +7416,42 @@ building the 5-bin relock tracker. Separately, HANDOFF.md §3.2-3.4 list the oth
 this session's pivot identified (coverage scoring script, M8/M9 reference-paper reproductions,
 additional subject captures) — none of which depend on this diagnostic's closure.
 
+## 2026-07-28 - 5-bin relock tracker decision: DEFERRED (Option C); coverage prioritized
+
+**Set out to do:** with the bin-drift diagnostic's review closed and its evidence in hand (prior
+entry today), walk the user through the go/no-go decision on building the 5-bin relock tracker.
+
+**Worked (with evidence):** presented three options — go now, defer, no-go — against the
+diagnostic's evidence (all 4 sessions show frequent short (<2s) argmax flicker but almost no
+sustained (≥5s) drift; in massimo1, ≥2s excursions occur across every outcome class without
+cleanly separating `covered` from `gate_not_run`, arguing against drift being the coverage-loss
+mechanism). The user pushed back with a fair point not fully captured in the initial framing: this
+is n=1-subject evidence from someone who moved very little (per protocol), so a future subject who
+moves more during a session could still make the tracker worthwhile — a real consideration, since
+the diagnostic's finding that drift doesn't track *this session's* DSP failures doesn't rule out a
+different subject's movement mattering. Also looked up the actual implementation cost: the
+2026-07-02 relock+holdover feature (`_RelockController`, `_derive_relock_candidate_bins`, a shared
+`_run_bin_selection_scan` refactor, `relock_events.json` audit trail) was ~371 lines in
+`scripts/live_demo.py` + ~9 lines of config + ~555 lines of tests (commit `0022845`), passed
+50/50 tests and real smoke tests (including an observed 27→28 bin switch on a forced-relock
+replay), and was reverted 2026-07-09 purely as "not worth its complexity/risk for now" — a
+judgment call, not a technical failure. That WIP (plus later trigger-rule tuning) still sits,
+working, in `git stash@{0}`, but is now stale relative to HEAD (predates M4, the bin-drift
+diagnostic, and ECA/AHET changes like `guard_cardiac_candidate_v1`), so reviving it would be a
+port + re-validation, not a clean `git stash pop`.
+
+**Decided: Option C (defer).** The user will work on the coverage-scoring script (HANDOFF.md
+§3.1) first; the relock-tracker decision is revisited later if time allows, ideally once the 3-5
+additional subjects (§3.4) are captured and the bin-drift diagnostic can be re-run on someone who
+actually moves. This is explicitly **not** a no-go — HANDOFF.md must not silently convert "deferred"
+into "decided against."
+
+**Failed / did not work, and why:** nothing failed; this was a decision-making conversation, not
+engineering.
+
+**Retired / no longer used:** nothing.
+
+**Next:** build the offline scoring script (HANDOFF.md §3.1) — the actual next engineering task.
+Revisit the relock-tracker decision only after that, and only with either more time or more
+(higher-movement) subject data than exists today.
+
