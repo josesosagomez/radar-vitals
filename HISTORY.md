@@ -7455,3 +7455,151 @@ engineering.
 Revisit the relock-tracker decision only after that, and only with either more time or more
 (higher-movement) subject data than exists today.
 
+## 2026-07-28 - Offline scoring script: plan drafted and cross-reviewed to closure (7 rounds)
+
+**Set out to do:** design the offline scoring script named as the next action in the prior
+entry — decode a real capture, run the shared DSP per the frozen 30 s window grid, score against
+Masimo under the frozen HR/BR comparator specs, and report MAE/RMSE/coverage. Get it cross-reviewed
+by Codex (CLAUDE.md §5/§6) before writing any code, since it touches the Masimo parser boundary
+and introduces a new comparator module.
+
+**Worked (with evidence):** wrote `plans/offline_scoring_script.md` (new module
+`src/comparator.py` implementing `notes/comparator_prespec.md`/`comparator_prespec_br.md` in
+full, including BR's §2.5 metronome cross-check and §2.6 natural/paced split; new script
+`scripts/score_offline.py`) and its companion `plans/offline_scoring_script_codex_review_prompt.md`
+/ `plans/offline_scoring_script_cross_review.md`. The review ran **7 real rounds**, reopening the
+same finding (OSR-03, the pinned-lock provenance/isolation check) **four times** as Codex kept
+finding a narrower, still-real gap after each fix — each reopening verified independently against
+actual repo files before being accepted, not taken on Codex's word:
+- Round 1 (16 findings): the plan's original defaults would have scored the wrong lock generation
+  entirely (original captures' locks 23/20/21 vs. the actually-measured 27/26/26, verified
+  directly against both sets of `run_metadata.json`), relied on `paired_metrics`'s
+  finite-in-all-conditions intersection (which structurally excludes exactly the newly-covered
+  windows the whole exercise exists to check — verified against `src/compare.py`), and would have
+  crashed on `f_r_hz=None` (verified `np.isfinite(None)` raises `TypeError` in the project's own
+  env).
+- Round 2 (8 findings): the CSV schema didn't actually carry the fields the prose promised, the
+  frozen-grid guard received a literal `20.0` instead of the validated rate (making it not
+  actually independent), and BR's paced-metronome scope needed a user decision on whether to
+  implement it now.
+- Round 3 (6 findings): a same-raw-capture replay generated under `guard_cardiac_candidate_v1`
+  (verified: `20260727_182319_replay_unknown`, same raw hash and even the same numeric lock 27
+  as the production replay) would have passed the round-2 hash check while not reproducing the
+  measured baseline; sweep was still contradictorily assigned a schedule-lookup path and mislabeled
+  "natural-style".
+- Round 4: the *original* massimo1/massimo2 directories (locks 23/20, recorded under the
+  production `eca_mode`, trivially hash-bound to themselves) would still have passed the round-3
+  config-identity check while not matching the measured locks — closed with an explicit
+  `--reproduction-baseline-lock` assertion, the user's 4th decision on this one finding.
+- Round 5: the new lock-value check wasn't reflected in the provenance schema (trivial, fixed).
+- Round 6: `br_session_type` (natural/paced) had no declared source at all — verified directly
+  that none of the 3 real `run_metadata.json` files carry any such field — closed with a required
+  `--session-type` CLI input and a mandatory, mutually-exclusive
+  `--paced-schedule`/`--paced-target-unavailable` pairing per paced capture.
+- Round 7: `COMMENTS OF CODEX` = `NO MORE COMMENTS`, closing assessment confirms revision 7
+  resolves everything with no new inconsistency.
+
+**6 user decisions came out of this loop**, all recorded in `plans/offline_scoring_script.md`'s
+"User decisions" sections: (1) run scoring on the approximate `start_wall_utc` origin, labeled
+provisional/non-frozen everywhere, rather than refuse; (2) compute both the pinned-bin and
+rerun-warmup estimands always, never pooled; (3) implement BR's paced-metronome/natural-paced
+reporting now rather than defer; (4) resolve a genuine tension between `comparator_prespec.md`
+§2.4 (a separate "excluded-by-PI" report category) and §2.1's later single-usable-set
+clarification by treating §2.1 as superseding; (5) refuse metronome target-concordance for the
+sweep capture entirely, since no file anywhere persists its actual step-transition timestamps
+(only `notes/protocol.md`'s nominal 120 s-per-step schedule); (6) add an explicit expected-lock
+check rather than merely weaken the "reproducing the measured methodology" framing.
+
+`plans/offline_scoring_script.md` is now at **revision 7**, the build authority — no code has
+been written yet.
+
+**Failed / did not work, and why:** nothing failed outright, but the round-1 plan's causal-
+isolation and provenance design was significantly weaker than it read at the time — three
+separate, concrete loopholes (wrong lock generation, wrong lock even at the same raw capture
+under a different `eca_mode`, and the same failure mode again at the *original* capture
+directories) took four rounds to fully close, each one verified against real files rather than
+assumed from the previous round's fix being "obviously" sufficient.
+
+**Retired / no longer used:** nothing (no code exists yet to retire).
+
+**Next:** implement `src/comparator.py` and `scripts/score_offline.py` per
+`plans/offline_scoring_script.md` revision 7's "New code"/"New tests" sections, then run its
+Verification §3 invocation on the 3 Masimo captures (pinned against the 2026-07-26 replay
+generation, locks 27/26/26, with `--isolate-fields heart.eca_mode` and both
+`--reproduction-baseline-eca-mode`/`--reproduction-baseline-lock` set) to get the first real
+MAE/RMSE/coverage numbers and answer whether `guard_cardiac_candidate_v1`'s coverage gain is also
+an accuracy gain.
+
+## 2026-07-28 - Offline scoring script: implemented, tested, and run for real
+
+**Set out to do:** implement `plans/offline_scoring_script.md` revision 7 (`src/comparator.py` +
+`scripts/score_offline.py`) exactly as specified, build its test suite, and run it for real on the
+3 Masimo captures to get the first MAE/RMSE numbers behind the `guard_cardiac_candidate_v1`
+coverage-gain question.
+
+**Worked (with evidence):**
+- `src/comparator.py` — `hr_reference`, `br_reference`, `br_metronome_concordance`, implementing
+  `notes/comparator_prespec.md`/`notes/comparator_prespec_br.md` exactly: usable-sample gates,
+  `method="linear"` percentiles at every call site, strict stationarity boundaries (HR 5.0 bpm,
+  BR 2.0 bpm), no caller-configurable thresholds (OSR-10). 18 tests in `tests/test_comparator.py`
+  pass, including the spec's own worked stationarity example (30-sample `3×71/23×72/4×77` →
+  spread 5.100 → excluded) and both HR/BR boundary siblings at exactly the threshold vs.
+  threshold+0.000001.
+- `scripts/score_offline.py` — the full scoring loop: decode-geometry validation (reused from
+  `scripts/diagnose_bin_drift.py`), both pinned/rerun-warmup estimands, `classify_window_outcome`
+  reuse with the `None → NaN` `f_r_hz` mapping (OSR-09), Masimo CSV auto-discovery excluding
+  `live_estimates.csv` (OSR-11), the `--session-type`/`--paced-schedule`/
+  `--paced-target-unavailable` validation (OSR-19), the 3-layer pinned-lock-source rejection
+  (raw-hash binding OSR-03 R2, `eca_mode` match OSR-03 R3, exact `locked_bin` match OSR-03 round
+  4), the `--isolate-fields` config-diff assertion (OSR-13/R2), a generic evidence-flattening
+  utility that persists every key `run_window_dsp` returns per window — including keys like
+  `hr_result.ahet_second_harmonic_hz` that are only present on SOME windows, discovered directly
+  while running the script for real, not anticipated by the plan (OSR-07 R2, extended) — the
+  reference/radar/joint marginals and the incremental-coverage partition (Step 10/11). 46 tests in
+  `tests/test_score_offline.py` pass, including the real massimo1 negative-case fixtures named in
+  the plan (`20260727_182319_replay_unknown` for the OSR-03 R3 same-hash-different-`eca_mode` case,
+  the original massimo1 directory for the OSR-03 round-4 wrong-lock case) and a structural
+  slice-equivalence check (`run_window_dsp` on a plain ndarray slice vs. a `collections.deque` of
+  the same frames is bit-identical). Full suite: **1788 passed, 1 skipped** (was 1724 before this
+  session — the +64 are exactly this session's new tests, zero regressions).
+- **Ran the plan's exact Verification §3 invocation for real** on all 3 Masimo captures, 2 configs
+  (`production`/`guard_v1`), both estimands, `--isolate-fields heart.eca_mode`, both
+  `--reproduction-baseline-*` checks passing (confirming each pinned lock source really is the
+  2026-07-26 replay generation at locks 27/26/26, not the original captures' own 23/20/21) —
+  `results/score_offline/20260728T154834Z/`. **First real numbers on the `guard_v1_only`
+  incremental-coverage bucket** (Step 11 — the direct answer to "is the extra covered evidence also
+  correct", not the `paired_metrics` intersection which structurally excludes it): pinned estimand,
+  sweep capture — 1 window in `guard_v1_only` (of 8 reference-admissible windows), MAE/RMSE 0.446
+  bpm, bias -0.446 bpm — a single window where `guard_cardiac_candidate_v1` produced a valid,
+  accurate-looking HR that production did not. massimo1/massimo2 (rerun estimand) also produced
+  non-empty `guard_v1_only`/`production_only` buckets (n=2 and n=1) with plausible sub-1-bpm
+  errors. **All of this is n≤2 per bucket, single-subject, and stamped
+  `comparator_status: exploratory_non_frozen`** (`start_wall_utc`-approximate origin, per OSR-01) —
+  it is a first, real, honest data point toward the guard_v1 promotion question, not a result:
+  nowhere near enough data to conclude the coverage gain is also an accuracy gain, only that the
+  small amount of data gathered so far does not contradict it either.
+- Fixed a design gap found only by actually running the script twice: passing `--out
+  results/score_offline` (the plan's own literal Verification §3 command) wrote directly into that
+  directory with no per-run timestamp, so a second run would silently overwrite the first —
+  violating CLAUDE.md §3 rule 5 ("log every run to `results/<experiment>/<timestamp>/`"). Fixed so
+  `--out` is always treated as a ROOT with a UTC `run_id` subdirectory appended and existing-run
+  reuse refused, mirroring `scripts/diagnose_bin_drift.py`'s identical pattern exactly.
+
+**Failed / did not work, and why:** the first real end-to-end run crashed with a `KeyError` on
+`hr_result__ahet_second_harmonic_hz` — the evidence-stacking code assumed every window's
+`run_window_dsp` dict had an identical key set (as the plan's own Step 9 text assumed: "the
+implementer must enumerate `estimate_rate_from_phase`'s exact return keys... this plan has not
+itself inventoried every key"), but `ahet_second_harmonic_hz` is only present on `hr_result` when a
+candidate is actually accepted — an ordinary `gate_not_run`/all-rejected window's dict lacks it
+entirely. Fixed by keying on the UNION of keys across all windows (not window 0's key set alone)
+and filling type-appropriate sentinels (NaN/False/"") for a window missing a given key, rather than
+by hand-enumerating the key set as the plan originally described.
+
+**Retired / no longer used:** nothing.
+
+**Next:** revisit the guard_v1 promotion decision once more subjects are captured (§3.4 of the
+prior HANDOFF) — the current `guard_v1_only`/`production_only` buckets are real but far too small
+(n≤2) to support a promotion call on their own. M8 step 1a (Ahmed et al. faithful reproduction) can
+now reuse this script's `as_window_estimate`/`WindowEstimate` path once a non-AHET estimator
+exists, per the plan's design intent.
+

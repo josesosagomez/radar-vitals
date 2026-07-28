@@ -645,7 +645,7 @@ def main() -> None:
     with cfg_path.open() as fh:
         cfg = yaml.safe_load(fh)
 
-    delay_s = 120
+    delay_s = 60
     
     if delay_s > 0:
         for remaining in range(int(delay_s), 0, -1):
