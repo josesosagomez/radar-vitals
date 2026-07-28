@@ -7310,3 +7310,69 @@ every debate item resolved, stop touching the diagnostic and hand the evidence t
 go/no-go decision on the 5-bin relock tracker (HANDOFF.md §3.1) — that decision is not part of
 this review loop.
 
+## 2026-07-28 - Bin-drift diagnostic round 10: the converse of the strict_v1 state contract, and a
+restructure to prevent a fourth repeat
+
+**Set out to do:** process round 10 of the bin-drift diagnostic's post-implementation cross-review
+— 1 finding: `BDR-25 R2` (Should-fix), the fourth round in a row on `classify_window_outcome`
+(after BDR-02/R2/R3, then BDR-25), and the third to specifically find a missed converse/direction
+of an otherwise-correct check.
+
+**Worked (with evidence):** verified both claims directly against `src/vitals.py` before
+accepting: (1) `if f_r_hz is None or f_r_is_outlier:` (line 523) is the ONLY branch that produces
+all-`-1` codes, so its converse holds unconditionally — any row with a concrete (non-`-1`) code
+came from the executed-gate path, which requires `f_r_hz` to have been finite and in-gate to reach
+at all, regardless of whether any candidate ultimately passed. Round 9's fix only checked this
+requirement for the all-`-1` (no-gate) branch, never for the executed-gate branch itself, so
+`classify_window_outcome(-1, [2,3,5], nan)` and the same row with `f_r_hz=1.2` both still silently
+returned `"other_rejected"`. (2) `for candidate_rank, ... in enumerate(zip(candidates_global,
+sorted_prominences))` (line 815) always attempts candidate ranks `0..N-1` in order, and
+`candidate_rejection_code[~candidate_attempted] = 5` (line 940) assigns code 5 to the complement —
+so the not-attempted set is always a trailing suffix, never interleaved; `[5,2,5]` (not-attempted,
+attempted, not-attempted) is structurally impossible but was accepted. Independently re-verified
+both against all three approved replay NPZs before writing any fix: zero concrete rows with
+invalid/out-of-gate `f_r_hz`, zero non-suffix code-5 rows across all 216 concrete windows
+(massimo1 29, massimo2 51, sweep 136) — confirming the real evidence counts are unaffected.
+
+Rather than append a fourth ad hoc check to an already-long list (as rounds 8, 9, and this round
+were each doing to the same function), restructured `classify_window_outcome` around the two
+EXHAUSTIVE producer states Codex's own WANTED suggested: **no-gate** (all `-1`, `accepted_rank=-1`,
+`f_r_hz` fails the gate) and **executed-gate** (no `-1` anywhere, finite in-gate `f_r_hz`, a
+trailing code-5 suffix, then the existing first-passed/rank rules). This makes a missed converse
+structurally harder to reintroduce, since the two branches are now mutually exclusive and
+exhaustive by construction rather than an accumulating list of independent conditions. Added a new
+`_is_trailing_suffix_of_not_attempted` helper and `REJECTION_CODE_NOT_ATTEMPTED_WITHIN_GATE = 5`
+constant (distinct from `REJECTION_CODE_NOT_ATTEMPTED = -1`, a different producer state). Four new
+tests: a concrete row with non-finite `f_r_hz`, the same with an out-of-gate finite value, a
+non-suffix code-5 row (`[5,2,5]`), and the valid edge case of an executed gate with zero candidates
+attempted (`[5,5,5]`, correctly classifies `other_rejected` without raising). Also had to fix the
+diagnostic's own end-to-end integration test: its `other_rejected` fixture window used
+`f_r_hz=1.5` (out of gate) paired with concrete codes — exactly the state this round's first fix
+makes invalid — corrected to `f_r_hz=0.4` (in-gate).
+
+4 new tests added (104 -> 108 for the diagnostic; full suite 1616 baseline + 108 = 1724 passed, 1
+skipped, matching exactly). Committed at `eee3497`. Re-ran on all 4 real captures from that clean
+commit (`results/diagnose/bin_drift/20260728T004453Z/`) and confirmed the outcome counts are STILL
+UNCHANGED from rounds 8-9 (massimo1 `gate_not_run=22, other_rejected=20, covered=9`; sweep
+`gate_not_run=15, other_rejected=101, covered=35`) — exactly as expected, since round 10's new
+checks reject only malformed/replaced-input states none of the 4 real captures exercise. The
+single round-10 comment moved into `DEBATE COMMENTS` with a response; `COMMENTS OF CODEX` reset to
+await round 11.
+
+**Failed / did not work, and why:** nothing failed.
+
+**Retired / no longer used:** the ad hoc, individually-appended validation checks inside
+`classify_window_outcome` (one raise per discovered contradiction, added incrementally across
+rounds 7-9) are retired in favor of the two-exhaustive-states structure — any future contribution
+to this function should extend one of the two branches, not append a ninth independent `if`.
+
+**Next:** check `plans/bin_drift_diagnostic_cross_review.md`'s `COMMENTS OF CODEX` for round 11
+before doing anything else with the diagnostic. `classify_window_outcome` has now been revised in
+FOUR consecutive rounds (8, 9, 10, and originally 7) — this is the single most-reworked piece of
+this diagnostic. The restructure to two exhaustive states is intended to make this the last round
+on this function, but that is a hope, not a guarantee: if round 11 touches this function again,
+re-derive its correctness from `src/vitals.py` directly rather than assuming the two-state framing
+is itself complete. If round 11 lands `NO MORE COMMENTS` with every debate item resolved, stop
+touching the diagnostic and hand the evidence to the user for the go/no-go decision on the 5-bin
+relock tracker (HANDOFF.md §3.1) — that decision is not part of this review loop.
+
