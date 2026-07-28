@@ -1,8 +1,8 @@
 # Plan: Range-bin drift measurement (`scripts/diagnose_bin_drift.py`)
 
-> **Implemented, run on all 4 real captures, and committed.** Review has gone through 8 rounds
-> (`plans/bin_drift_diagnostic_cross_review.md`, BDR-01…24 plus R2/R3 reopenings),
-> reopening five times after implementation as Codex found real gaps between the shipped code
+> **Implemented, run on all 4 real captures, and committed.** Review has gone through 9 rounds
+> (`plans/bin_drift_diagnostic_cross_review.md`, BDR-01…25 plus R2/R3 reopenings),
+> reopening six times after implementation as Codex found real gaps between the shipped code
 > and what the plan claimed:
 > round 4 (BDR-11…13) found the decided centroid-drift grid was never wired up, plus a stale
 > table and a scope-text inconsistency; round 5 (BDR-11 R2, BDR-14…19) found the window-scale
@@ -39,8 +39,17 @@
 > (round 6/7) still permitted lossy numeric coercion** — a fractional `frame_idx`/
 > `accepted_candidate_rank`/`candidate_rejection_codes` array passed shape validation and was
 > then silently truncated by `int(...)`/`.astype(np.int64)` downstream instead of failing
-> closed. All fixed below. Both prior escalations (**BDR-04 Option A, BDR-07 Option A**)
-> remain decided — see **§8**. No new escalations this round.
+> closed; **round 9 (BDR-25) found the round-8 classifier fix still validated only PART of the
+> approved strict_v1 row contract**: a returned row must have ALL rejection codes `-1` (the
+> no-ECA branch) or NO `-1` anywhere (`src/vitals.py:940` overwrites every never-attempted slot's
+> `-1` with code 5 once the gate executes), and a nonnegative accepted rank must equal the FIRST
+> code-`0` slot (`src/vitals.py:941-943`) — the diagnostic accepted a mix of `-1` and concrete
+> codes, an accepted rank that was not the first passed slot, and an all-`-1` row paired with an
+> in-gate finite `f_r_hz` (impossible, since ECA/AHET always executes and codes every slot in that
+> case). Direct inspection confirmed the three approved NPZs violate none of these, so the real
+> evidence counts are unchanged by this round. All fixed below. Both prior escalations
+> (**BDR-04 Option A, BDR-07 Option A**) remain decided — see **§8**. No new escalations this
+> round.
 
 ## Context
 
@@ -439,6 +448,17 @@ directory already exists; `summary.json` records its own `run_id`.
     "passed"; or `accepted_candidate_rank == -1` paired with any slot coded "passed" (a passed
     slot always forces the corresponding non-negative rank, `src/vitals.py:941-943`) — each
     raises rather than silently landing in `"covered"` or `"other_rejected"`.
+    **Round 9 (BDR-25) validates the remainder of the approved strict_v1 row contract:** a
+    `rejection_codes` row must be ALL `-1` (the no-ECA branch never touches them) or have NO `-1`
+    anywhere (`src/vitals.py:940` overwrites every never-attempted slot's `-1` with code 5 once
+    the gate executes) — a MIX of the two is rejected; a nonnegative `accepted_candidate_rank`
+    must equal the FIRST slot coded "passed" (`src/vitals.py:941-943`'s `passed_ranks[0]`
+    selection), not merely its own slot being "passed" — an earlier passed slot with a later
+    accepted rank is rejected; and an all-`-1` row is rejected when paired with a finite `f_r_hz`
+    WITHIN the physiological gate, since ECA/AHET always executes (and assigns concrete codes to
+    every slot) whenever `f_r_hz` passes the gate. Direct inspection of all three approved NPZs
+    confirms zero mixed-`-1` rows, zero non-first-passed accepted ranks, and zero all-`-1` rows
+    with an in-gate finite `f_r_hz` — the real evidence counts are unchanged by this round.
   - **`outcome_stratified_report`** (full_exposure / transitional) — for each outcome class:
     count, mean off-baseline duration (raw seconds), mean longest excursion, **and
     `mean_off_baseline_fraction`** (`off_baseline_duration_s / post_calibration_observed_s`,
@@ -552,11 +572,11 @@ measurement is available.
 |---|---|
 | `scripts/diagnose_bin_drift.py` | CLI: `--config scripts/live_demo_config.yaml --diagnostic-config scripts/diagnose_bin_drift_config.yaml --captures <4 dirs> --replays <matched-generation dirs, per §8> --out results/diagnose/bin_drift` |
 | `scripts/diagnose_bin_drift_config.yaml` | The diagnostic's own bound parameters (§1.1, §5) |
-| `tests/test_diagnose_bin_drift.py` | 101 tests (§7.1) |
+| `tests/test_diagnose_bin_drift.py` | 104 tests (§7.1) |
 
 Nothing else is touched. `data/raw/` not involved (empty); originals opened read-only.
 
-### 7.1 Test plan (expanded across rounds 4–8)
+### 7.1 Test plan (expanded across rounds 4–9)
 
 - Synthetic reflector stepped bin 25→27 mid-session: argmax series shows the step at the right
   block; occupancy fractions exact (`test_compute_occupancy_fractions`).
@@ -662,6 +682,14 @@ Nothing else is touched. `data/raw/` not involved (empty); originals opened read
   a fractional `accepted_candidate_rank`, a fractional `candidate_rejection_codes` row, an
   integer-valued but out-of-domain code (`99`), and a boolean-dtype `accepted_candidate_rank` all
   raise; `f_r_hz` (a genuine float) is confirmed exempt from the integer-valued check.
+- **The complete approved strict_v1 row contract is validated (BDR-25):** a mixed row
+  (`[0, -1, -1]`, some codes `-1` and some concrete) raises; an accepted rank that is not the
+  FIRST passed slot (`[0, 0, 2]` with `accepted_rank=1`, even though slot 1's own code is
+  correctly `0`) raises; an all-`-1` row paired with an in-gate finite `f_r_hz` (`[-1,-1,-1]` with
+  `accepted_rank=-1, f_r_hz=0.3`) raises. Every existing fixture using a since-shown-impossible
+  pattern (e.g. `[0, -1, -1]` for a "covered" row) was replaced with a producer-valid one
+  (`[0, 2, 5]`) so each test isolates the one contradiction it names, including the BDR-02 R2
+  end-to-end integration test's four fixture windows.
 
 ## 8. Design decisions (both escalations resolved by the user, 2026-07-27)
 
@@ -687,9 +715,9 @@ entries are `correlation_not_available`; no replay is generated for it.
 
 ## 9. Verification
 
-1. `conda run -n radar-vitals python -m pytest tests/test_diagnose_bin_drift.py -q` — all 101
+1. `conda run -n radar-vitals python -m pytest tests/test_diagnose_bin_drift.py -q` — all 104
    cases pass.
-2. Full suite still green (script is additive; expect 1616 baseline + 101 = 1717 passed, 1
+2. Full suite still green (script is additive; expect 1616 baseline + 104 = 1720 passed, 1
    skipped).
 3. Run on all 4 captures **from a clean committed tree**; confirm all output files exist
    (including the widened `bin_energy_blocks.csv`, the real `motion_energy_windows.npz` matrix,
@@ -721,8 +749,13 @@ entries are `correlation_not_available`; no replay is generated for it.
    `centroid_drift.n_blocks_used` reflects the actual block count for a session shorter than the
    configured span, not the requested value (BDR-23 R3); confirm a fractional or out-of-domain
    NPZ field is rejected by `validate_frame_idx_grid` before any cast (BDR-24).
-9. Session end: HISTORY.md append + HANDOFF.md rewrite (per CLAUDE.md §10) — including the
-   evidence summary, its evidence paths, and this round's fixes.
+9. **Round 9:** confirm the real re-run's counts are UNCHANGED from round 8 (BDR-25 validates
+   additional malformed/replaced-input states the 4 real captures never exercise — massimo1
+   `22`/`20`, sweep `15` must still hold); confirm a mixed rejection-codes row, a non-first-passed
+   accepted rank, and an all-not-run row paired with an in-gate finite `f_r_hz` are each rejected
+   by `classify_window_outcome`.
+10. Session end: HISTORY.md append + HANDOFF.md rewrite (per CLAUDE.md §10) — including the
+    evidence summary, its evidence paths, and this round's fixes.
 
 ## 10. Explicitly out of scope
 

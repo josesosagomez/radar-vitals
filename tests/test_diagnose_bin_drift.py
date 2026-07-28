@@ -515,8 +515,10 @@ OUT_OF_GATE_F_R_HZ = 1.2
 
 
 def test_classify_window_outcome_covered():
-    # Accepted slot 0 is coded PASSED (0); the real producer invariant.
-    codes = np.array([0, -1, -1])
+    # Accepted slot 0 is coded PASSED (0); slots 1/2 get real strict_v1 codes
+    # (2=ratio_db_low, 5=not_attempted), never -1 -- a strict_v1 row either
+    # has ALL codes -1 (gate never ran) or NO -1 anywhere (BDR-25).
+    codes = np.array([0, 2, 5])
     assert dbd.classify_window_outcome(0, codes, IN_GATE_F_R_HZ) == "covered"
 
 
@@ -540,13 +542,14 @@ def test_classify_window_outcome_gate_not_run_finite_outlier_f_r_hz():
 
 
 def test_classify_window_outcome_other_rejected():
-    codes = np.array([2, 3, -1])
+    # No -1 anywhere: an executed gate that rejected every candidate (BDR-25).
+    codes = np.array([2, 3, 5])
     assert dbd.classify_window_outcome(-1, codes, IN_GATE_F_R_HZ) == "other_rejected"
 
 
 def test_classify_window_outcome_rejects_out_of_domain_rank():
     """BDR-02 R2: rank 5 exceeds AHET_MAX_CANDIDATES=3's valid {-1,0,1,2}."""
-    codes = np.array([0, -1, -1])
+    codes = np.array([0, 2, 5])
     with pytest.raises(ValueError):
         dbd.classify_window_outcome(5, codes, IN_GATE_F_R_HZ)
 
@@ -562,7 +565,7 @@ def test_classify_window_outcome_rejects_accepted_with_nonfinite_f_r_hz():
     non-finite f_r_hz under strict_v1 -- ECA/AHET only runs when f_r_hz is
     finite; the no-ECA branch that yields non-finite f_r_hz always hardcodes
     accepted_rank=-1."""
-    codes = np.array([0, -1, -1])
+    codes = np.array([0, 2, 5])
     with pytest.raises(ValueError):
         dbd.classify_window_outcome(0, codes, float("nan"))
 
@@ -571,7 +574,7 @@ def test_classify_window_outcome_rejects_accepted_with_out_of_gate_finite_f_r_hz
     """BDR-02 R3: accepted_rank>=0 can also never legitimately pair with a
     FINITE f_r_hz outside the physiological gate -- ECA/AHET only runs when
     f_r_hz passes the gate, so an accepted rank implies f_r_hz was in-gate."""
-    codes = np.array([0, -1, -1])
+    codes = np.array([0, 2, 5])
     with pytest.raises(ValueError):
         dbd.classify_window_outcome(0, codes, OUT_OF_GATE_F_R_HZ)
 
@@ -584,8 +587,9 @@ def test_classify_window_outcome_rejects_accepted_with_all_not_run_codes():
 
 def test_classify_window_outcome_rejects_accepted_slot_not_coded_passed():
     """The accepted rank's OWN slot must be coded PASSED (0); here rank 1 is
-    "accepted" but slot 1's own code is 2 (a rejection code), contradictory."""
-    codes = np.array([-1, 2, -1])
+    "accepted" but slot 1's own code is 3 (a rejection code), contradictory.
+    Slot 0's code (2) is a real rejection reason, not -1 (BDR-25: no mixing)."""
+    codes = np.array([2, 3, 5])
     with pytest.raises(ValueError):
         dbd.classify_window_outcome(1, codes, IN_GATE_F_R_HZ)
 
@@ -594,8 +598,40 @@ def test_classify_window_outcome_rejects_negative_rank_with_passed_code():
     """BDR-02 R3: accepted_rank=-1 can never legitimately pair with a
     'passed' (0) code anywhere in rejection_codes -- a passed slot always
     forces the corresponding non-negative rank to be returned
-    (src/vitals.py:941-943)."""
-    codes = np.array([-1, 0, -1])
+    (src/vitals.py:941-943). Codes has no -1 (BDR-25: an executed gate never
+    leaves a slot at -1), isolating this contradiction from the mixed-codes
+    one."""
+    codes = np.array([0, 2, 5])
+    with pytest.raises(ValueError):
+        dbd.classify_window_outcome(-1, codes, IN_GATE_F_R_HZ)
+
+
+# ── BDR-25: the complete approved strict_v1 row contract ────────────────────
+
+def test_classify_window_outcome_rejects_mixed_rejection_codes():
+    """A row with SOME codes -1 and SOME concrete is impossible: strict_v1
+    either never runs the gate (all -1) or fully codes every slot once it
+    does (never leaves one at -1)."""
+    codes = np.array([0, -1, -1])
+    with pytest.raises(ValueError):
+        dbd.classify_window_outcome(0, codes, IN_GATE_F_R_HZ)
+
+
+def test_classify_window_outcome_rejects_accepted_rank_not_first_passed_slot():
+    """strict_v1 always selects `passed_ranks[0]` (src/vitals.py:941-943) --
+    if slot 0 is ALSO coded passed, the accepted rank cannot legitimately be
+    1, even though slot 1's own code is correctly 0."""
+    codes = np.array([0, 0, 2])
+    with pytest.raises(ValueError):
+        dbd.classify_window_outcome(1, codes, IN_GATE_F_R_HZ)
+
+
+def test_classify_window_outcome_rejects_all_not_run_with_in_gate_finite_f_r_hz():
+    """An all-not-run row can only legitimately occur when f_r_hz failed the
+    physiological gate (None or an outlier) -- ECA/AHET always executes (and
+    assigns concrete codes) whenever f_r_hz is finite and in-gate, so this
+    combination is impossible."""
+    codes = np.array([-1, -1, -1])
     with pytest.raises(ValueError):
         dbd.classify_window_outcome(-1, codes, IN_GATE_F_R_HZ)
 
@@ -1622,13 +1658,15 @@ def test_window_audit_csv_persists_rank_and_outcome_recomputes_from_raw_fields(t
     # coded PASSED, in-gate f_r_hz). Window 2: other_rejected. Window 3:
     # gate_not_run via a FINITE respiration value outside the physiological
     # gate (BDR-02 R3 -- 0.12 Hz < the 0.15 Hz gate floor). Each satisfies the
-    # real strict_v1 producer invariants BDR-02 R2/R3 now enforce.
+    # real strict_v1 producer invariants BDR-02 R2/R3/BDR-25 now enforce: an
+    # executed gate (windows 1, 2) never leaves a slot at -1 (every slot gets
+    # 0=passed or a real 1-7 rejection reason, including 5=not_attempted).
     frame_idx = np.array([599, 659, 719, 779], dtype=int)
     accepted_rank = np.array([-1, 0, -1, -1])
     rejection_codes = np.array([
         [-1, -1, -1],
-        [0, -1, -1],
-        [2, 3, -1],
+        [0, 2, 5],
+        [2, 3, 5],
         [-1, -1, -1],
     ])
     f_r_hz = np.array([np.nan, 0.3, 1.5, 0.12])

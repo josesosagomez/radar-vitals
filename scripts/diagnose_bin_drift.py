@@ -569,10 +569,16 @@ def classify_window_outcome(accepted_rank: int, rejection_codes: np.ndarray,
                              f_r_hz: float) -> str:
     """Mutually exclusive classifier (plan §4). Fail-closed on evidence the
     producer (scripts/live_demo.py, the strict_v1 AHET gate mode production
-    runs use) can never actually emit (BDR-02 R2, BDR-02 R3):
+    runs use) can never actually emit (BDR-02 R2, BDR-02 R3, BDR-25):
 
     - `accepted_rank` outside the domain `{-1, 0, ..., AHET_MAX_CANDIDATES-1}`
       this generation's 3 candidate slots allow.
+    - A MIX of `-1` and concrete codes in `rejection_codes` -- impossible
+      under strict_v1: a row either has all codes `-1` (the no-ECA branch
+      never touches them) or has NO `-1` anywhere, because
+      `candidate_rejection_code[not_attempted] = 5` (src/vitals.py:940)
+      overwrites every never-entered slot's `-1` with code 5 before the
+      executed gate returns.
     - `accepted_rank >= 0` (a candidate accepted) paired with a non-finite
       `f_r_hz`, or a finite `f_r_hz` outside the physiological gate
       `[RESP_GATE_LO_HZ, RESP_GATE_HI_HZ]` -- impossible under strict_v1:
@@ -586,12 +592,21 @@ def classify_window_outcome(accepted_rank: int, rejection_codes: np.ndarray,
     - `accepted_rank >= 0` whose own slot's rejection code is not
       `REJECTION_CODE_PASSED` -- the accepted-slot-passed invariant the
       generation guarantees.
+    - `accepted_rank >= 0` that is not the FIRST slot coded
+      `REJECTION_CODE_PASSED` -- strict_v1 always selects
+      `passed_ranks[0]` (src/vitals.py:941-943), so an earlier passed slot
+      with a later accepted rank is contradictory.
     - `accepted_rank == -1` paired with any slot coded `REJECTION_CODE_PASSED`
       -- also impossible: a passed slot always forces the corresponding
       non-negative rank to be returned (src/vitals.py:941-943).
+    - `accepted_rank == -1` with all-not-run codes paired with a finite
+      `f_r_hz` WITHIN the physiological gate -- also impossible: ECA/AHET
+      always executes (and assigns concrete, non-`-1` codes) whenever
+      `f_r_hz` passes the gate.
 
     A malformed or replaced NPZ that violates any of these raises `ValueError`
-    rather than silently landing in `"covered"`.
+    rather than silently landing in `"covered"`, `"gate_not_run"`, or
+    `"other_rejected"`.
 
     `gate_not_run` is decided from all-not-run rejection codes ALONE (BDR-02
     R3, corrected): the no-ECA early return that produces them
@@ -606,6 +621,14 @@ def classify_window_outcome(accepted_rank: int, rejection_codes: np.ndarray,
             f"{AHET_MAX_CANDIDATES}."
         )
     all_not_run = bool(np.all(rejection_codes == REJECTION_CODE_NOT_ATTEMPTED))
+    any_not_run = bool(np.any(rejection_codes == REJECTION_CODE_NOT_ATTEMPTED))
+    if any_not_run and not all_not_run:
+        raise ValueError(
+            f"rejection_codes={rejection_codes.tolist()} mixes 'not-run' (-1) with concrete "
+            "codes -- a strict_v1 row either has ALL codes -1 (the gate never ran) or NO -1 "
+            "anywhere (an executed gate always assigns every slot a concrete code, including "
+            "5 for a never-attempted slot)."
+        )
     if accepted_rank >= 0:
         if not np.isfinite(f_r_hz):
             raise ValueError(
@@ -632,6 +655,14 @@ def classify_window_outcome(accepted_rank: int, rejection_codes: np.ndarray,
                 f"is {int(rejection_codes[accepted_rank])}, not the 'passed' code "
                 f"({REJECTION_CODE_PASSED})."
             )
+        first_passed_idx = int(np.argmax(rejection_codes == REJECTION_CODE_PASSED))
+        if first_passed_idx != accepted_rank:
+            raise ValueError(
+                f"accepted_candidate_rank={accepted_rank} is not the FIRST passed slot -- "
+                f"slot {first_passed_idx} is also coded 'passed' in "
+                f"rejection_codes={rejection_codes.tolist()}; strict_v1 always selects the "
+                "first passing candidate."
+            )
         return "covered"
     if bool(np.any(rejection_codes == REJECTION_CODE_PASSED)):
         raise ValueError(
@@ -640,6 +671,14 @@ def classify_window_outcome(accepted_rank: int, rejection_codes: np.ndarray,
             "-- a passed slot always forces the corresponding non-negative rank."
         )
     if all_not_run:
+        f_r_in_gate = np.isfinite(f_r_hz) and (RESP_GATE_LO_HZ <= f_r_hz <= RESP_GATE_HI_HZ)
+        if f_r_in_gate:
+            raise ValueError(
+                f"accepted_candidate_rank=-1 with all-not-run rejection codes is "
+                f"contradictory with an in-gate finite f_r_hz={f_r_hz} -- ECA/AHET always "
+                "executes (and assigns concrete codes) whenever f_r_hz passes the "
+                "physiological gate."
+            )
         return "gate_not_run"
     return "other_rejected"
 
