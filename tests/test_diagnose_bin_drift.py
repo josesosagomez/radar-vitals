@@ -636,6 +636,44 @@ def test_classify_window_outcome_rejects_all_not_run_with_in_gate_finite_f_r_hz(
         dbd.classify_window_outcome(-1, codes, IN_GATE_F_R_HZ)
 
 
+# ── BDR-25 R2: the CONVERSE of the no-gate branch -- a concrete (no -1) row
+# requires a finite, in-gate f_r_hz regardless of whether any candidate
+# passed, and REJECTION_CODE_NOT_ATTEMPTED_WITHIN_GATE (5) must be a
+# trailing suffix ──────────────────────────────────────────────────────────
+
+def test_classify_window_outcome_rejects_concrete_row_with_nonfinite_f_r_hz_not_accepted():
+    """round 9 only checked non-finite f_r_hz against the all-not-run (no
+    -gate) branch; a concrete row (rank=-1, no -1 codes) with non-finite
+    f_r_hz silently returned "other_rejected" -- also impossible, since a
+    concrete row implies the gate executed, which requires finite f_r_hz."""
+    codes = np.array([2, 3, 5])
+    with pytest.raises(ValueError):
+        dbd.classify_window_outcome(-1, codes, float("nan"))
+
+
+def test_classify_window_outcome_rejects_concrete_row_with_out_of_gate_f_r_hz_not_accepted():
+    codes = np.array([2, 3, 5])
+    with pytest.raises(ValueError):
+        dbd.classify_window_outcome(-1, codes, OUT_OF_GATE_F_R_HZ)
+
+
+def test_classify_window_outcome_rejects_non_suffix_not_attempted_within_gate_code():
+    """candidates are attempted in order 0..N-1 (src/vitals.py:815), so the
+    never-attempted complement (code 5) is always a trailing suffix --
+    [5, 2, 5] (slot 0 not attempted, slot 1 attempted) is impossible."""
+    codes = np.array([5, 2, 5])
+    with pytest.raises(ValueError):
+        dbd.classify_window_outcome(-1, codes, IN_GATE_F_R_HZ)
+
+
+def test_classify_window_outcome_accepts_all_not_attempted_within_gate():
+    """A valid, if unusual, executed-gate state: the gate ran (finite
+    in-gate f_r_hz) but zero candidates existed to attempt, so every slot is
+    coded 5 -- distinct from the all-(-1) no-gate state. Must not raise."""
+    codes = np.array([5, 5, 5])
+    assert dbd.classify_window_outcome(-1, codes, IN_GATE_F_R_HZ) == "other_rejected"
+
+
 # ── validate_frame_idx_grid (BDR-19, BDR-19 R2) ─────────────────────────────
 
 def _outcome_arrays(n: int):
@@ -1658,9 +1696,11 @@ def test_window_audit_csv_persists_rank_and_outcome_recomputes_from_raw_fields(t
     # coded PASSED, in-gate f_r_hz). Window 2: other_rejected. Window 3:
     # gate_not_run via a FINITE respiration value outside the physiological
     # gate (BDR-02 R3 -- 0.12 Hz < the 0.15 Hz gate floor). Each satisfies the
-    # real strict_v1 producer invariants BDR-02 R2/R3/BDR-25 now enforce: an
-    # executed gate (windows 1, 2) never leaves a slot at -1 (every slot gets
-    # 0=passed or a real 1-7 rejection reason, including 5=not_attempted).
+    # real strict_v1 producer invariants BDR-02 R2/R3/BDR-25/BDR-25 R2 now
+    # enforce: an executed gate (windows 1, 2) never leaves a slot at -1
+    # (every slot gets 0=passed or a real 1-7 rejection reason, including
+    # 5=not_attempted-within-gate) AND requires a finite, in-gate f_r_hz
+    # (BDR-25 R2) regardless of whether any candidate ultimately passed.
     frame_idx = np.array([599, 659, 719, 779], dtype=int)
     accepted_rank = np.array([-1, 0, -1, -1])
     rejection_codes = np.array([
@@ -1669,7 +1709,7 @@ def test_window_audit_csv_persists_rank_and_outcome_recomputes_from_raw_fields(t
         [2, 3, 5],
         [-1, -1, -1],
     ])
-    f_r_hz = np.array([np.nan, 0.3, 1.5, 0.12])
+    f_r_hz = np.array([np.nan, 0.3, 0.4, 0.12])
     np.savez(replay_dir / "live_intermediates.npz", frame_idx=frame_idx,
              accepted_candidate_rank=accepted_rank,
              candidate_rejection_codes=rejection_codes, f_r_hz=f_r_hz)

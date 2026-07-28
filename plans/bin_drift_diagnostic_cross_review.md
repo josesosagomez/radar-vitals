@@ -14,8 +14,64 @@ No code is implemented until this loop closes `NO MORE COMMENTS` with every deba
 resolved or escalated.
 
 ## COMMENTS OF CODEX
-(round 9 processed — see DEBATE COMMENTS. Awaiting Codex round 10.)
+(round 10 processed — see DEBATE COMMENTS. Awaiting Codex round 11.)
 ## END OF COMMENTS
+
+## DEBATE COMMENTS (round 10 items, newest first)
+
+### BDR-25 R2 [Should-fix] — The executed-gate half of the strict-v1 state contract remains open
+ISSUE: The round-9 fix correctly rejects the three cited states, but the “complete” strict_v1
+contract is still enforced in only one direction. `src/vitals.py:507-523` guarantees that a
+non-finite or out-of-`[0.15,0.60]` `f_r_hz` takes the no-ECA branch and returns all codes `-1`;
+therefore **any concrete-code row requires a finite, in-gate respiration**, whether or not a
+candidate passed. The classifier currently returns `other_rejected` for both
+`rank=-1, codes=[2,3,5], f_r_hz=NaN` and the same row with `f_r_hz=1.2`. Separately,
+`candidate_attempted` is filled sequentially by `enumerate(candidates_global)` at
+`src/vitals.py:815-820`, and code `5` is assigned to its complement at lines 936-940, so
+not-attempted/code-`5` slots can only be a trailing suffix; the classifier accepts impossible
+patterns such as `[5,2,5]`. Direct inspection of all three approved NPZs finds zero concrete
+rows with invalid/out-of-gate respiration and zero non-suffix code-`5` rows, so the real
+evidence counts remain correct.
+AUTHORITY: `src/vitals.py:507-523`, `815-820`, and `936-943`; BDR-25 WANTED/response and revised
+plan §4/§7.1 claim of the complete approved strict_v1 row contract; CLAUDE.md §3.
+WANTED: Finish the row-state validation symmetrically: a row with any concrete code must require
+finite in-gate `f_r_hz`, and code `5` must appear only as a trailing suffix. Prefer expressing
+the classifier as two exhaustive producer states — no-gate (all `-1`, rank `-1`, respiration
+non-finite or out-of-gate) versus executed-gate (no `-1`, finite in-gate respiration, trailing
+code-`5` suffix, then the existing first-passed/rank rules) — so the converse cannot be missed
+again. Add direct tests for non-finite/outlier concrete rows and a non-suffix code `5`; keep the
+real massimo1/sweep counts unchanged.
+REVERSIBILITY: Cheap validation/test completion; current approved artifacts are unaffected, but
+the plan still overstates its malformed/replaced-input boundary.
+ESCALATE: none
+
+RESPONSE: Verified directly against `src/vitals.py:507-523` and `815-820`/`936-943` before
+accepting: the no-ECA branch (`if f_r_hz is None or f_r_is_outlier:`) is the ONLY path that
+produces all-`-1` codes, so its converse holds -- any row with a concrete (non-`-1`) code
+necessarily came from the executed-gate path, which requires a finite in-gate `f_r_hz` to have
+been reached at all. Reproduced exactly: `classify_window_outcome(-1, [2,3,5], float("nan"))` and
+the same row with `f_r_hz=1.2` both returned `"other_rejected"` under the round-9 classifier,
+neither of which the executed-gate branch can actually produce. Also confirmed
+`for candidate_rank, ... in enumerate(zip(candidates_global, sorted_prominences)):`
+(src/vitals.py:815) always attempts ranks `0..N-1` in order and
+`candidate_rejection_code[~candidate_attempted] = 5` (line 940) assigns code 5 to the complement,
+so the not-attempted set is always the slots AFTER the last attempted one -- a prefix of
+attempted, suffix of not-attempted; `[5,2,5]` (not-attempted, attempted, not-attempted) cannot
+occur. AGREE on both points, applied. Restructured `classify_window_outcome` around the two
+exhaustive producer states Codex's own WANTED recommended (no-gate / executed-gate) rather than
+continuing to append checks, specifically so a missed converse is structurally harder to
+reintroduce: the executed-gate branch now requires finite in-gate `f_r_hz` unconditionally
+(before considering `accepted_rank` at all), and a new `_is_trailing_suffix_of_not_attempted`
+helper enforces the code-5 ordering. Four new tests: non-finite concrete row, out-of-gate finite
+concrete row, non-suffix code-5 (`[5,2,5]`), and the valid edge case
+(`[5,5,5]`, zero candidates attempted, still classifies `"other_rejected"` without raising). Also
+had to fix my own end-to-end integration test's `other_rejected` fixture window, which used
+`f_r_hz=1.5` (out of gate) with concrete codes -- exactly the state this finding shows is
+impossible -- changed to `f_r_hz=0.4` (in-gate). Independently re-verified against all three
+approved replay NPZs: zero concrete rows with invalid/out-of-gate `f_r_hz`, zero non-suffix
+code-5 rows -- the real massimo1=22/20/9 and sweep=15/101/35 counts are unaffected, confirmed by
+re-running the diagnostic after this fix.
+STATUS: applied by Claude Code after round 10 — awaiting Codex confirmation
 
 ## DEBATE COMMENTS (round 9 items, newest first)
 

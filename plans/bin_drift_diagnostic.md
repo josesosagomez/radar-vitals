@@ -1,8 +1,8 @@
 # Plan: Range-bin drift measurement (`scripts/diagnose_bin_drift.py`)
 
-> **Implemented, run on all 4 real captures, and committed.** Review has gone through 9 rounds
+> **Implemented, run on all 4 real captures, and committed.** Review has gone through 10 rounds
 > (`plans/bin_drift_diagnostic_cross_review.md`, BDR-01…25 plus R2/R3 reopenings),
-> reopening six times after implementation as Codex found real gaps between the shipped code
+> reopening seven times after implementation as Codex found real gaps between the shipped code
 > and what the plan claimed:
 > round 4 (BDR-11…13) found the decided centroid-drift grid was never wired up, plus a stale
 > table and a scope-text inconsistency; round 5 (BDR-11 R2, BDR-14…19) found the window-scale
@@ -47,9 +47,20 @@
 > codes, an accepted rank that was not the first passed slot, and an all-`-1` row paired with an
 > in-gate finite `f_r_hz` (impossible, since ECA/AHET always executes and codes every slot in that
 > case). Direct inspection confirmed the three approved NPZs violate none of these, so the real
-> evidence counts are unchanged by this round. All fixed below. Both prior escalations
-> (**BDR-04 Option A, BDR-07 Option A**) remain decided — see **§8**. No new escalations this
-> round.
+> evidence counts are unchanged by this round; **round 10 (BDR-25 R2) found the round-9 fix was
+> still only HALF the contract** — round 9 validated that the no-gate state (all `-1`) requires
+> `f_r_hz` to have failed the gate, but never validated the converse: an executed-gate row (no
+> `-1` anywhere) equally requires a finite, in-gate `f_r_hz`, regardless of whether any candidate
+> passed, so `rank=-1, codes=[2,3,5], f_r_hz=NaN` still silently returned `"other_rejected"`.
+> Separately, candidates are attempted in strict order 0..N-1 (`src/vitals.py:815`), so the
+> never-attempted complement (code 5) can only ever be a TRAILING SUFFIX — `[5,2,5]` is
+> impossible but was accepted. Direct inspection again confirmed the three approved NPZs violate
+> neither invariant, so the real evidence counts are unchanged by this round too. The classifier
+> is now expressed as two exhaustive producer states (no-gate / executed-gate) rather than an
+> ad hoc check list, specifically so the converse of a check cannot be missed again the way
+> rounds 8, 9, and 10 each missed one direction of the SAME function. All fixed below. Both prior
+> escalations (**BDR-04 Option A, BDR-07 Option A**) remain decided — see **§8**. No new
+> escalations this round.
 
 ## Context
 
@@ -459,6 +470,21 @@ directory already exists; `summary.json` records its own `run_id`.
     every slot) whenever `f_r_hz` passes the gate. Direct inspection of all three approved NPZs
     confirms zero mixed-`-1` rows, zero non-first-passed accepted ranks, and zero all-`-1` rows
     with an in-gate finite `f_r_hz` — the real evidence counts are unchanged by this round.
+    **Round 10 (BDR-25 R2) found round 9 validated only ONE direction of the no-gate/executed-gate
+    split:** an executed-gate row (no `-1` anywhere in `rejection_codes`) equally requires a
+    finite, in-gate `f_r_hz` — the converse of round 9's all-`-1`-requires-out-of-gate check —
+    regardless of whether any candidate ultimately passed; `rank=-1, codes=[2,3,5], f_r_hz=NaN`
+    (or any out-of-gate finite value) previously returned `"other_rejected"` silently. Separately,
+    `REJECTION_CODE_NOT_ATTEMPTED_WITHIN_GATE` (5) must form a trailing suffix only — candidates
+    are attempted in strict order `0..N-1` (`src/vitals.py:815`), so the never-attempted
+    complement (coded 5 at `src/vitals.py:940`) can never precede an attempted slot; `[5,2,5]` is
+    structurally impossible but was accepted. The classifier is now expressed as two exhaustive
+    producer states — **no-gate** (all `-1`, `accepted_rank=-1`, `f_r_hz` fails the gate) and
+    **executed-gate** (no `-1`, finite in-gate `f_r_hz`, trailing code-5 suffix, then the
+    first-passed/rank rules) — rather than an ad hoc check list, specifically so a missed
+    converse cannot recur. Direct inspection of all three approved NPZs confirms zero concrete
+    rows with invalid/out-of-gate `f_r_hz` and zero non-suffix code-5 rows — the real evidence
+    counts are unchanged by this round too.
   - **`outcome_stratified_report`** (full_exposure / transitional) — for each outcome class:
     count, mean off-baseline duration (raw seconds), mean longest excursion, **and
     `mean_off_baseline_fraction`** (`off_baseline_duration_s / post_calibration_observed_s`,
@@ -572,11 +598,11 @@ measurement is available.
 |---|---|
 | `scripts/diagnose_bin_drift.py` | CLI: `--config scripts/live_demo_config.yaml --diagnostic-config scripts/diagnose_bin_drift_config.yaml --captures <4 dirs> --replays <matched-generation dirs, per §8> --out results/diagnose/bin_drift` |
 | `scripts/diagnose_bin_drift_config.yaml` | The diagnostic's own bound parameters (§1.1, §5) |
-| `tests/test_diagnose_bin_drift.py` | 104 tests (§7.1) |
+| `tests/test_diagnose_bin_drift.py` | 108 tests (§7.1) |
 
 Nothing else is touched. `data/raw/` not involved (empty); originals opened read-only.
 
-### 7.1 Test plan (expanded across rounds 4–9)
+### 7.1 Test plan (expanded across rounds 4–10)
 
 - Synthetic reflector stepped bin 25→27 mid-session: argmax series shows the step at the right
   block; occupancy fractions exact (`test_compute_occupancy_fractions`).
@@ -690,6 +716,14 @@ Nothing else is touched. `data/raw/` not involved (empty); originals opened read
   pattern (e.g. `[0, -1, -1]` for a "covered" row) was replaced with a producer-valid one
   (`[0, 2, 5]`) so each test isolates the one contradiction it names, including the BDR-02 R2
   end-to-end integration test's four fixture windows.
+- **The converse of the no-gate/executed-gate split is validated (BDR-25 R2):** a concrete
+  (no-`-1`) row with a non-finite `f_r_hz` (`[2,3,5]`, `f_r_hz=NaN`) raises; the same row with an
+  out-of-gate finite `f_r_hz` (`f_r_hz=1.2`) raises; a non-suffix `REJECTION_CODE_NOT_ATTEMPTED_
+  WITHIN_GATE` (`[5,2,5]`) raises; and the valid edge case of an executed gate with zero
+  candidates attempted (`[5,5,5]`, `accepted_rank=-1`) correctly returns `"other_rejected"`
+  without raising. The integration test's `other_rejected` fixture window (previously
+  `f_r_hz=1.5`, out of gate) was corrected to `f_r_hz=0.4` (in-gate) once this check made the
+  previous value invalid.
 
 ## 8. Design decisions (both escalations resolved by the user, 2026-07-27)
 
@@ -715,9 +749,9 @@ entries are `correlation_not_available`; no replay is generated for it.
 
 ## 9. Verification
 
-1. `conda run -n radar-vitals python -m pytest tests/test_diagnose_bin_drift.py -q` — all 104
+1. `conda run -n radar-vitals python -m pytest tests/test_diagnose_bin_drift.py -q` — all 108
    cases pass.
-2. Full suite still green (script is additive; expect 1616 baseline + 104 = 1720 passed, 1
+2. Full suite still green (script is additive; expect 1616 baseline + 108 = 1724 passed, 1
    skipped).
 3. Run on all 4 captures **from a clean committed tree**; confirm all output files exist
    (including the widened `bin_energy_blocks.csv`, the real `motion_energy_windows.npz` matrix,
@@ -754,7 +788,12 @@ entries are `correlation_not_available`; no replay is generated for it.
    `22`/`20`, sweep `15` must still hold); confirm a mixed rejection-codes row, a non-first-passed
    accepted rank, and an all-not-run row paired with an in-gate finite `f_r_hz` are each rejected
    by `classify_window_outcome`.
-10. Session end: HISTORY.md append + HANDOFF.md rewrite (per CLAUDE.md §10) — including the
+10. **Round 10:** confirm the real re-run's counts are STILL unchanged (BDR-25 R2 validates the
+    converse direction of the same producer-state contract, on states the 4 real captures don't
+    exercise); confirm a concrete row (no `-1`) with a non-finite or out-of-gate finite `f_r_hz`
+    raises, a non-suffix `REJECTION_CODE_NOT_ATTEMPTED_WITHIN_GATE` (`[5,2,5]`) raises, and the
+    valid all-not-attempted-within-gate edge case (`[5,5,5]`) does not.
+11. Session end: HISTORY.md append + HANDOFF.md rewrite (per CLAUDE.md §10) — including the
     evidence summary, its evidence paths, and this round's fixes.
 
 ## 10. Explicitly out of scope
