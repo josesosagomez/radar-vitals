@@ -49,16 +49,17 @@ relocking/display-holdover stay reverted (HISTORY.md 2026-07-09).
 `d554de4`: `81c1a9f`/`d554de4` were the round-6 fix + its HISTORY/HANDOFF update, `8bcfbbd`/`a5e19ac`
 were the round-7 fix + its HISTORY/HANDOFF update, `fedcf4e`/`aa8ba7a` were the round-8 fix + its
 HISTORY/HANDOFF update, `d38f7af`/`d1e8bde` were the round-9 fix + its HISTORY/HANDOFF update,
-`eee3497` is the round-10 review-driven fix — code + tests + plan doc + cross-review debate log,
-all together — plus this HISTORY/HANDOFF update as a further commit). **`classify_window_outcome`
-has now been revised in FOUR consecutive rounds** (7, 8, 9, 10) — round 8 found a real,
-data-changing bug in round 7's fix; rounds 9 and 10 each found the previous round validated only
-ONE DIRECTION of a two-sided producer-state contract. Round 10 restructured the function around
-two exhaustive states specifically to make this the last round on it, but treat that as a hope,
-not a guarantee — see §3.1. `results/` (gitignored, as always) gained five new run directories
-this session: `results/diagnose/bin_drift/20260727T215319Z/` (round 6), `.../20260727T230616Z/`
-(round 7), `.../20260727T233529Z/` (round 8), `.../20260728T001042Z/` (round 9),
-`.../20260728T004453Z/` (round 10, current) — not tracked, not part of these commits.
+`eee3497`/`d550576` were the round-10 fix + its HISTORY/HANDOFF update — plus this HISTORY/HANDOFF
+update marking the review CLOSED as its own commit). **`classify_window_outcome` was revised in
+FOUR consecutive rounds** (7, 8, 9, 10) — round 8 found a real, data-changing bug in round 7's
+fix; rounds 9 and 10 each found the previous round validated only ONE DIRECTION of a two-sided
+producer-state contract. Round 10 restructured the function around two exhaustive states, and
+**Codex's round-11 pass confirmed `NO MORE COMMENTS` — the review is now CLOSED** (independently
+re-verified, not just taken on trust; see §3.1). `results/` (gitignored, as always) gained five
+new run directories this session: `results/diagnose/bin_drift/20260727T215319Z/` (round 6),
+`.../20260727T230616Z/` (round 7), `.../20260727T233529Z/` (round 8), `.../20260728T001042Z/`
+(round 9), `.../20260728T004453Z/` (round 10, current and final — no new run for the round-11
+closure, which changed no code).
 
 ### M4 (deprioritized, not touched this session — state unchanged from before the pivot)
 
@@ -76,49 +77,37 @@ exists from M4.
 
 ## 3. Active task / next steps
 
-### 3.1 Bin-drift diagnostic: check the review loop FIRST, before anything else
+### 3.1 Bin-drift diagnostic: review CLOSED — a human decision is the only remaining step
 
-**This is almost certainly the immediate next action for a new chat.** The Codex cross-review
-(`plans/bin_drift_diagnostic_cross_review.md`) is an active, ongoing loop — it has already
-reopened six times *after* implementation (rounds 4, 5, 6, 7, 8, and 9) and found real code bugs
-each time, not just wording issues — **`classify_window_outcome` in particular has now been
-revised in FOUR consecutive rounds (7, 8, 9, 10)**: round 8 found a real, data-changing bug in
-round 7's fix (BDR-02 R3); rounds 9 (BDR-25) and 10 (BDR-25 R2) each found the previous round
-validated only ONE DIRECTION of a two-sided producer-state contract. Round 10 restructured the
-function around two exhaustive states specifically so a missed converse is harder to reintroduce
-— **treat that as a hope, not a guarantee.** Do not assume the loop is closed without checking,
-and do not assume a previously-"fixed" area — especially this function — is safe just because an
-earlier round touched it.
+**The Codex cross-review is CLOSED as of round 11 (2026-07-28).**
+`plans/bin_drift_diagnostic_cross_review.md`'s `COMMENTS OF CODEX` reads the literal string
+`NO MORE COMMENTS`, with a closing assessment confirming the round-10 no-gate/executed-gate state
+partition matches the approved strict_v1 producer contract, all 108 diagnostic tests pass, the
+clean four-capture re-run retains the corrected outcome counts, and no unresolved Blocking or
+Should-fix finding remains. Every item in `DEBATE COMMENTS` is `RESOLVED` (the user's design
+decisions) or `applied by Claude Code` with no open escalation — independently re-verified before
+accepting the closure, not just taken on Codex's word. `plans/bin_drift_diagnostic.md`'s header is
+marked `REVIEW CLOSED` accordingly.
 
-1. Read `plans/bin_drift_diagnostic_cross_review.md`'s `COMMENTS OF CODEX` section (near the
-   top). **As of this writing it reads `(round 10 processed — see DEBATE COMMENTS. Awaiting
-   Codex round 11.)`** — round 10's 1 finding (`BDR-25 R2`, Should-fix) was verified against
-   `src/vitals.py` directly AND the real NPZ data, confirmed real, fixed, tested, committed
-   (`eee3497`), and re-run on all 4 real captures (counts unchanged from rounds 8-9, as expected)
-   — see HISTORY.md 2026-07-28 for the full account. **If Codex has posted round 11 findings by
-   the time you read this, `COMMENTS OF CODEX` will show them instead of the placeholder above —
-   process them before anything else in §3.2–3.4.** If it still shows the placeholder, round 11
-   has not landed yet; check again before assuming the loop is closed. **If round 11 touches
-   `classify_window_outcome` again, re-derive its correctness from `src/vitals.py` directly rather
-   than assuming the two-exhaustive-states framing from round 10 is itself complete.**
-2. **Process a new round** using
-   `plans/bin_drift_diagnostic_claude_review_loop_prompt.md` as the procedure — this is a
-   **post-implementation** loop: findings can be real bugs in `scripts/diagnose_bin_drift.py`
-   (including in a PREVIOUS round's own fix, as rounds 8, 9, and 10 all demonstrated on the same
-   function), not just plan text, and processing one means verify against the actual running
-   code AND real output (not just the plan's prose) → apply the code fix → add a test that would
-   have caught it → run `tests/test_diagnose_bin_drift.py` then the full suite → once the round's
-   batch is done, **commit** (the diagnostic's own clean-tree gate requires this) → **re-run on
-   all 4 real captures** (paths in §6 below) → spot-check the changed
-   `summary.json`/`window_audit.csv` fields against real output, including any count/statistic a
-   fix might have changed, not just that the run succeeded → append `HISTORY.md` + rewrite
-   `HANDOFF.md` (new `run_id`, new commit hash) → commit and push. This exact cycle has now
-   happened seven times (rounds 4, 5, 6, 7, 8, 9, 10) — follow the same pattern, don't improvise a
-   lighter one.
-3. **If `COMMENTS OF CODEX` says `NO MORE COMMENTS`** with no open items in `DEBATE COMMENTS`,
-   the review is closed. Do **not** treat that as a cue to build something new — implementation is
-   already done. The remaining task becomes the human decision in the paragraph below, which is
-   not part of the review loop.
+**Do not reopen or re-litigate this review speculatively.** The loop ran 10 real rounds
+(BDR-01 through BDR-25 R2, 2026-07-27–28), reopened seven times after implementation, and twice
+found a real bug in a *previous round's own fix* on the same function
+(`classify_window_outcome`: round 8's BDR-02 R3 against round 7; the BDR-25/BDR-25 R2 lineage
+against rounds 8–9). That history is exactly why the closure was independently checked rather
+than assumed — but a genuinely closed review should not be second-guessed without new cause. If
+the diagnostic (`scripts/diagnose_bin_drift.py`) is modified again for any reason (a new finding
+surfaces some other way, a real bug is noticed in production use, or the user asks for a change),
+treat that as reopening the review: verify against the actual code and real data, propagate the
+fix, re-run on all 4 real captures, and update HISTORY/HANDOFF — the same discipline as rounds
+4–10, not a shortcut just because the loop was once closed.
+
+**What is left is a human decision, not engineering work:** read
+`results/diagnose/bin_drift/20260728T004453Z/*/summary.json` and `drift_overview.png` (evidence
+summary below) and decide go/no-go on building the 5-bin relock tracker (locked±2, radar-only
+scoring, hysteresis, window-boundary switching — the feature reverted 2026-07-09 as "not worth
+its complexity/risk for now," a call made without this measurement). This decision is **not**
+part of the review loop and was never delegated to Claude or Codex — it is the user's to make.
+Proceed to §3.2 (coverage) or §3.3 (M8/M9) in the meantime; neither depends on this decision.
 
 A range-bin drift diagnostic was designed, cross-reviewed with Codex (10 real rounds — the review
 reopened **seven times** after implementation: round 4 found the decided centroid-drift grid was
@@ -430,8 +419,8 @@ exist yet.
 |---|---|
 | Project rules (read first) | `CLAUDE.md` |
 | Whole-project milestone plan (pre-pivot — read against §3) | `plans/implementation_plan.md` |
-| **Bin-drift diagnostic — plan, review (round 10 processed, awaiting Codex round 11), run output** | `plans/bin_drift_diagnostic.md`, `plans/bin_drift_diagnostic_cross_review.md`, `results/diagnose/bin_drift/20260728T004453Z/` (current — `20260727T192643Z`, `20260727T195535Z`, `20260727T210936Z`, `20260727T215319Z`, `20260727T230616Z`, `20260727T233529Z`, `20260728T001042Z` are all superseded, kept but not citable; the round-7 run additionally reports the wrong outcome-class split for massimo1/sweep, BDR-02 R3) |
-| **Bin-drift review-loop procedure (start here to resume the loop, §3.1)** | `plans/bin_drift_diagnostic_claude_review_loop_prompt.md` (your side), `plans/bin_drift_diagnostic_codex_review_prompt.md` (Codex's side — for reference / re-sending fresh, not something you run) |
+| **Bin-drift diagnostic — plan, review (CLOSED round 11, `NO MORE COMMENTS`), run output** | `plans/bin_drift_diagnostic.md`, `plans/bin_drift_diagnostic_cross_review.md`, `results/diagnose/bin_drift/20260728T004453Z/` (current and final — `20260727T192643Z`, `20260727T195535Z`, `20260727T210936Z`, `20260727T215319Z`, `20260727T230616Z`, `20260727T233529Z`, `20260728T001042Z` are all superseded, kept but not citable; the round-7 run additionally reports the wrong outcome-class split for massimo1/sweep, BDR-02 R3) |
+| **Bin-drift review-loop procedure (CLOSED — reference only unless the diagnostic is modified again, §3.1)** | `plans/bin_drift_diagnostic_claude_review_loop_prompt.md` (your side), `plans/bin_drift_diagnostic_codex_review_prompt.md` (Codex's side — for reference / re-sending fresh, not something you run) |
 | Bin-drift diagnostic code + tests | `scripts/diagnose_bin_drift.py`, `scripts/diagnose_bin_drift_config.yaml`, `tests/test_diagnose_bin_drift.py` |
 | **Reusable cross-review prompt templates** (Codex + Claude loop sides) | `plans/codex_review_prompt_template.md`, `plans/claude_review_loop_prompt_template.md` |
 | ECA-mode coverage experiment (unpromoted) | `experiments/exp_eca_modes/config_guard_v1.yaml` |

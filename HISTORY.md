@@ -7376,3 +7376,43 @@ is itself complete. If round 11 lands `NO MORE COMMENTS` with every debate item 
 touching the diagnostic and hand the evidence to the user for the go/no-go decision on the 5-bin
 relock tracker (HANDOFF.md §3.1) — that decision is not part of this review loop.
 
+## 2026-07-28 - Bin-drift diagnostic review CLOSED (round 11: `NO MORE COMMENTS`)
+
+**Set out to do:** check whether Codex's round-11 pass on the bin-drift diagnostic cross-review
+landed any new findings, per the standing instruction to check this before any other diagnostic
+work.
+
+**Worked (with evidence):** `plans/bin_drift_diagnostic_cross_review.md`'s `COMMENTS OF CODEX`
+section now reads the literal string `NO MORE COMMENTS`, followed by a closing assessment: "Round
+10's explicit no-gate/executed-gate state partition now matches the approved strict_v1 producer
+contract in `src/vitals.py`, including respiration eligibility, rejection-code layout, code-5
+suffix ordering, and first-passed-rank selection. I verified all 108 diagnostic tests pass and the
+clean `20260728T004453Z` four-capture run retains the corrected massimo1 and sweep outcome counts.
+... No unresolved Blocking or Should-fix finding remains." Independently confirmed every item in
+`DEBATE COMMENTS` is either `STATUS: RESOLVED` (the four user design decisions: BDR-04 Option A,
+BDR-07 Option A ×3) or `STATUS: applied by Claude Code after round N` — none are open or
+escalated, satisfying the loop's closure condition (`NO MORE COMMENTS` **and** every debate item
+resolved/conceded/escalated). This closes a review that ran 10 real rounds (BDR-01 through
+BDR-25 R2, spanning 2026-07-27 through 2026-07-28), reopened seven times after implementation,
+and — notably — found a real, data-changing bug in a previous round's own fix twice (round 8's
+BDR-02 R3 against round 7; the whole BDR-25/BDR-25 R2 lineage against round 8/9's own
+`classify_window_outcome` fixes). Marked the plan doc (`plans/bin_drift_diagnostic.md`) header
+CLOSED. Per the loop's own governing instruction, a closing `NO MORE COMMENTS` is not a cue to
+build the 5-bin relock tracker or any other new work — that decision belongs to the user, informed
+by the diagnostic's evidence (HANDOFF.md §3.1), and is explicitly out of scope for this review
+loop.
+
+**Failed / did not work, and why:** nothing failed.
+
+**Retired / no longer used:** the bin-drift diagnostic's cross-review loop itself is retired (no
+further rounds expected) — `plans/bin_drift_diagnostic_claude_review_loop_prompt.md` and
+`plans/bin_drift_diagnostic_codex_review_prompt.md` are no longer active procedures unless the
+user explicitly reopens the review (e.g. if the diagnostic is modified again in the future).
+
+**Next:** the diagnostic itself needs no further code changes. The open item is a **human
+decision, not engineering work**: read `results/diagnose/bin_drift/20260728T004453Z/*/summary.json`
+and `drift_overview.png` (HANDOFF.md §3.1 has the full evidence summary) and decide go/no-go on
+building the 5-bin relock tracker. Separately, HANDOFF.md §3.2-3.4 list the other active threads
+this session's pivot identified (coverage scoring script, M8/M9 reference-paper reproductions,
+additional subject captures) — none of which depend on this diagnostic's closure.
+

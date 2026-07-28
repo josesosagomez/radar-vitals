@@ -1,6 +1,14 @@
 # Plan: Range-bin drift measurement (`scripts/diagnose_bin_drift.py`)
 
-> **Implemented, run on all 4 real captures, and committed.** Review has gone through 10 rounds
+> **REVIEW CLOSED (round 11, 2026-07-28):** `plans/bin_drift_diagnostic_cross_review.md`'s
+> `COMMENTS OF CODEX` now reads `NO MORE COMMENTS`, with a closing assessment confirming the
+> round-10 no-gate/executed-gate state partition matches the approved strict_v1 producer
+> contract, all 108 diagnostic tests pass, the clean four-capture re-run retains the corrected
+> outcome counts, and no unresolved Blocking or Should-fix finding remains. **This diagnostic is
+> not touched further under this loop** — see HANDOFF.md §3.1 for the human go/no-go decision on
+> the 5-bin relock tracker, which is separate from and not decided by this review.
+>
+> **Implemented, run on all 4 real captures, and committed.** Review went through 10 rounds
 > (`plans/bin_drift_diagnostic_cross_review.md`, BDR-01…25 plus R2/R3 reopenings),
 > reopening seven times after implementation as Codex found real gaps between the shipped code
 > and what the plan claimed:
