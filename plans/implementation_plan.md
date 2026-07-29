@@ -452,6 +452,15 @@ as an **offline comparison arm** — no production promotion without a separate 
 **Goal.** First real-data validation of a simulation-only method, and a test of its most valuable
 claim.
 **Depends on:** M2, M4. **Can start immediately on existing captures.**
+
+> **Status clarification (2026-07-29).** Step 1a is implemented and canonicalized, with status
+> `not_reproduced_under_declared_assumptions`; it has not run on any real capture. The next work is
+> a reviewed Step 1b plan, not implementation. Preserve the ordering below: first perform the
+> synthetic all-harmonic phase-model transfer control, then—subject to its documented verdict—run
+> an explicitly exploratory real-capture arm on `demo_massimo1` through `demo_massimo7` and
+> `demo_sweep`. Adapter-record compatibility from Step 1a is not a real `WindowEstimator` or
+> `score_offline.py` integration.
+
 **Work, in order:**
 1. **Two synthetic controls, in this order — together the go/no-go.** The paper's Fig. 8(c)–(d)
    claims HA estimates both rates correctly *when the 4th breathing harmonic equals the heartbeat*

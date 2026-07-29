@@ -1,160 +1,349 @@
-# Handoff — radar-vitals
+# Handoff — M8 Step 1b planning
 
-> Read this and `CLAUDE.md` before resuming. State verified on 2026-07-29.
-> `HISTORY.md` contains the chronological detail. This file is rewritten, not appended.
+> Read this and `CLAUDE.md` before doing anything. State verified on 2026-07-29.
+> `HISTORY.md` contains the chronological record. This file is rewritten, not appended.
 
-## 1. Project snapshot
+## 1. Immediate task for the new chat
 
-This project estimates heart rate and breathing rate from a TI IWR1642BOOST +
-DCA1000EVM 77 GHz FMCW radar. Masimo MightySat CSV ground truth uses the
-`Beats / min` PR column aligned by integer Unix-epoch `Timestamp`; breathing uses
-`Breaths / min` where present. The intended outputs are a journal paper and thesis chapter.
+Plan **M8 Step 1b: transfer Ahmed harmonic accumulation to this project's phase model, then to
+the saved real FMCW captures**.
 
-The current direction combines:
+There is an important scope definition to preserve. `plans/implementation_plan.md` already defines
+Step 1b as the synthetic all-harmonic phase-model transfer control; real-capture evaluation follows
+that gate. The new plan should cover both stages in that order, not skip directly from the
+equation-(14) simulator to performance testing.
 
-1. simulation-based reproduction/adaptation of the reference algorithms; and
-2. exploratory real-capture feasibility evidence.
+Do not implement Step 1b yet. The next chat should:
 
-The original M0/M4 frozen multi-subject design remains documented but is deprioritized.
-The method rationale and literature synthesis are in `notes/approach.md`; the older whole-project
-roadmap is `plans/implementation_plan.md`.
+1. inspect the paper, Step 1a evidence, all relevant Python interfaces, and all eight capture
+   schemas;
+2. write the first draft to `plans/m8_step1b_ahmed_transfer.md`;
+3. have independent architecture, correctness/math, Python, testing, and adversarial reviewers
+   verify the draft against the repository; and
+4. revise the plan and wait for explicit user approval before changing estimator or scorer code.
 
-## 2. Repository state
+The user has clarified the intended eventual real-data evaluation set: `demo_massimo1` through
+`demo_massimo7` plus `demo_sweep`.
 
-- Branch: `vital_signs_v9c`
-- HEAD before the current uncommitted M8 work:
-  `ba2f3d40238cf8fd238e5d43505a413bad9e2ffa`
-- Current M8 changes are intentionally uncommitted.
-- Tracked files modified in this work:
-  - `HISTORY.md`
-  - `HANDOFF.md`
-  - `notes/approach.md`
-- New M8 paths:
-  - `plans/m8_step1a_ahmed_reproduction.md`
-  - `src/m8/__init__.py`
-  - `src/m8/ahmed_fig8.py`
-  - `experiments/m8_ahmed_fig8/config.yaml`
-  - `figures/reproduce_ahmed_fig8.py`
-  - `tests/test_m8_ahmed_fig8.py`
+## 2. Critical boundary: what Step 1a did and did not do
 
-No production DSP was modified. In particular, M8 Step 1a does not change
-`src/respiration.py`, `run_window_dsp`, or `scripts/score_offline.py`.
+Step 1a is complete and canonicalized. It implemented Ahmed et al.'s equation-(14) synthetic
+single-TX/RX model and attempted a behavioral reproduction of Fig. 8(c)-(d).
 
-Use the pinned environment:
+It did **not**:
+
+- decode `adc_stream.bin`;
+- consume radar frame cubes;
+- implement the `(frames, locked_bin, fs, cfg)` `WindowEstimator` protocol;
+- run on any `demo_massimo*` or `demo_sweep` window;
+- modify `scripts/score_offline.py` to dispatch a foreign estimator; or
+- compare an Ahmed estimate against Masimo.
+
+`build_adapter_result(...)` passing through `as_window_estimate(...)` proves only that a synthetic
+native dictionary can be normalized into a `WindowEstimate`. It is not real-data readiness.
+
+Therefore the current evidence supports neither “Ahmed improves the real captures” nor “Ahmed
+cannot improve them.”
+
+### Step 1a scientific result
+
+Canonical bundle:
+
+`figures/generated/m8_ahmed_fig8/20260729T075443.145998Z_8e08f5ab0120/`
+
+Canonical source commit:
+
+`d1f44829ae0b272b61f2151ef1d2087491b16e26`
+
+Status: `not_reproduced_under_declared_assumptions`.
+
+| Synthetic curve | Selected rate | Target |
+|---|---:|---:|
+| Breathing, \(H=3\) | 20.0072 bpm | 20 bpm |
+| Breathing, \(H=5\) | 20.0072 bpm | 20 bpm |
+| Heart, \(H=3\) | 40.0144 bpm | 80 bpm |
+| Heart, \(H=5\) | 20.0072 bpm | 80 bpm |
+
+No predeclared Step 1a audit selected 80 bpm. Equation-(26)-literal suppression excludes the
+collision target \(2f_h=4(2f_b)\) and is `inconclusive_by_definition`. Do not tune Step 1b to
+reverse the Step 1a result, and do not describe Step 1a as a real-capture failure.
+
+## 3. Repository state
+
+- Branch: `vital_signs_ahmed_v10`
+- HEAD: `d1f44829ae0b272b61f2151ef1d2087491b16e26`
+- Current uncommitted work:
+  - modified `HANDOFF.md`
+  - modified `HISTORY.md`
+  - modified `notes/approach.md`
+  - modified `plans/implementation_plan.md`
+  - untracked canonical bundle under `figures/generated/m8_ahmed_fig8/`
+
+The user should commit this documentation and canonical bundle when satisfied. Do not discard or
+overwrite it.
+
+Use:
 
 ```powershell
 & 'C:\ProgramData\anaconda3\condabin\conda.bat' run -n radar-vitals <command>
 ```
 
-On this Windows host, give pytest a workspace-local `--basetemp=.pytest_tmp\<name>` because the
-default temporary directory may be unwritable.
+Use a workspace-local pytest base such as `--basetemp=.pytest_tmp\<name>` on Windows.
 
-## 3. Active task: M8 Step 1a
+## 4. Saved real-capture inventory
 
-### 3.1 What is implemented
+All eight directories exist under `results/live_demo/`. Every one contains:
 
-The approved build authority is `plans/m8_step1a_ahmed_reproduction.md`.
+- `adc_stream.bin`;
+- one Masimo CSV;
+- `live_estimates.csv`;
+- `live_intermediates.npz`;
+- `run_metadata.json`; and
+- `warmup_bin_selection.json`.
 
-`src/m8/ahmed_fig8.py` is an isolated implementation of:
+All metadata records 20 Hz frames, 30 s windows, and 3 s hops.
 
-- Ahmed et al. equation (14) as two independent single-TX/RX cosine returns;
-- the paper-derived PRF and fixed five-breath acquisition;
-- deterministic real AWGN;
-- unwindowed, undetrended positive-frequency FFT magnitude;
-- the paper's spectral convention with peaks at \(2f_b\) and \(2f_h\);
-- \(H=3\) and \(H=5\) fixed-harmonic accumulation;
-- exact finite-tie, empty-domain, exclusion, and Nyquist behavior;
-- the three contradictory source interpretations:
-  - `figure_visible_unsuppressed`
-  - `eq26_multiples_suppressed`
-  - `prose_low_or_equal_suppressed`
-- a native adapter dictionary accepted by `as_window_estimate`.
+| Capture directory | Nominal duration | Recorded lock | Masimo rows |
+|---|---:|---:|---:|
+| `20260713_172042_live_demo_massimo1` | 180 s | 23 | 247 |
+| `20260713_182002_live_demo_massimo2` | 180 s | 20 | 272 |
+| `20260714_180523_live_demo_sweep` | 480 s | 21 | 574 |
+| `20260728_224902_live_demo_massimo3` | 600 s | 26 | 613 |
+| `20260728_230903_live_demo_massimo4` | 600 s | 25 | 611 |
+| `20260728_232415_live_demo_massimo5` | 600 s | 25 | 608 |
+| `20260729_002158_live_demo_massimo6` | 600 s | 24 | 613 |
+| `20260729_004815_live_demo_massimo7` | 600 s | 32 | 612 |
 
-The adapter compatibility is only a record-boundary check. The simulation is not a
-`WindowEstimator`, and `score_offline.py` is still hardwired to `run_window_dsp`; scorer
-dispatch belongs to later adaptation work.
+Important inventory cautions:
 
-`figures/reproduce_ahmed_fig8.py` is the evidence CLI. It writes a collision-safe result
-directory with:
+- The `massimo3` metadata `session_id` is `massimo_3`, unlike its directory/CSV naming. Resolve
+  captures by validated paths or an explicit registry, not by assuming a uniform session string.
+- Only Massimo 1-2 persist `live_raw_mirror_hash`; the other six metadata files contain `null`.
+  Compute and persist SHA-256 directly from every `adc_stream.bin`.
+- The captures were made under different commits/config generations, and their recorded warmup
+  locks are not automatically a fair common lock policy.
+- Earlier work documented lock concerns in the old Massimo 1, Massimo 2, and sweep sessions.
+  Step 1b must choose and justify a fixed per-capture lock source shared by every compared
+  estimator, or report pinned and rerun-lock estimands separately.
 
-- resolved configuration;
-- strict metrics and provenance JSON;
-- non-object-dtype NPZ evidence for all primary profiles and ten one-factor audits;
-- PNG and PDF figures; and
-- a `running`/`complete`/`failed` status manifest.
+## 5. Decisions the Step 1b plan must settle before implementation
 
-Canonical promotion is versioned and requires all of the following:
+### 5.0 Synthetic transfer gate
 
-1. a clean `git status --porcelain`;
-2. all required plan/config/code/test paths tracked; and
-3. the exact approved default v1 contract.
+Before decoding real captures, implement and validate the master roadmap's Step 1b control:
 
-Dirty exploratory runs cannot overwrite or populate
-`figures/generated/m8_ahmed_fig8/`. That directory is currently absent by design.
+- replace Ahmed's even-harmonic equation-(14) return with the all-harmonic phase formulation used
+  by this project;
+- keep the collision scenario and all other defensible Step 1a parameters fixed where possible;
+- derive whether candidate frequency and bpm conversion now use \(f\) rather than \(2f\);
+- state exactly which Step 1a accumulator/suppression behavior is reused and which part is an
+  adaptation;
+- define full-curve and rate acceptance criteria before running it; and
+- record a negative transfer as a valid result rather than tuning the model.
 
-### 3.2 Scientific outcome
+The plan must make the gate explicit: no real-capture Ahmed performance run until the synthetic
+all-harmonic result is complete, validated, and reported. A negative synthetic transfer need not
+automatically forbid descriptive real-data work, but continuing would require a named rationale
+and user approval rather than silently treating the control as passed.
 
-The latest final evidence is:
+### 5.1 Paper-to-FMCW signal mapping
 
-`results/m8_ahmed_fig8/20260729T005107.440812Z_8e08f5ab0120/`
+Ahmed's equation (14) is a real slow-time return at one fixed fast-time sample. This repository
+has complex FMCW range-bin data after range processing. The following are scientifically different:
 
-Run status: `complete`.
+- one quadrature or the real part of the coherent locked-bin return;
+- the complex locked-bin return with a newly defined magnitude score;
+- magnitude/envelope;
+- unwrapped phase or displacement-derived phase.
 
-Scientific status: `not_reproduced_under_declared_assumptions`.
+The first is closest in form to equation (14) but depends on arbitrary complex phase. Magnitude can
+remove the sign/modulation structure. Phase produces peaks at \(f\), not automatically the paper's
+\(2f\) convention. The plan must derive and name the mapping from the signal model; it must not try
+several mappings and select whichever scores best against Masimo.
 
-Primary `figure_visible_unsuppressed` estimates:
+If more than one source-defensible mapping must be retained, preregister them as independently
+reported variants. Do not let one upgrade another's result.
 
-| Curve | Selected rate | Target | Outcome |
-|---|---:|---:|---|
-| Breathing, \(H=3\) | 20.0072 bpm | 20 bpm | within native resolution |
-| Breathing, \(H=5\) | 20.0072 bpm | 20 bpm | within native resolution |
-| Heart, \(H=3\) | 40.0144 bpm | 80 bpm | subharmonic; failed |
-| Heart, \(H=5\) | 20.0072 bpm | 80 bpm | subharmonic; failed |
+The plan must also decide, before seeing Ahmed-vs-Masimo scores:
 
-None of the ten predeclared one-factor audits selected 80 bpm. Do not tune parameters to convert
-this into a success.
+- chirp aggregation;
+- RX aggregation or channel selection;
+- static-clutter/DC handling;
+- whether detrending/windowing is forbidden for the paper-faithful transfer arm;
+- the exact range FFT and locked-bin extraction path; and
+- how the one-dimensional slow-time signal is preserved as evidence.
 
-The negative result is mathematically coherent: with \(\theta_0=0\), each return contains DC and
-even harmonics, and the unsuppressed heart candidate sweep is dominated by the breathing comb and
-its subharmonics. It supports only this narrow claim:
+### 5.2 The 20 Hz Nyquist blocker
 
-> The visible unsuppressed-curve interpretation does not reproduce Ahmed et al.'s reported heart
-> maximum under the declared assumptions.
+Every saved capture has 20 Hz frame rate and 10 Hz Nyquist.
 
-It does not prove that the authors' unpublished implementation fails. Equation (26) separately
-suppresses the breathing row and its multiples; because
-\(2f_h=4(2f_b)\), it also removes the heart target and is reported as
-`inconclusive_by_definition`. The source is internally inconsistent.
+For Ahmed's spectral candidate \(q\), \(H=5\) at the 100 bpm heart limit requires:
 
-### 3.3 Final evidence and provenance
+\[
+5 \times 2(100/60)=16.67\ \mathrm{Hz},
+\]
 
-Latest key hashes are in the run's `provenance.json`. At the final run:
+which is not observable. Even \(H=3\) reaches exactly 10 Hz at 100 bpm.
 
-- signal realization:
-  `1977bd5bfcf846030834c7a429a1589cda840251127796f4b1d8ca72180d6fe0`
-- Ahmed PDF:
-  `2d13bca3fdfcbf249a500622dac0be9ad37e35a6aa880c440ff0c12eb4f8689f`
-- source configuration:
-  `47ae39d87966adbb0beb496371a78a3e1f828c116cfc965b2f940207b18180a8`
-- resolved configuration:
-  `2133320d26b58943e8da2f7b5ba42cfb673be030817095d023e21f453078f99c`
-- plan:
-  `3cfe18129708735ac31b1f56408a48934b9e2f57676f1f644b084e13c3700478`
+Resampling cannot create the missing harmonics. The plan must explicitly choose among defensible
+policies such as:
 
-The run correctly did not promote a canonical bundle:
-`git_tree_or_required_tracking_not_clean`. After the reviewed files are committed, rerun the
-default command from a clean tree to create the citable versioned bundle:
+- make \(H=3\) the only full-range real-capture transfer arm and keep \(H=5\) as
+  unsupported/descriptive;
+- restrict \(H=5\)'s candidate domain to the truly supported rate range and label the resulting
+  estimand; or
+- define a separately named partial-harmonic accumulator that is acknowledged as an adaptation,
+  not Ahmed's fixed-\(H\) method.
 
-```powershell
-& 'C:\ProgramData\anaconda3\condabin\conda.bat' run -n radar-vitals `
-  python figures/reproduce_ahmed_fig8.py
-```
+Do not silently truncate, wrap, interpolate, or change the denominator.
 
-Do not copy the current dirty run into the canonical directory by hand.
+### 5.3 Window grid and acquisition duration
 
-### 3.4 Verification
+For a fair estimator comparison, the production and Ahmed arms should normally use the identical
+frozen 30 s / 600-frame windows and 3 s hops already built by `src/m4/window_grid.py`.
 
-Focused verification:
+If a paper-duration 15 s audit is wanted, keep it secondary and do not compare its metrics directly
+with the 30 s production arm without a separately defined common window grid.
+
+The plan must define behavior for:
+
+- warmup frames;
+- trailing incomplete windows;
+- frame-zero epoch;
+- dropped/truncated bytes;
+- nonfinite signals; and
+- windows whose requested harmonic support exceeds Nyquist.
+
+### 5.4 Suppression and collision interpretations
+
+Retain the Step 1a source disagreement:
+
+1. `figure_visible_unsuppressed`
+2. `eq26_multiples_suppressed`
+3. `prose_low_or_equal_suppressed`
+
+Report each independently. Do not select a suppression rule by lowest real-data error.
+
+The plan must define whether the breathing bin used for heart suppression comes from the Ahmed
+breathing arm or another estimator. Using production BR would couple the new method to the
+baseline and must be explicit.
+
+### 5.5 Validity and outputs
+
+The paper's accumulator naturally returns an argmax, while the production method has quality and
+AHET rejection gates. A fair plan must separate:
+
+- raw finite estimates available on every eligible window;
+- method validity/rejection defined without Masimo tuning; and
+- downstream scoring coverage.
+
+Every window must dump at least:
+
+- extracted slow-time signal and its exact definition;
+- sample rate and timestamps;
+- frequency grid and spectrum;
+- candidate and harmonic-bin matrices;
+- pre-exclusion scores;
+- suppression/eligibility mask;
+- selected and runner-up bins/scores;
+- HR/BR values and validity;
+- rejection reason;
+- estimator/config/signal hashes; and
+- range-lock provenance.
+
+### 5.6 Scorer architecture
+
+Relevant interfaces:
+
+- `src/window_pipeline.py::WindowEstimator`
+- `src/window_pipeline.py::as_window_estimate`
+- `scripts/score_offline.py`
+- `src/comparator.py`
+- `src/m4/window_grid.py`
+
+`scripts/score_offline.py` currently calls `run_window_dsp(...)` directly around line 1073 and
+passes the production `ESTIMATOR_ID`. Step 1b must either make this path estimator-pluggable or add
+a narrowly scoped estimator-neutral runner without copying the comparator/window/reference logic.
+
+The plan should prefer one shared window decode and reference partition, then run multiple named
+estimators on the same frames and lock. It must prevent:
+
+- duplicated decoding/comparator logic;
+- estimator-specific window omissions;
+- mutable raw evidence aliasing;
+- production-only outcome classifiers being applied to Ahmed records; and
+- foreign estimator IDs being overwritten with `eca_ahet_v1`.
+
+### 5.7 Ground truth and metrics
+
+Ground truth rules are unchanged:
+
+- HR: Masimo `Beats / min` aligned through integer Unix-epoch `Timestamp`;
+- BR: Masimo `Breaths / min`;
+- use the frozen comparator admissibility/stationarity rules;
+- do not tune radar outputs to a poor Masimo segment.
+
+At minimum compare production ECA+AHET and each preregistered Ahmed arm on identical admissible
+windows using:
+
+- MAE, RMSE, bias, and percentile errors;
+- reference, radar, and joint coverage;
+- HR and BR separately;
+- per-capture and pooled results;
+- paired intersection metrics; and
+- incremental-coverage partitions where meaningful.
+
+The sweep has no persisted true transition timestamps for its commanded breathing schedule.
+Do not invent metronome target alignment; radar-vs-Masimo BR can still be scored using the Masimo
+column.
+
+### 5.8 Development versus evaluation
+
+These are existing, single-subject development captures. `notes/analysis_prespec.md` classifies
+existing captures as development/tuning and exploratory evaluation, not confirmatory evidence.
+
+Before producing Ahmed results, the plan must decide whether:
+
+- all eight are development, making every result apparent/in-sample; or
+- a predeclared subset is withheld from all mapping/threshold decisions and used as an exploratory
+  holdout.
+
+No capture may both choose an adaptation and validate that adaptation. Do not report pooled windows
+as independent subjects.
+
+## 6. Required planning/review deliverable
+
+Create `plans/m8_step1b_ahmed_transfer.md`. It should include:
+
+- scope and explicit non-goals;
+- source equations and unresolved ambiguities;
+- the synthetic all-harmonic transfer gate and its acceptance criteria;
+- exact estimator interface and data flow;
+- eight-capture registry with direct raw/config/reference hashes;
+- preregistered signal mappings and harmonic-support policy;
+- lock, window, validity, and suppression rules;
+- scorer changes, if any;
+- failure/status/artifact schemas;
+- unit, oracle, property, integration, regression, and visual validation;
+- acceptance criteria that allow an honest negative result;
+- “Assumptions requiring confirmation”;
+- “Risks of tuning and data leakage”; and
+- “Step 1a components reused unchanged.”
+
+Then run five independent read-only reviews:
+
+1. architecture;
+2. mathematical correctness and edge cases;
+3. Python implementation;
+4. testing and validation; and
+5. adversarial pre-mortem.
+
+Reviewers must inspect the plan, Ahmed source evidence, and relevant code. Merge their findings,
+resolve disagreements with repository evidence, revise the plan, and stop for user approval.
+
+## 7. Verification state to preserve
+
+Step 1a focused suite:
 
 ```powershell
 & 'C:\ProgramData\anaconda3\condabin\conda.bat' run -n radar-vitals `
@@ -164,72 +353,25 @@ Focused verification:
 
 Result: **85 passed**.
 
-Broader regression suite, excluding four known environment-dependent scorer cases:
+Broader verified suite: **1816 passed, 2 skipped, 4 known environment-dependent scorer cases
+deselected**. See `HISTORY.md` for the exact command and explanation.
 
-```powershell
-& 'C:\ProgramData\anaconda3\condabin\conda.bat' run -n radar-vitals `
-  python -m pytest tests -q --basetemp=.pytest_tmp\m8_full_final2 `
-  -k "not test_resolve_pinned_lock_directory_correct and not test_resolve_pinned_lock_rejects_unrelated_raw_hash and not test_resolve_pinned_lock_isolate_active_requires_baseline_eca_mode and not test_end_to_end_real_capture_rerun_estimand"
-```
+No Step 1b test or real-capture Ahmed result exists yet.
 
-Result: **1816 passed, 2 skipped, 4 deselected**.
-
-The four raw full-suite failures are not M8 regressions:
-
-- three `tests/test_score_offline.py` tests depend on ignored local replay directories that are
-  absent in this checkout;
-- one legacy end-to-end scorer assertion expects the production clean-tree helper to report dirty
-  under `--allow-dirty`, but that helper uses `git diff --quiet HEAD --` and ignores untracked
-  files. M8 deliberately uses the stricter porcelain/tracking gate instead of modifying production
-  code in this step.
-
-The final PDF was rendered with Poppler and inspected at 150 DPI. Panel order, axes, target
-markers, legends, units, and labels are legible and unclipped.
-
-Two independent post-build reviewers approved the final implementation:
-
-- architecture: approve, no remaining blocker or major finding;
-- mathematical/correctness/testing: approve after independent PRF derivation, coherent-grid
-  Jacobi-Anger/Bessel tests, and provenance-hash recomputation.
-
-## 4. Other project state worth preserving
-
-The offline scorer and comparator from the prior milestone are implemented and were run on the
-three Masimo captures. Their latest detailed state and exploratory small-\(n\) guard-v1 results are
-in the preceding 2026-07-28 entry in `HISTORY.md` and
-`results/score_offline/20260728T154834Z/`. Do not infer a guard-v1 promotion from those \(n\le2\)
-incremental-coverage buckets.
-
-M4 Stage 1 review remains open and deprioritized; do not call it closed. The 5-bin relock tracker
-go/no-go also remains deferred.
-
-## 5. Next actions
-
-1. Review the M8 diff and commit the plan, configuration, source, CLI, tests, approach note,
-   `HISTORY.md`, and this handoff.
-2. From that clean commit, rerun the exact default M8 CLI and verify that versioned canonical
-   promotion succeeds and `LATEST.json` points at the new immutable bundle.
-3. Review the negative scientific evidence before choosing between:
-   - requesting clarification or code/data from Ahmed et al.; or
-   - registering another source-grounded interpretation in a new reviewed plan.
-4. Do not start M8 Step 1b, production adaptation, or `score_offline.py` integration until the
-   Step 1a evidence is explicitly approved.
-5. Continue collecting more subjects before any guard-v1 promotion decision.
-
-## 6. Pointers
+## 8. Pointers
 
 | Purpose | Path |
 |---|---|
-| Agent/project rules | `CLAUDE.md` |
+| Project rules | `CLAUDE.md` |
 | Chronological record | `HISTORY.md` |
-| M8 build authority | `plans/m8_step1a_ahmed_reproduction.md` |
-| M8 simulation/HA code | `src/m8/ahmed_fig8.py` |
-| M8 resolved input contract | `experiments/m8_ahmed_fig8/config.yaml` |
-| M8 evidence CLI | `figures/reproduce_ahmed_fig8.py` |
-| M8 test suite | `tests/test_m8_ahmed_fig8.py` |
-| Latest complete M8 run | `results/m8_ahmed_fig8/20260729T005107.440812Z_8e08f5ab0120/` |
-| Scientific metrics | latest run's `metrics.json` |
-| Reproducibility manifest | latest run's `provenance.json` |
-| Figure PDF | latest run's `ahmed_fig8cd_behavioral.pdf` |
 | Method/literature rationale | `notes/approach.md` §5.7 |
-| Offline scorer plan | `plans/offline_scoring_script.md` |
+| Evaluation-role rules | `notes/analysis_prespec.md` |
+| Immutable Step 1a plan | `plans/m8_step1a_ahmed_reproduction.md` |
+| Canonical Step 1a bundle | `figures/generated/m8_ahmed_fig8/20260729T075443.145998Z_8e08f5ab0120/` |
+| Step 1a simulation | `src/m8/ahmed_fig8.py` |
+| Estimator protocol/adapter | `src/window_pipeline.py` |
+| Current offline scorer | `scripts/score_offline.py` |
+| Frozen comparator | `src/comparator.py` |
+| Frozen window grid | `src/m4/window_grid.py` |
+| Eight raw captures | `results/live_demo/` |
+| New plan to create | `plans/m8_step1b_ahmed_transfer.md` |

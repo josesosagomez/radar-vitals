@@ -7663,3 +7663,93 @@ canonical bundle can be promoted. Review the negative evidence before deciding w
 author clarification or register another source-grounded interpretation. Do not begin Step 1b or
 integrate with `score_offline.py` without explicit approval.
 
+## 2026-07-29 - M8 Step 1a: clean-commit canonical reproduction
+
+**Set out to do:** after the user created branch `vital_signs_ahmed_v10` and committed the M8
+implementation, rerun the exact default reproduction from a clean, tracked tree and validate the
+versioned canonical bundle.
+
+**Worked (with evidence):**
+- Verified an empty `git status --porcelain` at commit
+  `d1f44829ae0b272b61f2151ef1d2087491b16e26`, with all five required plan/config/code/test
+  inputs tracked.
+- Ran `python figures/reproduce_ahmed_fig8.py` in the `radar-vitals` environment. The complete
+  timestamped evidence is
+  `results/m8_ahmed_fig8/20260729T075443.145998Z_8e08f5ab0120/`; the versioned canonical bundle is
+  `figures/generated/m8_ahmed_fig8/20260729T075443.145998Z_8e08f5ab0120/`, and `LATEST.json`
+  points to it.
+- Canonical promotion recorded `clean_and_required_tracked=true`, `contract_matches=true`, and
+  `eligible=true`. Independently recomputed every one of the 23 provenance digests and all 13 NPZ
+  evidence digests; all matched. The five promoted scientific files were byte-identical to the
+  timestamped run, and `LATEST.json`'s bundle-manifest digest matched
+  `e327443c8356dc6f782826ecf38ee8d8e174784e713b1a5afe401c120700a47c`.
+- Parsed all JSON strictly, loaded all 13 NPZ files with `allow_pickle=False`, reran the focused
+  suite (**85 passed**), rendered the canonical PDF at 150 DPI, and visually verified its axes,
+  traces, labels, markers, legends, panel order, and lack of clipping.
+
+**Failed / did not reproduce:** the scientific outcome is intentionally unchanged:
+`not_reproduced_under_declared_assumptions`. Primary breathing remains 20.0072 bpm for both
+\(H=3,5\); heart remains 40.0144 bpm for \(H=3\) and 20.0072 bpm for \(H=5\), and no audit selects
+80 bpm. Canonicalization certifies the evidence and its provenance; it does not turn the negative
+scientific result into a successful reproduction.
+
+**Retired / no longer used:** the prior dirty-tree timestamped run is superseded for citation by
+this clean-commit canonical bundle. It remains under ignored `results/` as diagnostic history.
+
+**Next:** review and commit the newly generated `figures/generated/m8_ahmed_fig8/` bundle plus
+this history/handoff update. Then explicitly review the negative Step 1a evidence before approving
+any Step 1b adaptation or another registered interpretation.
+
+## 2026-07-29 - M8 boundary clarified; handoff prepared for Step 1b planning
+
+**Set out to do:** answer whether Ahmed's method had already been tested on all saved live
+captures, then update the living Markdown documentation so a new chat starts by planning Step 1b
+rather than assuming the Step 1a simulator is ready for real-data scoring. Preserve the master
+roadmap's definition of Step 1b: synthetic all-harmonic phase transfer first, real captures after
+that gate.
+
+**Worked (with evidence):**
+- Confirmed that Step 1a never decoded or estimated any live capture. Its
+  `simulate_eq14(config, rng)` interface consumes a synthetic one-dimensional signal, whereas the
+  project `WindowEstimator` protocol consumes `(frames, locked_bin, fs, cfg)`.
+  `scripts/score_offline.py` still calls `run_window_dsp` directly at its scoring site. The
+  `as_window_estimate` test proves record compatibility only; it is not estimator dispatch.
+- Inventoried all eight requested directories under `results/live_demo/`:
+  `20260713_172042_live_demo_massimo1`, `20260713_182002_live_demo_massimo2`,
+  `20260714_180523_live_demo_sweep`, and `20260728_224902_live_demo_massimo3` through
+  `20260729_004815_live_demo_massimo7`. Every directory contains `adc_stream.bin`, the corresponding
+  Masimo CSV, `live_estimates.csv`, `live_intermediates.npz`, `run_metadata.json`, and
+  `warmup_bin_selection.json`.
+- Verified from metadata that all eight use 20 Hz frames, 30 s windows, and 3 s hops. Recorded
+  live locks are 23, 20, 21, 26, 25, 25, 24, and 32 respectively. The first two sessions are
+  nominal 180 s, the sweep 480 s, and Massimo 3-7 nominal 600 s.
+- Updated `notes/approach.md` to state explicitly that no Ahmed estimate exists yet for any real
+  capture, that Step 1a cannot support a real-performance conclusion, and that Step 1b requires a
+  reviewed paper-to-FMCW mapping and scorer integration.
+- Found and surfaced a naming/scope conflict before handoff: `plans/implementation_plan.md`
+  already defines Step 1b as the synthetic all-harmonic phase-model transfer control, with
+  real-capture BR/HR evaluation afterward. Updated that roadmap and `notes/approach.md` to preserve
+  the synthetic-first gate while including the user's requested eight-capture arm.
+- Rewrote `HANDOFF.md` around the next active task: produce and independently review one staged
+  Step 1b transfer plan before changing production or adaptation code.
+
+**Failed / not attempted:** no real-capture Ahmed scoring was run, by design. The simulator does
+not yet specify whether Ahmed's fixed-fast-time real return should map to a coherent complex
+range-bin return, one quadrature component, magnitude, or phase. Those choices are scientifically
+different and cannot be selected after looking at which one best matches Masimo. Also, a 20 Hz
+capture has 10 Hz Nyquist, so the full \(H=5\) heart sweep through 100 bpm would require
+16.67 Hz and is not observable; resampling cannot create those missing harmonics.
+
+**Retired / no longer used:** the shorthand “Step 1a is ready to score whatever estimator comes
+out of it” is retired as a description of current readiness. The precise state is: Step 1a emits
+an adapter-compatible result record in simulation; Step 1b must still create a real
+`WindowEstimator` and an estimator-neutral scoring path.
+
+**Next:** in a new chat, read `CLAUDE.md`, `HANDOFF.md`, the immutable Step 1a plan and evidence,
+Ahmed's local PDF, `plans/implementation_plan.md` M8, `src/window_pipeline.py`, and
+`scripts/score_offline.py`; then write `plans/m8_step1b_ahmed_transfer.md` and subject it to
+independent architecture, correctness/math, Python, testing, and adversarial review. The plan must
+stage the synthetic all-harmonic control before the real-data transfer, cover all eight captures,
+predeclare development/evaluation roles and non-tuning rules, and receive explicit approval before
+implementation.
+
