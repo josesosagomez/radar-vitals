@@ -1,0 +1,41 @@
+schema_version: 1
+experiment_id: m8_ahmed_fig8_behavioral_reproduction_v1
+citation:
+  title: "Discovering the Unseen: Radar-Based Estimation of Heartbeat, Breathing Rate, and Underlying Muscle Expansion Without Probes"
+  authors: "Ahmed et al."
+  doi: "10.1109/TRS.2024.3412915"
+  url: "https://repository.kaust.edu.sa/handle/10754/698235"
+  figure: "8(c)-(d)"
+primary:
+  c_m_s: 300000000.0
+  fc_hz: 6700000000.0
+  heart_hz: 1.3333333333333333
+  breath_hz: 0.3333333333333333
+  heart_displacement_m: 0.01
+  breath_displacement_m: 0.02
+  heart_amplitude: 1.0
+  breath_amplitude: 1.0
+  theta0_rad: 0.0
+  duration_breaths: 5.0
+  prf_bandwidth_multiplier: 5.0
+  sample_count_rule: round
+  n_fft: 4096
+  snr_db: 10.0
+  snr_power_mode: raw
+  seed: 42
+  breath_max_bpm: 25.0
+  heart_max_bpm: 100.0
+  normalization: non_dc_mean
+harmonics: [3, 5]
+suppression_profiles:
+  - figure_visible_unsuppressed
+  - eq26_multiples_suppressed
+  - prose_low_or_equal_suppressed
+audit:
+  sample_count_rule: [floor, ceil]
+  theta0_rad: [0.7853981633974483, 1.5707963267948966]
+  amplitude_ratio_h_to_b: [0.5, 2.0]
+  snr_power_mode: [centered]
+  n_fft: [2048, 8192]
+  normalization: [matrix_eta]
+

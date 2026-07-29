@@ -7603,3 +7603,63 @@ prior HANDOFF) — the current `guard_v1_only`/`production_only` buckets are rea
 now reuse this script's `as_window_estimate`/`WindowEstimate` path once a non-AHET estimator
 exists, per the plan's design intent.
 
+## 2026-07-29 - M8 Step 1a: Ahmed Fig. 8(c)-(d) behavioral reproduction
+
+**Set out to do:** implement the approved, cross-reviewed M8 Step 1a plan: reproduce Ahmed et
+al.'s single-TX/RX equation-(14) simulation and harmonic-accumulation curves for Fig. 8(c)-(d)
+under explicit assumptions, without adapting the algorithm to production radar data or changing
+`src/respiration.py`, `run_window_dsp`, or `scripts/score_offline.py`.
+
+**Worked (with evidence):**
+- Saved the build authority at `plans/m8_step1a_ahmed_reproduction.md`; added the isolated,
+  typed simulation/HA implementation in `src/m8/ahmed_fig8.py`, the complete v1 configuration in
+  `experiments/m8_ahmed_fig8/config.yaml`, and the thin evidence/rendering CLI in
+  `figures/reproduce_ahmed_fig8.py`.
+- Implemented the paper's two independent cosine returns, derived PRF, deterministic real AWGN,
+  unwindowed/undetrended FFT magnitude, spectral-frequency \(2f\) convention, fixed \(H=3,5\)
+  accumulators, exact tie/invalid behavior, and all three named suppression interpretations.
+  The estimator-neutral native dictionary passes through `as_window_estimate`, but this step does
+  not claim `WindowEstimator` or `score_offline.py` invocation compatibility.
+- Added immutable/read-only result handling, signal-realization/config hashes, a separately coded
+  literal accumulator oracle, a coherent-grid Jacobi-Anger/Bessel harmonic-family oracle, the
+  invalid 20 Hz/\(H=5\) Nyquist test, ten one-factor ambiguity audits, strict JSON/NPZ validation,
+  failure manifests, artifact hash recomputation, and clean/tracked/exact-contract canonical
+  promotion gating.
+- Final timestamped run:
+  `results/m8_ahmed_fig8/20260729T005107.440812Z_8e08f5ab0120/`. Its status is `complete`;
+  the PDF was rendered with Poppler and visually inspected with no clipping, overlap, panel-order,
+  unit, legend, or target-marker defect. The complete arrays, all three primary profiles, all ten
+  audits, metrics, configuration, provenance, PNG, and PDF are retained there.
+- Two independent post-build reviewers approved the final code: architecture found no remaining
+  blocker/major issue; mathematical/correctness/testing review independently confirmed the
+  equation-(14) implementation, \(2f\)-to-bpm conversion, accumulator, and negative subharmonic
+  result after the additional Bessel and provenance tests.
+- Verification: **85 focused tests passed** (`tests/test_m8_ahmed_fig8.py` plus the existing
+  adapter tests). The broader suite passed **1816 tests, 2 skipped, 4 deselected**. The four
+  deselected cases are pre-existing `tests/test_score_offline.py` environment/replay fixtures:
+  three require ignored local replay directories that are absent, and one asserts the legacy
+  production clean-tree behavior that ignores untracked files.
+
+**Failed / did not reproduce, and why:** the primary
+`figure_visible_unsuppressed` interpretation did **not** reproduce the reported heart-rate
+maximum under the locked assumptions. Breathing \(H=3\) and \(H=5\) both selected
+20.0072 bpm, while heart \(H=3\) selected 40.0144 bpm and heart \(H=5\) selected
+20.0072 bpm instead of 80 bpm. No predeclared audit selected 80 bpm. This is mathematically
+consistent with the unsuppressed breathing comb and is recorded as
+`not_reproduced_under_declared_assumptions`; no parameter was tuned to force agreement.
+Equation-(26)-literal suppression separately makes the colliding target
+\(2f_h=4(2f_b)\) ineligible and is therefore `inconclusive_by_definition`, not an ordinary
+estimator failure. The claim is deliberately narrow: a behavioral reconstruction under declared
+assumptions, not numerical equivalence or proof of the authors' unpublished implementation.
+
+**Retired / no longer used:** removed the stale loose canonical bundle produced during an early
+dirty-tree smoke run. Canonical publication is now versioned and refused unless the exact approved
+configuration is run from a clean tree with every required source tracked. The timestamped smoke
+and final evidence remain reproducible from the script; no raw data or production DSP was changed.
+
+**Next:** review and commit the M8 sources, plan, configuration, tests, and approach note; then
+rerun the exact default configuration from that clean commit so the versioned lightweight
+canonical bundle can be promoted. Review the negative evidence before deciding whether to seek
+author clarification or register another source-grounded interpretation. Do not begin Step 1b or
+integrate with `score_offline.py` without explicit approval.
+
