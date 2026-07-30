@@ -56,7 +56,7 @@ Step 1a never decoded or scored a real capture. Its adapter test proves record n
 | File | SHA-256 | Status |
 |---|---|---|
 | `plans/m8_step1b_ahmed_transfer.md` | `9294cb0589b9f0d8f50cdfa0ea893862b1f8ac7f26eb6fee31ee57d622da33ac` | five-discipline PASS on these exact bytes |
-| `plans/m8_step1b_ahmed_transfer_addendum_a.md` | `fa51300a1b3ea65fdc5ab133ff6f6c7a3259e29fd09d54f1b8cde177728d237c` | **user-approved 2026-07-30**; cross-model re-review **waived** |
+| `plans/m8_step1b_ahmed_transfer_addendum_a.md` | `b0bdc047ab6e43b42f6e6d362b59a3cd6bfda817607fb74253008c7c3e5fd0c8` | **user-approved 2026-07-30**; cross-model re-review **waived** |
 
 The base plan is deliberately **unmodified**, so its five acceptances remain valid. Governing
 authority is the *pair*; where they conflict, the addendum wins. Any manifest binding

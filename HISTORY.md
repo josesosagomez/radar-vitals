@@ -8153,3 +8153,63 @@ are reproducible without an explicit EOL policy, and base plan §3.1's
 the canonical Step 1a bundle's two stale payload hashes; then continue implementation with
 `src/m4/outcome.py`.
 
+## 2026-07-30 - Step 1b: classifier extracted, scientific core implemented
+
+**Set out to do:** begin the fixture-testable implementation in base plan §8 order, without opening
+any real capture or Masimo file.
+
+**Worked (with evidence):**
+- Extracted the AHET classifier to `src/m4/outcome.py` (`53cf4c7`). Verified the moved block is
+  **byte-for-byte identical** to the original at HEAD by splicing both out and `diff`-ing them, so no
+  rule, threshold, or `ValueError` message changed. `scripts/diagnose_bin_drift.py` re-exports for
+  its existing callers; `scripts/score_offline.py` now imports the classifier directly instead of
+  importing the executable script, as base plan §4.1 requires.
+  `tests/test_m4_outcome.py` pins that all three import paths resolve to the *same function object*,
+  that every reachable producer state classifies unchanged, and that all eleven fail-closed branches
+  raise unchanged message text.
+- Implemented `src/m4/estimator_suite.py` (`574657a`): `EstimatorArmSpec`, `SuiteWindowResult`,
+  `OutcomeClassifier`/`WindowEstimatorSuite` protocols, plus enforcement that evidence arrays are
+  immutable, non-object, C-contiguous copies and that configs canonicalize before hashing.
+- Implemented `src/m8/ahmed_transfer.py` (`574657a`). Reuses Step 1a's `accumulate_harmonics`,
+  `SUPPRESSION_PROFILES`, and `_select_scores` unchanged; adds \(q=f\)/`bpm=60q`, strict
+  \(Hq<f_s/2\) support with the denominator held at \(H\), native transform length, and the two
+  named domains. Six arms per invocation.
+- **Resolved an ambiguity the addendum left open.** §A3 said both heart domains are computed and
+  reported, but the base plan pins 7 arms and 1,792 real estimator rows. Marked
+  `COLLISION_DOMAIN_FROM_FB` as `real_data_eligible=False`: its heart band starts at the *known
+  synthetic* \(f_b\), a quantity that does not exist on real data. So both domains run on synthetic
+  (needed for P1–P4) and only the real domain runs on real data, leaving the pinned counts intact.
+- `tests/test_m8_ahmed_transfer.py` checks the core against `scripts/m8_step1b_gate_prediction.py`
+  — written independently before the core existed — across all four grid/domain cases and both
+  \(H\), plus the 60q convention, the strict support boundary at \(Hk<n_{fft}/2\), Nyquist
+  degeneracy at equality, both suppression rules, the real-domain prose duplicate, and evidence
+  immutability. Full suite: **1888 passed, 5 skipped**.
+
+**Failed / did not work, and why:**
+- **Predictions P2 and P3 were overclaimed and are now corrected.** They stated that
+  score(\(f_h\)) equals score(\(f_h/2\)) "bit-identically" and that non-divisor candidates score
+  "exactly zero". Both are exact only in exact arithmetic; the rFFT introduces round-off. Measured:
+  P2 agrees to `2.025e-15` (H=3) and `6.751e-16` (H=5) relative; the collision ratios are
+  `1.999999999999994` and `2.999999999999981`, not exactly 2 and 3; a non-divisor candidate scores
+  `1.4747e-12`, which is `8.758e-16` of the `1683.89` peak. The overclaim came from reading
+  4-decimal output in a scratch script. Caught by the core's own tests failing against the
+  prediction — the gate criterion working as intended, against my own error.
+- **P2 and P3 were not regenerable from any committed script.** The committed evidence script only
+  printed the P1/P4 selection table, so two of the four gate predictions had no reproducible source
+  — a direct CLAUDE.md §3 rule 1 violation that would have made the gate uncheckable. Added
+  `degeneracy_report()`, which prints them at full precision.
+- Gate tolerances are now explicit in addendum §A4.1 at ~1000× the observed round-off: ≤1e-12
+  relative for P2 and the ratios, ≤1e-12 relative-to-peak for the non-divisor score. Loose enough to
+  survive a different BLAS, still ~9 orders below any real line.
+- One test-authoring error: an early version of `test_module_does_not_import_the_executable_script`
+  grepped the module text and failed on the docstring's legitimate citation of the source file.
+  Replaced with an AST import-graph check.
+
+**Retired / no longer used:** retired the "bit-identical"/"exactly zero" phrasing of P2/P3 wherever
+it appeared (Addendum A §A4.1, `HANDOFF.md`), and retired `score_offline.py`'s dependency on
+`diagnose_bin_drift` for the classifier.
+
+**Next:** implement `ProductionEstimatorSuite` and `AhmedPhaseEstimatorSuite` over the new contracts,
+then the runner, scorer, serializers, CLI, experiment config, and capture registry. Still no real
+capture or Masimo access. The canonical Step 1a bundle decision remains open with the user.
+
