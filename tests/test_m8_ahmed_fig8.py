@@ -542,11 +542,59 @@ def test_derived_variant_seed_is_stable_and_separated():
     assert derive_variant_seed(42, "a") != derive_variant_seed(43, "a")
 
 
+def _required_relpaths(figure_script, config_path: Path) -> list[str]:
+    """Repo-relative posix paths of the files `_provenance` requires to be tracked."""
+    root = figure_script.REPO_ROOT
+    candidates = [
+        figure_script.PLAN_PATH,
+        figure_script.IMPLEMENTATION_PATH,
+        Path(figure_script.__file__).resolve(),
+        figure_script.TEST_PATH,
+        config_path,
+    ]
+    relative = []
+    for path in candidates:
+        try:
+            relative.append(path.resolve().relative_to(root).as_posix())
+        except ValueError:
+            continue  # outside the repo; intentionally untrackable
+    return relative
+
+
+def _pin_git_provenance(monkeypatch, figure_script, *, tracked, porcelain: str):
+    """Replace `_git_text` so promotion depends on injected state, not the real worktree.
+
+    The promotion decision is a function of `git ls-files` and `git status --porcelain`.
+    Reading those from the ambient worktree made canonical-promotion assertions flip with
+    whatever happened to be uncommitted, so every provenance test pins them explicitly.
+    """
+
+    def fake_git_text(*args: str) -> str:
+        if args == ("ls-files",):
+            return "\n".join(tracked)
+        if args == ("status", "--porcelain"):
+            return porcelain
+        if args == ("rev-parse", "HEAD"):
+            return "0" * 40
+        if args == ("branch", "--show-current"):
+            return "pinned-test-branch"
+        raise AssertionError(f"unexpected git invocation: {args!r}")
+
+    monkeypatch.setattr(figure_script, "_git_text", fake_git_text)
+
+
 def test_cli_execute_writes_strict_complete_artifacts(
-    figure_script, tmp_path: Path
+    figure_script, tmp_path: Path, monkeypatch
 ):
     output = tmp_path / "results"
     canonical = tmp_path / "canonical"
+    # Pin an ineligible tree so the promotion assertions below are deterministic.
+    _pin_git_provenance(
+        monkeypatch,
+        figure_script,
+        tracked=_required_relpaths(figure_script, figure_script.DEFAULT_CONFIG),
+        porcelain=" M notes/scratch.md",
+    )
     run_dir = figure_script.execute(
         figure_script.DEFAULT_CONFIG, output, canonical
     )
@@ -606,6 +654,159 @@ def test_cli_execute_writes_strict_complete_artifacts(
     )
     assert declared_evidence_hashes == actual_evidence_hashes
     assert not canonical.exists()
+
+
+def _run_with_provenance(
+    figure_script, tmp_path: Path, monkeypatch, *, tracked, porcelain, config_path=None
+):
+    config_path = config_path or figure_script.DEFAULT_CONFIG
+    _pin_git_provenance(
+        monkeypatch, figure_script, tracked=tracked, porcelain=porcelain
+    )
+    canonical = tmp_path / "canonical"
+    run_dir = figure_script.execute(config_path, tmp_path / "results", canonical)
+    provenance = json.loads((run_dir / "provenance.json").read_text(encoding="utf-8"))
+    status = json.loads((run_dir / "run_status.json").read_text(encoding="utf-8"))
+    return run_dir, provenance, status, canonical
+
+
+def test_provenance_clean_tracked_tree_promotes_canonical(
+    figure_script, tmp_path: Path, monkeypatch
+):
+    _, provenance, status, canonical = _run_with_provenance(
+        figure_script,
+        tmp_path,
+        monkeypatch,
+        tracked=_required_relpaths(figure_script, figure_script.DEFAULT_CONFIG),
+        porcelain="",
+    )
+    assert provenance["git"]["clean_and_required_tracked"] is True
+    assert all(provenance["git"]["required_files_tracked"].values())
+    promotion = provenance["canonical_promotion"]
+    assert promotion["eligible"] is True
+    assert promotion["contract_matches"] is True
+    assert promotion["ineligibility_reasons"] == []
+    assert status["canonical_promoted"] is True
+    assert status["canonical_bundle"] is not None
+    assert canonical.exists()
+
+
+def test_provenance_dirty_tree_blocks_promotion(
+    figure_script, tmp_path: Path, monkeypatch
+):
+    _, provenance, status, canonical = _run_with_provenance(
+        figure_script,
+        tmp_path,
+        monkeypatch,
+        tracked=_required_relpaths(figure_script, figure_script.DEFAULT_CONFIG),
+        porcelain=" M src/m8/ahmed_fig8.py",
+    )
+    assert provenance["git"]["clean_and_required_tracked"] is False
+    promotion = provenance["canonical_promotion"]
+    assert promotion["eligible"] is False
+    assert "git_tree_or_required_tracking_not_clean" in promotion["ineligibility_reasons"]
+    assert promotion["destination"] is None
+    assert status["canonical_promoted"] is False
+    assert status["canonical_bundle"] is None
+    assert not canonical.exists()
+
+
+def test_provenance_untracked_required_file_blocks_promotion(
+    figure_script, tmp_path: Path, monkeypatch
+):
+    # Clean tree, but the implementation module itself is not tracked.
+    tracked = [
+        path
+        for path in _required_relpaths(figure_script, figure_script.DEFAULT_CONFIG)
+        if not path.endswith("src/m8/ahmed_fig8.py")
+    ]
+    _, provenance, status, canonical = _run_with_provenance(
+        figure_script, tmp_path, monkeypatch, tracked=tracked, porcelain=""
+    )
+    tracking = provenance["git"]["required_files_tracked"]
+    assert tracking["src/m8/ahmed_fig8.py"] is False
+    assert provenance["git"]["status_porcelain"] == ""
+    assert provenance["git"]["clean_and_required_tracked"] is False
+    promotion = provenance["canonical_promotion"]
+    assert promotion["eligible"] is False
+    assert "git_tree_or_required_tracking_not_clean" in promotion["ineligibility_reasons"]
+    assert status["canonical_promoted"] is False
+    assert not canonical.exists()
+
+
+def test_provenance_external_config_blocks_promotion_on_otherwise_clean_tree(
+    figure_script, tmp_path: Path, monkeypatch
+):
+    """Complements `test_external_config_path_runs_and_is_reported_untracked`.
+
+    That test runs against the real worktree, so on a dirty tree it cannot tell whether
+    promotion was blocked by the external config or merely by ambient dirtiness. Pinning
+    a clean tree here isolates the external config as the sole cause.
+    """
+    external = tmp_path / "external_config.yaml"
+    external.write_bytes(figure_script.DEFAULT_CONFIG.read_bytes())
+    _, provenance, status, canonical = _run_with_provenance(
+        figure_script,
+        tmp_path,
+        monkeypatch,
+        # Git tracks the repo's real files; it never tracks the temporary config.
+        tracked=_required_relpaths(figure_script, figure_script.DEFAULT_CONFIG),
+        porcelain="",
+        config_path=external,
+    )
+    tracking = provenance["git"]["required_files_tracked"]
+    # `_provenance` keys a required file by its repo-relative posix path when it lies
+    # inside the repo and by its absolute path otherwise. Workspace-local `--basetemp`
+    # can put tmp_path inside the repo, so derive the key rather than assuming either.
+    resolved = external.resolve()
+    try:
+        key = resolved.relative_to(figure_script.REPO_ROOT).as_posix()
+    except ValueError:
+        key = str(resolved)
+    assert tracking[key] is False
+    assert provenance["git"]["clean_and_required_tracked"] is False
+    promotion = provenance["canonical_promotion"]
+    assert promotion["eligible"] is False
+    assert promotion["contract_matches"] is False
+    assert "config_path_is_not_default" in promotion["ineligibility_reasons"]
+    assert "git_tree_or_required_tracking_not_clean" in promotion["ineligibility_reasons"]
+    assert status["canonical_promoted"] is False
+    assert not canonical.exists()
+
+
+def test_scientific_outputs_identical_across_provenance_states(
+    figure_script, tmp_path: Path, monkeypatch
+):
+    """Provenance state may gate promotion, but must never change the science."""
+    tracked = _required_relpaths(figure_script, figure_script.DEFAULT_CONFIG)
+
+    def science(run_dir: Path, provenance: dict) -> tuple:
+        metrics = json.loads((run_dir / "metrics.json").read_text(encoding="utf-8"))
+        # Everything in metrics.json except the per-run identifier is science.
+        stable = {key: value for key, value in metrics.items() if key != "run_id"}
+        evidence = {
+            key: value
+            for key, value in provenance["hashes"].items()
+            if key.startswith("evidence_")
+        }
+        return stable, evidence
+
+    clean_dir, clean_prov, clean_status, _ = _run_with_provenance(
+        figure_script, tmp_path / "clean", monkeypatch, tracked=tracked, porcelain=""
+    )
+    dirty_dir, dirty_prov, dirty_status, _ = _run_with_provenance(
+        figure_script,
+        tmp_path / "dirty",
+        monkeypatch,
+        tracked=tracked,
+        porcelain=" M README.md",
+    )
+
+    assert science(clean_dir, clean_prov) == science(dirty_dir, dirty_prov)
+    # ...while promotion eligibility differs, proving the states really were distinct.
+    assert clean_status["canonical_promoted"] is True
+    assert dirty_status["canonical_promoted"] is False
+    assert clean_status["acceptance_status"] == dirty_status["acceptance_status"]
 
 
 def test_cli_runs_never_overwrite(figure_script, tmp_path: Path):

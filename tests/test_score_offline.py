@@ -36,6 +36,45 @@ _REQUIRE_REAL_DATA = pytest.mark.skipif(
     reason="results/live_demo/ real captures not present in this environment",
 )
 
+# The two replay directories are transient diagnostic artifacts from the 2026-07-26/27
+# bin-drift work; `results/` blobs are gitignored, so they are absent in a fresh clone.
+# _REQUIRE_REAL_DATA does not cover them (it only checks the massimo captures), which
+# left the tests below failing rather than skipping. The portable equivalents further
+# down cover the same OSR-03 branches without any real data.
+_REQUIRE_REPLAY_PROD = pytest.mark.skipif(
+    not REPLAY_MASSIMO1_PROD.exists(),
+    reason="results/live_demo/20260726_173434_replay_unknown replay artifact not present",
+)
+
+
+def _write_lock_source(
+    directory: Path,
+    *,
+    raw_sha256: str,
+    locked_bin: int = 27,
+    eca_mode: str = "skip_forbidden_harmonics_v1",
+    mode: str = "replay",
+) -> Path:
+    """Build a minimal portable `--pinned-lock-source` directory.
+
+    `resolve_pinned_lock` reads only `run_metadata.json`, so a few fields reproduce a
+    real lock source exactly, without a multi-hundred-megabyte capture.
+    """
+    directory.mkdir(parents=True, exist_ok=True)
+    payload: dict = {
+        "mode": mode,
+        "locked_bin": locked_bin,
+        "config": {"heart": {"eca_mode": eca_mode}},
+    }
+    if mode == "replay":
+        payload["replay_file_hashes"] = {"adc_stream.bin": raw_sha256}
+    elif mode == "live":
+        payload["live_raw_mirror_hash"] = raw_sha256
+    (directory / "run_metadata.json").write_text(
+        json.dumps(payload, sort_keys=True), encoding="utf-8"
+    )
+    return directory
+
 
 # ── CLI value parsing ────────────────────────────────────────────────────────
 
@@ -366,6 +405,7 @@ def test_resolve_pinned_lock_manual_int():
 
 
 @_REQUIRE_REAL_DATA
+@_REQUIRE_REPLAY_PROD
 def test_resolve_pinned_lock_directory_correct():
     raw_sha256 = so.sha256_file(MASSIMO1 / "adc_stream.bin")
     lock = so.resolve_pinned_lock(
@@ -379,6 +419,7 @@ def test_resolve_pinned_lock_directory_correct():
 
 
 @_REQUIRE_REAL_DATA
+@_REQUIRE_REPLAY_PROD
 def test_resolve_pinned_lock_rejects_unrelated_raw_hash():
     """OSR-03 R2: a directory not hash-bound to the scored capture is rejected."""
     wrong_raw_sha256 = "0" * 64
@@ -425,12 +466,79 @@ def test_resolve_pinned_lock_rejects_wrong_lock_value_round4():
 
 
 @_REQUIRE_REAL_DATA
+@_REQUIRE_REPLAY_PROD
 def test_resolve_pinned_lock_isolate_active_requires_baseline_eca_mode():
     raw_sha256 = so.sha256_file(MASSIMO1 / "adc_stream.bin")
     with pytest.raises(ValueError, match="OSR-03 R3"):
         so.resolve_pinned_lock(
             MASSIMO1.name, raw_sha256, str(REPLAY_MASSIMO1_PROD),
             isolate_fields_active=True, reproduction_baseline_eca_mode={},
+            reproduction_baseline_lock={},
+        )
+
+
+# ── OSR-03 lock resolution, portable (no real data) ──────────────────────────
+# These mirror the real-data tests above so the OSR-03 guard rails stay covered in
+# environments where the transient replay artifacts are absent.
+
+_FAKE_RAW = "a" * 64
+
+
+def test_resolve_pinned_lock_directory_binds_hash_and_lock_portable(tmp_path: Path):
+    source = _write_lock_source(tmp_path / "replay", raw_sha256=_FAKE_RAW)
+    lock = so.resolve_pinned_lock(
+        "cap", _FAKE_RAW, str(source),
+        isolate_fields_active=True,
+        reproduction_baseline_eca_mode={"cap": "skip_forbidden_harmonics_v1"},
+        reproduction_baseline_lock={"cap": "27"},
+    )
+    assert lock.kind == "directory"
+    assert lock.locked_bin == 27
+
+
+def test_resolve_pinned_lock_rejects_unrelated_raw_hash_portable(tmp_path: Path):
+    """OSR-03 R2: a directory not hash-bound to the scored capture is rejected."""
+    source = _write_lock_source(tmp_path / "replay", raw_sha256=_FAKE_RAW)
+    with pytest.raises(ValueError, match="OSR-03 R2"):
+        so.resolve_pinned_lock(
+            "cap", "0" * 64, str(source),
+            isolate_fields_active=False, reproduction_baseline_eca_mode={},
+            reproduction_baseline_lock={},
+        )
+
+
+def test_resolve_pinned_lock_live_mode_rejects_unrelated_mirror_hash_portable(
+    tmp_path: Path,
+):
+    """OSR-03 R2 on the `mode="live"` branch, which the real-data tests never reach."""
+    source = _write_lock_source(tmp_path / "live", raw_sha256=_FAKE_RAW, mode="live")
+    with pytest.raises(ValueError, match="OSR-03 R2"):
+        so.resolve_pinned_lock(
+            "cap", "0" * 64, str(source),
+            isolate_fields_active=False, reproduction_baseline_eca_mode={},
+            reproduction_baseline_lock={},
+        )
+
+
+def test_resolve_pinned_lock_isolate_active_requires_baseline_eca_mode_portable(
+    tmp_path: Path,
+):
+    source = _write_lock_source(tmp_path / "replay", raw_sha256=_FAKE_RAW)
+    with pytest.raises(ValueError, match="OSR-03 R3"):
+        so.resolve_pinned_lock(
+            "cap", _FAKE_RAW, str(source),
+            isolate_fields_active=True, reproduction_baseline_eca_mode={},
+            reproduction_baseline_lock={},
+        )
+
+
+def test_resolve_pinned_lock_missing_metadata_is_rejected_portable(tmp_path: Path):
+    empty = tmp_path / "no_metadata"
+    empty.mkdir()
+    with pytest.raises(ValueError, match="no run_metadata.json"):
+        so.resolve_pinned_lock(
+            "cap", _FAKE_RAW, str(empty),
+            isolate_fields_active=False, reproduction_baseline_eca_mode={},
             reproduction_baseline_lock={},
         )
 
