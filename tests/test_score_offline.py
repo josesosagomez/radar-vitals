@@ -617,7 +617,11 @@ def test_main_dirty_tree_with_allow_dirty_proceeds_past_the_gate(monkeypatch, tm
 # ── End-to-end real-capture run (small capture, both estimands, single config) ─
 
 @_REQUIRE_REAL_DATA
-def test_end_to_end_real_capture_rerun_estimand(tmp_path):
+def test_end_to_end_real_capture_rerun_estimand(tmp_path, monkeypatch):
+    # `reproducible` is `is_tree_clean()`, not a function of --allow-dirty: the flag only
+    # bypasses the refusal to run. Pin a dirty tree so the assertion at the end of this
+    # test is deterministic instead of depending on whatever is uncommitted right now.
+    monkeypatch.setattr(so, "is_tree_clean", lambda: False)
     out_root = tmp_path / "score_offline_out"
     so.main([
         "--captures", str(MASSIMO2),
@@ -656,7 +660,8 @@ def test_end_to_end_real_capture_rerun_estimand(tmp_path):
     assert summary["origin_is_approximate"] is True
     assert summary["lock_provenance"]["kind"] == "rerun_warmup"
     assert summary["hr_reference_marginal"]["n_windows"] == 6
-    assert summary["reproducible"] is False  # --allow-dirty was used above
+    assert summary["reproducible"] is False  # pinned dirty above
+    assert summary["scorer_git_dirty"] is True
 
 
 @_REQUIRE_REAL_DATA
