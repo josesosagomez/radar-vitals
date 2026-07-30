@@ -36,6 +36,8 @@ from __future__ import annotations
 import numpy as np
 from scipy.fft import fft as sp_fft, rfft as sp_rfft, rfftfreq as sp_rfftfreq
 
+from .clutter import CLUTTER_METHODS, remove_static_clutter
+
 
 # ---------------------------------------------------------------------------
 # Internal helpers
@@ -103,17 +105,25 @@ def extract_chest_phase(
     cube_slice: np.ndarray,
     locked_bin: int,
     method: str = "delta_before_mean",
+    clutter_removal: str = "none",
 ) -> np.ndarray:
     """Extract accumulated chest phase from a raw ADC cube slice.
 
     Applies a Hann window over ADC samples before the range FFT, selects
-    `locked_bin`, then aggregates across chirps and RX channels.
+    `locked_bin`, optionally removes the bin's static component, then aggregates
+    across chirps and RX channels.
 
     Parameters
     ----------
     cube_slice : (N, chirps, rx, adc_samples) complex64
     locked_bin : range FFT bin index for the chest.
     method     : "delta_before_mean" or "mean_phasor".
+    clutter_removal : {"none", "slow_time_mean"}, default "none".
+        **Default "none" is the pre-2026-07-30 behaviour, bit-for-bit.** See
+        `src/clutter.py` for what the non-default does, why it is off, and why a
+        high clutter-to-signal ratio is not on its own evidence that enabling it
+        helps. No scored configuration should set this until the coverage A/B
+        exists.
 
     Returns
     -------
@@ -123,6 +133,10 @@ def extract_chest_phase(
     if method not in ("delta_before_mean", "mean_phasor"):
         raise ValueError(
             f"method must be 'delta_before_mean' or 'mean_phasor', got {method!r}"
+        )
+    if clutter_removal not in CLUTTER_METHODS:
+        raise ValueError(
+            f"clutter_removal must be one of {CLUTTER_METHODS}, got {clutter_removal!r}"
         )
     N, _, _, n_adc = cube_slice.shape
     n_bins = n_adc  # complex FFT: n_bins == n_adc
@@ -137,6 +151,10 @@ def extract_chest_phase(
     windowed  = cube_slice * hann_win
     range_fft = sp_fft(windowed, axis=3)             # (N, chirps, rx, n_adc)
     bin_vals  = range_fft[:, :, :, int(locked_bin)]  # (N, chirps, rx)
+
+    # Identity when clutter_removal == "none" (returns the same object, no copy),
+    # so the default path is unchanged down to the bit.
+    bin_vals = remove_static_clutter(bin_vals, clutter_removal)
 
     if method == "mean_phasor":
         phasors = bin_vals.mean(axis=(1, 2))  # (N,) complex

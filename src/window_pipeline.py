@@ -65,6 +65,11 @@ def run_window_dsp(
         cube,
         locked_bin=locked_bin,
         method=cfg["phase"]["method"],
+        # .get(), not ["..."]: a config written before 2026-07-30 has no such key,
+        # and defaulting here keeps its run_config_hash — and therefore every result
+        # already recorded under it — unchanged. A config that wants the non-default
+        # must say so explicitly, which is also what --isolate-fields needs to see.
+        clutter_removal=cfg["phase"].get("clutter_removal", "none"),
     )
     phase_clean = remove_impulse_noise(
         phase_raw,
