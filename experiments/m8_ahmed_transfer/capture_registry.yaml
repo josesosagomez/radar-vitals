@@ -1,0 +1,166 @@
+# M8 Step 1b binding capture registry (base plan section 3.3).
+#
+# Values are transcribed from the approved plan, NOT measured here: plan section 8 step 3
+# forbids opening any real adc_stream.bin or Masimo file during implementation. Every hash,
+# lock, and count below is verified against the files at execution time, under
+# authorization, and any mismatch is fatal.
+#
+# The `radar` and `reference` sections are deliberately separate. Radar code is handed only
+# the radar section and can never reach a Masimo path; the scorer is handed only the
+# reference section and never sees a raw ADC path. See src/m4/capture_registry.py.
+#
+# Paths are explicit. Do NOT rediscover captures by scanning for a uniform session_id —
+# massimo 3 stores `massimo_3`, so a uniform pattern silently misses it.
+
+schema_version: 1
+registry_id: m8_ahmed_transfer_captures_v1
+root: results/live_demo
+
+# Shared decode geometry. Authoritative source at execution time is each capture's own
+# hash-verified metadata; these values must agree with it or the run is fatal.
+geometry:
+  adc_samples: 256
+  rx: 4
+  chirps_per_frame: 32
+  sample_dtype: complex_int16
+  bytes_per_frame: 131072
+  iq_swap: true
+  frame_rate_hz: 20.0
+  range_resolution_m_approx: 0.0436
+
+# Frozen offline grid: contiguous, non-overlapping 600-frame / 30 s windows from k=0.
+# The 3 s hop in live metadata is a display/replay value and must not create overlap.
+window_grid:
+  frames_per_window: 600
+  window_seconds: 30
+  starts_at_k: 0
+  total_windows: 128          # sum of per-capture `windows`
+  evaluation_k_ge_1_windows: 120
+
+radar:
+  m1:
+    directory: 20260713_172042_live_demo_massimo1
+    frames: 3610
+    windows: 6
+    tail_frames: 10
+    recorded_lock: 23
+    rerun_lock: 27
+    capture_config_sha256: c38ae7ae8b363b82d5635760716389aeffcc9021159c6dbcaf99adcae3493d71
+    adc_stream_sha256: dc2be2d008b48227c4bebde9bb5974133d3cf60196b4216e1ba630d175203f18
+    metadata_sha256: d0b92f3be1fa1d214f3c72035ffc82799ae92b1b0c48f63f91356b67e43a7a6f
+    warmup_sha256: be781af51c03ef42baee172413c03b2b63a49784d45691181e8c9c4d2ef68e07
+  m2:
+    directory: 20260713_182002_live_demo_massimo2
+    frames: 3611
+    windows: 6
+    tail_frames: 11
+    recorded_lock: 20
+    rerun_lock: 26
+    capture_config_sha256: c38ae7ae8b363b82d5635760716389aeffcc9021159c6dbcaf99adcae3493d71
+    adc_stream_sha256: 112a64bf3cfc820868ad46df19a9dbfba7b0ce2612547e4dd3e5131bec1f88bf
+    metadata_sha256: f6a922dd85ce093c943fba4791a96a507edf9aa4e12d202fb0d5041cfb6d8f01
+    warmup_sha256: 2483b18df3a38759413d506c223686b62fdd8c1f50b7bb5717d8cea55d90bfc9
+  sweep:
+    directory: 20260714_180523_live_demo_sweep
+    frames: 9611
+    windows: 16
+    tail_frames: 11
+    recorded_lock: 21
+    rerun_lock: 26
+    capture_config_sha256: e171e13ca64b9f6ec47c2d9439244226c18faa5306d8b9073e9d1731d417431f
+    adc_stream_sha256: 91bc422d9f33bbde0fc1549018692d008dee4f9c04ca374e04f153bb80a7a96d
+    metadata_sha256: 828b972c18736ac7e46d6a893bbf9e2ca486edea7e666cebdd6a22be171ff89c
+    warmup_sha256: 183387940992588bb693669b4ec310eb5ce8fe502c9e39c55f026cb836e43465
+  m3:
+    directory: 20260728_224902_live_demo_massimo3
+    frames: 12005
+    windows: 20
+    tail_frames: 5
+    recorded_lock: 26
+    rerun_lock: 26
+    capture_config_sha256: 60bf86663283a7b6a425e91d1c5b8f7fefb9ffb9a18bf1eb8337ad77f0f236c6
+    adc_stream_sha256: cca0cdcbaa8235672c96f524666835824aadf40aa78b12197705da63dbeb7b00
+    metadata_sha256: 4af3468d9e3809542e4c56c6ae67f1e18e060d0ea8b9d2bf8dc0a6907db0fcf8
+    warmup_sha256: de6c40db7550e5119806565edd10c6049f62f7135105648a6daf937d3f381136
+  m4:
+    directory: 20260728_230903_live_demo_massimo4
+    frames: 12002
+    windows: 20
+    tail_frames: 2
+    recorded_lock: 25
+    rerun_lock: 25
+    capture_config_sha256: 60bf86663283a7b6a425e91d1c5b8f7fefb9ffb9a18bf1eb8337ad77f0f236c6
+    adc_stream_sha256: 2edc2c6d1976407eea40101550b1f3c0ab442843a8cb8311a8ab4538bc423968
+    metadata_sha256: 22541f71195c0fbb78f2c8c9923d66958dcad372956105ec4c2bcdc268d191d4
+    warmup_sha256: 30fdc423658517286fccc780bae3f5f61853335aa5d5ce62512b9873c5f7ed76
+  m5:
+    directory: 20260728_232415_live_demo_massimo5
+    frames: 12005
+    windows: 20
+    tail_frames: 5
+    recorded_lock: 25
+    rerun_lock: 25
+    capture_config_sha256: 60bf86663283a7b6a425e91d1c5b8f7fefb9ffb9a18bf1eb8337ad77f0f236c6
+    adc_stream_sha256: a55a0e42f9972d6bcf5173870475f69694aabd808d84d4182fbdef544e76bb5b
+    metadata_sha256: 280a10c9ab99f6eb1cf019bd440432392b0514383a26bba87bbf569acd4a6fa1
+    warmup_sha256: 3066e79137a89ac728149b648cd65509891cb829a3c4f8b58a524a710031b560
+  m6:
+    directory: 20260729_002158_live_demo_massimo6
+    frames: 12003
+    windows: 20
+    tail_frames: 3
+    recorded_lock: 24
+    rerun_lock: 24
+    capture_config_sha256: 60bf86663283a7b6a425e91d1c5b8f7fefb9ffb9a18bf1eb8337ad77f0f236c6
+    adc_stream_sha256: b81ff843eff68e0bc9c05194525f065a9edc8346ac65397bf96d181d2e5a9103
+    metadata_sha256: a97c74570be68585bea8d1382ae6739f4bbd86db164f7a54170a23eea2524a4d
+    warmup_sha256: 467d436491d0684c99cae51e246ef64bfea4c8e7be8ad43b3722798f50af4181
+  m7:
+    directory: 20260729_004815_live_demo_massimo7
+    frames: 12020
+    windows: 20
+    tail_frames: 20
+    recorded_lock: 32
+    rerun_lock: 32
+    capture_config_sha256: 60bf86663283a7b6a425e91d1c5b8f7fefb9ffb9a18bf1eb8337ad77f0f236c6
+    adc_stream_sha256: 782166e0a0dda411e3f2eecf891fd1193ebdfa681c3edd9919ee7b1688c053c5
+    metadata_sha256: 7b73a0cb89dde2e4208b4213e929cc4ebd4b449a0a059ac889fe1c8b723403dd
+    warmup_sha256: 75f26bd73bfae1b52a9c6a947a91e7ca6b690053f04eceefd5c31a5f0022067f
+
+reference:
+  m1:
+    masimo_sha256: 960af7f5038a8fe9233b38dfcb583872f3dba8c89082c72cf8e05ed371732bf9
+  m2:
+    masimo_sha256: d1cb91a43691cb10907425b15c2f0f1d02da09d12825d399225c8b16e89d32ff
+  sweep:
+    masimo_sha256: 5974a9f303f79729c254fb4dc904d1c85c4bea006fafc202d12e0267de93de04
+  m3:
+    masimo_sha256: 92054b471a04eefdbe4de45988846bab503cf61a0e5c619e5d8f545ef0a965cb
+  m4:
+    masimo_sha256: 286b6e3fe085acbef15a85448f383e95945cd3ef23bf309c0159d0dc3dc6dfe5
+  m5:
+    masimo_sha256: 6e0de2788f3b1162bce1782b70a8a7a2d5a752fdc52b3ca12029119368aa8498
+  m6:
+    masimo_sha256: 119b740e801a410be2af4ce8962b2defb2a95a9aaf2b2f9b7494d097a7143178
+  m7:
+    masimo_sha256: 778cbbc8f4c2618294c6a29e2ba29c2022504bb4bdd2fe437637cf57ef4b0684
+
+# All eight are single-subject development/apparent data. None is a holdout, and none
+# becomes one retroactively. Errors are reported per capture and pooled only within a
+# protocol stratum — never as an all-capture headline (base plan section 3.5).
+roles:
+  data_role: development_apparent_single_subject
+  holdout: none
+protocol:
+  m1: natural
+  m2: paced_16_bpm            # target retained as provenance; not scored in this milestone
+  sweep: paced_schedule_target_unavailable   # 12/15/18/21 transitions were never persisted
+  m3: unknown_protocol_development
+  m4: unknown_protocol_development
+  m5: unknown_protocol_development
+  m6: unknown_protocol_development
+  m7: unknown_protocol_development
+strata:
+  natural: [m1]
+  paced: [m2, sweep]
+  unknown: [m3, m4, m5, m6, m7]
