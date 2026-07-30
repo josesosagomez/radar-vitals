@@ -8277,3 +8277,62 @@ explicit on-grid precondition alongside their tolerances.
 capture registry, and experiment config. No real data has been touched and none may be until a
 frozen gate bundle exists with `promotion_eligible=true` plus the separate authorization.
 
+## 2026-07-30 - Step 1b: bundle writer, provenance, CLI, and a fail-open bug
+
+**Set out to do:** build the immutable stage-bundle writer, the scoped source/environment
+attestations, and the `synthetic` CLI, so the passing gate can be frozen as an artifact.
+
+**Worked (with evidence):**
+- `src/m4/bundle.py` (`10e0711`): staging directory plus atomic rename; manifest lists every payload
+  with size and digest but **excludes itself**, so the structure is acyclic and
+  `sha256(manifest.json)` is the stage identity. No self-referential `bundle.json` — Step 1a had one
+  and it cannot be hashed without a fixed point. Strict JSON (UTF-8, sorted keys,
+  `allow_nan=False`), NPZ rejects object dtype and loads with `allow_pickle=False`, `LATEST.json`
+  lives outside the run directory and can only be published by a bundle that is **both** complete
+  and promotion-eligible.
+- `src/m8/ahmed_provenance.py`: hashes the scoped source set, records git commit/branch/dirty state,
+  and computes `promotion_eligible`. Environment attestation captures interpreter, platform, byte
+  order, versions, and NumPy BLAS config; `conda list --explicit` is captured or its failure
+  recorded.
+- `scripts/m8_ahmed_transfer.py`: the `synthetic` command runs the gate and freezes a bundle. The
+  real-data commands are registered but **refuse with an explanation**, because base plan §5.1
+  forbids adding executable code between the gate and the real stages.
+- Verified end to end into a temporary directory: with a dirty tree the bundle is written and
+  labelled `INELIGIBLE` with the offending paths listed; after committing, the same run reports
+  `promotion: eligible` and publishes `LATEST.json`. Full suite **1974 passed, 5 skipped**.
+- **Deliberately did not freeze a canonical gate bundle.** Base plan §5.1 requires all executable
+  scientific, runner, scorer, serializer, CLI, and fixture-test code to be implemented and passing
+  *before* the gate runs, with nothing added afterwards. The runner and scorer do not exist yet, so
+  freezing now would guarantee its own invalidation. `results/m8_ahmed_transfer/` does not exist.
+
+**Failed / did not work, and why:**
+- **A fail-open defect in the promotion check — the most serious bug of the session.**
+  `git_status_paths` originally reused `git_text`, which calls `.strip()`. Porcelain's status column
+  carries significant leading spaces (` M path`), so stripping them and then slicing `[3:]`
+  truncated every path by two characters (`src/m8/mod.py` -> `rc/m8/mod.py`). Nothing ever matched,
+  `scoped_dirty` was always empty, and **a dirty tree reported as promotion-eligible** — failing
+  open on the single check whose whole purpose is to fail closed. Replaced with a dedicated parser
+  using `-z` (literal NUL-separated paths, no quoting to unpick) and `--untracked-files=all` (so a
+  new directory is not collapsed to `dir/` and its contents hidden). Pinned by a named regression
+  test. Found only because a test asserted the dirty case rather than trusting the happy path.
+- Scoped paths could silently degrade to absolute machine-specific values when `root` was
+  unresolved, which would have made the source manifest unreproducible — the same class of defect as
+  the earlier CRLF hash problem. Root is now resolved and an out-of-root path raises rather than
+  falling back.
+- The first `git`-state test failed spuriously: rewriting `x = 1` as `x = 2` keeps the file the same
+  size, and git's index caches on `(size, mtime)`, so a same-second rewrite was never re-hashed. The
+  fixture now changes the file's length.
+- **Resolved an apparent plan conflict.** §4.3 scopes the Ahmed PDF into `source_manifest.json`,
+  but the PDF is copyrighted and gitignored via `literature*/`, so requiring it to be tracked would
+  have deadlocked the gate permanently — it could never be promotion-eligible. §5.1's promotion rule
+  speaks of "plan/source/config/test" files, which a reference PDF is not. It is now hashed for
+  provenance in a separate non-gating `reference_entries` list. The distinction is real: an
+  uncommitted *source* means the code that ran is unrecoverable, while an uncommitted *reference* is
+  still fully identified by its hash and cannot change what the code does.
+
+**Retired / no longer used:** retired the use of `git_text` for porcelain parsing, and retired the
+absolute-path fallback in scoped-path resolution. Both silently produced wrong provenance.
+
+**Next:** the real-path runner, scorer, capture registry, and experiment config, all fixture-tested
+with no real-data access. Only once those exist may the canonical gate be frozen, per §5.1.
+

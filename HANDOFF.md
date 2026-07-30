@@ -37,7 +37,7 @@ after the synthetic gate—run a strictly exploratory comparison on all eight sa
 - Existing estimator/scorer behaviour is unchanged. The only edits to shipped code are the
   `src/m4/outcome.py` extraction (verified byte-for-byte identical to the original block) and its
   two import sites; everything else is new modules and tests.
-- **Test baseline: the full suite is green** — `1944 passed, 5 skipped, 0 failed`
+- **Test baseline: the full suite is green** — `1974 passed, 5 skipped, 0 failed`
   (was `3 failed, 1822 passed, 2 skipped` at the start of 2026-07-30).
 - **Line endings are pinned to LF and this is load-bearing.** Before `3aec30a`, `core.autocrlf=true`
   with no `.gitattributes` meant a fresh clone checked out CRLF and every recorded SHA-256 changed
@@ -80,6 +80,9 @@ Built and tested (no real capture or Masimo file has been opened):
 | `src/m8/ahmed_transfer.py` | `estimate_phase_ha` core + `AhmedPhaseEstimatorSuite` (six arms) |
 | `src/m8/ahmed_synthetic.py` | the §2.2 synthetic control, extraction oracles, phase-slip audit |
 | `src/m8/ahmed_gate.py` | `evaluate_gate` — P1–P4 checks and the per-domain transfer verdict |
+| `src/m4/bundle.py` | immutable staged bundles, acyclic manifests, fail-closed `LATEST.json` |
+| `src/m8/ahmed_provenance.py` | scoped source manifest, git state, promotion eligibility, env attestation |
+| `scripts/m8_ahmed_transfer.py` | `synthetic` command; real-data commands refuse with an explanation |
 
 **The gate passes in-process** (`evaluate_gate()` -> `passed`, 14/14 checks), and the transfer
 verdicts are exactly as predeclared:
@@ -89,10 +92,18 @@ verdicts are exactly as predeclared:
 | `collision_domain_from_fb` | `not_transferred_under_declared_assumptions` | ~20 bpm (the breathing bin) |
 | `real_representative_domain` | `transferred_under_declared_seed_and_configuration` | 80.04 bpm |
 
-Not yet built: the immutable bundle writer (manifest, provenance, source/test/environment
-attestations, `gate.json`, `evidence.npz`), the CLI, the runner, the scorer, the experiment config,
-and the capture registry. **No frozen gate bundle exists yet**, so nothing is promotion-eligible and
-no real path may be touched.
+Verified end to end into a temporary directory: on a dirty tree the bundle writes and is labelled
+`INELIGIBLE` with the offending paths listed; on a clean tree the same run reports
+`promotion: eligible` and publishes `LATEST.json`.
+
+Not yet built: the runner, the scorer, the strict production serializer, the experiment config, and
+the capture registry.
+
+**No canonical gate bundle has been frozen, and this is deliberate.** Base plan §5.1 requires *all*
+executable scientific, runner, scorer, serializer, CLI, and fixture-test code to be implemented and
+passing **before** the gate runs, with nothing added afterwards. The runner and scorer do not exist
+yet, so freezing now would guarantee the gate's own invalidation. `results/m8_ahmed_transfer/` does
+not exist. No real path may be touched.
 
 ### Why Addendum A exists
 
@@ -146,13 +157,13 @@ Next steps, in order:
 4. ~~Implement the scientific core and suite contracts.~~ **Done** — `574657a`.
 5. ~~Implement both concrete suites.~~ **Done** — `025d259`.
 6. ~~Implement the synthetic generator and gate evaluation.~~ **Done** — `0e34078`.
-7. Implement the immutable bundle writer (manifest, provenance, `source_manifest.json`,
-   `test_attestation.json`, `environment_attestation.json`, `gate.json`, `evidence.npz`) and the
-   `synthetic` CLI command. **← current task**
-8. Implement the runner, scorer, strict serializers, experiment config, and capture registry, with
-   portable fixture tests — **without opening any real capture or Masimo file**.
-9. Run the focused, affected, new, and broad fixture-only suites; freeze the scoped source, test, and
-   environment attestations.
+7. ~~Implement the bundle writer, provenance, and `synthetic` CLI.~~ **Done** — `10e0711`.
+8. Implement the runner, scorer, strict production serializer, experiment config, and capture
+   registry, with portable fixture tests — **without opening any real capture or Masimo file**.
+   **← current task**
+9. Add `test_attestation.json` (exact ordered pytest node IDs and counts, not a bare number — the
+   plan's "85-test set" was never enumerated) and run the focused, affected, new, and broad
+   fixture-only suites.
 10. Execute the synthetic gate as a **frozen bundle**. It already passes in-process; what remains is
     writing it immutably with its attestations so it can parent a real stage.
 11. Stop after the gate. No real path may be touched unless the gate is complete,
@@ -235,6 +246,16 @@ Planning approval and real-data authorization remain separate decisions at diffe
   the scorer OSR-03 tests, and the scorer end-to-end test. When writing any test that asserts on
   promotion, `reproducible`, or git cleanliness, **pin the state** (`_pin_git_provenance`, or
   `monkeypatch.setattr(so, "is_tree_clean", ...)`). Do not let it read the ambient worktree.
+- **Never parse `git status --porcelain` with a stripped string.** Its status column carries
+  significant leading spaces; stripping them and slicing `[3:]` truncates every path by two
+  characters and makes a dirty tree look clean — a fail-open bug that defeated the promotion check
+  until it was caught. Use `src/m8/ahmed_provenance.py::git_status_paths`, which uses `-z` and
+  `--untracked-files=all`.
+- **Git's index caches on `(size, mtime)`.** A test that rewrites a file with same-length content in
+  the same second will not be seen as modified. Change the length.
+- The Ahmed PDF is copyrighted and gitignored, so it is hashed in `reference_entries` and does
+  **not** gate promotion. Do not "fix" this by adding it to the gating set — that deadlocks the gate
+  permanently.
 - **The two replay directories are gone for good.** `results/live_demo/` holds exactly the eight
   canonical captures; `20260726_173434_replay_unknown` and `20260727_182319_replay_unknown` were
   transient 2026-07-26/27 bin-drift artifacts and `results/` blobs are gitignored. The
