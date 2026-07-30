@@ -154,10 +154,25 @@ The following is committed **now**, from §A1, and is falsifiable:
 
 - **P1 — selection rule.** On the clean signal, the selected candidate is the lowest in-band integer
   divisor of the truth bin whose harmonic row captures the truth line.
-- **P2 — exact degeneracy.** score(\(q=f_h\)) equals score(\(q=f_h/2\)) bit-identically when both are
-  in band; non-divisor candidates score exactly zero.
-- **P3 — exact collision ratio.** With \(q=f_b\) in the heart domain, score ratio to \(q=f_h\) is
-  exactly 2 for H=3 and exactly 3 for H=5.
+- **P2 — subharmonic degeneracy.** score(\(q=f_h\)) equals score(\(q=f_h/2\)) when both are in band,
+  and a non-divisor candidate carries no signal.
+- **P3 — collision ratio.** With \(q=f_b\) in the heart domain, the score ratio to \(q=f_h\) is
+  2 for H=3 and 3 for H=5.
+
+**P2 and P3 are exact in exact arithmetic but not in float64.** An earlier revision of this addendum
+described them as holding "bit-identically" and "exactly zero"; that came from reading 4-decimal
+output and was an overclaim, corrected here. Measured on the real 30 s grid by
+`scripts/m8_step1b_gate_prediction.py`, whose `degeneracy_report()` now prints these at full
+precision:
+
+| Quantity | Observed | Gate tolerance |
+|---|---|---|
+| P2 relative difference | 2.0e-15 (H=3), 6.8e-16 (H=5) | ≤ 1e-12 relative |
+| P3 ratio | 1.999999999999994 (H=3), 2.999999999999981 (H=5) | ≤ 1e-12 relative |
+| P3 non-divisor score | 1.5e-12 absolute = 8.8e-16 of the 1683.89 peak | ≤ 1e-12 relative to peak |
+
+The tolerances are roughly 1000× the observed round-off, so they survive a different BLAS while
+remaining about nine orders of magnitude below any real spectral line.
 - **P4 — selection table.** The full grid × domain × vital × \(H\) table emitted by
   `scripts/m8_step1b_gate_prediction.py`, whose stdout SHA-256 is recorded in the resolved config at
   freeze time.

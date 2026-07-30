@@ -84,9 +84,12 @@ Identical signal, grid, and accumulator; only the heart candidate domain differs
 The synthetic domain starts at \(f_b\), admitting the breathing fundamental as a heart candidate;
 \(\beta_b/\beta_h = d_b/d_h = 2\) exactly, so it outscores the true heart bin. The real band excludes
 it. Two further findings: the synthetic `n_fft=4096` pad is leakage-dominated (BR selects 6.578 /
-4.933 bpm padded vs 20.011 bpm native), and the accumulator degeneracy is exact — score(\(f_h\)) and
-score(\(f_h/2\)) are bit-identical, non-divisors score exactly `0.0000`, collision ratio is exactly
-2 (H=3) and 3 (H=5).
+4.933 bpm padded vs 20.011 bpm native), and the accumulator is degenerate under
+\(q \to q/m\) for integer divisors \(m\) — score(\(f_h\)) equals score(\(f_h/2\)), non-divisor
+candidates carry no signal, and the collision ratio is 2 (H=3) and 3 (H=5). These are exact in
+exact arithmetic and hold to ~1e-15 relative in float64; see addendum §A4.1 for the measured values
+and the gate tolerances. Do not restate them as bit-exact — an earlier revision did, from rounded
+output, and it was wrong.
 
 ## 3. Active task and next steps
 

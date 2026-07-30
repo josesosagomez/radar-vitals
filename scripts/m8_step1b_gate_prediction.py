@@ -78,6 +78,36 @@ def accumulate(phase: np.ndarray, fs: float, n_fft: int, h: int, lo: float, hi: 
     return freqs, bins, scores
 
 
+def degeneracy_report() -> None:
+    """P2/P3 evidence at full precision.
+
+    These are exact identities in exact arithmetic but not in float64: the FFT introduces
+    round-off, so the printed values are quoted in full rather than rounded. An earlier
+    revision of the addendum described them as "bit-identical" and "exactly zero" on the
+    strength of 4-decimal output, which was an overclaim; the tolerances in
+    `plans/m8_step1b_ahmed_transfer_addendum_a.md` section A4.1 come from these numbers.
+    """
+    fs, n, h_bin, b_bin = 20.0, 600, 40, 10
+    clean, _ = build(fs, n)
+    spectrum = np.abs(np.fft.rfft(clean, n=n))
+    peak = float(spectrum.max())
+    print("== P2/P3 degeneracy, clean signal, real 30 s grid ==")
+    print(f"  spectrum peak magnitude = {peak!r}")
+    for h in HARMONICS:
+        def score(b: int) -> float:
+            return float(spectrum[b * np.arange(1, h + 1)].sum() / h)
+
+        fundamental, subharmonic = score(h_bin), score(h_bin // 2)
+        rel = abs(fundamental - subharmonic) / fundamental
+        non_divisor = score(13)  # 13*{1,2,3} = {13,26,39} misses bin 40
+        print(f"  H={h}: score(f_h)={fundamental!r}")
+        print(f"  H={h}: score(f_h/2)={subharmonic!r}  rel_diff={rel:.3e}")
+        print(f"  H={h}: score(non-divisor bin 13)={non_divisor!r} "
+              f"rel_to_peak={non_divisor / peak:.3e}")
+        print(f"  H={h}: score(f_b)/score(f_h)={score(b_bin) / fundamental!r}")
+    print()
+
+
 def main() -> None:
     print("M8 Step 1b synthetic gate — pre-implementation prediction")
     print(f"beta_breath={BETA_B:.10f} rad  beta_heart={BETA_H:.10f} rad  "
@@ -105,6 +135,7 @@ def main() -> None:
                       f"({sel_clean * res_bpm:7.3f} bpm) | noisy select "
                       f"{sel_noisy * res_bpm:7.3f} bpm  {'PASS' if ok else 'FAIL'}")
         print()
+    degeneracy_report()
 
 
 if __name__ == "__main__":
