@@ -19,7 +19,7 @@ Two invariants matter for provenance and are enforced here rather than by conven
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Mapping, Protocol, runtime_checkable
 
 import numpy as np
@@ -117,10 +117,15 @@ class SuiteWindowResult:
 
     Shared arrays are stored once here — never duplicated into each arm — and each arm
     refers to them by `shared_signal_hash`.
+
+    `arm_outcomes` holds classifier labels *outside* the native payloads, so a native
+    payload stays byte-equivalent to what a direct estimator call would produce (plan
+    section 4.1). Only arms whose spec declares a classifier may appear here.
     """
 
     shared_evidence: Mapping[str, object]
     arm_native_results: Mapping[str, dict]
+    arm_outcomes: Mapping[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         validate_evidence_mapping(self.shared_evidence, label="shared_evidence")
@@ -129,6 +134,12 @@ class SuiteWindowResult:
         for arm_id, native in self.arm_native_results.items():
             if not isinstance(native, dict):
                 raise TypeError(f"arm {arm_id!r} native result must be a dict")
+        unknown = set(self.arm_outcomes) - set(self.arm_native_results)
+        if unknown:
+            raise ValueError(f"arm_outcomes references unknown arms {sorted(unknown)}")
+        for arm_id, label in self.arm_outcomes.items():
+            if not isinstance(label, str):
+                raise TypeError(f"outcome for arm {arm_id!r} must be str")
 
 
 @runtime_checkable

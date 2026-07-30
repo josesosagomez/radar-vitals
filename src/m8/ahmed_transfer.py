@@ -35,20 +35,30 @@ from typing import Literal
 
 import numpy as np
 
-from src.m4.estimator_suite import SuiteWindowResult, canonical_plain, freeze_array
+from src.m4.estimator_suite import (
+    EstimatorArmSpec,
+    SuiteWindowResult,
+    canonical_plain,
+    freeze_array,
+    validate_arm_specs,
+    validate_returned_arms,
+)
 from src.m8.ahmed_fig8 import (
     SUPPRESSION_PROFILES,
     SuppressionProfile,
     accumulate_harmonics,
     _select_scores,
 )
+from src.respiration import extract_chest_phase
 from src.window_pipeline import run_config_hash
 
 __all__ = [
     "AhmedPhaseConfig",
+    "AhmedPhaseEstimatorSuite",
     "CandidateDomain",
     "COLLISION_DOMAIN_FROM_FB",
     "ESTIMATOR_ID",
+    "PHASE_EXTRACTION_METHOD",
     "REAL_REPRESENTATIVE_DOMAIN",
     "arm_id_for",
     "estimate_phase_ha",
@@ -56,6 +66,10 @@ __all__ = [
 ]
 
 ESTIMATOR_ID = "ahmed_fixed_h_phase_v1"
+
+#: The only real mapping (base plan section 3.1). Not configurable: an alternative method
+#: would be a different experiment, not a different setting.
+PHASE_EXTRACTION_METHOD = "delta_before_mean"
 
 Vital = Literal["breath", "heart"]
 
@@ -452,6 +466,63 @@ def _invalid_arm(
         breath_evidence=breath,
     )
     return record
+
+
+class AhmedPhaseEstimatorSuite:
+    """Six Ahmed arms over one window, sharing a single extracted phase.
+
+    `extract_chest_phase` is called **once** per window and the resulting phase is scored
+    by all six arms, so every arm row references the same `shared_signal_hash`. The suite
+    declares no outcome classifiers: the production AHET classifier's preconditions are
+    properties of the production gate and do not hold for these arms (plan section 3.4).
+
+    Configuration is bound at construction and cannot be substituted at call time.
+    """
+
+    suite_id = "ahmed_fixed_h_phase_suite_v1"
+
+    def __init__(self, config: AhmedPhaseConfig) -> None:
+        if not isinstance(config, AhmedPhaseConfig):
+            raise TypeError("config must be an AhmedPhaseConfig")
+        self._config = config  # frozen dataclass; nothing to copy
+        self.suite_config_hash = config.config_hash()
+        self.arm_specs = tuple(
+            EstimatorArmSpec(
+                arm_id=arm_id_for(harmonics, profile),
+                estimator_id=ESTIMATOR_ID,
+                run_config_hash=config.arm_config_hash(harmonics, profile),
+                harmonic_count=harmonics,
+                suppression_profile=profile,
+                outcome_classifier_id=None,
+            )
+            for harmonics in config.harmonic_counts
+            for profile in config.suppression_profiles
+        )
+        validate_arm_specs(self.arm_specs)
+        self.outcome_classifiers: dict[str, object] = {}
+
+    @property
+    def config(self) -> AhmedPhaseConfig:
+        return self._config
+
+    def __call__(self, frames, locked_bin: int, fs: float) -> SuiteWindowResult:
+        cube = np.stack(list(frames)) if not isinstance(frames, np.ndarray) else frames
+        phase = extract_chest_phase(
+            cube, locked_bin=int(locked_bin), method=PHASE_EXTRACTION_METHOD
+        )
+        header = (
+            f"schema=ahmed_phase_v1|domain={self._config.domain.domain_id}"
+            f"|locked_bin={int(locked_bin)}|fs={float(fs)!r}"
+            f"|n={int(np.asarray(phase).size)}|dtype=float64"
+        )
+        result = estimate_phase_ha(
+            phase,
+            fs,
+            self._config,
+            shared_signal_hash=phase_signal_hash(header, phase),
+        )
+        validate_returned_arms(self.arm_specs, result)
+        return result
 
 
 def _arm_record(
