@@ -8444,3 +8444,56 @@ already does this: it hashes exactly the `bytes` it writes.
 **Does not block Step 1b**, which parents its stages on its own synthetic gate and reads only
 `experiments/m8_ahmed_fig8/config.yaml`, never this bundle.
 
+## 2026-07-30 - Project-state audit: three stale claims in the implementation plan corrected
+
+**Set out to do:** answer a project-level "where are we" question, which required reading outside
+the M8 Step 1b work this session had been confined to.
+
+**Worked (with evidence):**
+- **Explained the respiration collapse properly and found the two defects are one.** The
+  respiration search band is `[0.10, 0.50]` Hz, so the "6 bpm floor" is literally the lowest bin of
+  the search — the argmax sliding to the wall of its own window, i.e. no peak found. Trigger
+  (measured, `massimo1` t≈144 s): body motion doubled phase peak-to-peak 13.8 → 29–32 rad (~9 mm),
+  and the low-frequency drift swamped the breathing line. `resp_valid` stayed `1` throughout.
+- **The knock-on to HR was previously recorded as a separate defect and is not.** `f_r` feeds ECA.
+  At `f_r`=0.1 Hz, `k_max_eff = min(k_max_cap=10, floor(2.0/0.1)=20) = 10`, so harmonics land at
+  0.1…1.0 Hz; k=8,9,10 fall inside the cardiac band `[0.8, 2.0]` and are skipped as forbidden
+  (`eca_forbidden_guard_hz=0.0`), while k=1..7 sit below 0.8 Hz and cannot affect it. Net: **ECA
+  removes 0.00 dB in-band**, and HR silently degrades to a bare argmax over an uncancelled spectrum
+  while every status flag reads healthy. `scripts/live_demo_config.yaml` already says the mode is
+  "known-broken (cancels nothing in the cardiac band)"; the causal link to the collapse was not
+  written down. The two rows in the plan's defect table are now merged and cross-referenced.
+- **Corrected three stale claims in `plans/implementation_plan.md`:**
+  1. *Current state* said **4 captures / 796 tests**; actual is **8 captures / 2028 passed,
+     5 skipped**.
+  2. *Known broken* framed the respiration collapse as unfixed. The fix **landed** — band-edge veto
+     by bin identity plus STFT-consistency gates on every STFT-dependent branch
+     (`src/respiration.py::resp_edge_veto`). M2 done-when 1–4 are closed; only **#5** (score
+     reprocessed BR under the frozen M3 comparator) is open, and it is **blocked on data, not DSP**:
+     approximate alignment cannot produce a frozen-comparator outcome and no capture that can
+     discharge it exists.
+  3. *Immediate next actions* listed the **evidence floor as the open blocker on M0**. It was frozen
+     by the user on 2026-07-24/25 and is written up in `notes/analysis_prespec.md` §2a/§2b. **M0 is
+     therefore believed unblocked**, which materially changes the critical path — it had been
+     presented as waiting on a decision that was already made.
+- Also cleared the "`experiments/` empty" row: `experiments/` now holds `exp_eca_modes`,
+  `m8_ahmed_fig8`, and `m8_ahmed_transfer`. `guard_cardiac_candidate_v1` promotion still waits, but
+  on evidence (n≤2 per bucket, single-subject, `exploratory_non_frozen`), not on a missing directory.
+
+**Failed / did not work, and why:**
+- **I gave the user an over-crude status first.** I reported "M2 OPEN — blocks the whole BR goal",
+  which implied the fix did not exist. It does; only its validation is open. The distinction
+  matters because it changes what unblocks BR — a capture with proper alignment, not more DSP work.
+  Corrected in the same conversation after reading `plans/m2_respiration_fix.md` and the code.
+- No new measurement was taken this session. The honest project position is unchanged: **BR
+  end-to-end accuracy has never been measured**, and HR agreement rests on n≤2-per-bucket
+  exploratory numbers from a single subject.
+
+**Retired / no longer used:** retired the implementation plan's "4 captures / 796 tests" current
+state, its framing of the respiration collapse as unfixed, its listing of the evidence floor as an
+open M0 blocker, and its treatment of the ECA 0.00 dB finding as a defect independent of the
+collapse.
+
+**Next:** M0 assembly and deposit is the critical path and is believed unblocked. M1 is the cheapest
+risk reduction. M8 Step 1b continues in parallel.
+

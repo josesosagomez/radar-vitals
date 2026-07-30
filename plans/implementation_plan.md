@@ -69,8 +69,10 @@ implement, tune, select *and* crown a winner.
 | Windowing, quality mask, Step 5/6 pipelines | 209 + 34 + 15 + 138 tests |
 | Live demo: capture, replay, raw mirror, diagnostics | `scripts/live_demo.py`, `diagnose_live_run.py` |
 | **HR comparator pre-specification** | `notes/comparator_prespec.md` (applied, binding) |
-| Full suite | **796 passed, 1 xfailed** — 797 outcomes; an xfail is not a pass (re-verified 2026-07-24) |
-| Data | **4 raw captures, of which 3 are Masimo-referenced**; ~2.52 GB raw, all reprocessable |
+| Full suite | **2028 passed, 5 skipped** (2026-07-30). Skips are honest absences, not passes: 4 are OSR-03 tests needing replay artifacts that no longer exist, 1 is elsewhere |
+| Data | **8 live captures**, of which 3 are Masimo-referenced; all single-subject, all pre-freeze exploratory |
+| M2 respiration-collapse fix | implemented and tested — band-edge veto + STFT-consistency gates (`src/respiration.py`). **Validation (#5) still open** |
+| M8 Step 1b scientific core, suites, synthetic gate, bundle writer, registry, metrics | implemented, 2026-07-30; gate passes 14/14 in-process. **Not yet frozen as a bundle** |
 
 ### Built but never validated against a reference
 
@@ -89,13 +91,14 @@ implement, tune, select *and* crown a winner.
 
 | Defect | Status |
 |---|---|
-| **Respiration collapse** — `f_r` pins to the 6 bpm floor while `resp_valid` stays `True` | **3-for-3 on the Masimo-referenced captures** — `massimo1` (12 hops), `massimo2` (5), `sweep` (10) at the 6.00 bpm floor; **absent** from the unreferenced `live_test1` (min BR 16.0 bpm). Measured from each run's `live_estimates.csv`. **Now a blocker: BR is a goal.** |
+| **Respiration collapse** — `f_r` pinned to the 6 bpm floor while `resp_valid` stayed `True` | **FIX IMPLEMENTED** (band-edge veto by bin identity + STFT-consistency gates, `src/respiration.py::resp_edge_veto`). Historical: 3-for-3 on the Masimo-referenced captures — `massimo1` (12 hops), `massimo2` (5), `sweep` (10); absent from the unreferenced `live_test1`. **Validation open (M2 #5)**: needs a frozen-comparator score, and no capture that can discharge it exists yet |
+| ECA v1 (`skip_forbidden_harmonics_v1`) removes **0.00 dB** in-band at low f_r | **Same causal chain as the row above, not an independent defect.** With `f_r`=0.1 Hz, `k_max_eff = min(10, floor(2.0/0.1)) = 10`, so harmonics land at 0.1…1.0 Hz; k=8,9,10 fall inside the cardiac band and are skipped as forbidden, while k=1..7 sit below 0.8 Hz and cannot affect it. Net: production harmonic cancellation is inert, and HR degrades to a bare argmax over an uncancelled spectrum while every status flag reads healthy |
 | Coverage 10–46% of windows yield an accepted HR | The real bottleneck; accuracy is not |
 | Candidate ranking: magnitude order ≠ credibility order | Confirmed, n=1, no plan yet |
 | Stage 1B lag-10 veto | Designed + scaffolded, **blocked**: zero baseline severe accepts exist post-bin-fix |
 | `elapsed_s` is wall-clock in replay NPZ under `--replay-fast` | Unfixed; use `frame_idx / frame_rate_hz` |
-| `experiments/` empty | Blocks promoting `guard_cardiac_candidate_v1` |
-| ECA v1 (`skip_forbidden_harmonics_v1`) removes **0.00 dB** in-band at low f_r | Production harmonic cancellation is effectively inert |
+| `guard_cardiac_candidate_v1` not promoted | `experiments/exp_eca_modes/config_guard_v1.yaml` now exists (the old "`experiments/` empty" blocker is cleared), but promotion still waits on evidence: the only real numbers are n≤2 per bucket, single-subject, `exploratory_non_frozen` |
+| Canonical Step 1a bundle: 2 payload hashes are CRLF-era | Resolved as a documented erratum (`HISTORY.md`, 2026-07-30). Bundle deliberately unmodified per §6.1 |
 
 ### Not started
 
@@ -246,6 +249,13 @@ logged in `HISTORY.md`.
 discovering it with a volunteer seated costs a session and goodwill.
 
 ### M2 — Respiration-collapse root cause and fix
+**STATUS (2026-07-30): done-when 1–4 CLOSED; only #5 remains, and it is not discharegable with
+current data.** The fix is implemented — band-edge veto by bin identity plus STFT-consistency gates
+on every STFT-dependent branch (`src/respiration.py`, `resp_edge_veto`). What is open is the
+*validation*: #5 requires scoring reprocessed BR under the frozen M3 comparator, and approximate
+time alignment cannot produce a frozen-comparator outcome. **No capture capable of discharging it
+exists yet**, so M2 is blocked on data (M1/M5), not on further DSP work. Do not re-open the fix.
+
 **Goal.** BR cannot be a project goal while its estimator silently fails on every capture that has
 a reference to fail against (3-for-3).
 **Depends on:** nothing (offline, uses existing captures).
@@ -620,17 +630,25 @@ tags**. Fill every `[CITATION NEEDED]`. Decide Paper A (methodology) vs Paper B 
 
 ## Immediate next actions
 
-1. **M1** — live smoke test (hours, no dependencies, highest risk-reduction per minute). Unscored,
-   so it does not wait on M0.
-2. **M2** — respiration-collapse fix (blocks the entire BR goal). Offline, on the three
-   Masimo-referenced captures.
-3. **M3** — the BR comparator pre-spec. **Runs in parallel with M2, not after it** (its design
-   evidence is reference-only), and it is the only thing M0 waits on.
-4. **M8 step 1b** — Step 1a is canonical and negative; the reviewed transfer/evaluation plan now
-   awaits explicit approval. If approved, begin with its fixture-only implementation and synthetic
-   gate, not real-capture scoring.
-5. **M0** — freeze and deposit: both comparators + protocol + the four analysis decisions
-   (agreement model, evidence floor, comparison discipline, amendment mechanism). **Before M5.**
+> **Refreshed 2026-07-30.** Three items below were stale and are corrected: the evidence floor is
+> frozen (not open), the M2 fix has landed (only its validation is open), and Step 1b is approved
+> and largely implemented (not awaiting approval).
+
+1. **M0 — freeze and deposit.** Believed **unblocked**. Its one blocking decision was the evidence
+   floor, which the user froze on 2026-07-24/25 and which is written up in
+   `notes/analysis_prespec.md` §2a/§2b. M3 is closed (48/48 findings). What remains is assembly and
+   the user's irreversible deposit act, plus recording the ethics approval reference number and
+   issuing board. **This is now the critical path** — M5 cannot start before it.
+2. **M1** — live smoke test. Hours, no dependencies, unscored, highest risk-reduction per minute.
+   Does not wait on M0.
+3. **M2 done-when #5** — the *only* open part of M2. Needs a frozen-comparator BR score, which
+   needs a capture with non-approximate time alignment. **Blocked on data, not on DSP**; M1/M5
+   unblock it. Do not re-open the fix.
+4. **M8 step 1b** — approved (base plan + Addendum A) and implemented through the gate. Remaining:
+   the runner's decode/dispatch loop against a synthetic capture fixture, the production
+   serializer, `test_attestation.json`, then freeze the gate bundle. Real-data access still needs a
+   separate authorization.
+5. **M5 pilot**, once M0 is deposited.
 
 Also start early, since it gates more than it looks like it does: the **linalg-free DSP cross-model
 review** — a prerequisite of M4, therefore of M5/M8/M9/M10.
@@ -642,13 +660,16 @@ manoeuvre, and recordings may run **up to 10 minutes**. Both former blockers are
 same day — before the deposit, so no amendment is needed. That was the cheapest lever against the
 evidence shortfall and it is now spent.
 
-**One decision remains open, and it must land in M0's deposit:**
+**The evidence floor is FROZEN — this paragraph previously said otherwise and was stale.** The user
+selected it on 2026-07-24/25 and it is written up in `notes/analysis_prespec.md` §2a (Option A:
+≥1 evaluable window per session, ≥4 per subject, LoA CI half-width ≤ 5 bpm, plus the miss rule) and
+§2b (extensions). BR has **no** confirmatory floor — it is a secondary, exploratory endpoint
+reported descriptively with its own coverage. M0 therefore has no open decision blocking it.
 
-- **The evidence floor** (deferred 2026-07-24). The minimum evaluable-window count and precision
-  target M6 is judged against. It can be deferred, but not past M0 — a floor chosen after seeing
-  the pilot yield is not a floor. The related question of whether to attack coverage (M11a) before
-  freezing, so a better estimator can be the pre-registered primary rather than a post-hoc
-  footnote, is deferred with it.
+Deferred alongside it, and still genuinely open: whether to attack coverage (M11a) **before**
+freezing, so that a better estimator can be the pre-registered primary rather than a post-hoc
+footnote. Given that coverage (10–46%) is the acknowledged real bottleneck, this is worth an
+explicit decision rather than a default.
 
 Also still unrecorded, and needed for the Methods section: the **ethics approval reference number
 and issuing board**.
