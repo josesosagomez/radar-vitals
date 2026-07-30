@@ -21,7 +21,10 @@ after the synthetic gate—run a strictly exploratory comparison on all eight sa
 ### Repository
 
 - Branch: `vital_signs_ahmed_v10`
-- HEAD: `d0cf5a97a88e8d035b507c143cc5353ae713f186`; worktree clean
+- Worktree clean. Last **code** commit is `0e34078`; anything after it on this branch is
+  documentation only. (An exact HEAD SHA is not recorded here: a SHA written into this file is
+  always one commit stale by the time the file is committed, which makes it a lie rather than a
+  reference. Run `git log --oneline` for the true head.)
 - 12 commits on 2026-07-30 since `1bad25c`. The load-bearing ones:
   - `2bfc167` deterministic Step 1a provenance + scorer OSR-03 tests
   - `f9e42b6` approved plan, Addendum A, gate-prediction evidence script
