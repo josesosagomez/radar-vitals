@@ -1,0 +1,29 @@
+# Line endings are load-bearing in this repository.
+#
+# Plan, config, source, and test files are hashed into provenance manifests — see
+# plans/m8_step1b_ahmed_transfer.md section 4.3 (source_manifest.json) and section 5.1
+# (approved_plan_sha256) — and CLAUDE.md section 3 rule 1 requires every recorded number
+# to be regenerable. With core.autocrlf=true and no attributes, Git stores LF but checks
+# out CRLF on Windows, so the same committed file hashes differently in a fresh clone
+# than in a working tree that was never re-checked-out. Verified 2026-07-30: without this
+# file, plans/m8_step1b_ahmed_transfer.md hashed fa64b234... in a fresh worktree instead
+# of the recorded and reviewed 9294cb05....
+#
+# eol=lf makes the working tree byte-identical to the index on every platform, so a
+# recorded SHA-256 is verifiable anywhere. Do not remove without re-deriving every
+# recorded hash in HISTORY.md, HANDOFF.md, the plans, and any frozen manifest.
+
+* text=auto eol=lf
+
+# Binary payloads: never touched by EOL conversion. text=auto already auto-detects most
+# of these, but scientific artifacts are declared explicitly so detection is not relied on.
+*.pdf  binary
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.bin  binary
+*.npy  binary
+*.npz  binary
+*.h5   binary
+*.mat  binary
+*.xlsx binary
