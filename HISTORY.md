@@ -8391,3 +8391,56 @@ fixture-tested, with no real capture or Masimo access.
 `test_attestation.json` with enumerated node IDs, then freeze the canonical gate bundle. Only after
 that does the separate real-evaluation authorization decision arise. No real data has been touched.
 
+## 2026-07-30 - ERRATUM: canonical Step 1a bundle payload hashes (CRLF-era)
+
+**Applies to:** `figures/generated/m8_ahmed_fig8/20260729T075443.145998Z_8e08f5ab0120/`
+
+**Status: the bundle is NOT modified.** User decision on 2026-07-30, under base plan §6.1 ("do not
+modify the canonical Step 1a bundle"): leave the artifact byte-for-byte as committed and publish
+this erratum instead, so a future verifier hitting the mismatch knows it is a line-ending artifact
+and not tampering.
+
+**What is wrong:** two payload digests recorded inside that bundle's `provenance.json` no longer
+match the files they describe.
+
+| Payload | Recorded in `provenance.json` (CRLF bytes) | Correct value (LF bytes, as committed) |
+|---|---|---|
+| `metrics.json` | `0d65bebf766dd434bbc9ba956beda0ab8fd8261749368e679e8c8119a9164e67` | `a6f79ad270cd9c1e8d8cb7cbdb8614dfdbd10cfecb653ffcda6f011f3317ef42` |
+| `resolved_config.yaml` | `2133320d26b58943e8da2f7b5ba42cfb673be030817095d023e21f453078f99c` | `98fa91ff44caf8c079f05526d3892bf011e2d29897147446ef660d38790a5514` |
+
+**Still verifying, unchanged:**
+
+| Payload | SHA-256 |
+|---|---|
+| `ahmed_fig8cd_behavioral.png` | `21a22455722f5fb38ba3aefc2c946d65b8086e03fb2097ff3eeb9fc683307c99` |
+| `ahmed_fig8cd_behavioral.pdf` | `54324ea6a440d5e96741d3e69c768949b139a4de04cdb7b65b546fd7db44a5eb` |
+
+`plan_sha256`, `implementation_module_sha256`, and `runner_script_sha256` also still verify.
+`test_file_sha256` differs for an unrelated and expected reason: the §6.1 prerequisite legitimately
+changed `tests/test_m8_ahmed_fig8.py` (see the 2026-07-30 provenance-test entry above).
+
+**Cause:** `figures/reproduce_ahmed_fig8.py` writes those two files through Python's text mode, which
+on Windows emits CRLF, and hashed those CRLF bytes into `provenance.json`. Git stored the files
+normalized to LF. Until `.gitattributes` was added (`3aec30a`), a Windows checkout with
+`core.autocrlf=true` converted them back to CRLF, so the bundle verified **on Windows only** — a
+Linux clone would never have verified it. Pinning LF made the working tree match the index
+everywhere, which is why the discrepancy is now visible on every platform.
+
+**Therefore:** the LF pin *exposed* this defect, it did not create it. The bundle was never
+platform-independently verifiable.
+
+**No scientific content changed.** The two files differ from their recorded digests only in line
+endings; every number, hash input, and figure is identical, and `git status` reports the bundle
+unmodified because what was committed was always LF.
+
+**Explicitly rejected:** editing the two digests inside `provenance.json` so the bundle appears to
+verify. That is retroactively rewriting a provenance record to conceal a mismatch — falsification,
+not a repair — and it must not be done by anyone later either.
+
+**Consequence for future work:** any script that writes a hashed text payload must open it in binary
+mode or with `newline="\n"`, so the bytes it hashes are the bytes that persist. `src/m4/bundle.py`
+already does this: it hashes exactly the `bytes` it writes.
+
+**Does not block Step 1b**, which parents its stages on its own synthetic gate and reads only
+`experiments/m8_ahmed_fig8/config.yaml`, never this bundle.
+

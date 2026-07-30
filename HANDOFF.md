@@ -159,9 +159,9 @@ Residual risk to carry forward: re-review was waived, and one internal contradic
 now fixed) was caught only by re-reading. The four unasked reviewer questions are listed in
 addendum §A8. Treat the addendum as unreviewed by the other model family.
 
-**One user decision is open** (does not block implementation): the canonical Step 1a bundle no
-longer self-verifies two of its own text payloads — see §5 and addendum §A6b. Repairing it means
-touching a canonical scientific artifact, which base plan §6.1 forbids, so it is yours to call.
+**No user decisions are outstanding.** The canonical Step 1a bundle's two stale payload hashes were
+resolved on 2026-07-30: the bundle is left byte-for-byte as committed (§6.1) and a dated erratum in
+`HISTORY.md` records both the recorded and the correct digests. See §5 and addendum §A6b.
 
 Next steps, in order:
 
@@ -247,17 +247,20 @@ Planning approval and real-data authorization remain separate decisions at diffe
   **and** asserts anything about `canonical_promoted`, pin provenance or it will flip with whatever
   is uncommitted. Base plan §6.1 and the first 2026-07-30 `HISTORY.md` entry still record the old
   inverted observation; Addendum A §A5 corrects it.
-- **Canonical Step 1a bundle: two payload hashes are stale (open decision).** In
-  `figures/generated/m8_ahmed_fig8/20260729T075443.145998Z_8e08f5ab0120/provenance.json`,
-  `metrics_sha256` and `resolved_config_sha256` no longer match their on-disk files. The runner wrote
-  them through Python text mode on Windows (CRLF) and hashed those bytes while Git stored LF, so
-  before the LF pin they verified only on a Windows autocrlf checkout and never on Linux. The pin
-  exposed this; it did not cause it. **Scientific outputs still verify** — `figure_png_sha256`,
-  `figure_pdf_sha256`, `plan_sha256`, `implementation_module_sha256`, `runner_script_sha256` all
-  match. (`test_file_sha256` also differs, for the unrelated and expected reason that the §6.1
-  prerequisite changed that file.) Not repaired: base plan §6.1 forbids modifying the canonical
-  bundle. Does **not** block Step 1b, which parents on its own gate and reads only
-  `experiments/m8_ahmed_fig8/config.yaml`.
+- **Canonical Step 1a bundle: two payload hashes are stale — RESOLVED as a documented erratum.**
+  In `figures/generated/m8_ahmed_fig8/20260729T075443.145998Z_8e08f5ab0120/provenance.json`,
+  `metrics_sha256` and `resolved_config_sha256` do not match their files: the runner hashed CRLF
+  bytes that Git stored as LF, so the bundle verified on Windows only and never on Linux. The LF pin
+  exposed this; it did not cause it. **The figures, plan, implementation module, and runner script
+  all still verify, and no scientific content changed** — only line endings.
+  User decision 2026-07-30: leave the bundle byte-for-byte as committed (§6.1) and publish an
+  erratum. **See the `ERRATUM: canonical Step 1a bundle payload hashes` entry in `HISTORY.md`** for
+  both the recorded and the correct digests. Do **not** "fix" this by editing the digests inside
+  `provenance.json` — that is falsifying a provenance record, and it was explicitly rejected.
+  Does not block Step 1b.
+- **Any script that hashes a text payload must write it in binary or with `newline="\n"`**, so the
+  bytes it hashes are the bytes that persist. The erratum above is exactly what happens otherwise.
+  `src/m4/bundle.py` hashes the same `bytes` object it writes.
 - **Three ambient-Git test defects were found and fixed this session** — the Step 1a artifact test,
   the scorer OSR-03 tests, and the scorer end-to-end test. When writing any test that asserts on
   promotion, `reproducible`, or git cleanliness, **pin the state** (`_pin_git_provenance`, or
