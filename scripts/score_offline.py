@@ -73,12 +73,16 @@ from src.window_pipeline import (  # noqa: E402
 
 import diagnose_bin_drift as bindrift  # noqa: E402
 
+# The classifier now lives in an importable module rather than in the executable
+# diagnose_bin_drift script (M8 Step 1b plan section 4.1). Imported directly here so
+# score_offline does not depend on the script for it.
+from src.m4.outcome import classify_window_outcome  # noqa: E402
+
 sha256_file = bindrift.sha256_file
 sha256_bytes = bindrift.sha256_bytes
 get_git_commit = bindrift.get_git_commit
 is_tree_clean = bindrift.is_tree_clean
 validate_decode_geometry = bindrift.validate_decode_geometry
-classify_window_outcome = bindrift.classify_window_outcome
 
 STRICT_GATE_MODE = "strict_v1"
 ORIGIN_CAVEAT = (
