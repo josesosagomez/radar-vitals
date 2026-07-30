@@ -58,6 +58,10 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 from src.radar_io import ChirpConfig, read_adc_bin
+# The capture acceptance gate lives in src/ for the same reason the DSP does: the
+# verdict printed here in the room must be the one scripts/verify_capture_integrity.py
+# reports later, not a second implementation of it.
+from src.capture_integrity import CaptureGeometry, evaluate_capture, format_report
 # The window-level DSP composition and the warmup bin-selection policy live in src/
 # so the M4 offline harness runs the SAME code, not a copy of it (M4 plan §5.1).
 from src.warmup_select import (
@@ -910,6 +914,47 @@ def main() -> None:
             }
         _write_metadata(meta_path, run_meta)
         print(f"Artifacts: {run_dir}")
+
+        # ── Capture acceptance gate ───────────────────────────────────────────
+        # Run against the raw mirror that was just written, while the subject is
+        # still in the chair. A rejected capture is worth re-taking now; finding
+        # out months later is how the 2026-07-28 scene change went unnoticed.
+        # Never allowed to break a completed run: the data is already on disk and
+        # a gate crash must not obscure that.
+        raw_path = run_dir / "adc_stream.bin"
+        if raw_path.exists():
+            try:
+                gate_stats = run_meta.get("live_packet_stats") or {}
+                gate_bins = derive_candidate_bins(cfg)
+                gate_rec = evaluate_capture(
+                    raw_path,
+                    # Built from chirp_cfg, not from cfg["profile"], so the gate
+                    # checks the SAME convention the decode used — a manifest row
+                    # can override iq_swap and the raw config would miss that.
+                    CaptureGeometry(
+                        num_adc_samples=chirp_cfg.num_adc_samples,
+                        num_rx=chirp_cfg.num_rx,
+                        num_chirps_per_frame=chirp_cfg.num_chirps_per_frame,
+                        range_resolution_m=chirp_cfg.range_resolution_m,
+                        iq_swap=chirp_cfg.iq_swap,
+                    ),
+                    (min(gate_bins), max(gate_bins)),
+                    n_dropped=gate_stats.get("n_dropped"),
+                    zero_filled_bytes=gate_stats.get("zero_filled_bytes"),
+                    mirror_truncated_bytes=gate_stats.get("mirror_truncated_bytes"),
+                )
+                print(format_report(gate_rec))
+                run_meta["capture_integrity"] = {
+                    k: v for k, v in gate_rec.items() if k != "bin_path"
+                }
+                _write_metadata(meta_path, run_meta)
+            except Exception as exc:  # noqa: BLE001 — must not lose a good capture
+                print(
+                    f"  WARNING: capture acceptance gate could not run: {exc}\n"
+                    f"  The capture itself is intact. Run "
+                    f"scripts/verify_capture_integrity.py against {run_dir.name} manually.",
+                    file=sys.stderr,
+                )
 
     # ── Safe figure close (must be called from within the animation callback) ──
     def _close_figure() -> None:

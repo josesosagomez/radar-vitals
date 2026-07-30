@@ -20,6 +20,15 @@ capture:
   duration_s: 285       # 285 s → 5700 frames @ 20 Hz → ~12 independent 20 s windows
   output_dir: "data/raw"
 
+# ── Protocol ──────────────────────────────────────────────────────────────────
+# Seated subject distance range (CLAUDE.md §1). Used by the capture acceptance
+# gate to derive the range bins the subject must fall in, and to locate that
+# gate's mirror image — the wrong I/Q convention puts the subject there instead.
+# Must match `protocol.subject_distance_m` in the live-demo experiment config;
+# the two paths gate against the same physical range.
+protocol:
+  subject_distance_m: [0.8, 1.4]
+
 # ── Radar profile ─────────────────────────────────────────────────────────────
 # All values must match config/vital_signs.lua exactly. Do not edit without updating
 # the experiment config and re-verifying range resolution (0.0436 m/bin).

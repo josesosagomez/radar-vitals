@@ -59,32 +59,22 @@ import sys
 from pathlib import Path
 
 import numpy as np
-from scipy.fft import fft as sp_fft
 
 _ROOT = Path(__file__).resolve().parents[1]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 from scripts.live_demo import _sha256_file  # noqa: E402
+from src.capture_integrity import (  # noqa: E402
+    CLIP_THRESHOLD,
+    DC_SKIRT_BINS,
+    DEFAULT_MIN_MIRROR_DB,
+    N_FRAMES_DEFAULT as N_FRAMES,
+    CaptureGeometry,
+    evaluate_capture,
+)
 from src.m8.ahmed_provenance import git_text  # noqa: E402
 from src.warmup_select import derive_candidate_bins  # noqa: E402
-
-# Frames read from the head of each capture for the spectral checks (C4, C5).
-# The range profile of a static scene is stationary enough that 200 frames (~10 s)
-# resolves the reflector layout; reading whole multi-GB captures buys nothing.
-N_FRAMES = 200
-
-# int16 full scale is 32768. A sample at or above this is treated as clipped --
-# short of true rail, because the ADC's own headroom is not exactly 2^15.
-CLIP_THRESHOLD = 32700
-
-# Range bins excluded from "strongest reflector" searches. TX-RX leakage and
-# close-range clutter put a large near-DC component in every range profile; it
-# is a known scene artefact, not a target (see src/radar_io.py module docstring).
-DC_SKIRT_BINS = 9
-
-# C4 threshold: dB by which in-gate energy must exceed the mirror band.
-DEFAULT_MIN_MIRROR_DB = 10.0
 
 # C6: minimum relative spread in frame count needed before a frame-rate slope is
 # identifiable. Captures of near-identical length cannot separate rate from
@@ -102,159 +92,51 @@ MIN_FRAME_COUNT_SPREAD = 0.05
 MAX_OVERHEAD_RESIDUAL_S = 0.25
 
 
-def _decode_head(raw_words: np.ndarray, iq_swap: bool, shape: tuple[int, int, int, int]) -> np.ndarray:
-    """Decode 2-lane LVDS 4-word packets under an explicit I/Q convention.
-
-    Mirrors src.radar_io.read_adc_bin's de-interleaving. Duplicated deliberately:
-    C4 must decode the SAME bytes under BOTH conventions, which the library
-    function cannot do without re-reading the file twice under two configs.
-    """
-    words = raw_words.reshape(-1, 4)
-    out = np.empty(raw_words.size // 2, dtype=np.complex64)
-    if iq_swap:
-        out[0::2] = words[:, 2].astype(np.float32) + 1j * words[:, 0].astype(np.float32)
-        out[1::2] = words[:, 3].astype(np.float32) + 1j * words[:, 1].astype(np.float32)
-    else:
-        out[0::2] = words[:, 0].astype(np.float32) + 1j * words[:, 2].astype(np.float32)
-        out[1::2] = words[:, 1].astype(np.float32) + 1j * words[:, 3].astype(np.float32)
-    return out.reshape(shape)
-
-
-def _mean_range_profile(cube: np.ndarray) -> np.ndarray:
-    """Mean power per range bin, using the same Hann + FFT as extract_chest_phase."""
-    n_adc = cube.shape[-1]
-    win = np.hanning(n_adc).astype(np.float32)
-    return np.mean(np.abs(sp_fft(cube * win, axis=3)) ** 2, axis=(0, 1, 2))
-
-
 def _check_one(run_dir: Path, min_mirror_db: float, verify_hashes: bool) -> dict:
-    """Run C1-C5 on one capture. Returns a result record; never raises for a failed check."""
+    """Adapt one live_demo run directory onto src.capture_integrity.evaluate_capture.
+
+    The checks themselves live in the shared core so the verdict this script
+    reports and the verdict a capture path prints in the room cannot diverge.
+    """
     meta_path = run_dir / "run_metadata.json"
     adc_path = run_dir / "adc_stream.bin"
-    rec: dict = {"capture": run_dir.name, "checks": {}, "diagnostics": {}}
 
     if not meta_path.exists() or not adc_path.exists():
-        rec["error"] = "missing run_metadata.json or adc_stream.bin"
-        rec["passed"] = False
-        return rec
+        return {
+            "capture": run_dir.name, "checks": {}, "diagnostics": {},
+            "error": "missing run_metadata.json or adc_stream.bin", "passed": False,
+        }
 
     meta = json.loads(meta_path.read_text(encoding="utf-8"))
     cfg = meta["config"]
     prof = cfg["profile"]
-    n_adc = int(prof["num_adc_samples"])
-    n_rx = int(prof["num_rx"])
-    n_ch = int(prof["num_chirps_per_frame"])
-    res_m = float(prof["range_resolution_m"])
-    iq_swap = bool(prof["iq_swap"])
-    bytes_per_frame = n_adc * n_rx * n_ch * 4
+    geom = CaptureGeometry(
+        num_adc_samples=int(prof["num_adc_samples"]),
+        num_rx=int(prof["num_rx"]),
+        num_chirps_per_frame=int(prof["num_chirps_per_frame"]),
+        range_resolution_m=float(prof["range_resolution_m"]),
+        iq_swap=bool(prof["iq_swap"]),
+    )
 
-    size = adc_path.stat().st_size
-    n_frames_total = size // bytes_per_frame
-    rec["iq_swap"] = iq_swap
-    rec["n_frames"] = int(n_frames_total)
-    rec["bytes_per_frame"] = bytes_per_frame
-
-    # --- C1 frame alignment ------------------------------------------------
-    remainder = size % bytes_per_frame
-    rec["checks"]["C1_frame_alignment"] = {
-        "passed": remainder == 0,
-        "remainder_bytes": int(remainder),
-    }
-
-    # --- C2 packet loss ----------------------------------------------------
-    stats = meta.get("live_packet_stats")
-    if stats is None:
-        # Replay runs and externally captured sessions carry no live UDP stats.
-        rec["checks"]["C2_packet_loss"] = {
-            "passed": True, "skipped": True,
-            "reason": "no live_packet_stats (not a live capture)",
-        }
-    else:
-        n_dropped = int(stats.get("n_dropped", -1))
-        zero_filled = int(stats.get("zero_filled_bytes", -1))
-        rec["checks"]["C2_packet_loss"] = {
-            "passed": n_dropped == 0 and zero_filled == 0,
-            "n_received": int(stats.get("n_received", -1)),
-            "n_dropped": n_dropped,
-            "zero_filled_bytes": zero_filled,
-        }
-
-    # --- C3 mirror trim ----------------------------------------------------
-    if stats is None or "mirror_truncated_bytes" not in stats:
-        rec["checks"]["C3_mirror_trim"] = {
-            "passed": True, "skipped": True, "reason": "no mirror_truncated_bytes",
-        }
-    else:
-        trimmed = int(stats["mirror_truncated_bytes"])
-        rec["checks"]["C3_mirror_trim"] = {
-            "passed": 0 <= trimmed < bytes_per_frame,
-            "mirror_truncated_bytes": trimmed,
-            "bytes_per_frame": bytes_per_frame,
-        }
-
-    # --- Read the head once, shared by C4 and C5 ---------------------------
-    n_read = min(N_FRAMES, n_frames_total)
-    n_words = (bytes_per_frame * n_read) // 2
-    raw = np.array(np.memmap(adc_path, dtype="<i2", mode="r")[:n_words])
-    shape = (n_read, n_ch, n_rx, n_adc)
-
-    # --- C5 saturation -----------------------------------------------------
-    peak = int(np.abs(raw).max())
-    n_clipped = int((np.abs(raw) >= CLIP_THRESHOLD).sum())
-    rec["checks"]["C5_saturation"] = {
-        "passed": n_clipped == 0,
-        "peak_abs_sample": peak,
-        "n_samples_at_or_above_threshold": n_clipped,
-        "clip_threshold": CLIP_THRESHOLD,
-    }
-    rec["diagnostics"]["adc_full_scale_pct"] = round(100.0 * peak / 32768.0, 2)
-
-    # --- C4 I/Q convention -------------------------------------------------
-    # Gate comes from the session's own protocol config via the production
-    # helper, so this is not a hardcoded bin range.
+    # Gate comes from the session's own protocol config via the production helper,
+    # so this is not a hardcoded bin range and matches what warmup actually searches.
     gate_bins = derive_candidate_bins(cfg)
-    lo, hi = min(gate_bins), max(gate_bins)
-    mirror_lo, mirror_hi = n_adc - hi, n_adc - lo
+    stats = meta.get("live_packet_stats") or {}
 
-    energies = {}
-    for convention in (True, False):
-        prof_pow = _mean_range_profile(_decode_head(raw, convention, shape))
-        energies[convention] = {
-            "gate": float(prof_pow[lo:hi + 1].sum()),
-            "mirror": float(prof_pow[mirror_lo:mirror_hi + 1].sum()),
-            "profile": prof_pow,
-        }
-
-    cfg_e = energies[iq_swap]
-    ratio_db = float(10.0 * np.log10(cfg_e["gate"] / cfg_e["mirror"]))
-    rec["checks"]["C4_iq_convention"] = {
-        "passed": ratio_db >= min_mirror_db,
-        "configured_iq_swap": iq_swap,
-        "gate_bins": [lo, hi],
-        "gate_range_m": [round(lo * res_m, 3), round(hi * res_m, 3)],
-        "mirror_bins": [mirror_lo, mirror_hi],
-        "mirror_range_m": [round(mirror_lo * res_m, 3), round(mirror_hi * res_m, 3)],
-        "gate_over_mirror_db": round(ratio_db, 2),
-        "threshold_db": min_mirror_db,
-        "alternative_convention_db": round(
-            float(10.0 * np.log10(energies[not iq_swap]["gate"] / energies[not iq_swap]["mirror"])), 2
-        ),
-    }
-
-    # --- Diagnostics: scene margin (reported, not gating) ------------------
-    prof_pow = cfg_e["profile"]
-    searchable = prof_pow.copy()
-    searchable[:DC_SKIRT_BINS] = 0.0
-    strongest_bin = int(searchable.argmax())
-    gate_peak_bin = lo + int(prof_pow[lo:hi + 1].argmax())
-    margin_db = float(10.0 * np.log10(prof_pow[gate_peak_bin] / prof_pow[strongest_bin]))
-    rec["diagnostics"]["strongest_reflector_bin"] = strongest_bin
-    rec["diagnostics"]["strongest_reflector_m"] = round(strongest_bin * res_m, 3)
-    rec["diagnostics"]["strongest_reflector_in_gate"] = bool(lo <= strongest_bin <= hi)
-    rec["diagnostics"]["gate_peak_bin"] = gate_peak_bin
-    rec["diagnostics"]["gate_peak_m"] = round(gate_peak_bin * res_m, 3)
-    rec["diagnostics"]["gate_peak_vs_strongest_db"] = round(margin_db, 2)
+    rec = evaluate_capture(
+        adc_path,
+        geom,
+        (min(gate_bins), max(gate_bins)),
+        n_dropped=stats.get("n_dropped"),
+        zero_filled_bytes=stats.get("zero_filled_bytes"),
+        mirror_truncated_bytes=stats.get("mirror_truncated_bytes"),
+        n_frames_read=N_FRAMES,
+        min_mirror_db=min_mirror_db,
+    )
+    rec["capture"] = run_dir.name
     rec["diagnostics"]["locked_bin"] = meta.get("locked_bin")
+    if "n_received" in stats:
+        rec["checks"]["packet_loss"]["n_received"] = int(stats["n_received"])
 
     # --- Provenance --------------------------------------------------------
     recorded_hash = meta.get("live_raw_mirror_hash")
@@ -262,12 +144,12 @@ def _check_one(run_dir: Path, min_mirror_db: float, verify_hashes: bool) -> dict
     if verify_hashes:
         actual = _sha256_file(adc_path)
         rec["adc_stream_sha256_actual"] = actual
-        rec["checks"]["C0_hash_matches_recorded"] = {
+        rec["checks"]["hash_matches_recorded"] = {
             "passed": recorded_hash is None or actual == recorded_hash,
             "skipped": recorded_hash is None,
         }
+        rec["passed"] = all(c["passed"] for c in rec["checks"].values())
 
-    rec["passed"] = all(c["passed"] for c in rec["checks"].values())
     return rec
 
 
@@ -399,9 +281,9 @@ def main() -> int:
             return " ok " if c[key]["passed"] else "FAIL"
 
         print(
-            f"{r['capture'][:34]:34s} {mark('C1_frame_alignment')} {mark('C2_packet_loss')} "
-            f"{mark('C3_mirror_trim')} {mark('C4_iq_convention')} {mark('C5_saturation')}  "
-            f"{c['C4_iq_convention']['gate_over_mirror_db']:+10.1f} dB "
+            f"{r['capture'][:34]:34s} {mark('frame_alignment')} {mark('packet_loss')} "
+            f"{mark('mirror_trim')} {mark('iq_convention')} {mark('saturation')}  "
+            f"{c['iq_convention']['gate_over_mirror_db']:+10.1f} dB "
             f"{r['diagnostics']['adc_full_scale_pct']:5.1f}%"
         )
 
