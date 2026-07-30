@@ -21,7 +21,7 @@ after the synthetic gate—run a strictly exploratory comparison on all eight sa
 ### Repository
 
 - Branch: `vital_signs_ahmed_v10`
-- Worktree clean. Last **code** commit is `10e0711`; anything after it on this branch is
+- Worktree clean. Last **code** commit is `e00d859`; anything after it on this branch is
   documentation only. (An exact HEAD SHA is not recorded here: a SHA written into this file is
   always one commit stale by the time the file is committed, which makes it a lie rather than a
   reference. Run `git log --oneline` for the true head.)
@@ -35,10 +35,12 @@ after the synthetic gate—run a strictly exploratory comparison on all eight sa
   - `025d259` `ProductionEstimatorSuite` and `AhmedPhaseEstimatorSuite`
   - `0e34078` synthetic generator and gate evaluation
   - `10e0711` bundle writer, provenance, synthetic CLI
+  - `468b57a` capture registry with radar/reference isolation, neutral metrics
+  - `e00d859` runner preflight and Cartesian completeness ledger
 - Existing estimator/scorer behaviour is unchanged. The only edits to shipped code are the
   `src/m4/outcome.py` extraction (verified byte-for-byte identical to the original block) and its
   two import sites; everything else is new modules and tests.
-- **Test baseline: the full suite is green** — `1974 passed, 5 skipped, 0 failed`
+- **Test baseline: the full suite is green** — `2028 passed, 5 skipped, 0 failed`
   (was `3 failed, 1822 passed, 2 skipped` at the start of 2026-07-30).
 - **Line endings are pinned to LF and this is load-bearing.** Before `3aec30a`, `core.autocrlf=true`
   with no `.gitattributes` meant a fresh clone checked out CRLF and every recorded SHA-256 changed
@@ -84,6 +86,10 @@ Built and tested (no real capture or Masimo file has been opened):
 | `src/m4/bundle.py` | immutable staged bundles, acyclic manifests, fail-closed `LATEST.json` |
 | `src/m8/ahmed_provenance.py` | scoped source manifest, git state, promotion eligibility, env attestation |
 | `scripts/m8_ahmed_transfer.py` | `synthetic` command; real-data commands refuse with an explanation |
+| `src/m4/capture_registry.py` | registry loader; **structural** radar/reference isolation |
+| `src/m4/estimator_scoring.py` | §3.5 neutral metrics from persisted rows; never decodes or estimates |
+| `src/m4/estimator_runner.py` | preflight (before any capture access) + Cartesian completeness ledger |
+| `experiments/m8_ahmed_transfer/capture_registry.yaml` | the eight captures, transcribed from §3.3 |
 
 **The gate passes in-process** (`evaluate_gate()` -> `passed`, 14/14 checks), and the transfer
 verdicts are exactly as predeclared:
@@ -97,8 +103,16 @@ Verified end to end into a temporary directory: on a dirty tree the bundle write
 `INELIGIBLE` with the offending paths listed; on a clean tree the same run reports
 `promotion: eligible` and publishes `LATEST.json`.
 
-Not yet built: the runner, the scorer, the strict production serializer, the experiment config, and
-the capture registry.
+**`src/m4/estimator_runner.py` is deliberately partial.** It has preflight and the completeness
+ledger but **not** base plan §4.2 steps 2–7: stream-hash/geometry check, decode-exactly-once, frozen
+span construction, both-lock resolution, read-only slice sharing between suites, post-run mutation
+assertions, and radar artifact persistence. Those need either real data or a synthetic capture
+fixture; writing them untested was the alternative, so they were left out. Build a small synthetic
+capture (a few hundred frames at the registry geometry) and implement against it — §6.3 wants
+portable fixtures as the default.
+
+Also not yet built: the strict production serializer (`production_native_index.json` +
+`production_evidence.npz`) and `test_attestation.json`.
 
 **No canonical gate bundle has been frozen, and this is deliberate.** Base plan §5.1 requires *all*
 executable scientific, runner, scorer, serializer, CLI, and fixture-test code to be implemented and
@@ -159,12 +173,13 @@ Next steps, in order:
 5. ~~Implement both concrete suites.~~ **Done** — `025d259`.
 6. ~~Implement the synthetic generator and gate evaluation.~~ **Done** — `0e34078`.
 7. ~~Implement the bundle writer, provenance, and `synthetic` CLI.~~ **Done** — `10e0711`.
-8. Implement the runner, scorer, strict production serializer, experiment config, and capture
-   registry, with portable fixture tests — **without opening any real capture or Masimo file**.
-   **← current task**
-9. Add `test_attestation.json` (exact ordered pytest node IDs and counts, not a bare number — the
-   plan's "85-test set" was never enumerated) and run the focused, affected, new, and broad
-   fixture-only suites.
+8. ~~Capture registry, neutral metrics, runner preflight and ledger.~~ **Done** — `468b57a`,
+   `e00d859`.
+9. Build a synthetic capture fixture and implement the runner's decode/dispatch loop (§4.2
+   steps 2–7) plus the strict production serializer against it. **← current task**
+10. Add `test_attestation.json` (exact ordered pytest node IDs and counts, not a bare number — the
+    plan's "85-test set" was never enumerated) and run the focused, affected, new, and broad
+    fixture-only suites.
 10. Execute the synthetic gate as a **frozen bundle**. It already passes in-process; what remains is
     writing it immutably with its attestations so it can parent a real stage.
 11. Stop after the gate. No real path may be touched unless the gate is complete,

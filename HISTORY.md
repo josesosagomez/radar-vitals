@@ -8336,3 +8336,58 @@ absolute-path fallback in scoped-path resolution. Both silently produced wrong p
 **Next:** the real-path runner, scorer, capture registry, and experiment config, all fixture-tested
 with no real-data access. Only once those exist may the canonical gate be frozen, per §5.1.
 
+## 2026-07-30 - Step 1b: capture registry, neutral metrics, and runner preflight
+
+**Set out to do:** the real-path scaffolding — capture registry, scorer metrics, and runner —
+fixture-tested, with no real capture or Masimo access.
+
+**Worked (with evidence):**
+- `experiments/m8_ahmed_transfer/capture_registry.yaml` (`468b57a`) transcribes base plan §3.3.
+  Values are **transcribed, not measured**: §8 step 3 forbids opening a real capture during
+  implementation, so the hashes are verified at execution time under authorization instead.
+- `src/m4/capture_registry.py` enforces the radar/reference split **structurally**. `RadarScope`
+  has no accessor that can reach a Masimo path and `ReferenceScope` has none that can reach a raw
+  ADC path. A comment saying "don't read Masimo here" is not a control; a scope object with no such
+  method is. A stray `masimo` key inside the radar section is fatal, and a test asserts no Masimo
+  string is reachable from a `RadarScope`.
+- The loader **re-derives** the window arithmetic rather than trusting the plan: `frames // 600`
+  must equal each declared `windows`/`tail`, the per-capture windows must sum to 128, and dropping
+  `k=0` must leave 120. All eight rows check out, independently confirming the plan's table, and the
+  pinned 256 / 1792 / 1536 / 240 / 1680 counts follow from it.
+- `src/m4/estimator_scoring.py` computes the §3.5 metrics from already-persisted rows only — it
+  never decodes ADC and never invokes an estimator. Dispositions are mutually exclusive with
+  reference precedence first; error metrics use `joint` rows only; percentiles pin
+  `method="linear"` so a NumPy default change cannot silently move a published number; an empty
+  intersection yields `null` metrics rather than aborting; the four validity partitions are
+  **asserted** to sum to `n_reference_admitted`. A test enforces that no p-value, winner, or ranking
+  is ever emitted. Every metric is checked against a hand-computed value.
+- `src/m4/estimator_runner.py` (`e00d859`) implements preflight and the completeness ledger.
+  Preflight runs before the first `stat` or `open` on any capture path — not merely before decoding
+  — and **two tests assert that with a filesystem guard** rather than inferring it from the code:
+  both a rejected and a successful preflight must touch zero capture paths. The gate check is
+  stricter than `status == complete`: `promotion_eligible` is required separately, with its own
+  test. One authorization covers the whole `real-smoke -> real-radar -> score` chain, because
+  per-stage authorization would permit outcome-adaptive stopping.
+- `CartesianLedger` asserts exactly one row per eligible `(capture, lock, k, arm)`. Verified against
+  the pinned counts (1792 full, 1536 Ahmed-only). Both lock estimands stay distinct for m3, where
+  the recorded and rerun locks are both 26.
+- Full suite **2028 passed, 5 skipped**.
+
+**Failed / did not work, and why:**
+- **`estimator_runner.py` is deliberately partial.** It contains preflight and the ledger, but
+  **not** the decode/dispatch loop of base plan §4.2 steps 2-7: stream-hash and geometry check,
+  decode-exactly-once, frozen span construction, both-lock resolution, read-only slice sharing
+  between suites, the post-run mutation assertions, or radar artifact persistence. Those steps
+  cannot be meaningfully exercised without either a real capture or a synthetic fixture capture,
+  and the honest options were to write untested code or to stop. I stopped. The next session should
+  build a small synthetic capture fixture (a few hundred frames at the registry geometry) and
+  implement the loop against it, per §6.3's "portable temporary fixtures are the default".
+- No `test_attestation.json` yet, so the gate cannot be frozen: base plan §4.3 requires the
+  attestation to bind ordered pytest node IDs, and §5.1 requires all executable code to exist first.
+
+**Retired / no longer used:** nothing retired.
+
+**Next:** the runner's decode/dispatch loop against a synthetic capture fixture, then
+`test_attestation.json` with enumerated node IDs, then freeze the canonical gate bundle. Only after
+that does the separate real-evaluation authorization decision arise. No real data has been touched.
+
