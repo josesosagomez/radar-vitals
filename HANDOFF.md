@@ -135,26 +135,37 @@ to exist before the gate runs.
 
 **Sequencing note:** `src/m8/ahmed_provenance.py`'s `_SCOPED_TREES` covers `src/**/*.py`,
 `scripts/**/*.py` and `tests/**/*.py`, so **any** change under those trees invalidates a frozen gate
-bundle. Several landed on 2026-07-30/31 (`src/capture_integrity.py`, `src/clutter.py`, the
-`live_demo.py` fix). Nothing was invalidated because no bundle exists — but freeze Step 1b only once
-you intend to stop touching those trees.
+bundle. Several landed on 2026-07-30/31 (`src/clutter.py`, and the capture-integrity apparatus that
+was subsequently removed). Nothing was invalidated because no bundle exists — but freeze Step 1b
+only once you intend to stop touching those trees.
 
-## 7. Capture stage — closed and gated
+## 7. Capture stage — measured once, no longer checked
 
-Verified 2026-07-30 across all 8 captures: 0 dropped/zero-filled UDP packets, exact frame alignment,
-no ADC sample within 68 counts of int16 full scale (peaks 3.0–4.9% FS), and the configured I/Q
-convention concentrates 12.8–38.8 dB more energy in the 0.8–1.4 m gate than in its mirror image.
+On 2026-07-30 all 8 captures were verified to have 0 dropped/zero-filled UDP packets, exact frame
+alignment, no ADC sample within 68 counts of int16 full scale (peaks 3.0–4.9% FS), and a configured
+I/Q convention concentrating 12.8–38.8 dB more energy in the 0.8–1.4 m gate than in its mirror
+image. Frame rate could not be certified from wall clock: pooling all 8 reads 19.896 Hz with a
+0.485 s residual while the homogeneous 2026-07-14+ subset reads 19.9884 Hz (+0.047 bpm bias at
+80 bpm); the real argument for the rate is the sensor's crystal-derived frame timer.
 
-`scripts/verify_capture_integrity.py` regenerates that evidence. The same checks run automatically
-at capture time in **both** capture paths via `src/capture_integrity.py` (one implementation, so the
-in-room verdict cannot drift from the offline one). Gating: frame alignment, packet loss, saturation,
-I/Q convention. **Reported but not gating:** the scene margin.
+**That evidence is a one-time record in `HISTORY.md` 2026-07-30, not a live check.** The tooling
+that produced it — `src/capture_integrity.py`, `scripts/verify_capture_integrity.py`, and the
+capture-time hooks in both capture paths — was **removed on the user's instruction 2026-07-31**.
+Nothing now checks a new capture for packet loss, frame misalignment, ADC clipping, or a mirrored
+I/Q convention, and no raw-ADC hash is recorded at capture time.
 
-Frame rate is **not** certifiable from wall clock. Regressing span on frame count assumes one fixed
-setup overhead; pooling all 8 captures reads 19.896 Hz with a 0.485 s residual, while the
-homogeneous 2026-07-14+ subset reads 19.9884 Hz (+0.047 bpm bias at 80 bpm). The script reports
-INDETERMINATE rather than certifying a biased slope. The real argument for the rate is the sensor's
-crystal-derived frame timer.
+What that means in practice, stated plainly so the next chat is not surprised:
+
+- **`scripts/live_demo.py` no longer writes `live_raw_mirror_hash`.** The field still exists in
+  `run_metadata.json` and is always `null`. `scripts/score_offline.py`'s directory-form
+  `--pinned-lock-source` hash-binds against that field (OSR-03 R2), so it will refuse every future
+  live capture; use the integer form, which is tagged `kind="manual"` and may not be captioned as
+  reproducing the measured methodology.
+- Frame-alignment truncation of the raw mirror is **retained** in `LiveFrameSource._loop` — it is
+  required for `read_adc_bin` to load the file at all, and is not a provenance feature.
+- `steps/step_1/capture.py` still computes its own `sha256` over the finished `.bin` (pre-existing
+  behaviour, untouched), so that path does record a capture hash. The live path does not.
+- The failure modes are documented in `HISTORY.md` and remain real; they are simply unguarded.
 
 ## 8. Gotchas that will bite you
 
@@ -173,17 +184,26 @@ crystal-derived frame timer.
 - **Candidate domains are not shared between the synthetic and real Step 1b paths.**
 - **P2/P3 require on-grid lines.** On the primary PRF grid the fundamentals are off-grid and they
   degrade to ~1e-3. Do not restate them as bit-exact.
-- **Session types are not machine-recorded anywhere.** `notes/capture_inventory.md` is the source:
-  massimo1 and massimo3–7 natural, **massimo2 paced 16 bpm**, sweep stepped 12→15→18→21. Verify
-  against the Masimo RRp channel rather than trusting recollection — massimo2 reads a flat 16.0 with
-  IQR 0.0. `scripts/score_offline.py` requires an explicit `--session-type` per capture (OSR-19) and
-  forbids inferring it.
+- **Session types are not machine-recorded anywhere.** `notes/capture_inventory.md` is the source
+  for the first three: massimo1 natural, **massimo2 paced 16 bpm**, sweep stepped 12→15→18→21. It
+  does **not** cover massimo3–7, which the user declared natural on 2026-07-31. Verify against the
+  Masimo RRp channel rather than trusting recollection — massimo2 reads a flat 16.0 with IQR 0.0,
+  while massimo3–7 wander 3–10 bpm within a session. `scripts/score_offline.py` requires an explicit
+  `--session-type` per capture (OSR-19) and forbids inferring it.
 - **massimo2's and sweep's live locks (20, 21) are mislocks;** the corrected bin is 26 for both. A
-  comparison pinned to a live lock is measuring at a known-bad bin.
-- **6 of 8 captures have no contemporaneous raw hash** (sweep, massimo3–7). The cause was fixed in
-  `cee8644`, but not retroactively. massimo1/massimo2/sweep have independent 2026-07-25 hashes in
-  `notes/capture_inventory.md` that still match; **massimo3–7 have no independent record at all**,
-  and their hashes were computed 2026-07-31, days after capture. Disclose that if they are cited.
+  comparison pinned to a live lock is measuring at a known-bad bin. massimo3–7 have **no** corrected
+  bin established.
+- **6 of 8 captures have no raw hash in their metadata** (sweep, massimo3–7) — a join-timeout race
+  that cost every capture ≥1.26 GB its hash. massimo1/massimo2/sweep have independent 2026-07-25
+  hashes in `notes/capture_inventory.md` that were re-confirmed matching on 2026-07-30;
+  **massimo3–7 have no independent record anywhere.** Their SHA-256s as of 2026-07-31 are recorded
+  in `HISTORY.md` only. The race was fixed and the fix then removed with the rest of the hashing
+  work on 2026-07-31, so future live captures also record no hash.
+- **`notes/capture_inventory.md` is stale and known to be so.** It is dated 2026-07-25: it predates
+  massimo3–7, still lists `20260713_170323_..._live_test1` (deleted), and its §2 lists three
+  `20260715_*_replay_unknown` folders that are all gone. Its §1 hashes are correct and still match.
+  An amendment was written and then reverted on 2026-07-31 with the rest of the hash-provenance
+  work; `HISTORY.md` 2026-07-31 has the content if it is ever wanted back.
 - `results/live_demo/` holds exactly the 8 canonical captures. m7 has duplicate/missing Masimo
   seconds — use the parser's integer-`Timestamp` dedup, never hardcoded row counts.
 - The `20260715_*_replay_unknown` folders referenced by older notes are **gone**; the OSR-03 tests
@@ -212,8 +232,6 @@ crystal-derived frame timer.
 | Canonical Step 1a bundle | `figures/generated/m8_ahmed_fig8/20260729T075443.145998Z_8e08f5ab0120/` |
 | Production DSP | `src/respiration.py`, `src/vitals.py`, `src/window_pipeline.py` |
 | Static clutter removal (off by default) | `src/clutter.py` |
-| Capture acceptance gate (shared core) | `src/capture_integrity.py` |
-| Capture integrity verifier | `scripts/verify_capture_integrity.py` |
 | Warmup selection regression check | `scripts/validate_warmup_selection.py` |
 | Offline scorer / comparators | `scripts/score_offline.py`, `src/comparator.py` |
 | Clutter A/B config pair | `experiments/exp_clutter_removal/` |

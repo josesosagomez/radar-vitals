@@ -58,10 +58,6 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 from src.radar_io import ChirpConfig, read_adc_bin
-# The capture acceptance gate lives in src/ for the same reason the DSP does: the
-# verdict printed here in the room must be the one scripts/verify_capture_integrity.py
-# reports later, not a second implementation of it.
-from src.capture_integrity import CaptureGeometry, evaluate_capture, format_report
 # The window-level DSP composition and the warmup bin-selection policy live in src/
 # so the M4 offline harness runs the SAME code, not a copy of it (M4 plan §5.1).
 from src.warmup_select import (
@@ -218,10 +214,6 @@ class LiveFrameSource(FrameSource):
         self._raw_mirror_path = raw_mirror_path
         self._q: queue.Queue = queue.Queue(maxsize=400)
         self._stop = threading.Event()
-        # Set by the receive thread once the mirror file is closed and no further
-        # bytes can be written. `finalize_mirror` waits on this before touching the
-        # file, so hashing can never race the writer.
-        self._writer_done = threading.Event()
         self._thread: threading.Thread | None = None
         self._sock = None
         # Public stats (read after stop)
@@ -229,11 +221,6 @@ class LiveFrameSource(FrameSource):
         self.n_dropped: int = 0
         self.zero_filled_bytes: int = 0
         self.mirror_truncated_bytes: int = 0
-        self.mirror_sha256: str | None = None
-        #: Why the mirror hash is missing, when it is. None means "no problem".
-        #: Never leave `mirror_sha256 = None` unexplained — that is what made the
-        #: 2026-07-28 captures look hashed-but-empty rather than obviously broken.
-        self.mirror_finalize_error: str | None = None
         self._frame_idx: int = 0
 
     def start(self) -> None:
@@ -324,17 +311,18 @@ class LiveFrameSource(FrameSource):
                         pass
                     self._frame_idx += 1
         finally:
-            # Close the file and nothing else. Frame-alignment and hashing moved to
-            # `finalize_mirror`, run on the main thread: they used to live here, but
-            # `stop()` joins this thread with a 3 s timeout, and hashing a multi-GB
-            # mirror does not finish in 3 s. The join expired, metadata was written
-            # with mirror_sha256 = None, and the raw hash was lost — silently, and
-            # only for large captures. It cost the raw-byte provenance of 6 of the 8
-            # canonical captures (every one >= 1.26 GB); a 10-min study session is
-            # 1.57 GB, so it would have cost all 20. See HISTORY.md 2026-07-30.
+            # Frame-align the mirror by dropping any trailing partial frame, so
+            # read_adc_bin can load it. This is cheap (a truncate, no read) and
+            # completes well inside stop()'s join timeout.
             if mirror:
                 mirror.close()
-            self._writer_done.set()
+                if self._raw_mirror_path and self._raw_mirror_path.exists():
+                    size = self._raw_mirror_path.stat().st_size
+                    remainder = size % self._bytes_per_frame
+                    if remainder:
+                        with self._raw_mirror_path.open("r+b") as fh:
+                            fh.truncate(size - remainder)
+                        self.mirror_truncated_bytes = remainder
 
     def get_frame(self, timeout_s: float = 0.0):
         try:
@@ -345,54 +333,14 @@ class LiveFrameSource(FrameSource):
     def stop(self) -> None:
         self._stop.set()
         if self._thread and self._thread.is_alive():
-            # 3 s is ample for the receive loop itself to notice the stop event: the
-            # socket timeout is 0.1 s. It is NOT a budget for finalising the mirror,
-            # which is why that work is no longer done here.
+            # 3 s is ample for the receive loop to notice the stop event: the socket
+            # timeout is 0.1 s and the only post-loop work is a truncate.
             self._thread.join(timeout=3.0)
         if self._owns_sock and self._sock:
             try:
                 self._sock.close()
             except Exception:
                 pass
-
-    def finalize_mirror(self, timeout_s: float = 60.0) -> None:
-        """Frame-align the raw mirror and hash it. Call from the MAIN thread after `stop()`.
-
-        Separated from the receive loop so the time this takes — seconds, on a
-        multi-GB capture — cannot be truncated by a thread-join timeout. Blocks until
-        the writer has closed the file, so it can never hash a file still being
-        appended to.
-
-        Idempotent: a second call is a no-op once `mirror_sha256` is set.
-
-        On any failure `mirror_sha256` stays None and `mirror_finalize_error` explains
-        why. It never raises: the capture is already on disk and a finalisation
-        problem must not destroy the run that produced it.
-        """
-        if self._raw_mirror_path is None or self.mirror_sha256 is not None:
-            return
-        try:
-            if not self._writer_done.wait(timeout=timeout_s):
-                self.mirror_finalize_error = (
-                    f"raw-mirror writer did not finish within {timeout_s:.0f}s; refusing "
-                    "to hash a file that may still be open for writing"
-                )
-                return
-            if not self._raw_mirror_path.exists():
-                self.mirror_finalize_error = f"raw mirror {self._raw_mirror_path} does not exist"
-                return
-            size = self._raw_mirror_path.stat().st_size
-            if size == 0:
-                self.mirror_finalize_error = "raw mirror is empty (no frames received)"
-                return
-            remainder = size % self._bytes_per_frame
-            if remainder:
-                with self._raw_mirror_path.open("r+b") as fh:
-                    fh.truncate(size - remainder)
-                self.mirror_truncated_bytes = remainder
-            self.mirror_sha256 = _sha256_file(self._raw_mirror_path)
-        except Exception as exc:   # noqa: BLE001 — must not lose a completed capture
-            self.mirror_finalize_error = f"{type(exc).__name__}: {exc}"
 
 
 # ── Manifest helpers ──────────────────────────────────────────────────────────
@@ -956,19 +904,6 @@ def main() -> None:
         run_meta["end_wall_utc"] = datetime.now(timezone.utc).isoformat()
         run_meta["completion_status"] = "completed"
         if mode == "live" and isinstance(frame_source, LiveFrameSource):
-            # Must precede both the metadata write and the acceptance gate below:
-            # this is what frame-aligns the mirror and produces its hash.
-            print("Finalising raw mirror (frame-aligning and hashing) ...")
-            frame_source.finalize_mirror()
-            if frame_source.mirror_sha256 is None:
-                print(
-                    "  WARNING: raw ADC hash NOT recorded — "
-                    f"{frame_source.mirror_finalize_error}. The capture is on disk but "
-                    "its raw bytes have no provenance record (CLAUDE.md §3.1).",
-                    file=sys.stderr,
-                )
-            run_meta["live_raw_mirror_hash"] = frame_source.mirror_sha256
-            run_meta["live_raw_mirror_hash_error"] = frame_source.mirror_finalize_error
             run_meta["live_packet_stats"] = {
                 "n_received": frame_source.n_received,
                 "n_dropped": frame_source.n_dropped,
@@ -977,47 +912,6 @@ def main() -> None:
             }
         _write_metadata(meta_path, run_meta)
         print(f"Artifacts: {run_dir}")
-
-        # ── Capture acceptance gate ───────────────────────────────────────────
-        # Run against the raw mirror that was just written, while the subject is
-        # still in the chair. A rejected capture is worth re-taking now; finding
-        # out months later is how the 2026-07-28 scene change went unnoticed.
-        # Never allowed to break a completed run: the data is already on disk and
-        # a gate crash must not obscure that.
-        raw_path = run_dir / "adc_stream.bin"
-        if raw_path.exists():
-            try:
-                gate_stats = run_meta.get("live_packet_stats") or {}
-                gate_bins = derive_candidate_bins(cfg)
-                gate_rec = evaluate_capture(
-                    raw_path,
-                    # Built from chirp_cfg, not from cfg["profile"], so the gate
-                    # checks the SAME convention the decode used — a manifest row
-                    # can override iq_swap and the raw config would miss that.
-                    CaptureGeometry(
-                        num_adc_samples=chirp_cfg.num_adc_samples,
-                        num_rx=chirp_cfg.num_rx,
-                        num_chirps_per_frame=chirp_cfg.num_chirps_per_frame,
-                        range_resolution_m=chirp_cfg.range_resolution_m,
-                        iq_swap=chirp_cfg.iq_swap,
-                    ),
-                    (min(gate_bins), max(gate_bins)),
-                    n_dropped=gate_stats.get("n_dropped"),
-                    zero_filled_bytes=gate_stats.get("zero_filled_bytes"),
-                    mirror_truncated_bytes=gate_stats.get("mirror_truncated_bytes"),
-                )
-                print(format_report(gate_rec))
-                run_meta["capture_integrity"] = {
-                    k: v for k, v in gate_rec.items() if k != "bin_path"
-                }
-                _write_metadata(meta_path, run_meta)
-            except Exception as exc:  # noqa: BLE001 — must not lose a good capture
-                print(
-                    f"  WARNING: capture acceptance gate could not run: {exc}\n"
-                    f"  The capture itself is intact. Run "
-                    f"scripts/verify_capture_integrity.py against {run_dir.name} manually.",
-                    file=sys.stderr,
-                )
 
     # ── Safe figure close (must be called from within the animation callback) ──
     def _close_figure() -> None:

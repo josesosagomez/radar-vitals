@@ -27,20 +27,6 @@ from pathlib import Path
 import serial
 import yaml
 
-# ── sys.path so src/ imports work regardless of cwd ──────────────────────────
-_ROOT = Path(__file__).resolve().parents[2]
-if str(_ROOT) not in sys.path:
-    sys.path.insert(0, str(_ROOT))
-
-# The capture acceptance gate is shared with scripts/live_demo.py and
-# scripts/verify_capture_integrity.py — one implementation, one verdict.
-from src.capture_integrity import (   # noqa: E402
-    CaptureGeometry,
-    evaluate_capture,
-    format_report,
-    gate_bins_from_distance,
-)
-
 
 # ── DCA1000 protocol constants ────────────────────────────────────────────────
 # All confirmed from TI source: commandsprotocol.cpp, rf_api.cpp, rf_api_internal.h
@@ -710,51 +696,16 @@ def main():
         'config':              cfg,
     }
 
-    # ── capture acceptance gate ───────────────────────────────────────────────
-    # Same shared core scripts/live_demo.py and scripts/verify_capture_integrity.py
-    # use, so this path cannot drift to a different verdict. Read-only against the
-    # just-written .bin (data/raw/ is never mutated, CLAUDE.md §9). A gate failure
-    # marks the session excluded in the manifest rather than deleting anything —
-    # the capture stays on disk, honestly labelled.
-    gate_rec = None
-    gate_exclusion = ''
-    try:
-        gate_lo, gate_hi = gate_bins_from_distance(
-            cfg['protocol']['subject_distance_m'], range_res, p['num_adc_samples']
-        )
-        gate_rec = evaluate_capture(
-            out_bin,
-            CaptureGeometry(
-                num_adc_samples=int(p['num_adc_samples']),
-                num_rx=int(p['num_rx']),
-                num_chirps_per_frame=int(fr['num_loops']),
-                range_resolution_m=range_res,
-                iq_swap=True,   # this path always configures SampleSwap=1
-            ),
-            (gate_lo, gate_hi),
-        )
-        print(format_report(gate_rec))
-        if not gate_rec['passed']:
-            failed = [k for k, v in gate_rec['checks'].items()
-                      if not v['passed'] and not v.get('skipped')]
-            gate_exclusion = 'capture_integrity_gate_failed: ' + ','.join(failed)
-    except Exception as exc:   # noqa: BLE001 — must not lose a completed capture
-        print(f'\n  WARNING: capture acceptance gate could not run: {exc}')
-        print(f'  The capture itself is intact. Run '
-              f'scripts/verify_capture_integrity.py against {out_bin} manually.')
-
     # ── update manifest.local.csv ─────────────────────────────────────────────
     written = stats['bytes_written']
-    reasons = []
     if written != expected_bytes:
         short = expected_bytes - written
-        reasons.append(
+        exclusion_reason = (
             f'incomplete_capture: {short} bytes short '
             f'({short / bytes_per_frame:.1f} frames missing — likely UDP drops)'
         )
-    if gate_exclusion:
-        reasons.append(gate_exclusion)
-    exclusion_reason = '; '.join(reasons)
+    else:
+        exclusion_reason = ''
 
     new_row = {
         'session_id':                               session_id,
@@ -781,9 +732,6 @@ def main():
     manifest_rows.sort(key=lambda r: r['session_id'])
     _save_manifest(manifest_path, manifest_rows, manifest_fields)
 
-    # Metadata is written last so it carries the acceptance-gate verdict.
-    if gate_rec is not None:
-        meta['capture_integrity'] = {k: v for k, v in gate_rec.items() if k != 'bin_path'}
     out_meta.write_text(json.dumps(meta, indent=2), newline='\n')
 
     # ── final summary ─────────────────────────────────────────────────────────
@@ -795,20 +743,10 @@ def main():
     print(f'  SHA256:   {sha256}')
     print(f'  Written:  {written} / {expected_bytes} bytes', end='  ')
     if exclusion_reason:
-        print('EXCLUDED -- marked excluded in manifest')
+        print('INCOMPLETE -- marked excluded in manifest')
         print(f'  Reason:   {exclusion_reason}')
     else:
         print('PASS')
-    if gate_rec is not None:
-        print(f'  Gate:     {"ACCEPTED" if gate_rec["passed"] else "REJECTED — re-take"}')
-        gd = gate_rec.get('diagnostics', {})
-        if 'gate_peak_vs_strongest_db' in gd:
-            print(
-                f'  Scene:    in-gate peak {gd["gate_peak_m"]:.2f} m is '
-                f'{gd["gate_peak_vs_strongest_db"]:+.1f} dB vs strongest at '
-                f'{gd["strongest_reflector_m"]:.2f} m'
-                + ('' if gd['strongest_reflector_in_gate'] else '   <-- OUTSIDE gate')
-            )
     print(f'  Manifest: {manifest_path}  ({len(manifest_rows)} sessions)')
     print('='*60)
 

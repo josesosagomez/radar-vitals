@@ -213,19 +213,6 @@ Record in `HISTORY.md`: settle duration, and the PR at the moment recording star
 6. Subject stays still and breathes **naturally** (or to the metronome) for the full recording.
    No talking, no posture shifts.
 7. Stop the radar capture, then stop Masimo. Note end time and final PR.
-8. **Read the CAPTURE ACCEPTANCE GATE block the capture script prints.** Both
-   `scripts/live_demo.py` and `steps/step_1/capture.py` run it automatically and
-   store the verdict in the run metadata.
-   - **VERDICT: REJECTED** — the capture failed frame alignment, packet loss,
-     saturation or the I/Q convention check. **Re-take it now**, while the subject
-     is still seated. Do not delete the rejected capture; `steps/step_1` marks it
-     excluded in the manifest with the reason.
-   - **"strongest reflector is OUTSIDE the subject gate"** — this is a **warning,
-     not a rejection**, and the capture is still usable. Check what is behind the
-     chair, record it in the session notes, and note the reflector distance the
-     gate printed. If it is something movable, move it and re-take.
-   - To re-check any capture later:
-     `conda run -n radar-vitals python scripts/verify_capture_integrity.py`
 
 ---
 

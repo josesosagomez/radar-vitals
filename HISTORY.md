@@ -8719,3 +8719,74 @@ proposed as a coverage fix without new data.
 **Next:** fix the mirror-hash race before M1/M5, since it silently degrades every study capture.
 The coverage bottleneck remains unexplained and clutter removal is no longer a candidate answer for
 it, which removes one argument for attacking coverage before the M0 freeze.
+
+## 2026-07-31 - Capture-integrity and hash-provenance apparatus removed (user instruction)
+
+**Set out to do:** the user asked for the capture-integrity gate and the raw-ADC hash provenance
+work to come out of the project.
+
+**Removed:**
+- `src/capture_integrity.py`, `tests/test_capture_integrity.py` (13 tests),
+  `scripts/verify_capture_integrity.py`, `tests/test_live_demo_mirror_finalize.py` (12 tests).
+- The capture-time gate hooks in `scripts/live_demo.py` and `steps/step_1/capture.py`, the
+  `protocol.subject_distance_m` block added to `steps/step_1/capture_config.yaml`, and session
+  step 8 in `notes/protocol.md`.
+- Raw-mirror hashing in the live path: `LiveFrameSource.finalize_mirror` and the
+  `live_raw_mirror_hash` / `live_raw_mirror_hash_error` writes. This reverts the `cee8644` fix by
+  removing the thing it fixed rather than restoring the race.
+- The §1a/§1b provenance amendment to `notes/capture_inventory.md` (commit `c8c9242`), reverted to
+  its 2026-07-25 state.
+
+Test baseline 2074 → **2049 passed, 5 skipped** (−25, exactly the two deleted test modules).
+
+**Retained deliberately, with reasons:**
+- **Frame-alignment truncation of the raw mirror** stays in `LiveFrameSource._loop`. It is not a
+  provenance feature — without it the mirror keeps a trailing partial frame and `read_adc_bin`
+  refuses to load the capture at all.
+- `steps/step_1/capture.py`'s own `sha256` over the finished `.bin` is **pre-existing** and was not
+  touched, so that capture path still records a hash. The live path no longer does.
+- `src/clutter.py` and the clutter A/B result, the `notes/approach.md` step-3 correction, the
+  warmup-expectation fix in `scripts/validate_warmup_selection.py`, and the `notes/protocol.md`
+  scene-change record were **not** reverted: they are outside the capture-integrity/hash bucket, and
+  the approach.md edit corrects a false claim that would otherwise be reinstated. Earlier `HISTORY.md`
+  entries were not touched (CLAUDE.md §10.2 forbids it). The user was told this explicitly and can
+  ask for any of them separately.
+
+**Numbers recorded before they were deleted (CLAUDE.md §10.2).** The reverted inventory amendment
+carried the only written record of these. SHA-256 of `adc_stream.bin`, computed 2026-07-31:
+```
+cca0cdcbaa8235672c96f524666835824aadf40aa78b12197705da63dbeb7b00  massimo3
+2edc2c6d1976407eea40101550b1f3c0ab442843a8cb8311a8ab4538bc423968  massimo4
+a55a0e42f9972d6bcf5173870475f69694aabd808d84d4182fbdef544e76bb5b  massimo5
+b81ff843eff68e0bc9c05194525f065a9edc8346ac65397bf96d181d2e5a9103  massimo6
+782166e0a0dda411e3f2eecf891fd1193ebdfa681c3edd9919ee7b1688c053c5  massimo7
+```
+SHA-256 of the Masimo CSVs, same date:
+```
+92054b471a04eefdbe4de45988846bab503cf61a0e5c619e5d8f545ef0a965cb  demo_massimo3.csv
+286b6e3fe085acbef15a85448f383e95945cd3ef23bf309c0159d0dc3dc6dfe5  demo_massimo4.csv
+6e0de2788f3b1162bce1782b70a8a7a2d5a752fdc52b3ca12029119368aa8498  demo_massimo5.csv
+119b740e801a410be2af4ce8962b2defb2a95a9aaf2b2f9b7494d097a7143178  demo_massimo6.csv
+778cbbc8f4c2618294c6a29e2ba29c2022504bb4bdd2fe437637cf57ef4b0684  demo_massimo7.csv
+```
+These attest those files as of 2026-07-31 only — days after capture, with no earlier record to
+compare against. `notes/capture_inventory.md` §1's hashes for massimo1/massimo2/sweep are
+contemporaneous (2026-07-25) and were re-confirmed matching on 2026-07-30.
+
+**What this costs, stated so it is not rediscovered by accident:**
+- Nothing now checks a new capture for UDP packet loss, frame misalignment, ADC clipping, or a
+  mirrored I/Q convention. All four are silent failures — they produce plausible numbers rather than
+  errors. The 2026-07-30 measurements stand as a one-time record for the 8 existing captures.
+- `scripts/live_demo.py` writes `live_raw_mirror_hash: null` for every capture, so
+  `scripts/score_offline.py`'s directory-form `--pinned-lock-source` (OSR-03 R2 hash-binding) will
+  refuse every future live capture. The integer form still works and is tagged `kind="manual"`.
+- CLAUDE.md §3.1 requires every paper number to trace to the input data file's hash. For live-path
+  captures that is now unmet at capture time; hashes can only be computed after the fact, which is a
+  weaker attestation.
+- `notes/capture_inventory.md` is back to its 2026-07-25 state and is stale: it predates massimo3–7,
+  lists the deleted `live_test1`, and its §2 lists three `20260715_*_replay_unknown` folders that no
+  longer exist.
+
+**Next:** unchanged — M0 assembly and deposit is the critical path, M1 the cheapest risk reduction.
+If the M0 deposit is to publish capture hashes (§3 of the inventory says it will), the live path will
+need a hash recorded somewhere before M5 captures are taken.
