@@ -74,6 +74,34 @@
   > and `notes/comparator_prespec.md` §2.2 (recorded identically, device-wide).
 - **Environment:** quiet room, no one walking around, no fan/HVAC airflow at the
   subject.
+- **Scene behind the subject:** the subject should be the **dominant reflector**
+  the radar sees. Keep the space behind and beside the chair clear of large flat
+  or metallic surfaces (equipment carts, monitors, cabinets, whiteboards, an
+  un-setback wall) within ~3 m of the sensor. Record what is behind the chair in
+  the session notes.
+
+  > **Added 2026-07-30 after finding this had already drifted, unrecorded.** The
+  > five captures of **2026-07-28** (`massimo3`–`massimo7`) contain static
+  > reflectors at **2.09 m** and **2.88 m** (plus one at 4.19 m) that return
+  > **more energy than the subject**, who sits **3.3–9.6 dB below them**; on
+  > `massimo4` the body is only the *fifth* strongest return in the range profile.
+  > The three earlier captures (`massimo1`, `massimo2`, `sweep`, 2026-07-13/14)
+  > have the subject as the dominant reflector at +0.0 dB. **The room changed
+  > between the two sessions and nothing recorded it** — exactly the protocol
+  > drift CLAUDE.md §3.6 exists to prevent. It was found only by inspecting range
+  > profiles two days later.
+  >
+  > **Why it matters.** `src/warmup_select.py` states its own operating assumption
+  > as "single seated subject is the dominant reflector inside the distance gate",
+  > and flags it as *not yet validated against competing reflectors*. Those five
+  > captures are the competing-reflector case. The distance gate still constrains
+  > selection, so the picks look sane — but the assumption behind them is only
+  > marginally true, and the sidelobe skirts of strong static returns leak into the
+  > gate. No stage of the pipeline removes static clutter (see `notes/approach.md`).
+  >
+  > **Not retroactively excluded.** Those five captures remain valid captures; this
+  > is recorded as a known scene difference between eras, not a defect finding. What
+  > it forbids is silently comparing across the two eras as if the scene were fixed.
 - **Recording duration:** **10 minutes** (600 s) per session, yielding **exactly 20
   independent non-overlapping 30 s windows** on the frozen frame-index grid
   (`notes/analysis_prespec.md` §7), `k = 0 … 19`. The first window `k = 0` (`[0, 30) s`)
@@ -132,6 +160,10 @@
 - [ ] Chirp profile loaded/verified (32 chirps/frame, 20 Hz frame rate)
 - [ ] Sensor level and pointed horizontally at the seated chest
 - [ ] Measure and record radar-to-chest distance (must be within 0.8–1.4 m)
+- [ ] **Scene behind/beside the chair clear** of large flat or metallic surfaces
+      within ~3 m; **write down what is there** (see "Fixed conditions"). If the
+      room has been rearranged since the last session, say so explicitly in the
+      session notes — this drifted unrecorded between 2026-07-13/14 and 2026-07-28.
 
 ### Masimo MightySat
 - [ ] **Battery charged / in good state** — it is a spot-check device; confirm it will run the full
@@ -181,6 +213,19 @@ Record in `HISTORY.md`: settle duration, and the PR at the moment recording star
 6. Subject stays still and breathes **naturally** (or to the metronome) for the full recording.
    No talking, no posture shifts.
 7. Stop the radar capture, then stop Masimo. Note end time and final PR.
+8. **Read the CAPTURE ACCEPTANCE GATE block the capture script prints.** Both
+   `scripts/live_demo.py` and `steps/step_1/capture.py` run it automatically and
+   store the verdict in the run metadata.
+   - **VERDICT: REJECTED** — the capture failed frame alignment, packet loss,
+     saturation or the I/Q convention check. **Re-take it now**, while the subject
+     is still seated. Do not delete the rejected capture; `steps/step_1` marks it
+     excluded in the manifest with the reason.
+   - **"strongest reflector is OUTSIDE the subject gate"** — this is a **warning,
+     not a rejection**, and the capture is still usable. Check what is behind the
+     chair, record it in the session notes, and note the reflector distance the
+     gate printed. If it is something movable, move it and re-take.
+   - To re-check any capture later:
+     `conda run -n radar-vitals python scripts/verify_capture_integrity.py`
 
 ---
 

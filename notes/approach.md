@@ -39,7 +39,22 @@ Standard phase-based chain. Each stage verified in isolation:
 1. Parse raw ADC (IWR1642 2-lane LVDS, Complex1x, 4-word packets). SDK captures use
    `iq_swap=True` (SampleSwap=1); mmWave Studio captures use `iq_swap=False`.
 2. Range FFT (fast time) → complex range profile per frame.
-3. Static clutter removal (subtract slow-time mean per bin).
+3. ~~Static clutter removal (subtract slow-time mean per bin).~~ **NOT IMPLEMENTED —
+   corrected 2026-07-30.** This step was listed here, and copied from here into
+   `HANDOFF.md`'s method summary, but no such stage exists in the production path.
+   `src/respiration.py::extract_chest_phase` goes Hann window → range FFT → select the
+   locked bin → `delta_before_mean` → cumsum, with nothing in between; there is no
+   slow-time mean subtraction, MTI filter or clutter subtraction anywhere in `src/`.
+   It is disabled on-chip too (`steps/step_1/capture.py` sends `clutterRemoval -1 0`
+   and `calibDcRangeSig -1 0`).
+   **Do not conflate this with `delta_before_mean`.** That cancels static *per-channel
+   phase offsets* (which is all its docstring claims); it does **not** cancel additive
+   static clutter in the range bin, which compresses the phase excursion and introduces
+   harmonic distortion — a concern here specifically because HR rests on AHET
+   second-harmonic verification and ECA on respiration harmonics.
+   **Open decision:** justify the omission with a citation, or implement it — see
+   `HISTORY.md` 2026-07-30. Relevant evidence: the 2026-07-28 captures contain static
+   reflectors stronger than the subject (`notes/protocol.md`, "Scene behind the subject").
 4. **Range-bin selection:** at warmup, scan the candidate bins spanned by the
    0.8-1.4 m gate, score each on HR validity / BR confidence / respiration validity /
    range-energy rank, and **lock the winner for the rest of the session**. No manual or

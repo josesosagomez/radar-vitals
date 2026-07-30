@@ -8585,3 +8585,69 @@ declared done, then close the capture stage properly.
 checks become a per-capture acceptance gate for the study (would need a scene-margin threshold,
 which is a new decision); decide whether static clutter removal is a deliberate omission to be
 justified in `notes/approach.md` or a gap to close before M0 freezes the estimator.
+
+## 2026-07-30 - Capture acceptance gate wired into both capture paths; scene change recorded
+
+**Set out to do:** turn the capture-integrity checks from a script run by hand into a gate every
+future capture must pass, add the in-gate-vs-strongest-reflector margin so a repeat of the
+2026-07-28 scene is caught in the room, and write that scene change into the protocol.
+
+**Worked (with evidence):**
+- **`src/capture_integrity.py` added** (`2f4d701`) — the checks moved out of the script into a
+  shared, layout-agnostic core taking raw bytes plus explicit geometry rather than a directory
+  shape. Three callers now import it (`scripts/live_demo.py`, `steps/step_1/capture.py`,
+  `scripts/verify_capture_integrity.py`), so the verdict printed at capture time cannot drift from
+  the one the offline verifier reports later — the same reasoning `src/warmup_select.py` records for
+  M4R-10. The refactored verifier reproduces identical numbers on all 8 captures (12.8-38.8 dB
+  gate-vs-mirror, same %FS), so the extraction is behaviour-preserving.
+- **Gating checks:** frame alignment, packet loss, saturation, I/Q convention (>= 10 dB
+  gate-vs-mirror). **Reported but NOT gating:** the scene margin. It prints an explicit
+  "check the room, record it in notes/protocol.md" block when the strongest reflector falls outside
+  the subject gate, but does not fail a capture — no defensible threshold exists, and inventing one
+  would silently redefine which captures are admissible.
+- **Wired into `scripts/live_demo.py`**: runs on the raw mirror after metadata is written, stores
+  the verdict under `capture_integrity` in `run_metadata.json`. Geometry is built from `chirp_cfg`,
+  **not** `cfg["profile"]` — a manifest row can override `iq_swap`, and reading the raw config would
+  have made the gate check a different convention than the decode used.
+- **Wired into `steps/step_1/capture.py`**: runs before the manifest row is built and folds a
+  failure into the existing `exclusion_reason` mechanism, so a rejected capture is marked excluded
+  rather than deleted. Metadata is now written last so it carries the verdict.
+  `steps/step_1/capture_config.yaml` gained `protocol.subject_distance_m: [0.8, 1.4]` rather than
+  hardcoding the gate.
+- **Both call sites wrap the gate** so it can never lose a completed capture: on any exception the
+  data stays on disk and the user is told to run the verifier by hand.
+- **`tests/test_capture_integrity.py`, 13 tests**, every check exercised in both directions on
+  synthetic captures. A capture written in SampleSwap=0 order and read as SampleSwap=1 is rejected
+  with the dB ratio sign-flipped **while every other check still passes** (the rejection is specific,
+  not incidental); absent UDP stats read as `skipped`, never as evidence; the 2026-07-28 scene is
+  reconstructed and asserted to be reported **without** gating; `gate_bins_from_distance` is pinned
+  equal to `derive_candidate_bins` so the checked range cannot drift from the bins warmup searches.
+- **Verified on real data:** massimo4 passes all five gates and fires the scene warning —
+  `in-gate peak 1.09 m is -9.6 dB vs strongest reflector at 2.09 m`. Had the gate existed on
+  2026-07-28 the scene change would have been caught in the room rather than two days later.
+- Full suite **2043 passed, 5 skipped** (2030 + 13).
+- **Scene change recorded in `notes/protocol.md`** — as a fixed condition (with the measured
+  numbers and why it matters), a pre-session equipment-checklist item, and a new post-capture
+  session step 8 telling the operator how to read the gate block and what to do on REJECTED versus
+  the scene warning.
+
+**Failed / did not work, and why:**
+- Nothing failed this session. One near-miss worth recording: the first live_demo wiring built the
+  gate geometry from `cfg["profile"]`, which ignores the manifest `iq_swap` override at
+  `scripts/live_demo.py:697-701`. That would have made the I/Q check validate a different convention
+  than the decode actually used — a quietly wrong check on precisely the failure mode it exists to
+  catch. Caught before commit by checking the variable was in scope.
+
+**Retired / no longer used:** the duplicated check implementations inside
+`scripts/verify_capture_integrity.py` (`_decode_head`, `_mean_range_profile`, and the inline C1-C5
+bodies) are gone; that script is now a thin adapter over `src/capture_integrity.py`. The `C1_`-`C5_`
+key prefixes in its JSON artefact are replaced by the core's names (`frame_alignment`,
+`packet_loss`, `mirror_trim`, `iq_convention`, `saturation`); artefacts written before `2f4d701`
+use the old keys.
+
+**Next:** the capture stage is closed and gated. Open from this thread: static clutter removal does
+not exist and is now recorded as a known gap (`notes/protocol.md`, this log) — decide whether it is
+a deliberate omission to justify in `notes/approach.md` or a gap to close **before M0 freezes the
+estimator**, since it bears on coverage, which is the acknowledged bottleneck. Also unresolved:
+whether the scene margin should ever become a gating threshold (needs a defensible number, not a
+guess), and `rx_gain_db` review given 3.0-4.9% ADC full-scale utilisation.
