@@ -21,25 +21,26 @@ after the synthetic gate—run a strictly exploratory comparison on all eight sa
 ### Repository
 
 - Branch: `vital_signs_ahmed_v10`
-- HEAD: `0e34078190a316fb3b4aa4904fdc6311e3a03f65`; worktree clean
-- Committed on 2026-07-30, in order:
+- HEAD: `d0cf5a97a88e8d035b507c143cc5353ae713f186`; worktree clean
+- 12 commits on 2026-07-30 since `1bad25c`. The load-bearing ones:
   - `2bfc167` deterministic Step 1a provenance + scorer OSR-03 tests
-  - `f9e42b6` approved plan, Addendum A, gate-prediction evidence script, docs
+  - `f9e42b6` approved plan, Addendum A, gate-prediction evidence script
   - `3aec30a` `.gitattributes` LF pin — recorded hashes were not reproducible
   - `833bc6e` pin git state in the scorer end-to-end test
-  - `b50d827` Addendum A §A6b — corrected config hash and EOL consequences
   - `53cf4c7` extract the AHET classifier into `src/m4/outcome.py`
-  - `574657a` Step 1b scientific core, suite contracts, corrected P2/P3
-  - `2b7d3de` record core progress
+  - `574657a` scientific core, suite contracts, corrected P2/P3
+  - `025d259` `ProductionEstimatorSuite` and `AhmedPhaseEstimatorSuite`
+  - `0e34078` synthetic generator and gate evaluation
 - Existing estimator/scorer behaviour is unchanged. The only edits to shipped code are the
   `src/m4/outcome.py` extraction (verified byte-for-byte identical to the original block) and its
-  two import sites.
-- **Test baseline: the full suite is green** — `1888 passed, 5 skipped, 0 failed`
+  two import sites; everything else is new modules and tests.
+- **Test baseline: the full suite is green** — `1944 passed, 5 skipped, 0 failed`
   (was `3 failed, 1822 passed, 2 skipped` at the start of 2026-07-30).
 - **Line endings are pinned to LF and this is load-bearing.** Before `3aec30a`, `core.autocrlf=true`
   with no `.gitattributes` meant a fresh clone checked out CRLF and every recorded SHA-256 changed
   (the base plan hashed `fa64b234…` instead of `9294cb05…`). Do not remove `.gitattributes` without
   re-deriving every recorded hash.
+
 ### Step 1a
 
 Step 1a is implemented, committed, canonicalized, and scientifically negative under its declared
