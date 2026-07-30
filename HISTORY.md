@@ -8497,3 +8497,91 @@ collapse.
 **Next:** M0 assembly and deposit is the critical path and is believed unblocked. M1 is the cheapest
 risk reduction. M8 Step 1b continues in parallel.
 
+
+## 2026-07-30 - Capture stage closed; M2's downstream effect on massimo1 identified
+
+**Set out to do:** answer whether capture, range FFT and static clutter removal could be
+declared done, then close the capture stage properly.
+
+**Worked (with evidence):**
+- **Established that the three stages are in very different states.** Capture and range FFT
+  had real but partial evidence; **static clutter removal does not exist** anywhere in the
+  production path. The only `clutter` match in `src/` is the docstring note at
+  `src/radar_io.py:22-24`, which describes near-DC leakage as a scene artefact rather than
+  addressing it. It is disabled on-chip too: `steps/step_1/capture.py:368` sends
+  `clutterRemoval -1 0`. The production chain is Hann -> range FFT -> select bin ->
+  `delta_before_mean` -> cumsum, with nothing in between. `delta_before_mean` cancels static
+  per-channel *phase offsets* (which its docstring claims correctly and only that); it does
+  not cancel additive static clutter in the bin.
+- **`iq_swap=True` decode is now covered** (`3469ded`). Only `iq_swap=False` had a test, while
+  every recorded capture uses `iq_swap=True`. Added `test_iq_lane_decode_4word_packet_sample_swap`
+  and `test_iq_swap_mirrors_range_bin` (synthetic on-grid tone at bin 23 peaks at 23 read
+  correctly, 233 read wrong). Mutation-checked: inverting `if cfg.iq_swap:` fails all 3 tests
+  in the file. Suite 2028 -> 2030 passed, 5 skipped.
+- **`scripts/verify_capture_integrity.py` added** (`3469ded`) — tracked, regenerable replacement
+  for the scratchpad checks. Gating: C1 frame alignment, C2 packet loss, C3 mirror trim,
+  C4 I/Q convention, C5 saturation, C6 frame rate. Non-gating diagnostics: scene margin and ADC
+  utilisation. Gate bins come from `derive_candidate_bins` on each session's own config.
+  Negative-tested (`--min-mirror-db 50` fails all 8 and exits 1).
+- **All 8 captures pass.** 0 dropped and 0 zero-filled UDP packets; exact frame alignment;
+  no ADC sample within 68 counts of int16 full scale (peaks 3.0-4.9% FS).
+- **I/Q convention confirmed empirically for the first time.** Decoding each capture both ways,
+  the configured convention concentrates 12.8-38.8 dB more energy in the 0.8-1.4 m gate than in
+  its mirror band (9.77-10.33 m). Wrong convention would place the subject at ~10 m.
+- **massimo1's warmup discrepancy diagnosed — not a regression.**
+  `scripts/validate_warmup_selection.py` was failing: expected bin 23, observed 27. Cause is the
+  **M2 respiration fix**. Live, bins 24-29 were all pinned at the 6 bpm band edge (`f_r=0.1 Hz`),
+  which makes ECA inert, so no bin earned an `hr_valid` pass and highest-energy bin 23 won on
+  breathing evidence alone. With the edge veto, bin 27 resolves a real 19.19 bpm, ECA cancels,
+  AHET passes, and the +1000 `hr_valid` bonus takes it. Scores confirm the mechanism arithmetically:
+  old `100 + 50 - 5*6 = 120`; new `1000 + 100 + 50 - 5*6 = 1120`. Bins 22 and 23 are byte-identical
+  old vs new, so nothing about the decode or the strong bins changed.
+
+**Failed / did not work, and why:**
+- **My first I/Q check was circular and proved nothing.** I compared each session's locked bin
+  against the protocol gate — but warmup only *searches* bins derived from that gate, so the
+  result was guaranteed by construction. Replaced with the both-ways gate-vs-mirror comparison.
+- **My first frame-rate estimate was biased and I reported it before catching it.** Regressing
+  wall-clock span on frame count assumes ONE fixed setup overhead. The capture path changed
+  between eras (~2.9 s overhead on 2026-07-13 vs ~5.1 s on 2026-07-28), so pooling all 8 reads
+  **19.896 Hz** with a 0.485 s residual, while the homogeneous 2026-07-14+ subset reads
+  **19.9884 Hz** with 0.155 s (+0.047 bpm bias at 80 bpm). The script now reports INDETERMINATE
+  above a residual threshold rather than certifying a biased slope. It also refuses to fit when
+  frame counts lack spread to identify one — a naive fit on near-equal-length captures produced
+  **21.27 Hz** and **4.72 Hz** on data whose true rate is ~20 Hz.
+- Wall clock cannot certify the frame rate at all; the definitive argument is the sensor's
+  crystal-derived frame timer. This regression is only a coarse consistency check on top of it.
+
+**Retired / no longer used:**
+- Retired the `20260713_170323_live_demo_live_test1` entry (expected bin 22) from
+  `validate_warmup_selection.py`. The capture directory no longer exists, so the entry made the
+  script exit 1 on a missing input rather than a real disagreement.
+- Retired massimo1's expected bin **23** in favour of **27**, and retired its note
+  "unaffected by the fix (no hr_valid pass in warmup)" — true of the energy-eligibility fix,
+  false after M2. Notes now name which fix set each expectation.
+
+**Open concerns recorded, not acted on:**
+- **Offline no longer reproduces massimo1's live range bin** (27 vs the recorded 23). This is the
+  live/offline bin drift `src/warmup_select.py:5-7` cites M4R-10 to prevent. It is caused by a
+  legitimate DSP fix rather than a duplicate implementation, but it means massimo1's
+  `live_estimates.csv` and a fresh offline pass are no longer on the same footing.
+- Bin 27 sits 8.7 dB below the strongest candidate and wins solely on the AHET pass. The
+  energy-eligibility prior exists to stop a lone AHET pass at a skirt bin outvoting the chest bin,
+  but its threshold is -12 dB, so -8.7 dB clears it. Whether 23 or 27 is the better pick needs the
+  frozen comparator (M2 done-when #5, blocked on data) — not eyeballing.
+- **The scene changed between capture eras and was never recorded.** The five 2026-07-28 captures
+  have stronger static reflectors at **2.09 m** and **2.88 m** (plus one at 4.19 m) than the
+  subject, which sits **3.3-9.6 dB below them**; on massimo4 the body is the fifth strongest
+  return. The 2026-07-13/14 captures have the subject as the dominant reflector. This is protocol
+  drift under CLAUDE.md S3.6, and it makes `src/warmup_select.py:86-90`'s stated assumption
+  ("single seated subject is the dominant reflector inside the distance gate") only marginally
+  true on those five. Those same reflectors are exactly the static clutter no stage removes.
+- ADC full-scale utilisation is 3.0-4.9%, leaving roughly 26 dB of dynamic range unused. Not a
+  correctness defect; worth reviewing `rx_gain_db` before the study.
+- `.gitignore` ignores `results*/` wholesale, though its comment says "keep configs + metrics
+  (json/yaml)". Capture-integrity artefacts are therefore local-only and regenerate from the script.
+
+**Next:** record the scene change in `notes/protocol.md`; decide whether the capture-integrity
+checks become a per-capture acceptance gate for the study (would need a scene-margin threshold,
+which is a new decision); decide whether static clutter removal is a deliberate omission to be
+justified in `notes/approach.md` or a gap to close before M0 freezes the estimator.
