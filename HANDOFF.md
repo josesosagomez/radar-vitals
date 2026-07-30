@@ -21,20 +21,22 @@ after the synthetic gate—run a strictly exploratory comparison on all eight sa
 ### Repository
 
 - Branch: `vital_signs_ahmed_v10`
-- HEAD: `1bad25cb034f7ce788c4c9b387e74b5d9adf7476`
-- Nothing has been staged or committed. Do not discard the worktree:
-  - modified `HANDOFF.md`, `HISTORY.md`, `notes/approach.md`, `notes/analysis_prespec.md`,
-    `plans/implementation_plan.md`
-  - modified `tests/test_m8_ahmed_fig8.py` (the §6.1 provenance-test prerequisite, done)
-  - modified `tests/test_score_offline.py` (OSR-03 skip guards + portable coverage)
-  - untracked `plans/m8_step1b_ahmed_transfer.md`
-  - untracked `plans/m8_step1b_ahmed_transfer_addendum_a.md`
-  - untracked `scripts/m8_step1b_gate_prediction.py`
-- No estimator, scorer, product code, config, result, or raw data has been changed by Step 1b work.
-  `git diff --stat -- scripts/ src/ figures/` is empty; only test files and documents changed.
+- HEAD: `833bc6ed6848c6f158abb0c7638a1ebda0e50b1f`
+- Committed on 2026-07-30, in order:
+  - `2bfc167` deterministic Step 1a provenance + scorer OSR-03 tests
+  - `f9e42b6` approved plan, Addendum A, gate-prediction evidence script, docs
+  - `3aec30a` `.gitattributes` LF pin — recorded hashes were not reproducible
+  - `833bc6e` pin git state in the scorer end-to-end test
+- Uncommitted: `HANDOFF.md`, `HISTORY.md`, and Addendum A (amendment §A6b).
+- No estimator, scorer, or product code has been changed. `git diff 1bad25c..HEAD --stat -- src/
+  figures/` is empty; changes are confined to tests, plans, docs, and `.gitattributes`.
 - **Test baseline: the full suite is green** — `1827 passed, 5 skipped, 0 failed`
   (was `3 failed, 1822 passed, 2 skipped` at the start of 2026-07-30). Focused Step 1a/adapter pair
   is `90 passed`.
+- **Line endings are pinned to LF and this is load-bearing.** Before `3aec30a`, `core.autocrlf=true`
+  with no `.gitattributes` meant a fresh clone checked out CRLF and every recorded SHA-256 changed
+  (the base plan hashed `fa64b234…` instead of `9294cb05…`). Do not remove `.gitattributes` without
+  re-deriving every recorded hash.
 
 ### Step 1a
 
@@ -54,7 +56,7 @@ Step 1a never decoded or scored a real capture. Its adapter test proves record n
 | File | SHA-256 | Status |
 |---|---|---|
 | `plans/m8_step1b_ahmed_transfer.md` | `9294cb0589b9f0d8f50cdfa0ea893862b1f8ac7f26eb6fee31ee57d622da33ac` | five-discipline PASS on these exact bytes |
-| `plans/m8_step1b_ahmed_transfer_addendum_a.md` | `707f891608a7a2248a4e72bc7a111a22069b9b3d79a596bb0b79afd522197f27` | **user-approved 2026-07-30**; cross-model re-review **waived** |
+| `plans/m8_step1b_ahmed_transfer_addendum_a.md` | `fa51300a1b3ea65fdc5ab133ff6f6c7a3259e29fd09d54f1b8cde177728d237c` | **user-approved 2026-07-30**; cross-model re-review **waived** |
 
 The base plan is deliberately **unmodified**, so its five acceptances remain valid. Governing
 authority is the *pair*; where they conflict, the addendum wins. Any manifest binding
@@ -98,14 +100,18 @@ Residual risk to carry forward: re-review was waived, and one internal contradic
 now fixed) was caught only by re-reading. The four unasked reviewer questions are listed in
 addendum §A8. Treat the addendum as unreviewed by the other model family.
 
+**One user decision is open** (does not block implementation): the canonical Step 1a bundle no
+longer self-verifies two of its own text payloads — see §5 and addendum §A6b. Repairing it means
+touching a canonical scientific artifact, which base plan §6.1 forbids, so it is yours to call.
+
 Next steps, in order:
 
-1. Commit `scripts/m8_step1b_gate_prediction.py`. Base plan §4.3 scopes `scripts/**/*.py` into
-   `source_manifest.json`, so it must be committed and clean before the gate runs.
-3. ~~Fix the ambient-Git Step 1a artifact test.~~ **Done** — see §2 and the second 2026-07-30
-   `HISTORY.md` entry. Focused baseline is now **90 passed** (prior 85 + 5 new provenance tests),
-   deterministic, with no product-code change.
-4. Implement the complete fixture-testable system — `src/m8/ahmed_transfer.py`, neutral
+1. ~~Commit the plans and evidence script.~~ **Done** — `f9e42b6`.
+2. ~~Fix the ambient-Git Step 1a artifact test.~~ **Done** — `2bfc167`. Focused baseline is now
+   **90 passed** (prior 85 + 5 new provenance tests), deterministic, with no product-code change.
+3. Extract `src/m4/outcome.py` from `scripts/diagnose_bin_drift.py:592`, with bit-identical
+   regression tests proving both existing callers are unaffected. **← current task**
+4. Implement the rest of the fixture-testable system — `src/m8/ahmed_transfer.py`, neutral
    suite/runner/scoring contracts under `src/m4/`, stable `src/m4/outcome.py`, strict serializers,
    CLI, experiment config, capture registry, and the full test set — **without opening any real
    capture or Masimo file**.
@@ -178,6 +184,21 @@ Planning approval and real-data authorization remain separate decisions at diffe
   **and** asserts anything about `canonical_promoted`, pin provenance or it will flip with whatever
   is uncommitted. Base plan §6.1 and the first 2026-07-30 `HISTORY.md` entry still record the old
   inverted observation; Addendum A §A5 corrects it.
+- **Canonical Step 1a bundle: two payload hashes are stale (open decision).** In
+  `figures/generated/m8_ahmed_fig8/20260729T075443.145998Z_8e08f5ab0120/provenance.json`,
+  `metrics_sha256` and `resolved_config_sha256` no longer match their on-disk files. The runner wrote
+  them through Python text mode on Windows (CRLF) and hashed those bytes while Git stored LF, so
+  before the LF pin they verified only on a Windows autocrlf checkout and never on Linux. The pin
+  exposed this; it did not cause it. **Scientific outputs still verify** — `figure_png_sha256`,
+  `figure_pdf_sha256`, `plan_sha256`, `implementation_module_sha256`, `runner_script_sha256` all
+  match. (`test_file_sha256` also differs, for the unrelated and expected reason that the §6.1
+  prerequisite changed that file.) Not repaired: base plan §6.1 forbids modifying the canonical
+  bundle. Does **not** block Step 1b, which parents on its own gate and reads only
+  `experiments/m8_ahmed_fig8/config.yaml`.
+- **Three ambient-Git test defects were found and fixed this session** — the Step 1a artifact test,
+  the scorer OSR-03 tests, and the scorer end-to-end test. When writing any test that asserts on
+  promotion, `reproducible`, or git cleanliness, **pin the state** (`_pin_git_provenance`, or
+  `monkeypatch.setattr(so, "is_tree_clean", ...)`). Do not let it read the ambient worktree.
 - **The two replay directories are gone for good.** `results/live_demo/` holds exactly the eight
   canonical captures; `20260726_173434_replay_unknown` and `20260727_182319_replay_unknown` were
   transient 2026-07-26/27 bin-drift artifacts and `results/` blobs are gitignored. The

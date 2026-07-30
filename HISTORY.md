@@ -8090,3 +8090,66 @@ domains. Gating is now defined solely by §A4.2 and is domain-independent.
 scopes it into `source_manifest.json`), then build the complete fixture-testable system without
 opening any real capture or Masimo file. The §6.1 provenance prerequisite is already done.
 
+## 2026-07-30 - Recorded SHA-256 hashes were not reproducible; LF pinned
+
+**Set out to do:** begin Step 1b implementation by committing the approved plans and evidence
+script.
+
+**Worked (with evidence):**
+- Committed the prerequisite test fixes (`2bfc167`) and the approved plan, Addendum A, evidence
+  script, and documentation (`f9e42b6`).
+- Git warned about LF→CRLF on every commit, which prompted a check that turned up a **critical
+  provenance defect**: `core.autocrlf=true` with no `.gitattributes` stores LF but checks out CRLF on
+  Windows. Verified in a throwaway worktree at `f9e42b6` that
+  `plans/m8_step1b_ahmed_transfer.md` hashed
+  `fa64b234bccc647d5d6297b45efcfd0099b4c7b9c7962e12c4a2556c3aa2358a` instead of the reviewed and
+  recorded `9294cb05…33ac`, and `scripts/m8_step1b_gate_prediction.py` hashed `efad272a…` instead of
+  `d4ed01a1…`. Every hash recorded in `HISTORY.md`, `HANDOFF.md`, Addendum A, and two commit messages
+  was therefore verifiable only on this machine.
+- This was not hypothetical for Step 1b: §4.3 hashes every scoped source/config/test file into
+  `source_manifest.json` and §5.1 binds `approved_plan_sha256`. Both would have produced
+  machine-dependent values, and the whole milestone rests on those hashes.
+- Added `.gitattributes` pinning `* text=auto eol=lf` with explicit binary declarations (`3aec30a`).
+  The index was already uniformly LF, so no committed content changed. Renormalized the 43
+  CRLF/mixed working-tree files. Confirmed afterwards that `plans/m8_step1b_ahmed_transfer.md`,
+  the addendum, and the evidence script now hash to their recorded values **both locally and in a
+  fresh worktree**.
+- Full suite green afterwards: **1827 passed, 5 skipped**.
+
+**Failed / did not work, and why:**
+- First renormalization attempt was a silent no-op. `git ls-files --eol`'s attribute column contains
+  a space (`attr/text=auto eol=lf`), so awk field-splitting produced non-existent paths and `rm -f`
+  deleted nothing. Git separates the filename with a tab; the corrected pass used `cut -f2-`.
+- **Base plan §3.1's recorded `scripts/live_demo_config.yaml` hash is now wrong.** It records
+  `8bc7438e887ddcb243cec124cbc316a2279429bad4bdffabb4577f23f3179d7e`, which was the **CRLF** hash;
+  under LF the file is `0862076d6a8f…`. The reviewed plan therefore already contained a
+  platform-dependent hash. Needs an addendum amendment before the registry is implemented.
+- **The canonical Step 1a bundle no longer self-verifies two of its own text payloads.**
+  `metrics_sha256` and `resolved_config_sha256` in
+  `figures/generated/m8_ahmed_fig8/20260729T075443.145998Z_8e08f5ab0120/provenance.json` no longer
+  match the on-disk files. Cause: the runner wrote them through Python text mode on Windows (CRLF),
+  hashed those CRLF bytes, and Git stored LF. Before the pin, a Windows autocrlf checkout happened to
+  reproduce CRLF so it verified locally; a Linux clone never would have. The eol pin did not break
+  the bundle — it exposed a pre-existing platform-dependent defect and made the behaviour uniform.
+  The scientific outputs still verify: both `figure_png_sha256` and `figure_pdf_sha256` match, as do
+  `plan_sha256`, `implementation_module_sha256`, and `runner_script_sha256`. `test_file_sha256`
+  also differs, but for the unrelated and expected reason that the §6.1 prerequisite changed that
+  test file. **Not repaired — this touches a canonical scientific artifact and CLAUDE.md §6.1
+  forbids modifying it, so the decision is the user's.** It does not block Step 1b, which parents
+  its stages on its own synthetic gate and reads only `experiments/m8_ahmed_fig8/config.yaml`.
+- A third ambient-Git test defect surfaced when the tree went clean:
+  `test_end_to_end_real_capture_rerun_estimand` asserted `summary["reproducible"] is False` with the
+  comment "--allow-dirty was used above". That comment encoded a misunderstanding —
+  `reproducible = is_tree_clean()`, and `--allow-dirty` only bypasses the refusal to run. Pinned
+  `is_tree_clean` via monkeypatch (`833bc6e`), matching the idiom already used twice in that file.
+  While fixing it I asserted `summary["allow_dirty"]`, which does not exist in the per-triple
+  `summary.json` (it lives in the run-level manifest); removed.
+
+**Retired / no longer used:** retired the assumption that recorded file hashes in this repository
+are reproducible without an explicit EOL policy, and base plan §3.1's
+`8bc7438e…` value for `scripts/live_demo_config.yaml`.
+
+**Next:** amend Addendum A with the corrected `live_demo_config.yaml` hash; obtain a user decision on
+the canonical Step 1a bundle's two stale payload hashes; then continue implementation with
+`src/m4/outcome.py`.
+

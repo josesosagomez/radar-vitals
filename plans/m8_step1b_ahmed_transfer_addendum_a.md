@@ -213,6 +213,43 @@ Base plan §1 lines 5–8 state that "the older branch/dirty-state description i
 stale". `HANDOFF.md` was rewritten on 2026-07-30 and now agrees with the plan. That sentence is
 deleted; the instruction that all claims and hashes be rechecked at execution time is retained.
 
+## A6b. Amendment 5 — corrected `live_demo_config.yaml` hash, and a repo-wide EOL pin
+
+Base plan §3.1 records `scripts/live_demo_config.yaml` as
+`8bc7438e887ddcb243cec124cbc316a2279429bad4bdffabb4577f23f3179d7e`. That value was computed on a
+**CRLF** working copy and is not reproducible.
+
+`core.autocrlf=true` with no `.gitattributes` stores LF in the index but checks out CRLF on Windows,
+so committed files hashed differently in a fresh clone than in a long-lived working tree. Verified
+2026-07-30 in a throwaway worktree: the base plan itself hashed `fa64b234…` rather than the reviewed
+`9294cb05…`. Since base plan §4.3 hashes every scoped source, config, and test file into
+`source_manifest.json` and §5.1 binds `approved_plan_sha256`, the entire provenance scheme would have
+produced machine-dependent values.
+
+Resolved by committing `.gitattributes` with `* text=auto eol=lf` plus explicit binary declarations.
+The index was already uniformly LF, so no committed content changed. After renormalizing the working
+tree, the base plan, this addendum, and the evidence script all hash to their recorded values both
+locally and in a fresh worktree.
+
+**Amendment:** the binding value for `scripts/live_demo_config.yaml` is its LF hash
+
+`0862076d6a8f7a05278d2c43dd259bcb8f7e66268f9d3e1fc49e81798ba19f0a`
+
+Base plan §3.1's `8bc7438e…` is superseded. All other §3.3 registry hashes are unaffected:
+they cover `adc_stream.bin`, Masimo CSVs, and metadata/warmup JSON under `results/live_demo/`, which
+is gitignored and therefore never subject to Git EOL conversion. Re-verify every one of them at
+execution time regardless, per base plan §1.
+
+**Known consequence, not repaired here.** The canonical Step 1a bundle no longer self-verifies two of
+its own text payloads: `metrics_sha256` and `resolved_config_sha256` in its `provenance.json` no
+longer match the on-disk files, because the runner wrote them through Python text mode on Windows
+(CRLF) and hashed those bytes while Git stored LF. Its scientific outputs still verify —
+`figure_png_sha256`, `figure_pdf_sha256`, `plan_sha256`, `implementation_module_sha256`, and
+`runner_script_sha256` all match. The pin did not break the bundle; it exposed a pre-existing
+platform dependency. Repair is a scientific-integrity decision for the user under base plan §6.1
+("do not modify the canonical Step 1a bundle") and is **not** a Step 1b blocker: Step 1b parents its
+stages on its own synthetic gate and reads only `experiments/m8_ahmed_fig8/config.yaml`.
+
 ## A7. Withdrawn suggestion — `simulate_eq14` is not a displacement source
 
 A harmonically rich displacement control was considered and is **withdrawn**. Inspection of
