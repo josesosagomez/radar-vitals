@@ -8651,3 +8651,71 @@ a deliberate omission to justify in `notes/approach.md` or a gap to close **befo
 estimator**, since it bears on coverage, which is the acknowledged bottleneck. Also unresolved:
 whether the scene margin should ever become a gating threshold (needs a defensible number, not a
 guess), and `rx_gain_db` review given 3.0-4.9% ADC full-scale utilisation.
+
+## 2026-07-30 - Clutter-removal A/B: no coverage gain, and it destabilises the bin lock
+
+**Set out to do:** answer, with a measurement rather than an argument, whether the static clutter
+removal added in `fc4bc75` improves HR coverage — the acknowledged bottleneck.
+
+**Worked (with evidence):** `scripts/score_offline.py` run `20260730T204448Z`, all 8 captures,
+`--isolate-fields phase.clutter_removal` (which refuses a run where the two configs differ anywhere
+else), both estimands, `reproducible: true`, scorer commit `e6efffe`. 67 admissible windows.
+
+| estimand | coverage OFF | coverage ON | both | off_only | on_only | neither |
+|---|---|---|---|---|---|---|
+| pinned (bin held identical) | **12%** (8/67) | **12%** (8/67) | 6 | 2 | 2 | 57 |
+| rerun (warmup re-selects) | **13%** (9/67) | **7%** (5/67) | 1 | 8 | 4 | 54 |
+
+**Conclusion: clutter removal does not improve coverage, and when the bin is free it makes things
+worse.** With the bin pinned, net coverage is identical — it swaps two windows in and two out
+(sweep gains 2, massimo6 loses 2). With warmup re-selecting per config, the lock moved in **4 of 8**
+captures (massimo2 26→24, massimo4 25→29, massimo5 25→26, massimo7 32→25) and coverage fell from
+13% to 7%. The worst case is massimo2: **80% → 0%** because the lock moved off bin 26 — which
+`notes/capture_inventory.md` records as that session's *corrected* bin.
+
+This is the interaction flagged as "gap 3" before the work started, now observed rather than
+predicted: clutter removal was wired into `extract_chest_phase` only, deliberately not into
+`range_energy_by_bin`, but warmup scores candidates via `run_window_dsp`, so the lock moves anyway.
+Wiring it into phase extraction alone does **not** isolate it from bin selection.
+
+Also notable: it did not help where it was most predicted to. massimo2's bin was one of the three
+clutter-dominated ones (+7.8 dB, HISTORY 2026-07-30 earlier entry); pinned coverage there was 80%
+in both arms, unchanged.
+
+**Session types established (they were not recorded anywhere machine-readable):**
+`notes/capture_inventory.md` gives massimo1 natural, **massimo2 paced 16 bpm**, sweep stepped
+12→15→18→21. The user recalled all massimo captures as natural; the Masimo RRp channel settles it
+independently — massimo2 reads **16.0 bpm flat across all three 120 s bins, IQR 0.0**, while
+massimo1 and massimo3–7 wander by 3–10 bpm within a session (e.g. massimo6 `18|18|18|18|16|11`).
+massimo2 is paced; the rest are natural. sweep's Masimo shows `12|12|15|18|21`, i.e. the settle-at-12
+period lies **inside** the recording, so per-window commanded rates cannot be anchored under OSR-01
+approximate alignment — scored with `--paced-target-unavailable`.
+
+**Failed / did not work, and why:**
+- **The first A/B run was invalid and I reported it before catching that.** It pinned massimo2 to
+  bin 20, which `notes/capture_inventory.md` records as the 2026-07-14 **mislock**. A coverage
+  comparison at a known-bad bin says little. Re-run pinned to the inventory's corrected bin 26,
+  which is what the table above reports.
+- **6 of 8 captures have no `live_raw_mirror_hash`** (sweep, massimo3–7), so OSR-03 directory
+  hash-binding is unavailable for them and all 8 had to use the weaker integer
+  `--pinned-lock-source` (`kind="manual"`). Root cause: `scripts/live_demo.py:339` joins the
+  receiver thread with `timeout=3.0`, but the mirror SHA-256 is computed inside that thread's
+  `finally` at line 328. Correlation with file size is exact — 0.47 GB captures kept the hash,
+  every capture ≥1.26 GB lost it. **A 10-min study session is 1.57 GB, so all 20 planned captures
+  would lose their raw hash**, breaking CLAUDE.md §3.1 traceability. Not yet fixed.
+- Baseline coverage is brutal and this run makes it concrete: **three captures (massimo3, massimo5,
+  massimo7) score 0% in both arms**, and the pooled figure is 12%.
+
+**Verified, not assumed:** `notes/capture_inventory.md` records independent SHA-256s for massimo1,
+massimo2 and sweep. All three **MATCH** the actual files, so sweep's missing metadata hash is the
+write-side race, not file corruption. massimo3–7 have no inventory entry, so for those six no
+independent record of the raw bytes exists anywhere.
+
+**Retired / no longer used:** nothing. `phase.clutter_removal` stays in the tree, default `none`.
+It is kept rather than reverted because the negative result is itself evidence — the code is what
+makes it reproducible — but on this evidence it should **not** be enabled, and it must not be
+proposed as a coverage fix without new data.
+
+**Next:** fix the mirror-hash race before M1/M5, since it silently degrades every study capture.
+The coverage bottleneck remains unexplained and clutter removal is no longer a candidate answer for
+it, which removes one argument for attacking coverage before the M0 freeze.
