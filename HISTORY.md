@@ -7753,3 +7753,340 @@ stage the synthetic all-harmonic control before the real-data transfer, cover al
 predeclare development/evaluation roles and non-tuning rules, and receive explicit approval before
 implementation.
 
+## 2026-07-30 - M8 Step 1b plan completed and five-discipline reviewed
+
+**Set out to do:** plan M8 Step 1b without implementing it: transfer Ahmed harmonic accumulation
+from the Step 1a pulse-radar control to this project's phase extraction, define the gated
+eight-capture exploratory evaluation, and leave a decision-complete authority that permits an
+honest negative result.
+
+**Worked (with evidence):**
+- Verified the planning baseline on branch `vital_signs_ahmed_v10`, commit
+  `1bad25cb034f7ce788c4c9b387e74b5d9adf7476`; the prior handoff's
+  `d1f44829...`/dirty-bundle description was stale because the canonical Step 1a bundle and
+  documentation had since been committed.
+- Re-read the local Ahmed PDF, Step 1a implementation/config/evidence, project phase extraction,
+  estimator adapter, frozen window/comparator paths, scorer, and all eight capture schemas. Bound
+  the plan to explicit raw/metadata/warmup/Masimo hashes, recorded and rerun locks, embedded capture
+  configuration hashes, complete-window counts, and the authoritative non-overlapping 600-frame
+  grid (128 complete windows; 120 after excluding lock-selection window `k=0`).
+- Wrote `plans/m8_step1b_ahmed_transfer.md`. Its final SHA-256 is
+  `9294cb0589b9f0d8f50cdfa0ea893862b1f8ac7f26eb6fee31ee57d622da33ac`.
+  The plan keeps Step 1a behavior unchanged, defines the synthetic gate, exact Python interfaces,
+  fail-closed source/test/environment provenance, immutable parent-linked stage bundles, complete
+  evidence schemas, separate radar/Masimo access, real-data authorization, validity/failure
+  precedence, metrics, and unit/oracle/integration/regression/visual acceptance.
+- Resolved the main scientific disagreement explicitly. For the declared coherent phasor with
+  sinusoidal breathing/heartbeat displacement, ideal delta/unwrapped phase contains the two
+  displacement fundamentals; phasor Bessel/mixed harmonics do not survive phase extraction.
+  Therefore the primary is `phase_fundamentals_only_transfer_v1`. “All-harmonic” refers to the
+  accumulator's \(q,2q,\ldots,Hq\) convention. Step 1b uses \(q=f\), `bpm=60*q`, and strict
+  \(Hq<f_s/2\); at 20 Hz, H=5 supports 100 bpm (8.33 Hz fifth harmonic) but excludes the
+  120 bpm Nyquist endpoint.
+- Registered six Ahmed arms (H=3/5 × the three Step 1a suppression interpretations), the unchanged
+  `delta_before_mean` FMCW mapping, both recorded-lock and current-production-rerun estimands,
+  `k=0` as lock-selection-in-sample diagnostics, `k>=1` as the sole comparative universe,
+  protocol-stratified descriptive summaries, and explicit approximate-origin/single-subject
+  development taint. No winner/profile/lock is selected by Masimo error.
+- Ran five independent exact-file reviews: architecture, mathematical correctness, Python
+  implementation, testing/validation, and adversarial pre-mortem. Every initial verdict requested
+  changes. The plan was revised for fundamentals-only labeling, strict Nyquist support,
+  model-relative phase-slip/noise oracles, bound suite configs, selector-fallback failure,
+  lossless NumPy-scalar serialization, immutable stage/manifest identity, source/test/environment
+  attestation, radar/reference isolation, exact row counts/metric denominators, `k=0` optimism,
+  timing taint, protocol pooling, outcome-adaptive stopping, and dirty-gate bypass. All five then
+  returned **PASS** on the identical final SHA above.
+- Reconciled the living documentation: `notes/approach.md` now records the reviewed scientific
+  mapping; `plans/implementation_plan.md` points to the approved-order authority; and the
+  not-yet-deposited `notes/analysis_prespec.md` records the eight-capture, approximate-origin,
+  `k>=1` M8 clarification. No estimator/scorer code or raw/result data was changed.
+
+**Failed / did not work, and why:**
+- The focused baseline command
+  `conda run -n radar-vitals python -m pytest tests/test_m8_ahmed_fig8.py
+  tests/test_window_pipeline_adapter.py -q --basetemp=.pytest_tmp\m8_plan_verify`
+  produced **84 passed, 1 failed** in the current clean tree. The failing
+  `test_cli_execute_writes_strict_complete_artifacts` expected canonical promotion to be false and
+  therefore depends on ambient Git dirtiness. This is a test-fixture/provenance defect, not a
+  scientific regression; the reviewed plan makes deterministic clean/dirty provenance tests its
+  first implementation prerequisite.
+- No Step 1b synthetic result, real-capture Ahmed estimate, or Masimo agreement number was
+  produced. This was intentional: planning and review do not authorize implementation or real-data
+  access.
+
+**Retired / no longer used:** retired the unqualified statement that a two-sinusoid coherent
+phasor becomes an “all-harmonic phase signal” after unwrap; the Step 1a \(q=2f\) 16.67 Hz H=5
+blocker as a Step 1b claim; metadata's 3 s live hop as the offline grid; `k=0` as comparative
+accuracy evidence; and a mutable one-directory synthetic/radar/scored bundle. These are replaced by
+the exact decisions in the reviewed plan.
+
+**Next:** obtain explicit user approval of
+`plans/m8_step1b_ahmed_transfer.md` before changing estimator/scorer code. If approved, first fix
+the ambient-Git Step 1a test, then implement the complete scientific core, suite, runner, scorer,
+serializer, CLI, registry/config, and portable fixture tests **without opening any real capture**.
+Only after the full fixture suite is green may a clean scoped source/test/environment manifest and
+synthetic gate be executed. No real path may be touched unless that gate is complete,
+`promotion_eligible=true`, and the comprehensive pre-data authorization exists; a negative gate
+also requires a user-approved continuation rationale.
+
+## 2026-07-30 - M8 Step 1b plan reviewed by Claude; Addendum A drafted
+
+**Set out to do:** independently review the content of the five-discipline-reviewed
+`plans/m8_step1b_ahmed_transfer.md` before approving it, then draft whatever correction the review
+warranted. No implementation.
+
+**Worked (with evidence):**
+- Confirmed the plan file is byte-identical to the reviewed bytes:
+  `9294cb0589b9f0d8f50cdfa0ea893862b1f8ac7f26eb6fee31ee57d622da33ac`. Its five exact-file
+  acceptances therefore still hold.
+- Verified rather than assumed the plan's repository claims. Present: `extract_chest_phase`,
+  `ha_estimate_rr`, `run_window_dsp`, `as_window_estimate`, `run_config_hash`,
+  `run_warmup_selection`, `hr_reference`, `br_reference`, `accumulate_harmonics`,
+  `SUPPRESSION_PROFILES`, and `classify_window_outcome` at `scripts/diagnose_bin_drift.py:592`.
+  `src/m4/outcome.py` correctly does not yet exist. `scripts/live_demo_config.yaml` hashes to
+  `8bc7438e887ddcb243cec124cbc316a2279429bad4bdffabb4577f23f3179d7e` as §3.1 states. All eight
+  frame/window/tail rows, the 128/120 window counts, and the 256/1792/1536/256 and 240/1680 row
+  counts re-derive correctly. The §2.2 fast-time Hann/FFT positive-real-scale claim and the
+  `(N,32,4,64)` static-offset cancellation claim are both mathematically correct.
+- Wrote `scripts/m8_step1b_gate_prediction.py` (SHA-256
+  `d4ed01a1cb273e6aef99d390461d11342b2253c6cda76ea02433e19472db858a`), an independent
+  reimplementation of the plan's §2.2 generator and §2.3 accumulator that reads no project data.
+  Its faithfulness is established by exact agreement with the plan's own declared realization:
+  `mean|n|^2=0.0959419233`, realized SNR `10.1799158` dB, max clean adjacent increment
+  `0.94111946` rad, min branch margin `2.20047319` rad.
+- **Principal finding: the synthetic gate fails, for a cause that cannot arise on the real path.**
+  On an identical signal, grid, and accumulator, changing only the heart candidate domain:
+  `[f_b, 100/60]` Hz (the plan's synthetic domain) selects 20.011 bpm for both H=3 and H=5 against
+  an 80 bpm target; `[0.80, 2.00]` Hz (the plan's own real domain) selects 80.042 bpm for both.
+  The synthetic domain begins at `f_b` and so admits the breathing fundamental as a heart
+  candidate; because `beta_b/beta_h = d_b/d_h = 2` exactly, it outscores the true heart bin. The
+  real band excludes it.
+- **Second finding: the synthetic `n_fft=4096` pad is leakage-dominated.** On the synthetic domain,
+  padded BR selects 6.578 bpm (H=3) and 4.933 bpm (H=5) against a 20 bpm target; the native
+  561-point transform selects 20.011 bpm for both. The plan forbids padding on real windows while
+  retaining it on the synthetic record, so the two paths do not share a spectral treatment.
+- **Third finding: the accumulator degeneracy is exact and band-limited.** On the clean signal,
+  score(q=f_h) and score(q=f_h/2) are bit-identical; a non-divisor candidate scores exactly
+  `0.0000`; the collision ratio of score(q=f_b) to score(q=f_h) is exactly `2` for H=3 and `3` for
+  H=5. Selection is the lowest in-band integer divisor of the truth bin whose harmonic row captures
+  the truth line. This explains BR H=3 failing on the real 30 s grid (in-band bin 5 divides bin 10)
+  while BR H=5 passes (bin 10's fifth harmonic reaches bin 40, breaking the tie).
+- **Corrected the prior entry's test observation.** The 2026-07-30 entry above records 84 passed /
+  1 failed "in the current clean tree". Re-measured today: the worktree is *dirty* (5 modified
+  documentation files plus untracked plans), and `test_cli_execute_writes_strict_complete_artifacts`
+  **passes** (`1 passed, 1821 deselected`). The observation was inverted. The underlying diagnosis
+  survives — the test flips with ambient worktree cleanliness — so the plan's first prerequisite is
+  still required. Separately, `tests/test_m8_ahmed_fig8.py` alone is 33 tests, so the "85-test set"
+  spans files the plan never enumerates.
+- Wrote `plans/m8_step1b_ahmed_transfer_addendum_a.md` (SHA-256
+  `634c138e450d2bb7442cf1ca8289eb9f693ad36bb6082dedc0165500d996354c`) as a non-destructive addendum
+  rather than an in-place edit, so the base plan's five acceptances survive. Authority is the pair
+  (base, addendum), addendum winning on conflict. It amends: native transform in both paths;
+  both heart domains retained with the real-representative one gating and the collision one reported
+  co-equally; a two-verdict gate separating implementation validation (reproduce predeclared
+  predictions P1-P4) from the reported, non-gating scientific transfer verdict; the §6.1 correction;
+  and deletion of the now-stale §1 note about `HANDOFF.md`.
+
+**Failed / did not work, and why:**
+- My first pass through the review asserted only that the gate was "analytically predetermined to
+  fail". That was true but under-diagnosed and would have led to the wrong remedy (accept the
+  negative and write a continuation rationale) instead of the right one (the gate is
+  unrepresentative of the path it gates).
+- My first prediction script applied the *synthetic* candidate domain to the real 30 s grid, which
+  produced a wrong conclusion that the real path would also select 20 bpm for heart. Caught by
+  inspecting an implausible row and fixed; each grid now carries its own domain explicitly, with a
+  comment recording the trap.
+- Considered and **withdrew** a suggestion to reuse `src/m8/ahmed_fig8.py::simulate_eq14` as a
+  harmonically rich control. Reading it shows it produces `A*cos(eta*sin(2*pi*f*t)+theta0)`, a real
+  received-signal model whose harmonics are Bessel sidebands of the carrier — not a chest
+  displacement waveform, so it cannot be fed through `extract_chest_phase`. The base plan's §2.1
+  position (a separately sourced, preregistered future control) is correct as written.
+
+**Retired / no longer used:** nothing retired. The base plan is unmodified at its reviewed SHA and
+no code, config, result, or raw data was changed. Two new untracked files were added and nothing was
+staged or committed.
+
+**Next:** user decides §A9 — whether real-data access gates on the collision domain (base plan) or
+the real-representative domain (Addendum A). Then targeted re-review of the addendum only, by four
+reviewers (mathematics, adversarial pre-mortem, testing, architecture); Python-implementation review
+is not required because no §4 interface changed. `scripts/m8_step1b_gate_prediction.py` must be
+committed and clean before the gate runs, since §4.3 scopes `scripts/**/*.py` into
+`source_manifest.json`. Implementation remains unauthorized.
+
+## 2026-07-30 - Step 1b prerequisite: Step 1a provenance tests made deterministic
+
+**Set out to do:** base plan §6.1's first prerequisite — stop
+`test_cli_execute_writes_strict_complete_artifacts` depending on ambient Git state, and add
+explicit clean / dirty / untracked-required-file / external-config provenance cases, without
+weakening promotion checks or touching the canonical Step 1a bundle. Required regardless of how the
+Addendum A §A9 decision lands.
+
+**Worked (with evidence):**
+- Diagnosed the actual coupling. `figures/reproduce_ahmed_fig8.py::_provenance` derives
+  `git.clean_and_required_tracked` from `_git_text("ls-files")` and
+  `_git_text("status", "--porcelain")`; `execute()` promotes to the canonical bundle when that flag
+  and the contract check are both true. The test hardcoded `canonical_promoted is False` and
+  `not canonical.exists()`, so it passed only while the worktree happened to be dirty.
+- Added `_pin_git_provenance` and `_required_relpaths` helpers to `tests/test_m8_ahmed_fig8.py`,
+  which monkeypatch `_git_text` so promotion follows injected state. The fake raises on any
+  unexpected git invocation rather than silently returning a default.
+- Pinned the original test to an explicitly ineligible tree, so its existing assertions are now
+  deterministic instead of accidental.
+- Added five tests: clean-and-tracked promotes; dirty blocks; untracked required file blocks with
+  `status_porcelain == ""` (proving the tracking branch, not the cleanliness branch, is what fires);
+  external config blocks on an otherwise-clean tree; and scientific outputs are identical across
+  provenance states while promotion eligibility differs.
+- The science-identity test compares all of `metrics.json` except `run_id`, plus every `evidence_*`
+  hash, between a pinned-clean and a pinned-dirty run — a stronger check than comparing acceptance
+  alone.
+- **No product code was changed.** `git diff --stat -- figures/reproduce_ahmed_fig8.py src/` is
+  empty: the promotion policy is untouched and was not weakened. The canonical bundle
+  `figures/generated/m8_ahmed_fig8/20260729T075443.145998Z_8e08f5ab0120/` still has its 6 files and
+  no Git changes.
+- Focused baseline
+  `pytest tests/test_m8_ahmed_fig8.py tests/test_window_pipeline_adapter.py` now reports
+  **90 passed** (the prior 85-test set plus the 5 new tests), zero failures, on the current dirty
+  worktree. Determinism is established by construction: the pinned-clean case asserts promotion
+  *does* happen while the real tree is dirty, so outcomes now track injected state rather than
+  ambient state. Audited the remaining three un-pinned `execute()` call sites
+  (`test_cli_runs_never_overwrite`, `test_external_config_path_runs_and_is_reported_untracked`,
+  `test_cli_failure_leaves_diagnostic_manifest`) and confirmed none asserts on promotion.
+
+**Failed / did not work, and why:**
+- Two of the new tests failed on first run, both my errors. The external-config test assumed
+  `tmp_path` lies outside the repository, but the project's workspace-local
+  `--basetemp=.pytest_tmp\...` convention puts it *inside*, so `_provenance` keyed the file by its
+  repo-relative path rather than its absolute path; the test now derives the key the same way the
+  product does. The science-identity test read a `metrics["results"]` key that does not exist — the
+  real schema is `signal`/`profiles`/`audit`/`adapter_record`/`acceptance`.
+- Discovered that `test_provenance_external_config_blocks_promotion_on_otherwise_clean_tree`
+  overlaps a pre-existing `test_external_config_path_runs_and_is_reported_untracked`. Kept both and
+  documented the distinction in a docstring: the pre-existing test runs against the real worktree
+  and therefore cannot separate "blocked by external config" from "blocked by ambient dirtiness",
+  which the pinned-clean version isolates.
+- **Pre-existing, unrelated broad-suite failures found:** the full suite is
+  **3 failed, 1822 passed, 2 skipped**. All three failures are in `tests/test_score_offline.py`
+  (`test_resolve_pinned_lock_directory_correct`,
+  `test_resolve_pinned_lock_rejects_unrelated_raw_hash`,
+  `test_resolve_pinned_lock_isolate_active_requires_baseline_eca_mode`). They reference
+  `results/live_demo/20260726_173434_replay_unknown`, which **does not exist** in this working copy.
+  Confirmed not caused by this session: `results/` has no modifications, and
+  `tests/test_score_offline.py` has zero references to the edited file. This is the *same class* of
+  defect as the §6.1 prerequisite — a test reading ambient on-disk state instead of a fixture — in
+  the scorer that Step 1b builds on. Not fixed here; recorded as an open item.
+
+**Retired / no longer used:** retired the assumption that the Step 1a artifact test's
+canonical-promotion assertions reflect a deliberate policy choice. They were an artifact of ambient
+worktree dirtiness and are now explicit, injected, and covered in both directions.
+
+**Next:** cross-model re-review of Addendum A and the §A9 decision are still the blocking items;
+neither is affected by this fix. Separately, decide whether to repair or fixture the three
+`test_score_offline.py` tests before Step 1b implementation, since base plan §4.2 requires
+`scripts/score_offline.py` behavior to stay unchanged and §6.3 requires portable fixtures.
+
+## 2026-07-30 - Scorer OSR-03 tests: honest skips plus portable coverage
+
+**Set out to do:** resolve the three pre-existing `tests/test_score_offline.py` failures found while
+finishing the §6.1 prerequisite, without changing `scripts/score_offline.py` (base plan §4.2).
+
+**Worked (with evidence):**
+- Root-caused the failures. `_REQUIRE_REAL_DATA` in that file skips only when the *massimo captures*
+  are missing, but the three tests depend on `results/live_demo/20260726_173434_replay_unknown`,
+  a transient replay artifact from the 2026-07-26/27 bin-drift diagnostic work. Confirmed on disk
+  that `results/live_demo/` holds exactly the eight canonical captures and **neither** replay
+  directory (`20260726_173434_replay_unknown`, `20260727_182319_replay_unknown`) survives; `results/`
+  blobs are gitignored, so they are absent in any fresh clone. The guard gap was an oversight — the
+  sibling `test_resolve_pinned_lock_rejects_different_eca_mode_same_hash_same_lock` already carried
+  an inline `pytest.skip` for the other replay directory.
+- Established that `resolve_pinned_lock` reads only `run_metadata.json` from a lock source
+  (`mode`, `replay_file_hashes` or `live_raw_mirror_hash`, `config.heart.eca_mode`, `locked_bin`),
+  so the whole OSR-03 branch set is reachable from a few JSON fields with no capture data.
+- Two-part fix, tests only. Added a `_REQUIRE_REPLAY_PROD` skipif marker so the three real-data
+  tests skip honestly instead of failing, matching the file's existing idiom; and added a
+  `_write_lock_source` helper plus **five portable tests** that cover the same guard rails with no
+  real data: directory hash+lock binding, OSR-03 R2 rejection on the replay branch, OSR-03 R2 on the
+  `mode="live"` branch (which the real-data tests never reached), OSR-03 R3 missing-baseline-eca-mode,
+  and the missing-`run_metadata.json` rejection.
+- Result: `tests/test_score_offline.py` is **47 passed, 4 skipped**; the full repository suite is
+  **1827 passed, 5 skipped, 0 failed** (was 3 failed / 1822 passed / 2 skipped). Arithmetic
+  reconciles: 1827 total before, +5 new portable tests = 1832; the 3 formerly-failing tests moved
+  from failed to skipped, and the 5 new tests pass.
+- **No product code changed.** `git diff --stat -- scripts/ src/ figures/` is empty and
+  `git diff --quiet -- scripts/score_offline.py` reports unchanged, so base plan §4.2's
+  "keep `score_offline.py` behavior unchanged during Step 1b" holds.
+
+**Failed / did not work, and why:**
+- Coverage is genuinely reduced, not merely relocated, and this should not be read as a full repair.
+  The three real-data tests asserted that *actual generated replay artifacts* bind correctly; the
+  portable mirrors assert only that the logic behaves correctly on synthetic metadata. If those
+  replay directories are ever regenerated, the real-data tests will run again and remain the
+  stronger evidence. Skipping is honest reporting of absent fixtures, not a pass.
+- Did not convert the sibling inline `pytest.skip` at
+  `test_resolve_pinned_lock_rejects_different_eca_mode_same_hash_same_lock` to the new marker. It
+  already skips correctly and churning a passing test was not worth the diff; the file now carries
+  two idioms for the same thing, which is a small readability cost recorded here deliberately.
+
+**Retired / no longer used:** nothing retired. The two replay directories were already gone before
+this session; this entry records their absence so nobody assumes the OSR-03 real-data tests are
+still exercising them.
+
+**Next:** unchanged — cross-model re-review of Addendum A and the §A9 decision remain the blocking
+items for Step 1b.
+
+## 2026-07-30 - Addendum A approved, re-review waived, gate criterion resolved
+
+**Set out to do:** restate the open §A9 decision for the user, who had declined cross-model
+re-review of Addendum A.
+
+**Worked (with evidence):**
+- Re-reading the addendum to restate the decision surfaced an **internal contradiction in my own
+  document**: §A3 designated `real_representative_domain` as "**gating**", while §A4.2 defined the
+  gate verdict as reproduction of predictions P1–P4 and both transfer verdicts as "reported,
+  **non-gating**". Both could not hold, and as written §A9 posed a choice §A4.2 had already
+  foreclosed. This is exactly the defect class re-review existed to catch; it was found only because
+  the user asked the decision to be restated.
+- Reframed the decision correctly for the user as three coherent options rather than two:
+  (A) truth recovery on the collision domain — base plan unamended, predicted to fail, costing a
+  continuation rationale and a permanent `continued_after_negative_synthetic_gate` label on every
+  descendant; (B) truth recovery on the real 0.80–2.00 Hz band — predicted to pass, but the option
+  genuinely vulnerable to the tuning-to-pass critique; (C) reproduction of P1–P4 across both
+  domains.
+- **User chose (C) on 2026-07-30.** Rationale recorded in addendum §A9: P1–P4 include the predicted
+  *failures*, so reproducing "HR selects the \(f_b\) bin on `collision_domain_from_fb`" is part of
+  passing. The gate therefore cannot be made to pass by narrowing the candidate band. It tests
+  whether the code matches the mathematics rather than whether the method works — the property a
+  pre-real-data gate actually needs, and the one that defuses the tuning-to-pass objection against
+  §A2/§A3.
+- Rewrote the addendum for consistency: §A3 retitled "compute and report both heart domains" with
+  its gating designation explicitly **withdrawn** and the withdrawal recorded in place rather than
+  silently edited out; §A4.2 made the sole definition of gating, extended to require reproduction
+  across both domains, with the non-gameability argument stated; §A8 converted from a re-review
+  plan into a record that re-review was waived, preserving the four unasked reviewer questions as
+  declared residual risk; §A9 converted from open question to resolved decision with the full
+  three-option table; status header updated to authorize fixture-testable implementation only.
+- Verified no contradictory language survives: every remaining occurrence of "gating"/"gates" in the
+  addendum is either the withdrawal notice, the `zero_padded_4096_audit` non-gating label, or the
+  transfer verdict's non-gating status.
+- New addendum SHA-256:
+  `707f891608a7a2248a4e72bc7a111a22069b9b3d79a596bb0b79afd522197f27`
+  (was `634c138e450d2bb7442cf1ca8289eb9f693ad36bb6082dedc0165500d996354c`). Base plan remains
+  byte-identical at `9294cb05…33ac`.
+
+**Failed / did not work, and why:**
+- The addendum shipped to the user with a self-contradiction between §A3 and §A4.2 and was described
+  as decision-complete when it was not. It survived my own review pass and would have reached
+  implementation had the user not asked for the decision to be restated. Recorded rather than
+  quietly corrected, because it is direct evidence for the cost of waiving the cross-model check.
+- Cross-model re-review was waived by the user. No independent party has checked the P1–P3
+  derivations, the native-vs-padded reasoning, whether §A2/§A3 constitute tuning-to-pass, gate
+  fail-closure, or composite base+addendum hash binding. Addendum §A8 carries these forward as
+  named residual risk; they are unresolved, not cleared.
+
+**Retired / no longer used:** retired §A3's designation of `real_representative_domain` as the
+gating domain, and with it the framing that the §A9 decision was a choice between two candidate
+domains. Gating is now defined solely by §A4.2 and is domain-independent.
+
+**Next:** implement, in base plan §8 order — commit `scripts/m8_step1b_gate_prediction.py` (§4.3
+scopes it into `source_manifest.json`), then build the complete fixture-testable system without
+opening any real capture or Masimo file. The §6.1 provenance prerequisite is already done.
+

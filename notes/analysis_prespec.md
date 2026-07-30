@@ -19,6 +19,16 @@
 > the frozen trigger still reads `selected_confidence` from `warmup_bin_selection.json`, and that
 > field is written identically. Raised as S0R-06 in `plans/m4_stage0_refactor_review.md`; user
 > decision 2026-07-27.
+>
+> **2026-07-30 — M8 existing-data clarification, pre-freeze.** The existing exploratory inventory
+> is now eight captures, not four. All eight are single-subject development/apparent data and remain
+> ineligible for confirmatory/headline use. The reviewed M8 Step 1b plan permits explicitly
+> `exploratory_non_frozen` reference scoring from the approximate `start_wall_utc` origin only if
+> every row/manifest/table/plot states that timing limitation and its ineligibility for promotion or
+> final agreement claims. It retains `k=0` as lock-selection-in-sample diagnostics and uses only
+> `k>=1` for comparative accuracy. This is a method-specific descriptive clarification before M0
+> deposit, not a relaxation of the prospective `frame0_epoch` requirement. It was included in the
+> five-discipline review of `plans/m8_step1b_ahmed_transfer.md`.
 
 ---
 
@@ -321,7 +331,7 @@ declared, prospective outcome, not a post-hoc rescue.
 ### 3.1 Data-roles table (binding)
 | data | role |
 |---|---|
-| 4 existing captures | **development/tuning AND exploratory evaluation only; never confirmatory/headline.** Exploratory agreement (e.g. M4's HR reproduction, M8/M9/M10 offline arms) is permitted and labelled exploratory; performance on a capture a method was tuned on is additionally labelled **apparent / in-sample**. |
+| 8 existing captures | **development/tuning AND exploratory evaluation only; never confirmatory/headline.** Exploratory agreement (e.g. M4's HR reproduction, M8/M9/M10 offline arms) is permitted and labelled exploratory; performance on a capture a method was tuned on is additionally labelled **apparent / in-sample**. For M8, approximate-origin reference scoring is additionally labelled `exploratory_non_frozen` and is ineligible for promotion/final agreement claims. |
 | M1 smoke test | **engineering-only** — never scored, never evaluation (CLAUDE.md §4). |
 | M5 pilot | post-freeze exploratory — may change the rules; excluded from confirmatory metrics |
 | M6 | evaluation only — never tuning; the confirmatory evidence base |
@@ -466,6 +476,9 @@ evidence-floor rule, **not** by discretionary exclusion.
   same buffer via `dsp_override` to emit the `k = 0` estimate (`live_demo.py:1564–1598`). So the
   selected bin is not "active in real time" during `[0, 30)`; it is chosen from the `k = 0` buffer
   and applied to it. Every window `k ≥ 0` is scored **iff it is a complete 600 frames**.
+  **M8 interpretation (pre-freeze clarification, 2026-07-30):** retain and report `k=0`, but label
+  it `lock_selection_in_sample`; only the persisted `k>=1` subset may support comparative accuracy
+  because both M8 lock estimands were selected by production logic using `k=0`.
 - **Frame-0 epoch origin — FROZEN rule, with a forward requirement.** The reference window for
   frame window `k` is the **half-open integer-second epoch interval** `[E(k·600), E((k+1)·600))`,
   where `E(i) = frame0_epoch + i/20` (20 Hz) and a Masimo sample at integer `epoch_utc = e` belongs
@@ -487,10 +500,13 @@ evidence-floor rule, **not** by discretionary exclusion.
   aggregate `n_dropped` / `zero_filled_bytes`, which cannot identify *which* windows are affected. A
   window containing any dropped or zero-filled frame is **flagged from that map and its estimate
   treated as radar-NaN** (§6 window level).
-- **The 4 existing exploratory captures lack a persisted `frame0_epoch`.** Any window alignment
+- **The 8 existing exploratory captures lack a persisted `frame0_epoch`.** Any window alignment
   reconstructed for them from `start_wall_utc` is **APPROXIMATE** (the offset is the capture-startup
-  latency, not sub-second) and is used **only for reference-characterization design evidence**
-  (`notes/comparator_prespec_br.md` §1), never for a frozen scoring number.
+  latency, not sub-second). It is never a frozen scoring number. M8 may use it only for the
+  explicitly `exploratory_non_frozen`, apparent/descriptive analysis registered in
+  `plans/m8_step1b_ahmed_transfer.md`; every output must carry the approximate-origin and
+  no-promotion/final-claim taint. Other uses remain limited to reference-characterization design
+  evidence (`notes/comparator_prespec_br.md` §1).
   - **Selection is boundary-aligned, not greedy:** each window is scored by the single estimate
     whose 600-frame analysis window is exactly `[k·600, (k+1)·600)`. Greedy selection of accepted
     hops is forbidden (it would maximise accepted windows and is estimator-dependent).
@@ -504,7 +520,7 @@ evidence-floor rule, **not** by discretionary exclusion.
 - **Distance is descriptive, not inferential:** reported as error against the measured continuous
   distance. **No post-hoc distance strata and no per-distance agreement claim** unless separately
   pre-specified by amendment (`plans/implementation_plan.md` §M4). NB: distance was not recorded in
-  the 4 existing exploratory captures — this breakdown applies from M5 onward.
+  the 8 existing exploratory captures — this breakdown applies from M5 onward.
 
 ## 8. Deliberately not pre-specified (open degrees of freedom)
 

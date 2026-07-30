@@ -133,7 +133,7 @@ TRACK B (data)                  TRACK C (methods — offline, in PARALLEL on exi
 
 **Critical path:** M3 → M0 → M5 → M6 → M12. **M1, M2 and M4 are parallel prerequisites of M5**, not
 predecessors of M0 — M0 waits only on M3. M4 is additionally gated on the linalg-free DSP
-cross-model review. Track C runs alongside Track B on the four existing captures and is re-run on
+cross-model review. Track C runs alongside Track B on the eight existing captures and is re-run on
 study data when it lands.
 
 **Read the gate correctly.** M0 is a hard gate on **study captures** (M5 onward), not on all work.
@@ -153,13 +153,13 @@ exploratory.
 strength it actually holds.
 
 > **The claim is "frozen before the confirmatory data", not "before any data".** The stronger
-> version is unavailable to this project and has been since July 2026: four captures already exist,
+> version is unavailable to this project and has been since July 2026: eight captures already exist,
 > and they **informed the method's design** — the harmonic-veto work was built on them
-> (`THIRD_CHAPTER.md` §10.1; `HANDOFF.md` §4 declares all three Masimo sessions exploratory-only for
-> Stage 1B). A deposit made today cannot predate data that already shaped the method. What it *can*
+> (`THIRD_CHAPTER.md` §10.1; `notes/analysis_prespec.md` §3.1 classifies all eight as
+> development/exploratory). A deposit made today cannot predate data that already shaped the method. What it *can*
 > do, and what carries the paper's argument, is predate **every capture the agreement claims are
 > computed on**. The deposit must therefore **enumerate every capture in existence at freeze time**
-> — the four existing ones, plus M1's smoke test if it has run — and label them exploratory, so a
+> — the eight existing ones, plus M1's smoke test if it has run — and label them exploratory, so a
 > reader can see exactly what was known when the rules were fixed. Overstating this in
 > `JOURNAL_PAPER.md` §3.1 or §10 would be the same class of error as the withdrawn "MAE 0.16 bpm".
 
@@ -203,14 +203,15 @@ that is, before **M5**. Three capture classes, and the distinction is the whole 
 
 | Class | Which | Status |
 |---|---|---|
-| **Pre-freeze exploratory** | the 4 existing captures, plus M1's smoke test | informed or could inform the rules; enumerated in the deposit; never confirmatory |
+| **Pre-freeze exploratory** | the 8 existing captures, plus M1's smoke test | informed or could inform the rules; enumerated in the deposit; never confirmatory |
 | **Post-freeze exploratory** | **M5**, the pilot | collected under the frozen rules but allowed to *change* them (see M5), so excluded from confirmatory metrics |
 | **Confirmatory** | **M6** (and M7 if it clears its ethics gate) | scored under the frozen rules; the evidence base for the paper |
 
 Depositing before M5 therefore predates **both** post-freeze classes — it is the strictest
 available gate, not a weakened one. M1–M4 legitimately run *before* M0 because none of them
-produces a study capture: M2, M3 and M4 are offline work on the four existing captures, and **M1 is
-an unscored engineering smoke test** whose readout is never paper-grade (CLAUDE.md §4). Three
+produces a study capture: M2, M3 and M4 are offline work that may use the eight existing
+exploratory captures, and **M1 is an unscored engineering smoke test** whose readout is never
+paper-grade (CLAUDE.md §4). Three
 conditions make that safe, and all three are binding:
 
 1. Any protocol or comparator change surfaced by M1–M4 is folded into the deposit **before** M0 is
@@ -453,12 +454,17 @@ as an **offline comparison arm** — no production promotion without a separate 
 claim.
 **Depends on:** M2, M4. **Can start immediately on existing captures.**
 
-> **Status clarification (2026-07-29).** Step 1a is implemented and canonicalized, with status
-> `not_reproduced_under_declared_assumptions`; it has not run on any real capture. The next work is
-> a reviewed Step 1b plan, not implementation. Preserve the ordering below: first perform the
-> synthetic all-harmonic phase-model transfer control, then—subject to its documented verdict—run
-> an explicitly exploratory real-capture arm on `demo_massimo1` through `demo_massimo7` and
-> `demo_sweep`. Adapter-record compatibility from Step 1a is not a real `WindowEstimator` or
+> **Status clarification (2026-07-30).** Step 1a is implemented and canonicalized, with status
+> `not_reproduced_under_declared_assumptions`; it has not run on any real capture. The
+> decision-complete Step 1b authority is now
+> `plans/m8_step1b_ahmed_transfer.md` (SHA-256
+> `9294cb0589b9f0d8f50cdfa0ea893862b1f8ac7f26eb6fee31ee57d622da33ac`), passed on those
+> exact bytes by architecture, mathematical, Python, testing, and adversarial reviewers.
+> Implementation still requires explicit user approval. Preserve the reviewed ordering: implement
+> and fixture-test the complete synthetic/runner/scorer system without opening real inputs; execute
+> the clean synthetic transfer gate; only then, with a comprehensive pre-data authorization, run
+> the explicitly exploratory arm on `demo_massimo1` through `demo_massimo7` and `demo_sweep`.
+> Adapter-record compatibility from Step 1a remains neither a real `WindowEstimator` nor
 > `score_offline.py` integration.
 
 **Work, in order:**
@@ -473,18 +479,28 @@ claim.
      reproduce Fig. 8(c)–(d). **This is the control that makes the next step interpretable.**
      Without it, a failure at step 1b cannot be told apart from a bug in our own implementation,
      and a success is not a reproduction of anything the paper claimed.
-   - **1b — Then change one thing: the model.** Move to the all-harmonic phase formulation actually
-     implemented in `src/respiration.py` (ours: f_b/2f_b/3f_b…) and re-run the identical test.
-     **Label this result an adaptation, never a reproduction.** If the robustness depends on the
-     even-harmonic structure it will die here, and that — a named, cheaply obtained transfer
-     failure of a published simulation-only claim — is itself a publishable finding.
-2. **Validate HA as a BR estimator** against Masimo `rr_bpm` + metronome (M3 spec).
-3. **If step 1 passes:** implement HA as an *HR* estimator and test it on the collision fixture
-   (M7 / the existing sweep) head-to-head with ECA+AHET.
+   - **1b — Then change the signal mapping.** Use the project's unchanged coherent locked-bin
+     `delta_before_mean` phase extraction with the same sinusoidal breathing/heartbeat displacement
+     control. Ideal extraction leaves the two displacement fundamentals; it does not preserve the
+     phasor's Bessel/mixed harmonics. The registered primary is therefore
+     `phase_fundamentals_only_transfer_v1`: the fixed-\(H\) accumulator still evaluates
+     \(q,2q,\ldots,Hq\), with \(q=f\), `bpm=60*q`, and strict \(Hq<f_s/2\) support.
+     **Label this result an adaptation, never a reproduction or general robustness proof.** A
+     negative result is a valid endpoint.
+2. **After a promotion-eligible synthetic gate and one frozen pre-data authorization, validate HA
+   as BR and HR estimators** against the unchanged Masimo comparators on all eight existing
+   captures. A negative gate requires an additional user-approved continuation rationale; it
+   cannot be silently treated as passed.
+3. Run production and all six Ahmed \(H\)/suppression arms on identical non-overlapping windows and
+   both separately reported lock estimands. Retain `k=0` as lock-selection-in-sample diagnostics;
+   use `k>=1` as the only comparative accuracy universe. Keep all results
+   exploratory/apparent, approximate-origin, protocol-stratified, and ineligible for production
+   promotion.
 4. Optionally reproduce the paper's CRLB as a benchmark.
 **Done when:** **both** synthetic verdicts documented (1a reproduction, 1b adaptation, reported
-separately); BR agreement numbers exist; collision claim tested on real data with an explicit
-pass/fail.
+separately); and, if the gate/authorization chain permits real continuation, immutable radar-only
+and scored bundles contain complete BR/HR coverage and agreement evidence for every preregistered
+arm without a winner-selection claim.
 **Risk / why it matters:** this addresses the project's central unsolved problem using a method
 already half-implemented in the repo. Cheapest high-value milestone in the plan.
 
@@ -576,7 +592,7 @@ tags**. Fill every `[CITATION NEEDED]`. Decide Paper A (methodology) vs Paper B 
 5. **Negative results are recorded, never deleted.** `HISTORY.md` append-only; `HANDOFF.md`
    rewritten each session.
 6. **No agreement number outside the frozen comparators**, and no *confirmatory* agreement number
-   from exploratory data — the four existing captures and the M5 pilot are exploratory by
+   from exploratory data — the eight existing captures and the M5 pilot are exploratory by
    construction (they informed, or are allowed to change, the rules).
 7. **Live readouts are never paper-grade** — metrics come from offline reprocessing of
    `adc_stream.bin`.
@@ -610,8 +626,9 @@ tags**. Fill every `[CITATION NEEDED]`. Decide Paper A (methodology) vs Paper B 
    Masimo-referenced captures.
 3. **M3** — the BR comparator pre-spec. **Runs in parallel with M2, not after it** (its design
    evidence is reference-only), and it is the only thing M0 waits on.
-4. **M8 step 1a/1b** — the HA reproduction control, then the adaptation transfer test; cheap, and
-   it may reshape the whole method strategy before any subject is recorded.
+4. **M8 step 1b** — Step 1a is canonical and negative; the reviewed transfer/evaluation plan now
+   awaits explicit approval. If approved, begin with its fixture-only implementation and synthetic
+   gate, not real-capture scoring.
 5. **M0** — freeze and deposit: both comparators + protocol + the four analysis decisions
    (agreement model, evidence floor, comparison discipline, amendment mechanism). **Before M5.**
 

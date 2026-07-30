@@ -289,20 +289,40 @@ has yet been produced for `demo_massimo1` through `demo_massimo7` or
 `demo_sweep`, and the Step 1a negative result cannot be used to claim that the
 method does or does not improve real-capture HR/BR.
 
-**Next milestone: plan M8 Step 1b before writing code.** The pre-existing master
-roadmap defines Step 1b as the synthetic transfer control that changes Ahmed's
-even-harmonic pulse-radar model to this project's all-harmonic phase model;
-real-capture evaluation follows that gate. The new plan must preserve this
-ordering, then cover the user-requested evaluation on all eight saved
-`adc_stream.bin` captures and their Masimo CSVs. The real-data stage must define
-the paper-to-FMCW slow-time signal mapping, confront the captures' 20 Hz Nyquist
-limit (which cannot support the full \(H=5\), 100 bpm sweep), predeclare window,
-range-lock, suppression, validity, and comparison policies, and label these
-single-subject development captures exploratory/apparent rather than
-confirmatory. The production baseline and Ahmed arms must use identical window
-and reference partitions, and every Ahmed estimate must retain the input
-slow-time signal, spectrum, harmonic rows, eligibility mask, scores, selected
-bin, and rejection reason.
+**Step 1b plan reviewed; implementation awaits approval (2026-07-30).**
+`plans/m8_step1b_ahmed_transfer.md` is the decision-complete build authority
+(SHA-256
+`9294cb0589b9f0d8f50cdfa0ea893862b1f8ac7f26eb6fee31ee57d622da33ac`).
+Independent architecture, mathematical, Python, testing, and adversarial
+reviewers all passed those exact bytes. No Step 1b code or real-capture result
+exists yet.
+
+The review corrected the roadmap's loose “all-harmonic phase model” wording.
+For the declared coherent phasor with sinusoidal breathing and heartbeat
+displacements, delta/unwrapped phase contains the two displacement fundamentals;
+the phasor's Bessel/mixed harmonics do not survive ideal phase extraction.
+The primary synthetic adaptation is therefore honestly named
+`phase_fundamentals_only_transfer_v1`. “All-harmonic” describes the fixed-\(H\)
+accumulator's \(q,2q,\ldots,Hq\) candidate convention, not fabricated signal
+content. Candidate frequency is \(q=f\), rate is \(60q\) bpm, and full support
+requires strict \(Hq<f_s/2\). Consequently, \(H=5\) at 100 bpm requires only
+8.33 Hz and is supported at the captures' 20 Hz frame rate; the 120 bpm endpoint
+is Nyquist-degenerate and excluded. The earlier \(16.67\) Hz blocker applied to
+Step 1a's \(q=2f\) paper model and is not transferred to Step 1b.
+
+The approved-order boundary remains synthetic first, real data second. All
+scientific/runner/scorer code and portable tests are implemented before the
+synthetic gate, but no real path is touched until a clean,
+`promotion_eligible=true` gate and one comprehensive pre-data authorization
+exist. Any negative transfer is recorded rather than tuned; descriptive real
+continuation would additionally require a gate-bound user rationale. Real
+outputs use the unchanged `delta_before_mean` phase mapping, six preregistered
+\(H\)/suppression arms, separate recorded/rerun lock estimands, the exact
+non-overlapping 30 s grid, and Masimo-independent radar artifacts. `k=0` is
+retained as lock-selection-in-sample diagnostics; only `k>=1` supports
+comparative accuracy. All eight captures remain single-subject
+development/apparent evidence with approximate timing, protocol-stratified
+descriptive summaries, and no production-promotion claim.
 
 ---
 
