@@ -8790,3 +8790,45 @@ contemporaneous (2026-07-25) and were re-confirmed matching on 2026-07-30.
 **Next:** unchanged — M0 assembly and deposit is the critical path, M1 the cheapest risk reduction.
 If the M0 deposit is to publish capture hashes (§3 of the inventory says it will), the live path will
 need a hash recorded somewhere before M5 captures are taken.
+
+## 2026-07-31 - M0 deposit postponed by user decision; the capture gate stands
+
+**Set out to do:** record a project-state decision, and remove the resulting staleness from
+`HANDOFF.md` before it misled the next session.
+
+**Decision (user, 2026-07-31):** nothing will be deposited for now, **and the M0 gate stands.**
+
+The two halves are independent and both were stated explicitly, because the alternative reading —
+proceeding without pre-registration — was offered and **not** chosen:
+
+- **Postponed, not abandoned.** M0 is blocked on nothing. The evidence floor was frozen
+  2026-07-24/25 (`notes/analysis_prespec.md` §2a/§2b), M3 closed 48/48, and the ethics reference is
+  recorded (`24IBEC051`, IBEC KAUST, in `notes/protocol.md`; only the formal "IBEC" expansion is
+  outstanding, for Methods). What remains is assembly plus the user's irreversible deposit act,
+  whenever they choose it.
+- **The gate holds.** No study capture may be taken until M0 is deposited — before M5, not merely
+  before M6. Postponing the deposit therefore postpones the study.
+
+**Consequences recorded in `HANDOFF.md`:**
+- Track B (M5 pilot, M6 main study) is **parked**, and the next session is told not to propose
+  starting it.
+- Forward work is M1 (a smoke test, not a study session — `notes/protocol.md` distinguishes
+  method-development captures from study sessions and labels the stepped sweep exactly that way, so
+  the gate does not cover it), M8 Step 1b (entirely synthetic), and offline work on the 8 existing
+  captures (already pre-freeze exploratory, so re-scoring changes nothing about their status).
+- **M2 done-when #5 narrowed to a single route.** It was recorded as unblocked by "M1/M5"; with M5
+  parked, only M1 can discharge it — and only if that smoke test carries a Masimo reference and the
+  clock sync of `notes/protocol.md` step 3a. A bare smoke test does not.
+- The coverage question (M11a) was framed as "attack it before freezing". With the freeze postponed
+  indefinitely that framing is void; coverage work is simply available whenever wanted. It remains
+  12% pooled and unexplained, and one candidate explanation (clutter removal) has been measured and
+  rejected.
+
+**Also settled by this decision:** the outstanding argument for recording a raw-ADC hash at capture
+time was that the deposit would publish capture hashes (`notes/capture_inventory.md` §3). With no
+deposit pending, that argument does not apply, and the removal of the hashing work earlier the same
+day (`bace897`) carries no immediate cost. The §3 requirement returns if and when M0 is revived —
+`notes/capture_inventory.md` §3 still lists file hashes in the approved public schema.
+
+**Next:** M1 live smoke test is the cheapest available work and now the only route to M2 #5.
+M8 Step 1b continues in parallel. Track B stays parked until the user revisits M0.

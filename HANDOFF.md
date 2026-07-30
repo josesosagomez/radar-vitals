@@ -38,8 +38,8 @@ understand before planning work.
 | A | M2 respiration-collapse fix | **fix landed**; only done-when #5 (validation) open — see §4 |
 | A | M3 BR comparator pre-spec | **closed**, 48/48 findings |
 | A | M4 offline evaluation harness | built (`scripts/score_offline.py`), has run for real |
-| 0 | **M0 pre-registration deposit** | **HARD GATE — believed unblocked**, see §3 |
-| B | M5 pilot / M6 main study | **not started**; blocked by M0 |
+| 0 | **M0 pre-registration deposit** | **POSTPONED 2026-07-31 by user decision; gate STANDS** — see §3 |
+| B | M5 pilot / M6 main study | **not started; blocked by M0 and staying blocked** |
 | C | M8 Step 1a (Ahmed reproduction) | done — **scientifically negative**, canonical bundle committed |
 | C | M8 Step 1b | implemented through the gate; see §6 |
 | C | M9 (Kotte) / M10 baselines | **not started** |
@@ -48,23 +48,34 @@ understand before planning work.
 Active branch: **`vital_signs_ahmed_v10`**. Test baseline: **2074 passed, 5 skipped**. The 5 skips
 are honest absences (4 OSR-03 tests need replay artifacts that no longer exist), not passes.
 
-## 3. The critical path, and the one thing to decide
+## 3. The critical path — M0 postponed, and Track B is parked behind it
 
-**M0 is the gate and is believed unblocked.** Its blocking decision was the evidence floor, frozen
-by the user on 2026-07-24/25 (`notes/analysis_prespec.md` §2a/§2b). M3 is closed. What remains is
-assembly plus the user's irreversible deposit act.
+**Decision, user, 2026-07-31: nothing will be deposited for now, and the gate stands.**
 
-The ethics reference **is** recorded — approval `24IBEC051`, issuing board **IBEC, KAUST**
-(`notes/protocol.md`). The only residual is confirming the formal expansion of the "IBEC" acronym
-for the Methods section.
+Read that precisely, because the two halves are independent and both matter:
 
-Until M0 is deposited, **no study capture may be taken** — that gate sits before M5, not merely
-before M6.
+- **Postponed, not abandoned.** M0 is not blocked on anything — the evidence floor was frozen
+  2026-07-24/25 (`notes/analysis_prespec.md` §2a/§2b), M3 is closed, the ethics reference is
+  recorded (approval `24IBEC051`, board **IBEC, KAUST**, in `notes/protocol.md`; only the formal
+  expansion of the "IBEC" acronym is outstanding, for Methods). What remains is assembly plus the
+  user's irreversible deposit act, whenever they choose to do it.
+- **The gate still holds.** Until M0 is deposited, **no study capture may be taken** — that gate
+  sits before M5, not merely before M6. Postponing the deposit therefore postpones the study.
+  **Do not take M5 or M6 captures. Do not propose starting them as "the obvious next step".**
 
-**Genuinely open decision:** whether to attack **coverage (M11a) before freezing**. This is now
-better informed than when it was last deferred: clutter removal was the leading candidate fix and
-has been measured and rejected (§5), so one argument for delaying the freeze is gone. Coverage
-remains 12% and unexplained.
+**So Track B is parked, and the forward work is elsewhere:**
+
+| available now | why |
+|---|---|
+| **M1 live smoke test** | not a study session. `notes/protocol.md` distinguishes method-development captures from study sessions (it labels the stepped sweep exactly that way), so the M0 gate does not cover it. Still the cheapest risk reduction available. |
+| **M8 Step 1b** | entirely synthetic; has never opened a real capture. See §6. |
+| offline work on the 8 existing captures | they are pre-freeze exploratory already; re-scoring them changes nothing about their status. |
+
+**Still open, and no longer urgent:** whether to attack **coverage (M11a)**. It used to be framed as
+"before freezing"; with the freeze postponed indefinitely that framing is gone, and coverage work is
+simply available whenever wanted. It is better informed than when last deferred — clutter removal
+was the leading candidate fix and has been measured and rejected (§5). Coverage remains 12% and
+unexplained.
 
 ## 4. Respiration collapse — the fix landed; only validation is open
 
@@ -83,7 +94,10 @@ STFT-consistency gates. Accepted cost: a genuine ~6 bpm breather on the edge bin
 invalid.
 
 **Open: M2 done-when #5** — score reprocessed BR under the frozen M3 comparator. **Blocked on data,
-not DSP.** M1/M5 unblock it.
+not DSP:** approximate time alignment cannot produce a frozen-comparator outcome, and none of the 8
+existing captures can discharge it. With M5 parked behind the postponed M0 deposit (§3), **M1 is now
+the only route** — and only if that smoke test carries a Masimo reference and the clock sync of
+`notes/protocol.md` step 3a. A smoke test without those does not discharge it.
 
 A worked consequence of this fix is recorded in `HISTORY.md` 2026-07-30: it moved massimo1's warmup
 lock from 23 to 27, so **offline no longer reproduces that session's live bin**.
