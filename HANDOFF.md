@@ -21,11 +21,11 @@ after the synthetic gate—run a strictly exploratory comparison on all eight sa
 ### Repository
 
 - Branch: `vital_signs_ahmed_v10`
-- Worktree clean. Last **code** commit is `0e34078`; anything after it on this branch is
+- Worktree clean. Last **code** commit is `10e0711`; anything after it on this branch is
   documentation only. (An exact HEAD SHA is not recorded here: a SHA written into this file is
   always one commit stale by the time the file is committed, which makes it a lie rather than a
   reference. Run `git log --oneline` for the true head.)
-- 12 commits on 2026-07-30 since `1bad25c`. The load-bearing ones:
+- 15 commits on 2026-07-30 since `1bad25c`. The load-bearing ones:
   - `2bfc167` deterministic Step 1a provenance + scorer OSR-03 tests
   - `f9e42b6` approved plan, Addendum A, gate-prediction evidence script
   - `3aec30a` `.gitattributes` LF pin — recorded hashes were not reproducible
@@ -34,6 +34,7 @@ after the synthetic gate—run a strictly exploratory comparison on all eight sa
   - `574657a` scientific core, suite contracts, corrected P2/P3
   - `025d259` `ProductionEstimatorSuite` and `AhmedPhaseEstimatorSuite`
   - `0e34078` synthetic generator and gate evaluation
+  - `10e0711` bundle writer, provenance, synthetic CLI
 - Existing estimator/scorer behaviour is unchanged. The only edits to shipped code are the
   `src/m4/outcome.py` extraction (verified byte-for-byte identical to the original block) and its
   two import sites; everything else is new modules and tests.
@@ -266,10 +267,10 @@ Planning approval and real-data authorization remain separate decisions at diffe
   `tests/test_m8_ahmed_fig8.py` (33 → now 38) plus `tests/test_window_pipeline_adapter.py`, and the
   pair now totals 90. Enumerate exact pytest node IDs in `test_attestation.json` rather than
   asserting a bare count.
-- Planned files `src/m8/ahmed_transfer.py`, `src/m4/estimator_suite.py`,
-  `src/m4/estimator_runner.py`, `src/m4/estimator_scoring.py`, and `src/m4/outcome.py` do not exist
-  yet. The outcome classifier still lives at `scripts/diagnose_bin_drift.py:592` and is aliased by
-  `scripts/score_offline.py`.
+- Still to be written: `src/m4/estimator_runner.py` and `src/m4/estimator_scoring.py`. Everything
+  else the plan names now exists — see the module table in §2. The outcome classifier has **moved**
+  to `src/m4/outcome.py`; `scripts/diagnose_bin_drift.py` re-exports it and `scripts/score_offline.py`
+  imports it directly, so do not reintroduce the old script-importing-script path.
 - Candidate domains are **not** shared between the synthetic and real paths. Applying the wrong one
   to a grid silently changes the answer — this exact mistake was made and caught during review.
 - The exact capture registry/hashes/locks are in the base plan §3.3; do not rediscover captures by
