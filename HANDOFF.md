@@ -21,23 +21,25 @@ after the synthetic gate—run a strictly exploratory comparison on all eight sa
 ### Repository
 
 - Branch: `vital_signs_ahmed_v10`
-- HEAD: `833bc6ed6848c6f158abb0c7638a1ebda0e50b1f`
+- HEAD: `2b7d3de460e5dca5e5e57abd794e7d71f21e2d9c`; worktree clean
 - Committed on 2026-07-30, in order:
   - `2bfc167` deterministic Step 1a provenance + scorer OSR-03 tests
   - `f9e42b6` approved plan, Addendum A, gate-prediction evidence script, docs
   - `3aec30a` `.gitattributes` LF pin — recorded hashes were not reproducible
   - `833bc6e` pin git state in the scorer end-to-end test
-- Uncommitted: `HANDOFF.md`, `HISTORY.md`, and Addendum A (amendment §A6b).
-- No estimator, scorer, or product code has been changed. `git diff 1bad25c..HEAD --stat -- src/
-  figures/` is empty; changes are confined to tests, plans, docs, and `.gitattributes`.
-- **Test baseline: the full suite is green** — `1827 passed, 5 skipped, 0 failed`
-  (was `3 failed, 1822 passed, 2 skipped` at the start of 2026-07-30). Focused Step 1a/adapter pair
-  is `90 passed`.
+  - `b50d827` Addendum A §A6b — corrected config hash and EOL consequences
+  - `53cf4c7` extract the AHET classifier into `src/m4/outcome.py`
+  - `574657a` Step 1b scientific core, suite contracts, corrected P2/P3
+  - `2b7d3de` record core progress
+- Existing estimator/scorer behaviour is unchanged. The only edits to shipped code are the
+  `src/m4/outcome.py` extraction (verified byte-for-byte identical to the original block) and its
+  two import sites.
+- **Test baseline: the full suite is green** — `1888 passed, 5 skipped, 0 failed`
+  (was `3 failed, 1822 passed, 2 skipped` at the start of 2026-07-30).
 - **Line endings are pinned to LF and this is load-bearing.** Before `3aec30a`, `core.autocrlf=true`
   with no `.gitattributes` meant a fresh clone checked out CRLF and every recorded SHA-256 changed
   (the base plan hashed `fa64b234…` instead of `9294cb05…`). Do not remove `.gitattributes` without
   re-deriving every recorded hash.
-
 ### Step 1a
 
 Step 1a is implemented, committed, canonicalized, and scientifically negative under its declared
@@ -62,7 +64,19 @@ The base plan is deliberately **unmodified**, so its five acceptances remain val
 authority is the *pair*; where they conflict, the addendum wins. Any manifest binding
 `approved_plan_sha256` must bind both.
 
-Nothing is implemented. No Step 1b synthetic or real result exists.
+### Step 1b implementation progress
+
+Built and tested (no real capture or Masimo file has been opened):
+
+| Module | Purpose |
+|---|---|
+| `src/m4/outcome.py` | AHET classifier, extracted verbatim; three callers share one function object |
+| `src/m4/estimator_suite.py` | neutral arm/result/suite contracts; immutable evidence; config bound at construction |
+| `src/m8/ahmed_transfer.py` | `estimate_phase_ha` — the scientific core, six arms per invocation |
+
+Not yet built: `ProductionEstimatorSuite`, `AhmedPhaseEstimatorSuite`, the runner, the scorer, the
+serializers, the CLI, the experiment config, and the capture registry. **No synthetic or real Step 1b
+result exists and the gate has not been run.**
 
 ### Why Addendum A exists
 
@@ -112,20 +126,21 @@ Next steps, in order:
 1. ~~Commit the plans and evidence script.~~ **Done** — `f9e42b6`.
 2. ~~Fix the ambient-Git Step 1a artifact test.~~ **Done** — `2bfc167`. Focused baseline is now
    **90 passed** (prior 85 + 5 new provenance tests), deterministic, with no product-code change.
-3. Extract `src/m4/outcome.py` from `scripts/diagnose_bin_drift.py:592`, with bit-identical
-   regression tests proving both existing callers are unaffected. **← current task**
-4. Implement the rest of the fixture-testable system — `src/m8/ahmed_transfer.py`, neutral
-   suite/runner/scoring contracts under `src/m4/`, stable `src/m4/outcome.py`, strict serializers,
-   CLI, experiment config, capture registry, and the full test set — **without opening any real
-   capture or Masimo file**.
-5. Run the focused, affected, new, and broad fixture-only suites; freeze the scoped source, test, and
+3. ~~Extract `src/m4/outcome.py`.~~ **Done** — `53cf4c7`.
+4. ~~Implement the scientific core and suite contracts.~~ **Done** — `574657a`.
+5. Implement `ProductionEstimatorSuite` (wrapping `run_window_dsp` as `eca_ahet_v1`, with the sole
+   `eca_bindrift_outcome_v1` classifier adapter) and `AhmedPhaseEstimatorSuite` over the contracts.
+   **← current task**
+6. Implement the runner, scorer, strict serializers, CLI, experiment config, and capture registry,
+   with portable fixture tests — **without opening any real capture or Masimo file**.
+7. Run the focused, affected, new, and broad fixture-only suites; freeze the scoped source, test, and
    environment attestations.
-6. Execute the synthetic gate. Under Addendum A the gate verdict turns on reproducing predeclared
+8. Execute the synthetic gate. Under Addendum A the gate verdict turns on reproducing predeclared
    predictions P1–P4, and the scientific transfer verdict is reported per domain, non-gating.
-7. Stop after the gate. No real path may be touched unless the gate is complete,
+9. Stop after the gate. No real path may be touched unless the gate is complete,
    `promotion_eligible=true`, and one comprehensive real-evaluation authorization is frozen before
    first access.
-8. If authorized, run the immutable `real-smoke -> radar -> scored` chain exactly as registered.
+10. If authorized, run the immutable `real-smoke -> radar -> scored` chain exactly as registered.
 
 Planning approval and real-data authorization remain separate decisions at different stages.
 
