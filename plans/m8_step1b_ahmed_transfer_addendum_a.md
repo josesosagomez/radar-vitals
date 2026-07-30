@@ -173,6 +173,26 @@ precision:
 
 The tolerances are roughly 1000× the observed round-off, so they survive a different BLAS while
 remaining about nine orders of magnitude below any real spectral line.
+
+**P2 and P3 additionally require the declared fundamentals to fall exactly on rFFT bin centres**, a
+precondition an earlier revision omitted. They are identities about which bins a harmonic row lands
+on, so they hold only when each line occupies a single bin. Measured 2026-07-30:
+
+| Grid | \(f_b\), \(f_h\) in bins | P2 relative difference |
+|---|---|---|
+| primary PRF, 561 samples | 4.9976, 19.990 — **off-grid** | 8.1e-04 (H=3), 1.7e-03 (H=5) |
+| 20 Hz, 300 samples | 5, 20 — on-grid | 0.0 (H=3), 6.8e-16 (H=5) |
+| 20 Hz, 600 samples | 10, 40 — on-grid | 2.0e-15 (H=3), 6.8e-16 (H=5) |
+
+Off-grid lines leak across neighbouring bins and degrade the identities by roughly twelve orders of
+magnitude, which is spectral leakage rather than an implementation fault. The gate therefore
+evaluates **P1 and P4 on every grid** and **P2 and P3 only on the on-grid 20 Hz realization**, and
+refuses outright to evaluate P2/P3 off-grid rather than silently reporting a failure.
+
+This does **not** give the 20 Hz audit authority over the primary grid. Base plan §2.2 forbids the
+audit upgrading, replacing, or downgrading the primary-PRF verdict, and that constraint is about the
+**transfer** verdict, which remains computed on the primary grid alone. P2/P3 are implementation
+identities, not transfer claims.
 - **P4 — selection table.** The full grid × domain × vital × \(H\) table emitted by
   `scripts/m8_step1b_gate_prediction.py`, whose stdout SHA-256 is recorded in the resolved config at
   freeze time.
