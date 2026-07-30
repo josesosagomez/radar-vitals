@@ -8832,3 +8832,66 @@ day (`bace897`) carries no immediate cost. The §3 requirement returns if and wh
 
 **Next:** M1 live smoke test is the cheapest available work and now the only route to M2 #5.
 M8 Step 1b continues in parallel. Track B stays parked until the user revisits M0.
+
+## 2026-07-31 - Pipeline docs corrected; HANDOFF re-pointed at warmup as the active task
+
+**Set out to do:** the user asked what comes after capture — FFT or warmup lock — then asked for the
+markdown updated and `HANDOFF.md` prepared for a new session working on warmup.
+
+**Worked (with evidence):** every claim below was re-derived from the code before being written, not
+copied from an earlier document.
+
+- **`notes/approach.md` §3 step 2 corrected.** It read "Range FFT (fast time) → complex range
+  profile per frame", which implies a shared stage feeding later steps. There is no such stage: two
+  functions each compute their own Hann + `scipy.fft.fft` over the ADC axis —
+  `src/warmup_select.py::range_energy_by_bin` and `src/respiration.py::extract_chest_phase`. The
+  numbering is logical order, not data flow.
+- **§3 step 4 rewritten.** It described bin selection as "scan the candidate bins, score each on HR
+  validity / BR confidence / respiration validity / range-energy rank" — true but flattening the
+  fact that scoring a candidate means **running the entire downstream chain on it**. Now spells out
+  the five sub-steps, the scoring weights, and that 14 candidates over the 0.8–1.4 m gate means ~16
+  range transforms and 14 full HR/BR chains before the first estimate exists.
+- **§3 steps 5–6 corrected — they documented the wrong phase method.** They read "Phase extraction
+  (arctan I/Q) + phase unwrapping" then "Phase differencing / impulse-noise removal". That describes
+  `mean_phasor`. Production config sets `phase.method: delta_before_mean`, which takes the conjugate
+  product between consecutive frames, averages over (chirp, rx), takes the angle and `cumsum`s —
+  differencing is *inside* the step and **there is no `np.unwrap` call** (verified at
+  `src/respiration.py:159-168`: `np.unwrap` appears only in the `mean_phasor` branch, line 161).
+- **`HANDOFF.md` restructured with warmup as §3, the active task**, per CLAUDE.md §10.1's "concrete
+  next action, specific enough to start on". §3 carries: what warmup actually does with the real
+  scoring weights; why it is worth working on (it picks the bin every estimate depends on, and three
+  captures score 0% coverage in both A/B arms); six known-suspicious observations kept as evidence
+  rather than verdicts; the prior art; and the constraints (§6 cross-review applies to bin
+  selection; do not tune against Masimo; changing selection breaks live/offline bin reproduction).
+  Sections 4–10 renumbered and every cross-reference re-checked.
+- **Verified before writing:** `phase.method = delta_before_mean`, `settle_skip_s = 5.0`,
+  `energy_eligibility_min_settled_db = -12.0`, candidate bins **19–32 (n=14)**,
+  `FRAMES_PER_WINDOW = 600`, and the +1000 / +250 / +100 / −100 / +50 / −5×rank scoring weights all
+  present in `run_warmup_selection`. Every `HANDOFF.md` pointer path was checked to exist, including
+  `results/diagnose/bin_drift/20260728T004453Z/` and `git stash@{0}`.
+- **Recovered prior art the next session would otherwise have missed**, and recorded it in §3.4: the
+  bin-drift diagnostic **has been run** (evidence on disk, gitignored) and found frequent short
+  (<2 s) argmax flicker but almost no sustained (≥5 s) drift, with massimo1's ≥2 s excursions failing
+  to separate `covered` from `gate_not_run` — so drift is not obviously the coverage-loss mechanism.
+  It has **never been run on massimo3–7**. And the **5-bin relock tracker is DEFERRED (Option C,
+  2026-07-28), explicitly not rejected**; a working prior implementation sits in `git stash@{0}`,
+  stale relative to HEAD.
+
+**Failed / did not work, and why:**
+- **A verification script of mine produced a false negative and I nearly recorded it as a check.**
+  It tested for `np.unwrap` in the `mean_phasor` branch by splitting the source on the literal
+  string `"mean_phasor"`, which occurs several times (docstring, validation, dispatch), so the slice
+  examined the wrong region and reported `False`. Reading `src/respiration.py:159-168` directly
+  showed `np.unwrap` is present on line 161 as documented. The claim was right; the checker was
+  wrong. Source-text checks need anchors that are unique.
+- **`HANDOFF.md` carried a stale test baseline for one commit.** It said 2074 passed after
+  `bace897` removed 25 tests and left the real figure at 2049. Caught by re-running the suite while
+  preparing this entry rather than trusting the number already in the file.
+
+**Retired / no longer used:** the `notes/approach.md` claims that a shared range-FFT stage exists,
+that bin selection is a post-FFT scoring step, and that production phase extraction is arctan +
+unwrap. All three were wrong descriptions of working code.
+
+**Next:** warmup range-bin selection (`HANDOFF.md` §3). The cheapest first question is whether the
+three 0%-coverage captures (massimo3, massimo5, massimo7) are bad locks or genuinely signal-free —
+score them at every candidate bin rather than the locked one and compare.

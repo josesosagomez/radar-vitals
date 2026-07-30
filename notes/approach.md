@@ -38,7 +38,12 @@ Standard phase-based chain. Each stage verified in isolation:
 
 1. Parse raw ADC (IWR1642 2-lane LVDS, Complex1x, 4-word packets). SDK captures use
    `iq_swap=True` (SampleSwap=1); mmWave Studio captures use `iq_swap=False`.
-2. Range FFT (fast time) → complex range profile per frame.
+2. Range FFT (fast time) → complex range profile per frame. **There is no shared
+   "range FFT stage."** Two functions each compute their own Hann + `scipy.fft.fft`
+   over the ADC axis: `src/warmup_select.py::range_energy_by_bin` (per-bin power, for
+   the energy prior) and `src/respiration.py::extract_chest_phase` (the one whose bin
+   value becomes phase). The numbering here is logical order, not a data-flow diagram —
+   nothing consumes a range profile produced by an earlier step.
 3. ~~Static clutter removal (subtract slow-time mean per bin).~~ **NOT IMPLEMENTED —
    corrected 2026-07-30.** This step was listed here, and copied from here into
    `HANDOFF.md`'s method summary, but no such stage exists in the production path.
@@ -55,12 +60,37 @@ Standard phase-based chain. Each stage verified in isolation:
    **Open decision:** justify the omission with a citation, or implement it — see
    `HISTORY.md` 2026-07-30. Relevant evidence: the 2026-07-28 captures contain static
    reflectors stronger than the subject (`notes/protocol.md`, "Scene behind the subject").
-4. **Range-bin selection:** at warmup, scan the candidate bins spanned by the
-   0.8-1.4 m gate, score each on HR validity / BR confidence / respiration validity /
-   range-energy rank, and **lock the winner for the rest of the session**. No manual or
-   manifest pin in the current protocol. Evidence dumped to `warmup_bin_selection.json`.
-5. Phase extraction (arctan I/Q) + phase unwrapping on the continuous slow-time.
-6. Phase differencing / impulse-noise removal.
+4. **Range-bin selection (warmup).** Not a post-FFT filter — it runs **the entire
+   downstream chain, once per candidate bin**, and picks a winner
+   (`src/warmup_select.py::run_warmup_selection`):
+   a. `range_energy_by_bin` over every candidate → mean power per bin (FFT #1);
+   b. the same again on the *settled* sub-window, after skipping `settle_skip_s`
+      (default 5 s), so a settling transient cannot inflate a skirt bin (FFT #2);
+   c. **for each candidate bin, call `run_window_dsp`** — steps 5–7 below in full:
+      phase extraction, BR fusion, ECA, AHET;
+   d. score each: `hr_valid` **+1000** (granted only if the bin's settled energy is
+      within `energy_eligibility_min_settled_db`, default −12 dB, of the strongest
+      candidate), BR confidence high/medium/low **+250/+100/−100**, `br_valid` **+50**,
+      minus `5 ×` energy rank;
+   e. **lock the winner for the rest of the session.** No manual or manifest pin in the
+      current protocol. Evidence dumped to `warmup_bin_selection.json`.
+
+   For the 0.8–1.4 m gate at 0.0436 m/bin that is 14 candidates, so warmup transforms
+   its window ~16 times and runs the full HR/BR chain 14 times before the first reported
+   estimate. It also means **any change to the downstream DSP can move the bin lock** —
+   observed 2026-07-30/31 for both the M2 respiration fix and the clutter-removal A/B.
+5. **Phase extraction.** `src/respiration.py::extract_chest_phase`, two methods —
+   **corrected 2026-07-31; this entry previously described only the non-default one.**
+   Production config (`scripts/live_demo_config.yaml`) sets `phase.method:
+   delta_before_mean`:
+   - `delta_before_mean` (**default**): conjugate product between consecutive frames,
+     `v[n]·conj(v[n−1])`, averaged over (chirp, rx), take the angle, then `cumsum`.
+     Differencing is *inside* this step, and there is **no `np.unwrap` call** — the
+     per-frame increment is already wrapped into (−π, π] by `angle`.
+   - `mean_phasor`: average the phasor over (chirp, rx), then `angle` + `np.unwrap`.
+     This is the "arctan I/Q + unwrapping" chain — it is **not** what production runs.
+6. Impulse-noise removal on the extracted phase (`src/vitals.py::remove_impulse_noise`,
+   `phase.impulse_clip_rad`), applied in `run_window_dsp` after step 5.
 7. Respiration estimate → ECA harmonic cancellation → cardiac band (0.8-2.0 Hz =
    48-120 bpm) → AHET second-harmonic verification (see §7).
 8. **Windowing:** 30 s window. The live demo hops every 3 s (display cadence); the

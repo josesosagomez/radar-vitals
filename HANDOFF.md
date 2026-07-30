@@ -17,7 +17,11 @@ verification, which returns **NaN rather than a guess** when it fails. 30 s non-
 at 20 Hz.
 
 **There is no static clutter removal in that chain.** `notes/approach.md` and an earlier version of
-this file both claimed there was; the claim was false and is corrected. See §5.
+this file both claimed there was; the claim was false and is corrected. See §6.
+
+**That one-liner flattens warmup, and the flattening misleads.** Warmup is not a post-FFT filter
+that picks a bin — it runs the *entire* downstream chain once per candidate bin and scores the
+results. That is the active work area; see §3.
 
 ## 2. Where the project actually is
 
@@ -35,20 +39,114 @@ understand before planning work.
 | Track | Milestone | Status |
 |---|---|---|
 | A | M1 live smoke test | **not run** — cheapest risk reduction available |
-| A | M2 respiration-collapse fix | **fix landed**; only done-when #5 (validation) open — see §4 |
+| A | M2 respiration-collapse fix | **fix landed**; only done-when #5 (validation) open — see §5 |
 | A | M3 BR comparator pre-spec | **closed**, 48/48 findings |
 | A | M4 offline evaluation harness | built (`scripts/score_offline.py`), has run for real |
-| 0 | **M0 pre-registration deposit** | **POSTPONED 2026-07-31 by user decision; gate STANDS** — see §3 |
+| 0 | **M0 pre-registration deposit** | **POSTPONED 2026-07-31 by user decision; gate STANDS** — see §4 |
 | B | M5 pilot / M6 main study | **not started; blocked by M0 and staying blocked** |
 | C | M8 Step 1a (Ahmed reproduction) | done — **scientifically negative**, canonical bundle committed |
-| C | M8 Step 1b | implemented through the gate; see §6 |
+| C | M8 Step 1b | implemented through the gate; see §7 |
 | C | M9 (Kotte) / M10 baselines | **not started** |
 | D | M12 paper, figures, chapter | not started |
 
-Active branch: **`vital_signs_ahmed_v10`**. Test baseline: **2074 passed, 5 skipped**. The 5 skips
-are honest absences (4 OSR-03 tests need replay artifacts that no longer exist), not passes.
+Active branch: **`vital_signs_ahmed_v10`**. Test baseline: **2049 passed, 5 skipped** (verified
+2026-07-31). The 5 skips are honest absences (4 OSR-03 tests need replay artifacts that no longer
+exist), not passes.
 
-## 3. The critical path — M0 postponed, and Track B is parked behind it
+## 3. ACTIVE TASK — warmup range-bin selection
+
+**This is what the next session is for.** Read §3 fully before touching `src/warmup_select.py`;
+there is more prior art here than is obvious, including a deferred decision that must not be
+silently reversed.
+
+### 3.1 What warmup actually does
+
+`src/warmup_select.py::run_warmup_selection`, called once at session start on the first
+`FRAMES_PER_WINDOW` (600) frames:
+
+1. `range_energy_by_bin` over every candidate bin → mean power (Hann + `scipy.fft.fft`).
+2. Same again on the **settled** sub-window, skipping `settle_skip_s` (default 5 s), so a settling
+   transient cannot inflate a skirt bin past the eligibility gate.
+3. **For each candidate bin, run `run_window_dsp` in full** — phase extraction, BR fusion, ECA,
+   AHET. This is the part the one-line method summary hides.
+4. Score: `hr_valid` **+1000** (only if the bin's settled energy is within
+   `energy_eligibility_min_settled_db`, default **−12 dB**, of the strongest candidate — an
+   *eligibility partition*, not a bonus), BR confidence high/medium/low **+250/+100/−100**,
+   `br_valid` **+50**, minus `5 ×` energy rank. Tie-breaks then run through `hr_bonus_granted`,
+   BR confidence order, `br_valid`, energy rank, distance from gate centre, bin index.
+5. **Lock the winner for the whole session.** Evidence → `warmup_bin_selection.json` per capture.
+
+Candidates come from `derive_candidate_bins` — the 0.8–1.4 m protocol gate at 0.0436 m/bin = bins
+**19–32**, i.e. 14 candidates. So warmup transforms its window ~16 times and runs the full HR/BR
+chain 14 times before the first estimate exists.
+
+**Consequence that has bitten twice: any downstream DSP change can move the bin lock.** The M2
+respiration fix moved massimo1 from 23 to 27; enabling clutter removal moved 4 of 8 captures. A
+change intended to be "phase-extraction only" is not isolated from selection.
+
+### 3.2 Why this is worth working on
+
+Coverage is 12% pooled and is the bottleneck (§2). Warmup picks the single bin every downstream
+estimate depends on, and **three captures score 0% coverage in both A/B arms** (massimo3, massimo5,
+massimo7). Whether that is a bad lock or genuinely no cardiac signal at any in-gate bin is
+**unknown and is the first question worth answering** — it is cheap to test by scoring those three
+at every candidate bin instead of the locked one.
+
+### 3.3 Known-suspicious observations (evidence, not verdicts)
+
+- **massimo7 locked bin 32** = the gate *edge* (1.40 m), while its strongest in-gate energy is at
+  bin 24 (1.05 m). That bin is clutter-dominated (+10.6 dB static-to-moving) with a phase
+  peak-to-peak of 1.3 rad against 18–40 rad for signal-dominated bins. Unexplained.
+- **massimo1 now locks 27, was 23 live.** Bin 27 won on a lone AHET pass at **−8.7 dB**, which
+  clears the −12 dB eligibility threshold. The threshold exists precisely to stop a skirt-bin AHET
+  pass outvoting the chest; −8.7 dB is inside the margin.
+- **massimo2 and sweep live-locked 20 and 21; both are mislocks**, corrected bin 26 for each
+  (`notes/capture_inventory.md`). massimo3–7 have **no** corrected bin established.
+- **The +1000 `hr_valid` bonus makes selection partly circular** — the bin is chosen using the
+  quantity the bin is then used to measure. Not necessarily wrong; not examined.
+- `src/warmup_select.py:86-90` states its own operating assumption as "single seated subject is the
+  dominant reflector inside the distance gate" and flags it as *not validated against competing
+  reflectors*. For the five 2026-07-28 captures the subject sits **3.3–9.6 dB below** static
+  reflectors at 2.09 m and 2.88 m (`notes/protocol.md`, "Scene behind the subject").
+
+### 3.4 Prior art — read before proposing anything
+
+- **`plans/bin_drift_diagnostic.md`** (+ `_cross_review.md`, review loop closed) and
+  **`scripts/diagnose_bin_drift.py`** — a read-only diagnostic measuring whether in-gate energy
+  drifts from its settled warmup baseline. It has been **run**; evidence at
+  `results/diagnose/bin_drift/20260728T004453Z/` (on disk, gitignored).
+  **Finding:** all 4 sessions show frequent short (<2 s) argmax flicker but almost no sustained
+  (≥5 s) drift, and in massimo1 ≥2 s excursions occur across every outcome class without separating
+  `covered` from `gate_not_run` — i.e. drift is **not** obviously the coverage-loss mechanism.
+  **It has never been run on massimo3–7.**
+- **The 5-bin relock tracker is DEFERRED, not rejected** (decision 2026-07-28, Option C). Deferred
+  because the evidence is n=1 subject who barely moved; a higher-movement subject could change it.
+  A working prior implementation (~371 lines in `live_demo.py` + ~555 test lines, commit `0022845`,
+  reverted 2026-07-09 as not worth the complexity) still sits in **`git stash@{0}`** — stale
+  relative to HEAD, so reviving it is a port plus re-validation, not a `git stash pop`.
+  **Do not record this as "decided against."**
+- `scripts/validate_warmup_selection.py` — pins the selection for massimo1/massimo2/sweep against
+  expected bins, and each expectation names the fix that last moved it. **Run it after any change**;
+  it is the fastest signal that selection moved.
+- `scripts/diagnose_live_run.py`, `scripts/diagnose_coverage_gaps.py`, and each capture's
+  `warmup_bin_selection.json` (all 8 present) carry the per-candidate evidence.
+- Tests: `tests/test_live_demo_warmup_helpers.py`, `tests/test_step3_bin_selection.py`,
+  `tests/test_diagnose_bin_drift.py`.
+
+### 3.5 Constraints on this work
+
+- **CLAUDE.md §6 applies.** Bin selection is explicitly in the cross-review list — any change to
+  the scoring rule, the −12 dB threshold, or the candidate derivation needs an independent pass
+  before it lands.
+- **Do not tune against Masimo agreement.** Selection must be decided on radar-side evidence; §4
+  forbids choosing a bin because it matches the reference better.
+- Changing selection **breaks live/offline bin reproduction** for existing captures, which M4R-10
+  exists to protect (`src/warmup_select.py:5-7`). It has already happened once for massimo1. If it
+  happens again, record it rather than re-baselining silently.
+- `src/m8/ahmed_provenance.py::_SCOPED_TREES` covers `src/**/*.py` — edits here invalidate any
+  frozen Step 1b gate bundle (none exists yet; see §7).
+
+## 4. The critical path — M0 postponed, and Track B is parked behind it
 
 **Decision, user, 2026-07-31: nothing will be deposited for now, and the gate stands.**
 
@@ -74,10 +172,10 @@ Read that precisely, because the two halves are independent and both matter:
 **Still open, and no longer urgent:** whether to attack **coverage (M11a)**. It used to be framed as
 "before freezing"; with the freeze postponed indefinitely that framing is gone, and coverage work is
 simply available whenever wanted. It is better informed than when last deferred — clutter removal
-was the leading candidate fix and has been measured and rejected (§5). Coverage remains 12% and
+was the leading candidate fix and has been measured and rejected (§6). Coverage remains 12% and
 unexplained.
 
-## 4. Respiration collapse — the fix landed; only validation is open
+## 5. Respiration collapse — the fix landed; only validation is open
 
 Do not re-open the fix.
 
@@ -95,14 +193,14 @@ invalid.
 
 **Open: M2 done-when #5** — score reprocessed BR under the frozen M3 comparator. **Blocked on data,
 not DSP:** approximate time alignment cannot produce a frozen-comparator outcome, and none of the 8
-existing captures can discharge it. With M5 parked behind the postponed M0 deposit (§3), **M1 is now
+existing captures can discharge it. With M5 parked behind the postponed M0 deposit (§4), **M1 is now
 the only route** — and only if that smoke test carries a Masimo reference and the clock sync of
 `notes/protocol.md` step 3a. A smoke test without those does not discharge it.
 
 A worked consequence of this fix is recorded in `HISTORY.md` 2026-07-30: it moved massimo1's warmup
 lock from 23 to 27, so **offline no longer reproduces that session's live bin**.
 
-## 5. Static clutter removal — implemented, OFF, and measured not to help
+## 6. Static clutter removal — implemented, OFF, and measured not to help
 
 `src/clutter.py` provides `remove_static_clutter`; `phase.clutter_removal` defaults to `"none"`,
 which is the pre-existing pipeline bit-for-bit (pinned by
@@ -124,7 +222,7 @@ does **not** isolate it from bin selection, because warmup scores candidates thr
 Do not enable it, and do not re-propose it as a coverage fix without new data. The code stays
 because it is what makes the negative result reproducible.
 
-## 6. M8 Step 1b — current in-flight work
+## 7. M8 Step 1b — current in-flight work
 
 Authority is the **pair** of files; the addendum wins on conflict.
 
@@ -153,7 +251,7 @@ bundle. Several landed on 2026-07-30/31 (`src/clutter.py`, and the capture-integ
 was subsequently removed). Nothing was invalidated because no bundle exists — but freeze Step 1b
 only once you intend to stop touching those trees.
 
-## 7. Capture stage — measured once, no longer checked
+## 8. Capture stage — measured once, no longer checked
 
 On 2026-07-30 all 8 captures were verified to have 0 dropped/zero-filled UDP packets, exact frame
 alignment, no ADC sample within 68 counts of int16 full scale (peaks 3.0–4.9% FS), and a configured
@@ -181,7 +279,7 @@ What that means in practice, stated plainly so the next chat is not surprised:
   behaviour, untouched), so that path does record a capture hash. The live path does not.
 - The failure modes are documented in `HISTORY.md` and remain real; they are simply unguarded.
 
-## 8. Gotchas that will bite you
+## 9. Gotchas that will bite you
 
 - **Line endings are pinned to LF and it is load-bearing.** Before `3aec30a`, `core.autocrlf=true`
   meant a fresh clone checked out CRLF and *every* recorded SHA-256 changed. Any script that hashes
@@ -228,7 +326,7 @@ What that means in practice, stated plainly so the next chat is not surprised:
   `& 'C:\ProgramData\anaconda3\condabin\conda.bat' run -n radar-vitals python …`, and never call the
   env's `python.exe` by absolute path (it crashes matplotlib `savefig`).
 
-## 9. Pointers
+## 10. Pointers
 
 | Purpose | Path |
 |---|---|
@@ -245,8 +343,15 @@ What that means in practice, stated plainly so the next chat is not surprised:
 | Step 1b gate evidence (regenerable) | `scripts/m8_step1b_gate_prediction.py` |
 | Canonical Step 1a bundle | `figures/generated/m8_ahmed_fig8/20260729T075443.145998Z_8e08f5ab0120/` |
 | Production DSP | `src/respiration.py`, `src/vitals.py`, `src/window_pipeline.py` |
+| **Warmup selection (ACTIVE — §3)** | **`src/warmup_select.py`** |
+| Warmup config knobs (`bin_selection`) | `scripts/live_demo_config.yaml` |
+| Warmup selection regression check — run after any change | `scripts/validate_warmup_selection.py` |
+| Per-capture warmup evidence (all 8) | `results/live_demo/*/warmup_bin_selection.json` |
+| Bin-drift diagnostic + its closed cross-review | `plans/bin_drift_diagnostic.md`, `scripts/diagnose_bin_drift.py` |
+| Bin-drift evidence run (gitignored, on disk) | `results/diagnose/bin_drift/20260728T004453Z/` |
+| Deferred relock-tracker WIP (stale, needs porting) | `git stash@{0}` |
+| Warmup / bin-selection tests | `tests/test_live_demo_warmup_helpers.py`, `tests/test_step3_bin_selection.py` |
 | Static clutter removal (off by default) | `src/clutter.py` |
-| Warmup selection regression check | `scripts/validate_warmup_selection.py` |
 | Offline scorer / comparators | `scripts/score_offline.py`, `src/comparator.py` |
 | Clutter A/B config pair | `experiments/exp_clutter_removal/` |
 | Frozen window grid | `src/m4/window_grid.py` |
