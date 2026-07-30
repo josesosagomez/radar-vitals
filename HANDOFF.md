@@ -21,7 +21,7 @@ after the synthetic gate—run a strictly exploratory comparison on all eight sa
 ### Repository
 
 - Branch: `vital_signs_ahmed_v10`
-- HEAD: `2b7d3de460e5dca5e5e57abd794e7d71f21e2d9c`; worktree clean
+- HEAD: `0e34078190a316fb3b4aa4904fdc6311e3a03f65`; worktree clean
 - Committed on 2026-07-30, in order:
   - `2bfc167` deterministic Step 1a provenance + scorer OSR-03 tests
   - `f9e42b6` approved plan, Addendum A, gate-prediction evidence script, docs
@@ -58,7 +58,7 @@ Step 1a never decoded or scored a real capture. Its adapter test proves record n
 | File | SHA-256 | Status |
 |---|---|---|
 | `plans/m8_step1b_ahmed_transfer.md` | `9294cb0589b9f0d8f50cdfa0ea893862b1f8ac7f26eb6fee31ee57d622da33ac` | five-discipline PASS on these exact bytes |
-| `plans/m8_step1b_ahmed_transfer_addendum_a.md` | `b0bdc047ab6e43b42f6e6d362b59a3cd6bfda817607fb74253008c7c3e5fd0c8` | **user-approved 2026-07-30**; cross-model re-review **waived** |
+| `plans/m8_step1b_ahmed_transfer_addendum_a.md` | `b8625f6e1e33aa4034591c30f528887910f049fbde75e78627d6d7cadd02fed0` | **user-approved 2026-07-30**; cross-model re-review **waived** |
 
 The base plan is deliberately **unmodified**, so its five acceptances remain valid. Governing
 authority is the *pair*; where they conflict, the addendum wins. Any manifest binding
@@ -72,11 +72,23 @@ Built and tested (no real capture or Masimo file has been opened):
 |---|---|
 | `src/m4/outcome.py` | AHET classifier, extracted verbatim; three callers share one function object |
 | `src/m4/estimator_suite.py` | neutral arm/result/suite contracts; immutable evidence; config bound at construction |
-| `src/m8/ahmed_transfer.py` | `estimate_phase_ha` — the scientific core, six arms per invocation |
+| `src/m4/production_suite.py` | `ProductionEstimatorSuite` + the sole `eca_bindrift_outcome_v1` adapter |
+| `src/m8/ahmed_transfer.py` | `estimate_phase_ha` core + `AhmedPhaseEstimatorSuite` (six arms) |
+| `src/m8/ahmed_synthetic.py` | the §2.2 synthetic control, extraction oracles, phase-slip audit |
+| `src/m8/ahmed_gate.py` | `evaluate_gate` — P1–P4 checks and the per-domain transfer verdict |
 
-Not yet built: `ProductionEstimatorSuite`, `AhmedPhaseEstimatorSuite`, the runner, the scorer, the
-serializers, the CLI, the experiment config, and the capture registry. **No synthetic or real Step 1b
-result exists and the gate has not been run.**
+**The gate passes in-process** (`evaluate_gate()` -> `passed`, 14/14 checks), and the transfer
+verdicts are exactly as predeclared:
+
+| Domain | Transfer verdict | Heart selection |
+|---|---|---|
+| `collision_domain_from_fb` | `not_transferred_under_declared_assumptions` | ~20 bpm (the breathing bin) |
+| `real_representative_domain` | `transferred_under_declared_seed_and_configuration` | 80.04 bpm |
+
+Not yet built: the immutable bundle writer (manifest, provenance, source/test/environment
+attestations, `gate.json`, `evidence.npz`), the CLI, the runner, the scorer, the experiment config,
+and the capture registry. **No frozen gate bundle exists yet**, so nothing is promotion-eligible and
+no real path may be touched.
 
 ### Why Addendum A exists
 
@@ -128,19 +140,21 @@ Next steps, in order:
    **90 passed** (prior 85 + 5 new provenance tests), deterministic, with no product-code change.
 3. ~~Extract `src/m4/outcome.py`.~~ **Done** — `53cf4c7`.
 4. ~~Implement the scientific core and suite contracts.~~ **Done** — `574657a`.
-5. Implement `ProductionEstimatorSuite` (wrapping `run_window_dsp` as `eca_ahet_v1`, with the sole
-   `eca_bindrift_outcome_v1` classifier adapter) and `AhmedPhaseEstimatorSuite` over the contracts.
-   **← current task**
-6. Implement the runner, scorer, strict serializers, CLI, experiment config, and capture registry,
-   with portable fixture tests — **without opening any real capture or Masimo file**.
-7. Run the focused, affected, new, and broad fixture-only suites; freeze the scoped source, test, and
+5. ~~Implement both concrete suites.~~ **Done** — `025d259`.
+6. ~~Implement the synthetic generator and gate evaluation.~~ **Done** — `0e34078`.
+7. Implement the immutable bundle writer (manifest, provenance, `source_manifest.json`,
+   `test_attestation.json`, `environment_attestation.json`, `gate.json`, `evidence.npz`) and the
+   `synthetic` CLI command. **← current task**
+8. Implement the runner, scorer, strict serializers, experiment config, and capture registry, with
+   portable fixture tests — **without opening any real capture or Masimo file**.
+9. Run the focused, affected, new, and broad fixture-only suites; freeze the scoped source, test, and
    environment attestations.
-8. Execute the synthetic gate. Under Addendum A the gate verdict turns on reproducing predeclared
-   predictions P1–P4, and the scientific transfer verdict is reported per domain, non-gating.
-9. Stop after the gate. No real path may be touched unless the gate is complete,
-   `promotion_eligible=true`, and one comprehensive real-evaluation authorization is frozen before
-   first access.
-10. If authorized, run the immutable `real-smoke -> radar -> scored` chain exactly as registered.
+10. Execute the synthetic gate as a **frozen bundle**. It already passes in-process; what remains is
+    writing it immutably with its attestations so it can parent a real stage.
+11. Stop after the gate. No real path may be touched unless the gate is complete,
+    `promotion_eligible=true`, and one comprehensive real-evaluation authorization is frozen before
+    first access.
+12. If authorized, run the immutable `real-smoke -> radar -> scored` chain exactly as registered.
 
 Planning approval and real-data authorization remain separate decisions at different stages.
 

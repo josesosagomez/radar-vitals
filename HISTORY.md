@@ -8213,3 +8213,67 @@ it appeared (Addendum A §A4.1, `HANDOFF.md`), and retired `score_offline.py`'s 
 then the runner, scorer, serializers, CLI, experiment config, and capture registry. Still no real
 capture or Masimo access. The canonical Step 1a bundle decision remains open with the user.
 
+## 2026-07-30 - Step 1b: suites, synthetic generator, and a passing gate
+
+**Set out to do:** continue the fixture-testable implementation — both concrete suites, the
+synthetic control, and the gate evaluation. No real capture or Masimo file to be opened.
+
+**Worked (with evidence):**
+- `ProductionEstimatorSuite` (`025d259`, `src/m4/production_suite.py`) wraps `run_window_dsp` as
+  `eca_ahet_v1` / `production_eca_ahet_v1`. A test walks the **full nested payload** and asserts
+  field-by-field equality with a direct `run_window_dsp` call, arrays compared with
+  `equal_nan=True`. `WindowEstimate` is deliberately not the oracle: it normalizes and would hide a
+  payload difference. Config is deep-copied and hashed at construction and each call materializes a
+  fresh private dict, so mutating the caller's dict afterwards changes neither hashes nor results —
+  tested directly.
+- `EcaBindriftOutcomeClassifier` is the sole `eca_bindrift_outcome_v1` adapter, declared only under
+  `strict_v1`, keyed by arm id, mirroring `score_offline`'s `None -> NaN` `f_r_hz` mapping. Its label
+  goes in a new `SuiteWindowResult.arm_outcomes` field, outside the native payload.
+- `AhmedPhaseEstimatorSuite` calls `extract_chest_phase` **once** per window with
+  `delta_before_mean` and scores all six arms from that one signal; tests pin the single call, the
+  method, one shared signal hash across all six arms, and that no outcome classifier is ever
+  attached to an Ahmed arm.
+- `src/m8/ahmed_synthetic.py` (`0e34078`) builds the §2.2 control and audits it. Tests pin the
+  declared realization exactly, **through the production extraction path**: noise power
+  `0.0959419233`, realized SNR `10.1799158` dB, max clean increment `0.94111946` rad, branch margin
+  `2.20047319` rad, reference increment `1.64805` rad, sample counts 561/300. The `(N,32,4,64)`
+  aggregation oracle matches the single-channel extraction, confirming static per-channel offsets
+  cancel in the conjugate product.
+- `src/m8/ahmed_gate.py` evaluates both verdicts. P1/P4 are checked by a **line-model predictor that
+  never touches the FFT**, so the accumulator is compared against theory rather than against itself;
+  a test cross-checks all three independent implementations (predictor, core, frozen script).
+- **Gate result on the declared configuration: `passed`, all 14 checks.** P2 relative differences
+  `0.0` (H=3) and `6.751e-16` (H=5); collision ratios `1.9999999999999991` and `2.9999999999999925`;
+  non-divisor scores at `5.3e-16` and `4.7e-16` of the peak.
+- **Transfer verdicts are exactly as predeclared**, and gate status is independent of them:
+  `collision_domain_from_fb` -> `not_transferred_under_declared_assumptions` (heart selects the
+  breathing bin, ~20 bpm, both \(H\)); `real_representative_domain` ->
+  `transferred_under_declared_seed_and_configuration` (80.04 bpm, both \(H\)).
+- Full suite **1944 passed, 5 skipped**.
+
+**Failed / did not work, and why:**
+- **The first gate run failed, and the predictions were again at fault, not the code.** P2/P3 came
+  back at ~1e-3 instead of ~1e-15. Cause: they are identities about *which bins a harmonic row lands
+  on*, so they require the declared fundamentals to sit exactly on rFFT bin centres. On the primary
+  PRF grid the lines are **off-grid** — \(f_b\) at 4.9976 bins, \(f_h\) at 19.990 — and leakage
+  degrades them by twelve orders of magnitude. The measurements quoted in Addendum A §A4.1 were
+  taken on the 20 Hz grid, where the lines land on bins 5/20 and 10/40 exactly, but the precondition
+  was never written down. Added it to §A4.1 with the measured off-grid values, and the gate now
+  evaluates P1/P4 on every grid and P2/P3 only on the on-grid 20 Hz realization, **refusing**
+  outright to evaluate P2/P3 off-grid rather than silently reporting a failure. The transfer verdict
+  stays on the primary grid, so base plan §2.2's limit on the 20 Hz audit is respected.
+- Two weak tests were written and then replaced: one contained a tautological
+  `assert ... or True`, and one was named "fails if the accumulator normalization changes" while
+  actually asserting the gate *passes* under a harmless uniform rescale. Replaced with a check that
+  P2/P3 are genuinely evaluated (counting them and requiring a measured value in each detail
+  string) and with two honestly named drift tests that document what the gate does and does not
+  detect.
+
+**Retired / no longer used:** retired the unqualified statement of P2/P3 — they now carry an
+explicit on-grid precondition alongside their tolerances.
+
+**Next:** the immutable bundle writer (manifest, provenance, source/test/environment attestations,
+`gate.json`, `evidence.npz`) and the `synthetic` CLI command, then the real-path runner, scorer,
+capture registry, and experiment config. No real data has been touched and none may be until a
+frozen gate bundle exists with `promotion_eligible=true` plus the separate authorization.
+
