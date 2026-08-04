@@ -37,7 +37,7 @@ reference alone (the three exploratory captures; radar never consulted):
 | paced 16 | 6 | 100 % | median **0.0**, max 1.0 | 14–17 | 3.8 | offset from 16 bpm target **+0.0** |
 | sweep 12/15/18/21 | 16 | 100 % | median **0.0**, max 2.0 | 12–22 | 9.6 | observed RRp range 12–22 |
 
-*(**Origin-specific exploratory illustrations**, single subject. Computed by the reference-only
+*(**Origin-specific exploratory illustrations**, four subjects. Computed by the reference-only
 `scripts/derive_br_comparator_evidence.py` on 30 s windows anchored at an **approximate** origin —
 these exploratory captures have no persisted frame-0 epoch, so the alignment is not the exact
 scoring grid (`notes/analysis_prespec.md` §7). The counts are illustrative of RRp's displayed
@@ -161,7 +161,7 @@ reason is the reference's measured behaviour:
   sweep (0/16) windows**; a looser 2.5-bin gate (5 bpm) excludes **nothing anywhere** and is
   toothless. The gate therefore **bites where the displayed breathing rate varies (natural) and
   passes the stable paced sessions** — the desired behaviour, though on a very small, exploratory,
-  single-subject `n` with approximate window alignment (§4).
+  small-`n` (four subjects) with approximate window alignment (§4).
 - **What the gate actually observes.** 2.0 bpm = one FFT bin, so the gate flags a **displayed RRp
   transition of more than one bin** inside the window. The inequality is **strict** — the frozen gate
   excludes iff `p90 − p10 > 2.0 bpm`, so a spread of **exactly** one bin (2.0 bpm) is **retained**,
@@ -250,7 +250,7 @@ In **paced** sessions the commanded metronome rate is a second, **target-concord
   `notes/capture_inventory.md`; the three metadata digests, which the inventory does not carry, are
   pinned in the script.) It **imports no radar-pipeline code and reads no radar estimate** (it reads
   `run_metadata.json` only for the `start_wall_utc` timestamp).
-- **All existing radar/RRp pairs are EXPLORATORY** (single subject; the sessions informed the
+- **All existing radar/RRp pairs are EXPLORATORY** (four subjects; the sessions informed the
   method's design). No confirmatory BR number may come from them.
 
 ## 5. Risk and adequacy rule — decided at M5, prospectively

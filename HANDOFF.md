@@ -30,8 +30,9 @@ bottleneck.
 understand before planning work.
 
 - **BR end-to-end accuracy has never been measured. Not once.**
-- HR agreement exists only as single-subject numbers stamped `exploratory_non_frozen`.
-- 8 captures exist, **all one subject**, all exploratory.
+- HR agreement exists only as exploratory numbers stamped `exploratory_non_frozen`.
+- 8 captures exist, spanning **four subjects** (corrected 2026-08-03 — the record previously said
+  one; see `notes/capture_inventory.md` "Subject map"), all exploratory.
 - **HR coverage is 12%** pooled over those 8 captures (8 of 67 admissible windows, run
   `20260730T204448Z`). Three captures — massimo3, massimo5, massimo7 — score **0%**. Coverage, not
   accuracy, is the bottleneck.
@@ -318,8 +319,11 @@ not coverage work, and it should not be sold as the latter.
   (≥5 s) drift, and in massimo1 ≥2 s excursions occur across every outcome class without separating
   `covered` from `gate_not_run` — i.e. drift is **not** obviously the coverage-loss mechanism.
   **It has never been run on massimo3–7.**
-- **The 5-bin relock tracker is DEFERRED, not rejected** (decision 2026-07-28, Option C). Deferred
-  because the evidence is n=1 subject who barely moved; a higher-movement subject could change it.
+- **The 5-bin relock tracker is LIVE AGAIN** (was deferred 2026-07-28, Option C). The deferral
+  rested on one stated condition — "the evidence is n=1 subject who barely moved; a higher-movement
+  subject could change it". **That premise was factually wrong: the captures span four subjects**
+  (corrected 2026-08-04, `notes/capture_inventory.md` "Subject map"), so the condition no longer
+  holds. The user independently re-proposed the same design on 2026-08-04.
   A working prior implementation (~371 lines in `live_demo.py` + ~555 test lines, commit `0022845`,
   reverted 2026-07-09 as not worth the complexity) still sits in **`git stash@{0}`** — stale
   relative to HEAD, so reviving it is a port plus re-validation, not a `git stash pop`.

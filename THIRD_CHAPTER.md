@@ -27,7 +27,7 @@
 >
 > **Honesty contract (CLAUDE.md §4).** Every empirical number below carries a status tag:
 > - **[VERIFIED]** — computed by a committed script from data that still exists; regenerable.
-> - **[PRELIMINARY]** — real and regenerable, but n=1 subject, exploratory (used to design the
+> - **[PRELIMINARY]** — real and regenerable, but n=4 subjects, exploratory (used to design the
 >   method), or otherwise not defensible as a headline result.
 > - **[RETIRED]** — computed on data deleted 2026-07-09; **must never be reported as a result.**
 > - **[PENDING]** — not yet measured. A placeholder, not a promise.
@@ -68,7 +68,7 @@
 | System implementation | **Yes** | — |
 | Evaluation methodology (comparator) | **Yes** | — |
 | Failure-mode analysis | **Yes** — this is a genuine strength | — |
-| Headline agreement results | **No** | 10-subject study not started; n=1 subject exists |
+| Headline agreement results | **No** | 10-subject study not started; n=4 subjects exist |
 | Bland–Altman (subject-clustered), per-subject breakdown | **No** | Same; and the repeated-measures model is not implemented yet (§7.5) |
 | Baseline comparison (TI on-chip, published pipeline) | **No** | Never run |
 | Conclusions | **Partially** | Method conclusions yes; performance conclusions no |
@@ -593,7 +593,7 @@ chapter. The obvious reviewer question about an exclusion gate is "what did it h
 checked.)*
 
 **Why these are not citable as a result:**
-- **n = 1 subject** across all sessions.
+- **n = 4 subjects** across the eight sessions (corrected 2026-08-03; previously recorded as one — see `notes/capture_inventory.md` "Subject map").
 - These sessions **informed the design** of the harmonic-veto work, so they are exploratory, not
   held-out validation.
 - `natural`'s MAE rests on a **single** scorable window.
@@ -750,7 +750,7 @@ currently has nothing to veto.** Its objective criterion is not derivable from a
 population and is deferred to a new capture designed to *provoke* a collision.
 
 ### 12.6 Other declared limitations
-- **Single subject** in all current data; no demographic, BMI, or chest-morphology diversity.
+- **Only four subjects** in all current data, not randomly sampled; no recorded demographic, BMI, or chest-morphology diversity.
 - **Seated posture only**; no lying, standing, or motion arms.
 - **Single-antenna, single-bin** processing.
 - **20 Hz frame rate** — 5× below the primary reference's 100 Hz.
@@ -1015,7 +1015,7 @@ spectra, AHET candidates, checkpointed every 60 s), and `adc_stream.bin` (the ra
 
 The project is **heavily weighted toward infrastructure, verification and failure analysis**, and
 **light on subject data**. Roughly 18,700 lines of code and 797 test outcomes support four captures from
-a single subject. That ratio is not a criticism — the failure analyses in §11 and the
+four subjects. That ratio is not a criticism — the failure analyses in §11 and the
 methodology in §7 are only possible because the diagnostic infrastructure exists, and they are
 the chapter's most distinctive material. But it does identify the critical path precisely:
 **every remaining gap in §0's status board is closed by collecting data, not by writing code.**

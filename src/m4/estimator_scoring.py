@@ -17,7 +17,7 @@ Reporting rules that are easy to get wrong and are enforced here:
   silently-dropped comparison.
 
 Nothing here pools across protocol strata. Base plan section 3.5 forbids an all-capture
-error headline for single-subject development data, so the caller supplies one stratum at
+error headline for small-n development data, so the caller supplies one stratum at
 a time.
 """
 from __future__ import annotations

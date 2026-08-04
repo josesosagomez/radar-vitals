@@ -25,7 +25,8 @@
 > decision 2026-07-27.
 >
 > **2026-07-30 — M8 existing-data clarification, pre-freeze.** The existing exploratory inventory
-> is now eight captures, not four. All eight are single-subject development/apparent data and remain
+> is now eight captures, not four. All eight are development/apparent data (four subjects — corrected
+> 2026-08-03; previously recorded as one) and remain
 > ineligible for confirmatory/headline use. The reviewed M8 Step 1b plan permits explicitly
 > `exploratory_non_frozen` reference scoring from the approximate `start_wall_utc` origin only if
 > every row/manifest/table/plot states that timing limitation and its ineligibility for promotion or

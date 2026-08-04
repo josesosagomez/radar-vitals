@@ -1,16 +1,19 @@
-# Capture inventory — pre-registration deposit (M0 / A3)
+# Capture inventory
 
-> **Status: DRAFT, prepared 2026-07-25 for the M0 deposit.** Re-verified at freeze time
-> (`plans/m0_preregistration.md` A3/C2). Every capture in existence at freeze time is enumerated
-> here and labelled **pre-freeze exploratory** — none is confirmatory evidence
-> (`plans/implementation_plan.md` §M0). Hashes computed with `sha256sum` on 2026-07-25.
+> **Status: internal record.** Prepared 2026-07-25; M0 was removed from the project 2026-08-03, so
+> this is no longer a deposit artifact. Every capture is **exploratory** — none is confirmatory
+> evidence. Hashes computed with `sha256sum` on 2026-07-25.
+>
+> **CORRECTION 2026-08-03 — the eight captures are FOUR subjects, not one.** User-stated; it
+> supersedes every "single subject / self-capture" claim in this file and elsewhere. See
+> "Subject map" below. This materially changes prior conclusions that were caveated `n=1`.
 
 ---
 
 ## 1. Study captures (radar + optional Masimo)
 
-All four are **pre-freeze exploratory**, single subject (the researcher, self-capture), collected
-with `scripts/live_demo.py` in live mode. **Distance and posture were not machine-recorded** in
+All are **exploratory**, collected with `scripts/live_demo.py` in live mode, across **four
+subjects** (see "Subject map" below). **Distance and posture were not machine-recorded** in
 these exploratory runs (`run_metadata.json` `distance_cm`/`posture` = null) — a limitation; the
 study protocol (`notes/protocol.md`) requires recording distance per session.
 
@@ -60,7 +63,7 @@ Approved public participant metadata schema (`plans/m0_preregistration.md` A6; e
 sex, age, height, cardiac condition, file hashes, class label** — nothing else. No names, no date
 of birth, no raw recordings in the public payload.
 
-At v1 freeze every row above is a **researcher self-capture**, so no third-party participant data
+Rows above span four subjects (see "Subject map"), so third-party participant data
 exists yet; the schema governs the amendment inventories that will carry M5/M6 participants. The
 researcher's own sex/age/height/cardiac fields are **[to fill if the user chooses to publish own
 demographics]** — not fabricated here.
@@ -70,3 +73,40 @@ demographics]** — not fabricated here.
   metadata from each folder's `run_metadata.json`.
 - `data/raw/` is empty; `data/manifest.local.csv` is header-only (0 rows) — these four live-demo
   captures are the entire dataset at freeze time.
+
+
+---
+
+## Subject map — CORRECTION, 2026-08-03
+
+**Source: user statement, 2026-08-03.** The project record previously said all eight captures were
+a single researcher self-capture. That was wrong. The eight captures come from **four subjects**,
+paired as follows:
+
+| Subject | Captures | Date(s) |
+|---|---|---|
+| **A** | `massimo1`, `massimo2` | 2026-07-13 |
+| **B** | `massimo3`, `sweep` | 2026-07-28, 2026-07-14 |
+| **C** | `massimo4`, `massimo5` | 2026-07-28 |
+| **D** | `massimo6`, `massimo7` | 2026-07-29 |
+
+**Subject identity is not machine-recorded anywhere** — no `run_metadata.json` field carries it,
+and it cannot be recovered from the artifacts. This table is the only record. Treat it as
+authoritative and do not re-derive it.
+
+**What this changes.** Several conclusions were explicitly caveated "n=1 subject" and are now
+better supported than they were recorded as being:
+
+- the 2026-07-31 signal-presence and bin-sweep findings (BR extractable; HR not demonstrated;
+  bin selection not the coverage bottleneck) were drawn across four subjects, not one;
+- the **−12 dB energy-eligibility threshold** in `src/warmup_select.py` was documented as
+  "4 sessions / 1 subject" — its empirical basis is broader than stated;
+- the **5-bin relock tracker** was deferred on 2026-07-28 *specifically* because the evidence was
+  "n=1 subject who barely moved". **That deferral condition no longer holds.**
+
+**What it does NOT change.** Four subjects is still small, and the subjects were not randomly
+sampled. Nothing here becomes confirmatory.
+
+**Train/test split agreed 2026-08-03** for the BR bin-selection work: discovery on **A + B**
+(`massimo1`, `massimo2`, `massimo3`, `sweep`); the held-out test on **C + D** (`massimo4`,
+`massimo5`, `massimo6`, `massimo7`) is touched **once**, with the feature set already frozen.

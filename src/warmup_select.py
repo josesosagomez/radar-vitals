@@ -82,12 +82,15 @@ def run_warmup_selection(
     bonus: an energy-ineligible bin can never outvote an energy-eligible one
     (via breathing evidence or anything else), it can only win if no
     energy-eligible candidate's DSP call succeeded (see winner_pool below).
-    Empirical basis: 4 recorded sessions / 1 subject (2026-07-14/15) — a lone
+    Empirical basis: 4 recorded sessions, 2026-07-14/15 — a lone
     AHET pass at a skirt bin, or genuine cardiac leakage into a low-energy skirt
     bin, both otherwise outvoted the true chest bin. Assumes the protocol scene
     (single seated subject is the dominant reflector inside the distance gate);
-    not yet validated across subjects/postures/competing reflectors — see
-    notes/approach.md and re-check against the 10-subject study.
+    not yet validated across postures/competing reflectors — see notes/approach.md
+    and re-check against the 10-subject study. NOTE 2026-08-03: the eight existing
+    captures span FOUR subjects, not one as previously recorded
+    (notes/capture_inventory.md "Subject map"), so the cross-subject evidence here
+    is broader than this docstring previously claimed.
     """
     if not candidate_bins:
         raise ValueError(

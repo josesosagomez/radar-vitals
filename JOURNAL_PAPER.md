@@ -53,8 +53,8 @@
 
 | Requirement for any credible venue | Status |
 |---|---|
-| Multi-subject dataset | **MISSING** — n = 1 subject, 4 sessions |
-| Agreement vs reference (MAE/RMSE/Bland–Altman) | **MISSING** — pilot numbers only, from a single subject |
+| Multi-subject dataset | **WEAK** — n = 4 subjects, 8 sessions (corrected 2026-08-03; previously recorded as n = 1) |
+| Agreement vs reference (MAE/RMSE/Bland–Altman) | **MISSING** — pilot numbers only, n = 4 subjects |
 | Comparison against ≥1 baseline | **MISSING** — never run |
 | Coverage at a defensible level | **WEAK** — 10–46% of windows produce an estimate |
 | Ethics approval / informed consent for human subjects | **OBTAINED** (confirmed 2026-07-23) — record the reference number for the Methods section (§10) |
@@ -79,7 +79,7 @@ Realistically, steps 2–4 are the difference between a rejected manuscript and 
 
 **A caution about the framing you may be tempted into.** With MAE around 0.2–0.5 bpm on pilot
 data [PRELIMINARY], it is tempting to lead with "sub-bpm accuracy." Do not. Those numbers come
-from one subject, on ~10–20% of windows, from sessions that informed the method's design, and
+from four subjects, on ~10–20% of windows, from sessions that informed the method's design, and
 with a single scorable window in one session. A reviewer who notices any of that — and a good
 one will — will distrust the whole paper. Our own project history contains exactly this lesson:
 a "MAE 0.16 bpm" result was reported internally and had to be withdrawn once the comparator was
@@ -209,7 +209,7 @@ one. Report exclusion sensitivity at 3 / 5 / 8 bpm so the choice is auditable.
 | paced-16 | 23 / 50 | 2 | 21 | 0.50 bpm | 0 |
 | sweep | 30 / 150 | 11 | 19 | 0.53 bpm | 0 |
 
-Mandatory accompanying statements: **n = 1 subject**; these sessions **informed the method's
+Mandatory accompanying statements: **n = 4 subjects**; these sessions **informed the method's
 design** (exploratory, not held-out); `natural` rests on **one** scorable window; coverage is
 10–46%. All 17 excluded windows were individually checked and every one is a real reference
 instability (spread 5.1–26.0 bpm) — pre-empt the "what did your exclusion gate hide?" question,
@@ -237,7 +237,7 @@ the static-clutter removal (a per-bin slow-time mean, poorly estimated from few 
 residual static energy into low-signal bins) — reasoning, not a result. Do not publish it as one.
 
 **State the scope honestly:** the −12 dB / 5 s thresholds are an empirical, scene-scoped prior
-from 4 sessions / 1 subject, in a scene where a single seated subject dominates the range gate.
+from 4 sessions, in a scene where a single seated subject dominates the range gate.
 Untested with competing reflectors. Overclaiming here is unnecessary — the *failure mode* is the
 contribution, and it is general even where the threshold is not.
 

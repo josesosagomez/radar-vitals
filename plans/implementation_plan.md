@@ -71,7 +71,7 @@ That risk is real whether or not anything is pre-registered.
 | Live demo: capture, replay, raw mirror, diagnostics | `scripts/live_demo.py`, `diagnose_live_run.py` |
 | **HR comparator pre-specification** | `notes/comparator_prespec.md` (applied, binding) |
 | Full suite | **2028 passed, 5 skipped** (2026-07-30). Skips are honest absences, not passes: 4 are OSR-03 tests needing replay artifacts that no longer exist, 1 is elsewhere |
-| Data | **8 live captures**, of which 3 are Masimo-referenced; all single-subject, all pre-freeze exploratory |
+| Data | **8 live captures**, all Masimo-referenced; **four subjects** (corrected 2026-08-03; previously recorded as one), all exploratory |
 | M2 respiration-collapse fix | implemented and tested — band-edge veto + STFT-consistency gates (`src/respiration.py`). **Validation (#5) still open** |
 | M8 Step 1b scientific core, suites, synthetic gate, bundle writer, registry, metrics | implemented, 2026-07-30; gate passes 14/14 in-process. **Not yet frozen as a bundle** |
 
@@ -81,7 +81,7 @@ That risk is real whether or not anything is pre-registered.
   `src/respiration.py`, adapted from pulse-radar even-harmonics to all-harmonics phase. **Never
   compared to Masimo `rr_bpm`.**
 - **BR end-to-end accuracy** — never measured, ever.
-- **HR agreement** — pilot only: MAE 0.19/0.50/0.53 bpm, 0 severe, but n=1 subject, 10–46%
+- **HR agreement** — pilot only: MAE 0.19/0.50/0.53 bpm, 0 severe, but n=4 subjects, 10–46%
   coverage, exploratory (the sessions informed the method's design).
 - **AHET criterion** — soft threshold (~1.0), no genuine rejection population.
 - **linalg-free DSP path** (FFT masking replacing `filtfilt`; Gram–Schmidt replacing `linalg.qr`)
@@ -98,7 +98,7 @@ That risk is real whether or not anything is pre-registered.
 | Candidate ranking: magnitude order ≠ credibility order | Confirmed, n=1, no plan yet |
 | Stage 1B lag-10 veto | Designed + scaffolded, **blocked**: zero baseline severe accepts exist post-bin-fix |
 | `elapsed_s` is wall-clock in replay NPZ under `--replay-fast` | Unfixed; use `frame_idx / frame_rate_hz` |
-| `guard_cardiac_candidate_v1` not promoted | `experiments/exp_eca_modes/config_guard_v1.yaml` now exists (the old "`experiments/` empty" blocker is cleared), but promotion still waits on evidence: the only real numbers are n≤2 per bucket, single-subject, `exploratory_non_frozen` |
+| `guard_cardiac_candidate_v1` not promoted | `experiments/exp_eca_modes/config_guard_v1.yaml` now exists (the old "`experiments/` empty" blocker is cleared), but promotion still waits on evidence: the only real numbers are n≤2 per bucket, four subjects, `exploratory_non_frozen` |
 | Canonical Step 1a bundle: 2 payload hashes are CRLF-era | Resolved as a documented erratum (`HISTORY.md`, 2026-07-30). Bundle deliberately unmodified per §6.1 |
 
 ### Not started

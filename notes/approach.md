@@ -365,7 +365,7 @@ outputs use the unchanged `delta_before_mean` phase mapping, six preregistered
 \(H\)/suppression arms, separate recorded/rerun lock estimands, the exact
 non-overlapping 30 s grid, and Masimo-independent radar artifacts. `k=0` is
 retained as lock-selection-in-sample diagnostics; only `k>=1` supports
-comparative accuracy. All eight captures remain single-subject
+comparative accuracy. All eight captures span four subjects (corrected 2026-08-03) and remain
 development/apparent evidence with approximate timing, protocol-stratified
 descriptive summaries, and no production-promotion claim.
 
