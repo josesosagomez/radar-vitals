@@ -9768,3 +9768,58 @@ origin for captures taken from 2026-08-04 onward.
 **Next:** the three new captures. Taken with this build they will carry a true origin, which
 makes them the first data able to discharge M2 done-when #5 and the first clean test set for
 the BR bin-selection feature study.
+
+## 2026-08-04 - Session close: HANDOFF rewritten for a fresh chat
+
+**Set out to do:** update the markdown files and rewrite `HANDOFF.md` so a new chat can resume
+this work, per CLAUDE.md §10.
+
+**Worked (with evidence):**
+
+- **`HANDOFF.md` rewritten from scratch**, 605 lines -> 261. It had accumulated historical
+  narrative that belongs in this file, and several sections whose premises had since been
+  resolved (the whole of the old §3, "ACTIVE TASK — warmup range-bin selection", is now a
+  settled question). Restructured to CLAUDE.md §10.1's shape: snapshot, current state, active
+  work, in-flight piece, settled questions, gotchas, pointers.
+- **Every path and factual claim was verified before being written**, not copied forward:
+  all 30-odd referenced files confirmed to exist; `test_default_path_is_bit_identical` present
+  in `tests/test_clutter.py`; `_HR_STATIONARITY_MAX_BPM = 5.0` at `src/comparator.py:27`;
+  `src/vitals.py:523` confirmed to be the `f_r_hz is None or f_r_is_outlier` branch;
+  `git stash@{0}` still present; HEAD `044ee47`; suite 2087 passed / 5 skipped. Both M8
+  authority documents re-hashed and matched (`9294cb05…`, `b8625f6e…`).
+- **New "Settled questions — do not re-open without new data" section** consolidating four
+  things that repeatedly get re-proposed: static clutter removal (measured, rejected), the 5-bin
+  relock tracker (inert, do not port the relock half), warmup selection as the HR coverage
+  bottleneck (it is not — AHET is), and the respiration-collapse fix (landed, do not re-open).
+- **Recorded the holdout contamination as a gotcha.** `massimo4`-`massimo7` were scored under
+  two operating points of the same policy family, so they are no longer a clean holdout for any
+  bin-policy question. The agreed plan resolves it by moving them into training and testing on
+  the three new captures, but a chat that did not know would draw a wrong conclusion.
+- **Recorded the pre-M2-fix lock trap as a gotcha**: `massimo1`, `massimo2` and `sweep` have a
+  `run_metadata.json` `locked_bin` chosen by buggy code; re-derive with `run_warmup_selection`
+  rather than trusting it (current code gives 27, 26, 26).
+- **`notes/capture_inventory.md`** carries the authoritative Subject map and the agreed
+  train/test split; `notes/protocol.md` carries the approved recovery arm and its screening
+  conditions; `notes/analysis_prespec.md` carries the pending 3-arm edit banner. All current.
+
+**Failed / did not work, and why:**
+
+- **The feature study is designed but wholly unimplemented**, and `HANDOFF.md` §4.2 says so
+  explicitly rather than implying scaffolding exists. Roughly half the candidate features are
+  already in the two diagnostic CSVs; branch agreement between the fft/ha/stft BR estimators is
+  **not recorded anywhere** and needs a `diagnose_bin_sweep.py` extension plus a re-run.
+- **A join hazard is flagged and not yet resolved:** the two feature-source CSVs come from
+  different runs at different times. They share the frozen grid and bin set so the join is
+  well-defined, but it must be verified row-for-row — a silent mismatch would corrupt every
+  feature downstream.
+- **The M8 Step 1b ceremony question is raised, not answered.** Its gate-bundle and
+  pre-data-authorization apparatus was designed under the pre-registration discipline, and M0 is
+  gone. It is not M0 and did not die with it, but it costs real time and deserves a decision
+  before anyone builds to its requirements.
+
+**Retired / no longer used:** the old `HANDOFF.md` §3 framing of warmup range-bin selection as
+the active task, and its §8 capture-stage section (a one-time 2026-07-30 measurement, preserved
+in this file, compressed to a single gotcha about what is now unguarded).
+
+**Next:** the user's three new captures. Then the BR feature study (`HANDOFF.md` §4.2 build order),
+and/or the M8 real-data arm, which is the paper's headline and independent of the bin work.
