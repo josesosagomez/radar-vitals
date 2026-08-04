@@ -9823,3 +9823,429 @@ in this file, compressed to a single gotcha about what is now unguarded).
 
 **Next:** the user's three new captures. Then the BR feature study (`HANDOFF.md` §4.2 build order),
 and/or the M8 real-data arm, which is the paper's headline and independent of the bin work.
+
+## 2026-08-04 - BR bin-selection pre-flight: the feature study is a NO-GO, and a zero-parameter rule beats production
+
+**Set out to do:** start the BR feature study designed in `HANDOFF.md` §4.2 — learn a
+per-window range-bin selection rule for breathing rate from radar-side features only.
+User decisions taken first: the rule selects **per 30 s window** (that is where the
+measured headroom is), and it **always emits** (no tuned abstain threshold — abstaining is
+what made the previous frozen policy miss its coverage criterion).
+
+**Worked (with evidence):**
+
+Built and committed the study's measurement apparatus, all four pieces new:
+
+* `src/br_features.py` — keyed one-to-one merge of the bin-sweep and signal-presence
+  tables, the radar-side feature set, within-window z-scoring, and the integrity guards.
+* `src/br_bin_search.py` — selection rules, scoring, exhaustive signed-z-score search,
+  leave-one-subject-out CV, and the permutation null.
+* `scripts/br_bin_preflight.py` — the run, with a go/no-go written into the script.
+* `tests/test_br_bin_study.py` — 31 tests. Suite went 2087 -> **2118 passed, 5 skipped**;
+  no regressions.
+
+Evidence: `results/diagnose/br_bin_preflight/20260804T192908Z/`, git commit
+`a9a2416`, tree clean, seed 20260804. Inputs by SHA-256: bin_sweep `20260804T131040Z`
+`windows.csv` = `47802e32…8ebdea9`; signal_presence `20260731T155946Z` `windows.csv` =
+`92ceb8c5…390f7db3`.
+
+Scope: frozen 600-frame grid, **`k>=1` only** (`notes/analysis_prespec.md` §7 labels `k=0`
+`lock_selection_in_sample`) = 120 windows; **105 admitted** under the frozen BR gate.
+Labels are reconstructed from `start_wall_utc` and are APPROXIMATE for all eight captures.
+
+**The result that matters — a rule with NO fitted parameters beats production.** Pooled,
+admitted gate:
+
+| rule | dof | coverage | MAE bpm | RMSE | hit±3 | n scored |
+|---|---|---|---|---|---|---|
+| random valid bin (null) | 0 | 1.00 | 3.370 | 4.770 | 0.520 | 105 |
+| `P0_static_lock` re-derived (production) | 0 | **0.867** | 2.679 | 3.955 | 0.670 | 94 |
+| max energy | 0 | 1.00 | 2.375 | 3.577 | 0.724 | 105 |
+| **medoid consensus** | **0** | **1.00** | **2.291** | **3.229** | **0.733** | 105 |
+| oracle (uses the reference) | ∞ | 1.00 | 1.103 | 1.692 | 0.914 | 105 |
+
+The medoid rule — among `br_valid` bins report the one whose `br_bpm` is closest to the
+window median over valid bins — improves on production on **both** axes at once:
+coverage 0.867 -> 1.00 and MAE 2.679 -> 2.291. Paired per-subject delta on the common
+scored windows: **+0.473 bpm, SE 0.266, n=4**, medoid better in **3 of 4** subjects
+(A +0.32, B −0.09, C +0.49, D **+1.18**). Oracle-normalised skill: medoid **0.476** vs
+production's **0.305**.
+
+**Failed / did not work, and why:** **the feature study itself. Verdict NO-GO on both
+declared criteria, under both labelling gates.**
+
+* **Gain over the zero-parameter medoid: −0.093 bpm** (needed ≥ +0.5). The searched rule's
+  honest out-of-fold MAE is **2.384** against the medoid's **2.291** — the eight-feature
+  search is *worse* than the rule with no parameters.
+* **Fold stability: 3 distinct sign vectors across 4 folds** (needed 1). The rule is not
+  identifiable at this n. Folds: hold-A and hold-B both chose
+  `{phase_std:+1, br_snr:+1, temporal_dev:−1}`; hold-C chose
+  `{phase_std:+1, spectrum_stage:+1, temporal_dev:−1}`; hold-D chose
+  `{rel_db:+1, energy_rank:−1, temporal_dev:−1}`. Fold test MAE ranged **0.763 to 3.186**.
+* **The permutation null explains why the in-sample number looked good.** 300 draws, errors
+  shuffled within each window across its valid bins, the entire 834-vector search re-run on
+  every draw: searching *pure noise* reaches a best in-sample MAE of **2.665 on average**
+  (best 2.288), against a null of 3.370. Observed in-sample was 2.056 (p = 0.000), so there
+  **is** real signal — it simply does not survive cross-validation, and most of the
+  apparent in-sample gain is the search finding shape in noise.
+* **The degenerate control passes the learned rule.** "Always bin 24" scores in-sample MAE
+  **2.269**, better than the searched rule's out-of-fold 2.384.
+* **Rank correlation is not selection skill, measured directly.** `temporal_dev` has the
+  highest mean within-window Spearman against error (**+0.389**) yet its argmax rule gives
+  MAE **2.799**, clearly worse than `dev_consensus` (ρ +0.351, MAE **2.291**). A feature
+  screen on ρ would have picked the wrong feature. Any future gate must be on argmax MAE.
+
+The `finite` (ungated-label) sensitivity gives the identical ordering and the identical
+NO-GO: null 3.544, P0 2.738, max-energy 2.595, medoid 2.539, oracle 1.226; searched rule
+out-of-fold 2.537, gain **+0.003** bpm, again 3 distinct vectors across 4 folds. **The
+choice of labelling gate does not change any conclusion.**
+
+**Two bugs found, both by controls that exist for exactly that purpose:**
+
+1. **`conf_ord` was a dead feature.** `_SOURCE_OF_FEATURE` pointed it at the raw
+   `br_confidence` *strings*, so every value coerced to NaN, z-scored to a constant zero,
+   and contributed nothing to any ranking — while still inflating the reported size of the
+   search space and therefore the permutation null calibrated against it. Caught by the
+   liveness detector (`finite_frac_on_valid = 0.0`) on the first run, fixed, re-run. The
+   fix did not change the winner or the verdict; it makes the reported 834-vector space
+   honest. Regression test added.
+2. **`is_locked_bin` in the sweep CSV is the pre-M2-fix recorded lock**, so it is banned as
+   both feature and baseline; `P0` is re-derived per capture with `run_warmup_selection`.
+   Re-derivation moved three locks: massimo1 23->27, massimo2 20->26, sweep 21->26.
+
+**Label census (new, and not previously recorded):** the frozen BR admissibility gate drops
+**15 of 120** `k>=1` windows — massimo7 −5, massimo3/4/5 −3 each, massimo6 −1, and
+**zero** from massimo1/massimo2/sweep. **Every exclusion is by stationarity; none by
+availability.**
+
+**Retired / no longer used:** nothing deleted. The **multi-feature learned bin rule is
+stopped**, not retired — the apparatus is committed and re-runnable, and the binding
+constraint is n=4 subjects, not the feature set. Do not resume it by adding features;
+resume it, if at all, with more subjects. `HANDOFF.md` §4.2's claim that
+`warmup_settled_energy_db` ("settled energy dB") is available as a feature was **false** —
+that column is empty on all 1792 rows of the sweep.
+
+**Also noticed, not acted on:** `HANDOFF.md` §3 asserts the pre-registration purge left
+only prohibitions. That is **not true of the code**: `src/comparator.py:4` still calls the
+comparator specs "pre-registered", and `scripts/diagnose_signal_presence.py` (×2),
+`scripts/stage1b_exploratory_motion.py` (×2) and `scripts/stage1b_temporal_continuity.py`
+(×2) still use "pre-specified"/"PRE-SPECIFIED" affirmatively. Seven sites, all in code
+comments/docstrings, none surfaced to a reader of the manuscript. Left for a user decision
+rather than swept mid-task.
+
+**Next:** freeze the medoid + always-emit rule as the v1 BR bin rule with a prediction
+interval derived from the fold spread and a paired-delta success criterion (never an
+absolute threshold — per-subject oracle MAE varies 0.26 to 1.35 across A-D, so subject
+difficulty dominates any absolute number). Then score it **once** on the three new
+captures when they arrive. The branch-agreement columns (§4.2 item 1) remain unbuilt and
+are now optional: `br_confidence` already discretises branch agreement, and it was the
+weakest live feature in this run.
+
+## 2026-08-04 - Pre-registration vocabulary purged from code; the notes/ specs are NOT done
+
+**Set out to do:** act on the finding logged earlier today that `HANDOFF.md` §3's claim — that the
+2026-08-03 purge left only prohibitions — is false. User approved purging the sites.
+
+**Worked (with evidence):** a full-repo sweep found the residue is much larger than the seven sites
+first reported, and splits into three populations with very different risk.
+
+**Purged in full — all affirmative uses in code.** `src/`, `scripts/` and `tests/` now contain
+**zero** affirmative uses of "pre-registered" / "pre-specified" / "deposited"; the only two
+surviving matches are prohibitions (`src/comparator.py:7`, `scripts/br_bin_preflight.py:504`,
+both of the form "nothing in this project is pre-registered"). Sites fixed:
+
+| file | sites | change |
+|---|---|---|
+| `src/comparator.py` | 1 | "pre-registered and binding" → "frozen and binding", plus the transparency-not-timing framing and a CLAUDE.md §4 pointer |
+| `src/m4/window_grid.py` | 2 | "amendment to a pre-registered analysis decision" → "…to a frozen analysis decision" |
+| `src/m4/manifest.py` | 1 | "inside a pre-registered result" → "inside a headline result" |
+| `scripts/diagnose_signal_presence.py` | 2 | "one pre-specified bin" → "a single fixed bin" |
+| `scripts/stage1b_temporal_continuity.py` | 4 | "PRE-SPECIFIED … before any run" → "FIXED in the module docstring and applied unchanged" (the timing claim dropped, not reworded) |
+| `scripts/stage1b_exploratory_motion.py` | 2 | "the failed pre-specified experiment" → "the failed round-1 experiment"; "comparator must be pre-specified" → "written down and applied unchanged" |
+| `scripts/stage1b_lag_statistic.py` | 9 | "numeric pre-registration (Sec 7c)" → "numeric specification (Sec 7c)"; "the planned new confirmatory capture" → "…held-out capture" |
+| `tests/test_m4_manifest.py` | 1 | "out of a pre-registered analysis" → "out of a frozen analysis" |
+
+**Also fixed — the single worst site, which was not in code.** `notes/comparator_prespec.md`
+opened with "**PRE-REGISTERED 2026-07-14, before the next capture.**" — an unqualified timing
+claim at the head of a spec that is binding on every agreement number in the paper.
+`notes/analysis_prespec.md` already names it a "companion spec, same status" and carries the
+2026-08-03 void banner, so the two documents flatly contradicted each other and a reader opening
+the comparator spec alone saw only the false claim. Replaced with the same banner pattern its
+sibling already uses (title and filename left alone, exactly as the 2026-08-03 purge did, because
+every citation in the repo is of the form `notes/comparator_prespec.md §2.1`). Its §2.1
+"pre-deposit clarification … not a post-deposit amendment" was also corrected — no deposit or DOI
+ever existed, so the distinction it drew is void.
+
+Suite **2118 passed, 5 skipped** after the purge — unchanged, no regressions.
+
+**Failed / did not work, and why: NOT ATTEMPTED, deliberately.** Two populations were left alone
+because doing them unilaterally would be either risky or a naming decision that is not mine:
+
+1. **"confirmatory" as a data-role concept — 41 sites.** `src/m4/manifest.py` (8),
+   `tests/test_m4_manifest.py` (5), `notes/analysis_prespec.md` (11),
+   `notes/note_stage1b_lag_statistic.md` (12), plus 5 elsewhere. This is not loose prose: it is the
+   M5/M6/M7 data-role system, `manifest.py` **quotes `analysis_prespec.md` §3.1 verbatim** in
+   comments and in runtime error strings that tests match on, and `DataRole` enum semantics hang
+   off it. Changing the code without changing the spec breaks the citation correspondence; changing
+   both needs a replacement term chosen by the user ("headline"? "evaluation"? "primary"?). Note
+   `notes/capture_inventory.md` and `scripts/stage1b_exploratory_motion.py` use it as a **denial**
+   ("never confirmatory", "EXPLORATORY, NOT CONFIRMATORY"), which is the correct framing and should
+   survive whatever is decided.
+2. **`notes/` deposit/pre-specification prose — 33 sites** across `analysis_prespec.md` (8),
+   `protocol.md` (5), `note_stage1b_lag_statistic.md` (5), `comparator_prespec_br.md` (5),
+   `comparator_prespec.md` (4), `ethics_amendment_hr_recovery.md` (3), and 3 others. Several are
+   load-bearing gates written in deposit terms (e.g. `protocol.md`: "blocking the pre-registration
+   deposit (M0)") that need re-deriving, not find-and-replace, now that M0 is gone.
+
+**Confirmed clean, contrary to expectation:** `JOURNAL_PAPER.md` and `THIRD_CHAPTER.md`. Every
+match in both is a prohibition or part of the 2026-08-03 void banner. The manuscript purge held;
+it was only the code and the specs that were missed.
+
+**Retired / no longer used:** the "PRE-REGISTERED 2026-07-14, before the next capture" header of
+`notes/comparator_prespec.md`, retracted in place with the retraction recorded in the new banner
+rather than silently deleted.
+
+**Next:** a user decision on the two untouched populations above — specifically the replacement
+term for the "confirmatory" data role, since that one propagates into enum semantics and runtime
+error strings. `HANDOFF.md` §3's "every surviving mention is a prohibition" is now true of code and
+of the manuscript files, and still false of `notes/`.
+
+## 2026-08-04 - "Confirmatory" data role renamed to "primary" across spec and code together
+
+**Set out to do:** close population 1 of the pre-registration vocabulary purge — the 41 sites where
+"confirmatory" named the M5/M6/M7 data role. User chose the replacement term: **primary**.
+
+**Worked (with evidence):** done as a single coordinated spec+code change, because
+`src/m4/manifest.py` quotes `notes/analysis_prespec.md` §3.1 verbatim in comments and in a runtime
+error string; changing either alone would have broken the citation correspondence.
+
+| file | sites |
+|---|---|
+| `notes/analysis_prespec.md` (the authority) | 11 |
+| `notes/note_stage1b_lag_statistic.md` | 12 |
+| `src/m4/manifest.py` | 6 |
+| `tests/test_m4_manifest.py` | 5 |
+| `notes/capture_inventory.md` | 2 |
+| `notes/comparator_prespec_br.md` | 2 |
+| `scripts/stage1b_exploratory_motion.py` | 2 |
+| `notes/note_candidate_ranking.md` | 1 |
+
+Mapping used throughout: "the confirmatory evidence base" → "the primary evidence base"; "never
+confirmatory/headline" → "never primary/headline"; "excluded from confirmatory metrics" → "excluded
+from primary metrics"; "the confirmatory capture" → "the primary capture"; denials keep their force
+("EXPLORATORY, NOT PRIMARY", "Nothing here becomes primary", "none is primary").
+
+Suite **2118 passed, 5 skipped** — unchanged. Repo-wide, the only surviving occurrences of
+"confirmatory" outside `HISTORY.md`/`plans/` are the four prohibitions themselves (`CLAUDE.md` §4,
+`HANDOFF.md` §3, and the void banners in `JOURNAL_PAPER.md` / `THIRD_CHAPTER.md`).
+
+**A naming collision found and handled, worth knowing about:** `notes/analysis_prespec.md` was
+already using "primary" in **two** unrelated senses — the primary *endpoint* (HR, as opposed to the
+secondary BR) and the primary *CI recipe / estimator* (as opposed to the sensitivity analyses). The
+new data-role sense is a third. A blind find-and-replace would have corrupted §2's meaning outright:
+"BR ... has NO **confirmatory** evidence floor" would have become "no **primary** evidence floor",
+sitting three lines below "Option A below is the **HR (primary-endpoint) evidence floor**" — two
+near-identical sentences meaning different things. That one site was rewritten instead of replaced,
+to "**carries no evidence floor for primary/headline claims**". Every other site was checked
+individually for the same collision; none of the rest was ambiguous, because they all carry a
+disambiguating noun ("primary evidence base", "primary/headline metrics", "primary capture").
+
+**Also harmonised:** an earlier edit today had rendered the same concept as "held-out capture" in
+`scripts/stage1b_lag_statistic.py`. Changed to "primary capture" so the repo has one vocabulary for
+one concept, not two.
+
+**Failed / did not work, and why:** nothing failed. **Population 2 remains untouched and is now the
+only outstanding item: 32 sites of deposit / pre-specification prose in `notes/`** —
+`analysis_prespec.md` (8), `protocol.md` (5), `note_stage1b_lag_statistic.md` (5),
+`comparator_prespec_br.md` (4), `comparator_prespec.md` (4), `ethics_amendment_hr_recovery.md` (3),
+and 3 others. Several are load-bearing gates written in deposit terms — e.g. `protocol.md`'s "Open,
+and blocking the pre-registration deposit (M0)" names a gate that no longer exists — so they need
+re-deriving against the post-M0 world, not find-and-replace. Deliberately left for a separate pass.
+
+**Retired / no longer used:** "confirmatory" as project vocabulary. It survives only inside the
+rules that forbid it and in the append-only record.
+
+**Next:** population 2 (32 sites), which is a re-derivation job rather than a rename.
+
+## 2026-08-04 - Deposit prose re-derived against the post-M0 world; purge complete
+
+**Set out to do:** close population 2 — the deposit / pre-specification prose in `notes/`. Treated
+as a re-derivation rather than a rename, because several sites named machinery that no longer
+exists. Four user decisions taken first (all 2026-08-04).
+
+**Worked (with evidence):**
+
+**The four decisions, and what each changed:**
+
+1. **The evidence floor is BINDING AS ENGINEERING.** Option A survives M0's removal with full
+   force: per-session ≥ 1 evaluable window, per-subject ≥ 4, study-wide ≥ 8 of 10 subjects, LoA CI
+   half-width ≤ 5 bpm, natural-drop miss rule. A below-floor result **narrows the claim and is
+   logged** — it is not ignored. Recorded as a status banner at `notes/analysis_prespec.md` §2, and
+   the closed item removed from `protocol.md`'s open list. The reasoning that it must be fixed
+   before the yield it judges is seen never depended on a deposit; it is the §4 prospective-only
+   rule, which also survived.
+2. **`notes/comparator_prespec_br.md` is now a BINDING engineering spec**, not "DRAFT for the M0
+   deposit … READY FOR THE M0 FREEZE — NOT yet frozen". Its cross-review was complete (M3R-01…48)
+   and `src/comparator.py:br_reference` already implemented it; it was waiting on an act that can
+   no longer happen. Banner replaced with the one its two siblings carry. Its first use under that
+   status is recorded in the file: the 2026-08-04 BR pre-flight, whose primary labelling gate is
+   its §2.2 `admitted`.
+3. **`notes/ethics_amendment_hr_recovery.md` is a RECORD AS SUBMITTED — body not edited.** Its
+   three uses of "pre-specified quality criteria" are the wording sent to the IBEC board, so
+   editing them would falsify a submission record — the same reasoning that forbids "fixing" the
+   Step 1a bundle digests. A dated header was added noting the vocabulary is as-submitted, that
+   project rules changed 2026-08-03, and that no timing claim from it may be repeated elsewhere.
+   Verified: `git diff --stat` shows **10 insertions, 0 deletions**.
+4. **The 2-vs-3-session contradiction now triggers on "before any M5 pilot session"** (was "before
+   M0 is deposited"). Recorded in both files. It explicitly does **not** block the three new BR
+   captures (E/F/G), which are not M5.
+
+**One factual error corrected, not reworded.** `notes/protocol.md` still asserted: *"The M0 gate is
+unaffected and still stands … no study capture may be taken until the pre-registration is
+deposited … Nothing about 2026-08-03 makes a study session capturable."* **That gate was removed
+with M0 on 2026-08-03**, and the user is already collecting subjects E/F/G. The paragraph now
+states plainly that there is no governance gate before study capture, that the previous text was
+wrong, and that what actually governs capture is unchanged and is not governance: ethics
+`24IBEC051`, the settle criterion, the clock-sync step, the protocol itself.
+
+**Sites changed:** `notes/analysis_prespec.md` (10), `notes/protocol.md` (5),
+`notes/comparator_prespec.md` (5), `notes/comparator_prespec_br.md` (4),
+`notes/plan_eca_forbidden_zone.md` (6 — **a file missed by the earlier count entirely**),
+`notes/note_stage1b_lag_statistic.md` (5), `src/comparator.py` (1), plus one each in
+`capture_inventory.md`, `note_candidate_ranking.md`, `approach.md`, and the ethics header.
+
+Notable individual re-derivations rather than renames:
+- `analysis_prespec.md` §4 amendment mechanism required "a **new Zenodo version DOI** under the
+  concept DOI" and declared an "un-re-deposited change void". No Zenodo record ever existed. The
+  recording mechanism is now a dated `HISTORY.md` entry; **the prospective-only requirement — the
+  part that ever mattered — is untouched.**
+- `comparator_prespec_br.md` §5 said a data-triggered comparator switch on M6 "would void the
+  pre-registration and is forbidden". Now: it "is **forbidden** — it would mean choosing the
+  comparator by the answer it gives, which is the exact failure this spec exists to prevent." The
+  prohibition is strictly stronger without the dead machinery.
+- Four "PRE-DEPOSIT CLARIFICATION" banners in `comparator_prespec.md` / `comparator_prespec_br.md`
+  justified themselves by position relative to a deposit. They now justify themselves by the fact
+  that nothing had been scored under the ambiguity — which is the real argument, and true.
+
+Suite **2118 passed, 5 skipped** throughout — unchanged across all three purge passes today.
+
+**Failed / did not work, and why:** nothing failed, but the site count was wrong three times in a
+row and each correction came from re-running the sweep rather than from reasoning. The first pass
+reported 7 sites, the second 74, the third 32; the true totals were larger each time because the
+`grep -v` filters used to separate affirmative uses from prohibitions kept hiding real hits
+(`notes/plan_eca_forbidden_zone.md` was excluded from a count entirely, and `src/comparator.py:46`
+survived two passes). **Lesson for the next sweep: classify every match by hand and print the
+classification; never let a filter decide what is a prohibition.**
+
+**Retired / no longer used:** the M0 capture gate in `notes/protocol.md`; the Zenodo DOI amendment
+mechanism in `analysis_prespec.md` §4; the "READY FOR THE M0 FREEZE" status of the BR comparator.
+
+**Next:** nothing outstanding on vocabulary. Every affirmative use of "pre-registered",
+"pre-specified", "frozen before data", "deposited" and "confirmatory" is gone from `src/`,
+`scripts/`, `tests/`, `notes/` and both manuscript files. What remains is prohibitions, the
+append-only record (`HISTORY.md`, `plans/`), and the deliberately preserved IBEC submission record.
+
+## 2026-08-04 - BR bin rule v1 FROZEN: medoid consensus with always-emit, zero fitted parameters
+
+**Set out to do:** Step 2 of the BR bin study — freeze a rule, with a prediction interval and a
+paired-delta success criterion, ready to score once on the three new captures.
+
+**Worked (with evidence):**
+
+**FROZEN: `medoid_consensus_always_emit` v1.** Among the `br_valid` bins of a window, report the
+one whose `br_bpm` is closest to the median of `br_bpm` over those same valid bins; tie-break by
+higher energy, then lower bin index; emit whenever at least one bin is valid.
+
+Artifact `results/diagnose/br_bin_rule/20260804T204634Z_freeze/frozen_rule.json`,
+**SHA-256 `cda0b35211b721131c36229095482e5d1839a2563fd47ebe0e72b8a1174f81af`**, git commit
+`a9a2416`, seed 20260804. Inputs by hash: bin_sweep `20260804T131040Z` `47802e32…8ebdea9`,
+signal_presence `20260731T155946Z` `92ceb8c5…390f7db3`. Rule spec is declarative in
+`src/br_bin_search.py:BR_BIN_RULE_V1` so it can be re-implemented from the artifact without
+reading the code.
+
+New: `scripts/br_bin_rule.py` (freeze / offset-scan / test), `tests/test_br_bin_rule.py` (22
+tests). Suite **2118 → 2140 passed, 5 skipped**, no regressions.
+
+**Training evidence** — subjects A–D, `k>=1`, admitted gate, 105 scored windows:
+
+| rule | dof | coverage | MAE bpm | RMSE | hit±3 |
+|---|---|---|---|---|---|
+| null (random valid bin) | 0 | 1.000 | 3.812 | 5.286 | 0.533 |
+| `P0_static_lock` re-derived — production | 0 | **0.867** | 2.679 | 3.955 | 0.670 |
+| **FROZEN medoid + always-emit** | **0** | **1.000** | **2.291** | **3.229** | **0.733** |
+| oracle (uses the reference) | ∞ | 1.000 | 1.103 | 1.692 | 0.914 |
+
+Per-subject MAE (A/B/C/D): rule **0.725 / 1.663 / 2.822 / 2.856**; P0 1.012 / 1.461 / 2.960 /
+3.949; oracle 0.259 / 0.889 / 1.354 / 1.323. Paired delta P0 − rule on common scored windows:
+**mean +0.473 bpm, SE 0.266, rule better in 3 of 4** (A +0.317, B −0.093, C +0.486, D +1.183).
+
+**Why this rule and not a learned one:** the searched nine-feature rule lost to it out of fold
+(2.384 vs 2.291) with an unstable sign vector — see the pre-flight entry above. With **nothing
+fitted there is no selection optimism**, so the training-subject score *is* a generalisation
+estimate rather than an upper bound on one. Recorded in the artifact and asserted by test:
+**with no fitted parameters, leave-one-subject-out and per-subject scoring are the same numbers**,
+because there is no training step for a fold to hold out from.
+
+**Predictions recorded before any new capture exists** (t-based, n=4 subjects):
+
+| quantity | mean | 95 % prediction interval |
+|---|---|---|
+| MAE, one new subject | 2.017 | **[0.00, 5.66]** (lower bound floored; MAE cannot be negative) |
+| MAE, mean of three new subjects | 2.017 | **[0.00, 4.51]** |
+| paired delta, one new subject | 0.473 | **[−1.42, +2.36]** |
+| paired delta, mean of three | 0.473 | **[−0.82, +1.77]** |
+
+**These are deliberately wide and the delta interval spans zero. That is the finding at four
+subjects, not a defect of the method.** A point prediction is exactly what made the previous
+policy's holdout read as a failure (46 % coverage against a predicted 68 %).
+
+**Success criteria, frozen:** PRIMARY — mean paired delta `MAE(P0) − MAE(rule)` over the new
+subjects > 0, on windows where both rules report and the reference is admissible. FAILURE — mean
+delta ≤ 0, **or** the rule is worse than P0 in ≥ 2 of 3 new subjects. **No absolute MAE
+threshold**, because per-subject oracle MAE spans 0.26–1.35 bpm across A–D: an absolute bar would
+measure which subjects were recruited, not the rule.
+
+**Coverage is a structural guarantee, not a prediction.** The rule emits whenever any bin is
+valid; P0 only when the locked bin is; so P0's emitting set is a subset and the rule can never
+cover less. A violation is a bug. Asserted against every fixed-bin rule over five seeds in
+`tests/test_br_bin_rule.py`, not left as a criterion to be checked after the fact.
+
+**Label-origin sensitivity — run once, after the freeze, on the frozen rule only.** Fixed 3-point
+grid {0, +7.5, +15} s added to `frame0_epoch`, covering the 5–15 s `start_wall_utc` error
+(`HANDOFF.md` §4.3). Evidence
+`results/diagnose/br_bin_rule/20260804T204716Z_offset-scan/`:
+
+| offset | rule MAE | P0 MAE | rule coverage | paired delta |
+|---|---|---|---|---|
+| 0 s | 2.291 | 2.679 | 1.000 | +0.473 |
+| +7.5 s | 2.302 | 2.586 | 1.000 | +0.465 |
+| +15 s | 2.337 | 2.590 | 1.000 | +0.487 |
+
+**Rule ordering identical at all three offsets**; rule MAE moves ≤ 0.046 bpm and the paired delta
+≤ 0.022 bpm. **The approximate frame-0 origin is not a threat to this result** — a real relief,
+since it is unfixable for all eight training captures. The scan entry point structurally cannot
+enumerate candidates: it requires `--frozen-rule` and re-scores only what that file names.
+
+**The held-out path is now guarded in code, not by convention.** `--mode test` requires
+`--frozen-rule`, `--i-have-frozen-the-rule` **and** `--subject-map`, and the script contains no
+search machinery at all (asserted by a test that greps its own source for `sign_vectors`). Subject
+map is mandatory rather than inferred because subject identity is not machine-recorded anywhere
+and every paired delta depends on it. This is the guard `massimo4`–`massimo7` lacked until after
+they were spent.
+
+**Failed / did not work, and why:** nothing failed. Two implementation notes worth keeping:
+`prediction_interval` uses a ten-entry Student-t table rather than `scipy.stats.t.ppf`, because
+`from scipy import stats` fails with exit 127 and no traceback when the env's `python.exe` is
+invoked by absolute path — a silent import failure inside a freeze artifact's provenance is the
+worse trade. And `src/br_features.py:assert_grid` was split, with the capture-agnostic shape
+checks moved to `assert_structure`, so captures E/F/G are still structurally validated despite
+having no entry in the frozen window-count table.
+
+**Retired / no longer used:** nothing. The searched-rule apparatus stays committed and re-runnable
+— it is the go/no-go for any future attempt with more subjects.
+
+**Next:** score the frozen rule **once** on the three new captures when they land:
+`python -X utf8 scripts/br_bin_rule.py --mode test --frozen-rule <path> --i-have-frozen-the-rule
+--sweep-run <dir> --presence-run <dir> --subject-map <suffix>=E <suffix>=F <suffix>=G`. Those
+captures need a `diagnose_bin_sweep` and a `diagnose_signal_presence` run first. Separately, the
+2-vs-3-session spec amendment is due before any M5 pilot session.

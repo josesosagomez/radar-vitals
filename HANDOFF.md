@@ -1,6 +1,6 @@
 # Handoff — resume here
 
-> Read this and `CLAUDE.md` before doing anything. **State verified 2026-08-04.**
+> Read this and `CLAUDE.md` before doing anything. **State verified 2026-08-04 (evening).**
 > `HISTORY.md` is the append-only log; this file is the always-current summary. Where they
 > disagree, this file is wrong and should be fixed.
 
@@ -27,7 +27,7 @@ Two things the one-liner hides, both of which have caused real mistakes:
 
 **Infrastructure is strong; the science is thin, and what exists is exploratory.**
 
-Active branch **`vital_signs_ahmed_v10`**, HEAD `044ee47`. Suite **2087 passed, 5 skipped**
+Active branch **`vital_signs_ahmed_v10`**, HEAD `a9a2416`. Suite **2140 passed, 5 skipped**
 (verified 2026-08-04). The 5 skips are honest absences (4 OSR-03 tests need replay artifacts that
 no longer exist), not passes.
 
@@ -102,12 +102,59 @@ window (840 cells over the three 0%-coverage captures):
 its hard gate on study captures. M5/M6/M7 are no longer blocked by governance.
 
 **Nothing in this project is pre-registered.** Agreement results are exploratory/descriptive,
-never confirmatory. Both writing files were **purged**, not flagged — a sweep confirms every
-surviving mention is a prohibition. **Never reintroduce** "pre-registered", "pre-specified",
-"frozen before data", "registered \<date\>", "deposited" or "confirmatory" about this study's own
-specs or results, in any file, manuscript, title or talk. Full rule: `HISTORY.md` 2026-08-03
-("Pre-registration language purged") and CLAUDE.md §4. It governs over residual `M0` mentions in
-the append-only review logs under `plans/`.
+never confirmatory. **Never reintroduce** "pre-registered", "pre-specified", "frozen before data",
+"registered \<date\>", "deposited" or "confirmatory" about this study's own specs or results, in
+any file, manuscript, title or talk. Full rule: `HISTORY.md` 2026-08-03 ("Pre-registration language
+purged") and CLAUDE.md §4. It governs over residual `M0` mentions in the append-only review logs
+under `plans/`.
+
+**Purge status, re-swept and largely closed 2026-08-04. One population remains:**
+
+- **`JOURNAL_PAPER.md` / `THIRD_CHAPTER.md` — CLEAN.** Every match is a prohibition or part of the
+  void banner. The manuscript purge held; it was code and specs that had been missed.
+- **`src/` / `scripts/` / `tests/` — CLEAN.** Zero affirmative uses of any banned term.
+- **"confirmatory" — GONE repo-wide.** Renamed to **`primary`** on 2026-08-04 (user decision)
+  across spec and code in one change, 41 sites: `analysis_prespec.md` (11),
+  `note_stage1b_lag_statistic.md` (12), `src/m4/manifest.py` (6), `tests/test_m4_manifest.py` (5),
+  and 7 elsewhere. **`primary` is now the project's word for the M6/M7 data role** — "the primary
+  evidence base", "never primary/headline", "excluded from primary metrics". The only surviving
+  occurrences of "confirmatory" are the prohibitions themselves.
+  > **Watch the collision when you write.** `analysis_prespec.md` uses "primary" in **three**
+  > senses now: the primary *endpoint* (HR, vs secondary BR), the primary *CI recipe/estimator*
+  > (vs the sensitivity analyses), and this data role. Always attach a disambiguating noun —
+  > "primary evidence base", "primary/headline metrics", "primary capture" — never a bare
+  > "primary". §2's BR sentence had to be rewritten rather than renamed for exactly this reason.
+- **`notes/` — CLEAN as of 2026-08-04.** The deposit / pre-specification prose was re-derived
+  against the post-M0 world rather than renamed. Detail: `HISTORY.md` 2026-08-04 ("Deposit prose
+  re-derived").
+- **The purge is complete.** Every surviving match repo-wide is a prohibition, the append-only
+  record (`HISTORY.md`, `plans/`), or the preserved IBEC submission record. **If you sweep again,
+  classify every match by hand — `grep -v` filters hid real hits three times today.**
+
+**Four decisions taken 2026-08-04 that outlive the vocabulary work — do not unknowingly reverse:**
+
+1. **The evidence floor is BINDING AS ENGINEERING.** Option A (`analysis_prespec.md` §2a/§2b) kept
+   its force when M0 died: per-session ≥ 1, per-subject ≥ 4, study-wide ≥ 8/10, LoA CI half-width
+   ≤ 5 bpm, natural-drop miss rule. **A below-floor result narrows the claim and is logged.**
+2. **`notes/comparator_prespec_br.md` is BINDING**, no longer "READY FOR THE M0 FREEZE — NOT yet
+   frozen". `src/comparator.py:br_reference` implements it; the 2026-08-04 BR pre-flight used its
+   §2.2 `admitted` as the primary labelling gate.
+3. **`notes/ethics_amendment_hr_recovery.md` is a RECORD AS SUBMITTED.** Its "pre-specified"
+   wording is what went to IBEC. **Do not edit the body** — that would falsify a submission record.
+   A header says so; the file's diff is 10 insertions, 0 deletions.
+4. **The 2-vs-3-session contradiction between `protocol.md` and `analysis_prespec.md` must be
+   resolved BEFORE ANY M5 PILOT SESSION** (was "before M0 is deposited"). It does **not** block the
+   three new BR captures. It needs CLAUDE.md §6 cross-review — the completed M3 review covered only
+   the 2-arm design — and touches the §1 estimand, the §2b per-subject floor denominator and the
+   §2b miss rule.
+
+**Corrected 2026-08-04, and it mattered:** `notes/protocol.md` still asserted *"no study capture may
+be taken until the pre-registration is deposited"* — a hard gate on a deposit that never existed,
+while the user is already collecting E/F/G. **There is no governance gate before study capture.**
+What governs capture is ethics `24IBEC051`, the settle criterion, the clock-sync step and the
+protocol. Separately, `notes/comparator_prespec.md` had opened with "**PRE-REGISTERED 2026-07-14,
+before the next capture**" while `analysis_prespec.md` named it a companion spec carrying the void
+banner; the two contradicted each other. Banner replaced, retraction recorded in place.
 
 **Say this instead, because it is true and still strong:** the comparator and analysis specs are
 written down in full and applied *identically to every estimator compared*. A **transparency**
@@ -132,8 +179,9 @@ the paper has no headline.
 The user is collecting **three new captures from three new people** (subjects E, F, G). The agreed
 plan for the BR bin-selection study:
 
-- **Discovery/training: all 8 existing captures (subjects A–D).**
-- **Test: the 3 new captures, touched once.**
+- **Discovery/training: all 8 existing captures (subjects A–D)** — done, see §4.2.
+- **Test: the 3 new captures, touched once**, with the rule already frozen. **This is the only
+  untouched BR bin-selection holdout that exists**; `massimo4`–`massimo7` are spent (§7).
 
 **Requirements for those captures to be usable** (from `notes/protocol.md`):
 natural breathing — **not** the recovery arm, whose elevated changing BR is a different regime;
@@ -144,39 +192,90 @@ between the 2026-07-13/14 and 2026-07-28 eras — the later captures have static
 Taken with the current build they will also carry a true capture origin (§4.3), making them the
 first data able to **discharge M2 done-when #5**.
 
-### 4.2 The BR feature study — DESIGNED, NOT IMPLEMENTED
+### 4.2 The BR feature study — BUILT, RUN, and a NO-GO. A zero-parameter rule won instead.
 
-Goal: replace/improve warmup's hand-set scoring with a rule learned from radar-side features. The
-deployed rule uses **only radar features**; the reference is used at design time to label, which is
-supervised learning, not tuning-to-the-reference. **The one rule that keeps it honest: never report
-agreement on the data the rule was learned from.**
+**The learned-feature arm is stopped.** It was built, run and measured on 2026-08-04, and it lost
+to a rule with no fitted parameters. Do not resume it by adding features — the binding constraint
+is **n=4 subjects**, not the feature set. Full numbers: `HISTORY.md` 2026-08-04
+("BR bin-selection pre-flight"). Artifacts: `results/diagnose/br_bin_preflight/20260804T192908Z/`.
 
-**Nothing is built.** What exists is raw material in two CSVs:
+**What won — and it is genuinely better than production, on both axes at once.** Pooled over the
+105 admissible `k>=1` windows:
 
-| available now | source |
-|---|---|
-| settled energy dB, energy rank, rel dB in window | `bin_sweep` |
-| BR value / validity / confidence, `f_r_hz`, spectrum stage | `bin_sweep` |
-| **BR peak SNR** (reference-free), phase std | `signal_presence` |
+| rule | dof | coverage | MAE bpm | hit±3 |
+|---|---|---|---|---|
+| random valid bin (null) | 0 | 1.00 | 3.370 | 0.520 |
+| `P0_static_lock` re-derived — **production today** | 0 | 0.867 | 2.679 | 0.670 |
+| **medoid consensus + always-emit** | **0** | **1.00** | **2.291** | **0.733** |
+| oracle (uses the reference) | ∞ | 1.00 | 1.103 | 0.914 |
 
-**Missing, in build order:**
-1. **Branch agreement** between the fft / ha / stft BR estimators — *not recorded anywhere*.
-   `run_window_dsp` computes `fft_r`/`ha_r`/`stft_r` but the sweep keeps only the fused output.
-   Needs a small extension to `diagnose_bin_sweep.py`, then a re-run over all 8 (~8 min).
-2. **The feature table** — join both CSVs; add **spatial consistency** (does this bin agree with its
-   neighbours?) and **temporal stability** (is it steady across windows?). Both derivable by
-   aggregation, no new DSP. **Verify the join row-for-row** — the two CSVs came from different runs;
-   they share the frozen grid and bin set so it is well-defined, but a silent mismatch would corrupt
-   every feature downstream.
-3. **Forward selection on training subjects only**, adding one feature at a time, **recording every
-   combination tried, not just the winner**.
-4. **Freeze, then test once** on the new captures.
+The rule: **among `br_valid` bins, report the one whose `br_bpm` is closest to the window median
+over valid bins; tie-break by higher energy; always emit.** Paired per-subject delta against
+production **+0.473 bpm, SE 0.266, better in 3 of 4 subjects**. Its appeal is not the MAE — it is
+that with zero fitted parameters there is **no selection optimism**, so the measured number is an
+estimate rather than an upper bound on one.
 
-**Expect optimism.** Measured this session: selection over 38 combinations on 4 captures / 41
-scored windows gave train MAE 0.97 → holdout 2.60. Features give *more* degrees of freedom than
-that did.
+**Why the feature search failed:**
+- **Out-of-fold it was WORSE than the medoid** — 2.384 vs 2.291 (needed ≥ 0.5 bpm *better*).
+- **Not identifiable:** 3 distinct winning sign vectors across 4 leave-one-subject-out folds; fold
+  test MAE ranged 0.763–3.186.
+- **The permutation null explains the in-sample number.** Searching 834 vectors on *shuffled*
+  errors reaches best-in-sample MAE 2.665 on average, against a 3.370 null. Real signal exists
+  (observed in-sample 2.056, p=0.000) but does not survive cross-validation.
+- Bonus: "always bin 24" beats the searched rule (2.269 in-sample vs 2.384 out-of-fold).
 
-### 4.3 Landed this session — no action needed, but know it
+**Do not re-derive these lessons the hard way:**
+- **Rank correlation is not selection skill.** `temporal_dev` has the *highest* within-window
+  Spearman against error (+0.389) and a clearly *worse* argmax rule (MAE 2.799) than
+  `dev_consensus` (ρ +0.351, MAE 2.291). Gate on argmax MAE, never on ρ.
+- `HANDOFF` previously listed **"settled energy dB" as an available feature. It is not** —
+  `warmup_settled_energy_db` is empty on all 1792 rows of the sweep.
+- **Branch-agreement columns (fft/ha/stft) were never built and are now optional.**
+  `run_window_dsp` does already return `fft_r`/`ha_r`/`stft_r` (`src/window_pipeline.py:188-190`),
+  so it is columns-only in `diagnose_bin_sweep.py` plus a ~7 min re-run — but `br_confidence`
+  already discretises branch agreement and was the weakest live feature in the run.
+
+### 4.2a The rule is FROZEN — the only thing left is to score it once
+
+**`medoid_consensus_always_emit` v1, frozen 2026-08-04.** Artifact
+`results/diagnose/br_bin_rule/20260804T204634Z_freeze/frozen_rule.json`, SHA-256
+`cda0b352…174f81af`. Spec is declarative in `src/br_bin_search.py:BR_BIN_RULE_V1`.
+
+**Predictions recorded at the freeze**, t-based at n=4 subjects — deliberately wide, and the
+delta interval spans zero:
+
+| quantity | mean | 95 % PI |
+|---|---|---|
+| MAE, one new subject | 2.017 | [0.00, 5.66] |
+| MAE, mean of three new subjects | 2.017 | [0.00, 4.51] |
+| paired delta (P0 − rule), mean of three | 0.473 | [−0.82, +1.77] |
+
+**Success criteria as frozen:** PRIMARY — mean paired delta `MAE(P0) − MAE(rule)` over the new
+subjects > 0. FAILURE — mean delta ≤ 0, **or** the rule worse than P0 in ≥ 2 of 3 subjects.
+**No absolute MAE threshold** (oracle MAE spans 0.26–1.35 across A–D, so an absolute bar measures
+recruitment, not the rule). Coverage is a **structural guarantee**, not a criterion — the rule
+emits whenever any bin is valid, P0 only when the locked bin is, so P0's emitting set is a subset;
+a violation is a bug and is asserted by test.
+
+**Label-origin sensitivity: clean, and this was the real worry.** Fixed grid {0, +7.5, +15} s run
+once after the freeze (`…20260804T204716Z_offset-scan/`): rule ordering identical at all three,
+rule MAE moves ≤ 0.046 bpm, paired delta ≤ 0.022. **The unfixable approximate frame-0 origin of the
+eight training captures does not threaten this result.**
+
+**To score it — one touch, no re-tuning:**
+
+```
+python -X utf8 scripts/br_bin_rule.py --mode test \
+  --frozen-rule results/diagnose/br_bin_rule/20260804T204634Z_freeze/frozen_rule.json \
+  --i-have-frozen-the-rule --sweep-run <dir> --presence-run <dir> \
+  --subject-map <suffix>=E <suffix>=F <suffix>=G
+```
+
+The new captures need a `diagnose_bin_sweep` and a `diagnose_signal_presence` run first.
+`--mode test` refuses to run without all three flags and the script contains **no search
+machinery at all** — the guard `massimo4`–`massimo7` lacked until after they were spent.
+
+### 4.3 Already landed — no action needed, but know it
 
 **Frame 0's true capture epoch is now recorded.** `start_wall_utc` was written before the DCA1000
 and IWR1642 are configured, so it preceded frame 0 by 5–15 s — **40% of a 30 s window** at 12 s.
@@ -242,8 +341,16 @@ and HR coverage/feasibility, **not HR tracking**.
   either: on the holdout it beat production on accuracy (MAE 2.60 vs 3.41) but cost half the
   coverage (46% vs 89%), and regressed `massimo5` on every axis.
 - **Warmup bin selection is not the HR coverage bottleneck** (§2.3). It still matters for **BR
-  accuracy** — the holdout oracle ceiling is MAE 1.38 against production's 3.41, so a correct
-  per-window bin more than halves BR error. That headroom is what §4.2 chases.
+  accuracy** — over the 105 admissible `k>=1` windows the per-window oracle ceiling is MAE 1.10
+  against production's 2.68, so a correct per-window bin more than halves BR error. About a third
+  of that headroom is reachable with no fitted parameters (§4.2); the rest is not reachable by any
+  rule this dataset can identify.
+- **A learned multi-feature bin-selection rule does not beat a zero-parameter consensus rule** —
+  measured 2026-08-04 (`scripts/br_bin_preflight.py`). Out-of-fold 2.384 vs medoid 2.291; winning
+  sign vector unstable across all 4 leave-one-subject-out folds; a permutation null shows searching
+  834 vectors on shuffled errors reaches 2.665 for free against a 3.370 null. **Do not re-open by
+  adding features** — the constraint is four subjects. Re-open only with more subjects, and re-run
+  the same script, which is the go/no-go.
 - **Respiration collapse** — fixed in `src/respiration.py` via band-edge veto by bin identity
   (`resp_edge_veto`) plus STFT-consistency gates. **Do not re-open the fix.** Accepted cost: a
   genuine ~6 bpm breather on the edge bin is permanently invalid. Only **done-when #5** is open —
@@ -264,6 +371,13 @@ and HR coverage/feasibility, **not HR tracking**.
 - **Any DSP change can move the bin lock**, because warmup scores candidates by running the full
   chain. Run `scripts/validate_warmup_selection.py` after any change — fastest signal that
   selection moved.
+- **The BR admissibility gate drops 15 of 120 `k>=1` windows, and every exclusion is by
+  stationarity, none by availability** — massimo7 −5, massimo3/4/5 −3 each, massimo6 −1, and zero
+  from massimo1/massimo2/sweep. Measured 2026-08-04; not uniform, so always report it.
+- **`is_locked_bin` in the sweep CSV is the PRE-M2-FIX recorded lock**, and it looks like the right
+  column. Banned as feature and as baseline in `src/br_features.py:BANNED_COLUMNS`. Re-derive with
+  `run_warmup_selection` (`scripts/simulate_bin_policy.py:current_code_lock`) — it moves three of
+  eight locks: massimo1 23→27, massimo2 20→26, sweep 21→26.
 - **`oracle SNR` and AHET's `ratio_db` are not comparable** — different spectra (no-ECA vs post-ECA
   second pass) and different floors.
 - **Line endings are pinned to LF and it is load-bearing.** Any script hashing a text payload must
@@ -314,6 +428,10 @@ and HR coverage/feasibility, **not HR tracking**.
 | Per-bin sweep (feature source) | `scripts/diagnose_bin_sweep.py` → `results/diagnose/bin_sweep/20260804T131040Z/` |
 | Signal-presence audit (feature source) | `scripts/diagnose_signal_presence.py` → `results/diagnose/signal_presence/20260731T155946Z/` |
 | Bin-policy simulator | `scripts/simulate_bin_policy.py` → `results/diagnose/bin_policy/` |
+| **FROZEN BR bin rule + one-touch test** | `scripts/br_bin_rule.py` → `results/diagnose/br_bin_rule/20260804T204634Z_freeze/frozen_rule.json` |
+| **BR bin rules: feature table + guards** | `src/br_features.py` |
+| **BR bin rules: search, LOSO, permutation null** | `src/br_bin_search.py` |
+| **BR bin-selection pre-flight / go-no-go** | `scripts/br_bin_preflight.py` → `results/diagnose/br_bin_preflight/20260804T192908Z/` |
 | Static clutter removal (off by default) | `src/clutter.py` |
 | Frozen window grid | `src/m4/window_grid.py` |
 | The 8 captures | `results/live_demo/` |
