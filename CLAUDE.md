@@ -21,7 +21,12 @@
   tracks the Masimo while seated at 0.8-1.4 m.
 - **"Done" (paper-grade):** quantified agreement vs Masimo PR over recorded sessions —
   MAE and RMSE in bpm, plus a Bland-Altman analysis — across subjects (posture
-  fixed: seated).
+  fixed: seated). **An HR agreement claim counts only on sessions that carry HR dynamic
+  range.** Measured 2026-07-31: on sessions where PR is effectively constant, a predictor that
+  ignores the radar and emits the session median scores 100% on every admissible window, so
+  such sessions cannot falsify an HR claim. The seated recovery arm
+  (`notes/protocol.md`, ethics-approved 2026-08-03) exists to supply that range; BR is
+  unaffected.
 - **Baselines:** TI's on-chip vital-signs lab output; published mmWave vital-signs
   phase-based pipelines (see `notes/approach.md`).
 - **Primary metrics:** heart-rate error vs Masimo PR — MAE (bpm), RMSE (bpm), Bland-Altman
@@ -63,6 +68,12 @@
 - Flag every assumption (far-field, single dominant reflector, stationarity of HR over a
   window, Masimo PR as truth, etc.) explicitly.
 - Cite the source for any method or equation. No invented citations; mark `[CITATION NEEDED]`.
+- **Nothing in this project is pre-registered.** M0 was removed 2026-08-03. Never write
+  "pre-registered", "pre-specified", "frozen before data", "registered <date>", "deposited" or
+  "confirmatory" about this study's own specifications or results — in any file, manuscript,
+  title, abstract or talk. The comparator and analysis specs are real and are applied identically
+  to every estimator compared; that is a **transparency** claim, not a **timing** one. Standing
+  rule: `HISTORY.md` 2026-08-03 ("Pre-registration language purged").
 - **Do not tune the radar algorithm to match a low-quality reference.** If the Masimo
   Perfusion Index is low in a segment, treat that segment's PR as unreliable — flag it,
   don't chase it.

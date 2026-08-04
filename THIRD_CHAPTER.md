@@ -1,3 +1,22 @@
+> # ⚠ PRE-REGISTRATION CLAIMS IN THIS FILE ARE VOID — 2026-08-03
+>
+> **M0 (pre-registration freeze and deposit) was removed from the project by user decision.**
+> No deposit exists, no DOI exists, and **nothing in this study is pre-registered.**
+>
+> Every occurrence below of "pre-registered", "pre-specified", "frozen before data",
+> "deposited", "registered <date>" or "confirmatory" **about this study's own results** is
+> obsolete and must not reach the manuscript. The comparator specifications still exist and are
+> still applied — they are **internal engineering specs** (`notes/comparator_prespec*.md`,
+> `notes/analysis_prespec.md`), not registrations, and must be described that way.
+>
+> **This affects the planned headline.** "Comparator pre-registration" was listed here as the
+> paper's primary novelty; that claim is no longer available. The strongest remaining candidate
+> is the **first real-data validation of two simulation-only published methods** (M8 Ahmed,
+> M9 Kotte) under one common comparator with coverage reported — which is now the project's
+> active work. **This file has not yet been rewritten around that; doing so is an open task.**
+>
+> See `plans/implementation_plan.md` "Track 0", `HANDOFF.md` §4, `HISTORY.md` 2026-08-03.
+
 # Thesis Chapter 3 — Contactless Heart-Rate Estimation with a 77 GHz FMCW Radar
 
 > **What this file is.** A single source for writing the thesis chapter: the science, the
@@ -68,28 +87,38 @@ enough to track a clinical pulse-oximeter reference?
 
 **Claimed contributions**, ordered by how well the evidence currently supports them:
 
-1. **A pre-registered comparator specification for radar-vs-oximeter agreement**
-   (`notes/comparator_prespec.md`). We show that the *same* radar output scored against the
-   *same* reference yields **MAE 0.16 bpm or 2.72 bpm — a 17× difference — purely from the
-   choice of comparator** [PRELIMINARY, §10.1]. This is a methodological result about how the
-   field reports agreement, and it is arguably the most transferable thing in the chapter.
-2. **A warmup range-bin selection failure mode and its fix.** Energy-based eligibility
+1. **The first evaluation on real radar data of two published, simulation-only methods** —
+   harmonic accumulation [R1] and joint high-amplitude-difference Doppler [R2] — scored against a
+   clinical reference on identical windows under one common comparator, with coverage reported.
+   Both papers claim to solve the respiratory-harmonic problem; neither has been tested outside
+   simulation. **This is the headline contribution.** [IN PROGRESS — M8 / M9]
+2. **An explicit comparator specification for radar-vs-oximeter agreement**
+   (`notes/comparator_prespec.md`), stated in full and applied identically to every estimator
+   compared. We show that the *same* radar output scored against the *same* reference yields
+   **MAE 0.16 bpm or 2.72 bpm — a 17× difference — purely from the choice of comparator**
+   [PRELIMINARY, §10.1]. This is a methodological result about how the field reports agreement.
+   **It is a transparency contribution, not a timing one:** the specification is not
+   pre-registered and no claim about when it was written may be made (see the banner at the top
+   of this file).
+3. **A warmup range-bin selection failure mode and its fix.** Energy-based eligibility
    partitioning prevents the warmup from locking onto a low-energy "skirt" bin that produces a
    confident but entirely spurious heart rate [VERIFIED, §9].
-3. **A characterisation of the respiratory-harmonic coincidence limit** (4·f_r ≈ HR) as an
+4. **A characterisation of the respiratory-harmonic coincidence limit** (4·f_r ≈ HR) as an
    *identifiability* problem rather than a resolution or tuning problem, with a documented
    chain of four failed attempts to engineer around it [VERIFIED as negative results, §12].
-4. **An implementation and evaluation of ECA + AHET** [Tang 2025] on hardware and at a window
+5. **An implementation and evaluation of ECA + AHET** [Tang 2025] on hardware and at a window
    length different from the original paper (30 s at 20 Hz vs 20 s at 100 Hz).
-5. **Agreement with a clinical reference across subjects** [PENDING — this is the contribution
+6. **Agreement with a clinical reference across subjects** [PENDING — this is the contribution
    the thesis examiner will look for first, and it does not exist yet]. **Across subjects, not
    across distances**: the protocol leaves the exact distance free within 0.8–1.4 m, so distance
    is descriptive metadata rather than a designed factor (§10.3).
 
 > **Framing advice.** Do not write the chapter as "we built an accurate HR sensor" — the data
-> does not support that yet. Write it as "we built the system, and in doing so found that the
-> reported-accuracy literature has a comparator problem and a bin-selection problem." That
-> chapter is defensible today. Upgrade to the former once the 10-subject study lands.
+> does not support that yet. Write it as "we built the system, took the field's two leading
+> simulation-only remedies and tested them on real data for the first time, and in doing so found
+> that the reported-accuracy literature also has a comparator problem and a bin-selection
+> problem." That chapter is defensible today. Upgrade to the former once the 10-subject study
+> lands.
 
 ---
 
@@ -205,11 +234,11 @@ theirs directly.
 
 Seated, back straight, both hands resting on the legs, facing the radar; chest 0.8–1.4 m from
 the radar face; **10-minute recordings** (~30 s warmup + ~9.5 min usable, ~19 independent
-non-overlapping 30 s windows — raised from 5 min on 2026-07-24, before the pre-registration
-deposit, because 5 min yielded too few evaluable windows at 10–46% coverage; the ethics approval
-permits up to 10 min and that ceiling is hard); 10 subjects × 2
-sessions on different days, each session re-set up (so setup variability is inside, not outside,
-the reported variance).
+non-overlapping 30 s windows — raised from 5 min on 2026-07-24 because 5 min yielded too few
+evaluable windows at 10–46% coverage; the ethics approval permits up to 10 min and that ceiling
+is hard); **10 subjects × 3 sessions** (natural, paced, and a post-exertion recovery arm added
+2026-08-03 under an approved ethics amendment) on different days, each session re-set up (so
+setup variability is inside, not outside, the reported variance).
 
 **Settle criterion (added 2026-07-14 after observing settling transients corrupt early
 windows).** Before the radar starts: on the live Masimo, PR spread ≤ 5 bpm over a continuous
@@ -256,10 +285,13 @@ its arXiv ID. Summarised by *strategy*:
 | **[R13] Gu et al. 2025** — NRBO-VMD | Auto-tune VMD parameters by minimising sample entropy | RMSE 5.21 bpm, 18 subjects | Measured from the **back at 20 cm** — different geometry |
 | **[R14] Zhang et al. 2023** — Pi-ViMo | Time-domain template matching with physiological models (RC respiration, Van der Pol heart) | 11.9% error stationary | ~4.3 s compute per 15 s window — not real time |
 
-**Gap this work addresses.** Every one of these reports accuracy without pre-registering how the
-radar window is compared to the reference, and — with the exception of [R2] — without reporting
-*coverage* (what fraction of windows produced an estimate at all). §7 shows both choices can
-move a headline number by more than the differences between the methods in this table.
+**Gap this work addresses.** Two of the strongest proposals in this table — [R1] and [R2] — have
+been evaluated **only in simulation**, and are nonetheless cited as solutions to the
+respiratory-harmonic problem; this chapter gives both their first test on real radar data.
+Separately, every entry reports accuracy without stating how the radar window is compared to the
+reference, and — with the exception of [R2] — without reporting *coverage* (what fraction of
+windows produced an estimate at all). §7 shows both choices can move a headline number by more
+than the differences between the methods in this table.
 
 ---
 
@@ -370,8 +402,8 @@ Four caveats that **must appear in the chapter** — they are not dataset artefa
 
 The radar produces one estimate per **30 s window** — an FFT peak, i.e. a *dominant frequency*.
 The Masimo produces an **instantaneous PR once per second**. These are not the same kind of
-quantity, and the bridge between them is a free parameter that the literature does not
-pre-register. On the same five radar hops, same reference [PRELIMINARY]:
+quantity, and the bridge between them is a free parameter that the literature leaves unstated.
+On the same five radar hops, same reference [PRELIMINARY]:
 
 | Comparator | MAE | Severe errors (>5 bpm) |
 |---|---|---|
@@ -389,7 +421,7 @@ sensor artefact. The radar's first accepted window straddled it.
 **there is no single true HR for that window**, and no comparator is defensible. The fix is not
 a cleverer average — it is to *detect that case and exclude it*.
 
-### 7.2 The pre-registered specification [`notes/comparator_prespec.md`, registered 2026-07-14]
+### 7.2 The comparator specification [`notes/comparator_prespec.md`]
 
 For a radar window ending at *t*, spanning [t − 30 s, t]:
 
@@ -445,8 +477,8 @@ wrong for the study, and it was never right for the n=1 pilot either — windows
 not become independent by being non-overlapping, and a single subject carries no between-subject
 variance, so population limits of agreement are unidentifiable from it. **Treat every number that
 script has produced as descriptive only.** The chapter must use a subject-clustered
-repeated-measures model, specified in advance in the pre-registration deposit
-[PENDING — see `plans/implementation_plan.md` M0 decision 1 and M4].
+repeated-measures model specified in `notes/analysis_prespec.md` §1
+[PENDING implementation — see `plans/implementation_plan.md` M4].
 
 ---
 
@@ -543,7 +575,7 @@ coverage discussion in §10.2. One session (`massimo1`) still locks a mediocre b
 
 > **Read the status tags.** Nothing in §10 is a defensible headline result yet.
 
-### 10.1 Agreement, at the corrected bin, under the pre-registered comparator [PRELIMINARY]
+### 10.1 Agreement, at the corrected bin, under the stated comparator [PRELIMINARY]
 
 All three Masimo-referenced sessions re-processed end-to-end at current HEAD and scored strictly
 under `notes/comparator_prespec.md`:
@@ -634,7 +666,7 @@ single-sinusoid model of the high-order respiratory harmonics is unsupported. **
 that this is dead on physics permanently. *Procedural caveat: this verdict still owes its
 independent cross-model review — treat as provisional in the chapter.*
 
-### 11.6 Stage 1B round 1 (temporal continuity) — FAILED its own pre-specified criteria
+### 11.6 Stage 1B round 1 (temporal continuity) — FAILED its own stated acceptance criteria
 Cause diagnosed as a labelling error in the experiment design, not a property of the signal.
 
 ### 11.7 Stage 1B round 2 (one-hop motion statistic) — NO LEVERAGE
@@ -870,8 +902,8 @@ Per the reproducibility rules, each must come from a committed script in `figure
 
 1. **Run the 10-subject study** (`notes/protocol.md`). Nothing algorithmic blocks it. This is the
    critical path for §3.8 and half of §3.10.
-2. **Take one confirmatory capture designed to provoke a 4·f_r ≈ HR collision** — needed to
-   unblock §12.5 and to give §12.1 direct rather than retired evidence.
+2. **Take one capture designed to provoke a 4·f_r ≈ HR collision** — needed to unblock §12.5 and
+   to give §12.1 direct rather than retired evidence.
 3. **Address coverage** (§10.2). Currently 10–46%; at that level a coverage-adjusted accuracy
    claim is weak regardless of MAE.
 4. **Run the baselines** — TI on-chip output and one published pipeline. A thesis chapter without
@@ -970,8 +1002,11 @@ spectra, AHET candidates, checkpointed every 60 s), and `adc_stream.bin` (the ra
 - **Cross-model design review** (CLAUDE.md §6) applied to every change touching phase extraction,
   filtering or peak-picking. The Stage 1B design alone went through **six rounds**; the warmup
   bin-lock fix through **three**.
-- **Pre-registered specifications** written before the data they govern:
-  `notes/comparator_prespec.md` (2026-07-14) and `notes/note_stage1b_lag_statistic.md` (draft 7).
+- **Explicit written specifications** for the comparator and the analysis, applied uniformly to
+  every estimator compared: `notes/comparator_prespec.md`, `notes/comparator_prespec_br.md`,
+  `notes/analysis_prespec.md`, and `notes/note_stage1b_lag_statistic.md` (draft 7). **These are
+  engineering specifications, not registrations** — no deposit exists and no claim is made about
+  when they were written relative to the data.
 - **Hardware capture paths**, both exercised: `live_demo.py` live mode (live display + raw
   mirror) and `steps/step_1/capture.py` standalone (headless, writes `data/raw/` + metadata with
   SHA-256 + manifest row).

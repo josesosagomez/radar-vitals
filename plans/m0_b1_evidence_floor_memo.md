@@ -1,3 +1,16 @@
+> # RETIRED 2026-08-03
+>
+> **M0 (pre-registration freeze and deposit) was removed from the project by user decision.**
+> This file is kept, not deleted, so the reasoning behind the evidence floor and the deposit
+> design stays recoverable (CLAUDE.md §9). **Nothing in it is a commitment.** No deposit exists,
+> no DOI exists, and no result in this project is pre-registered.
+>
+> The parts that remain useful are the *analytical* ones — the evidence-floor reasoning and the
+> shortfall rules — which live on as design targets in `notes/analysis_prespec.md` §2a/§2b. The
+> parts about freezing, depositing, timestamps and amendment DOIs are dead.
+>
+> See `plans/implementation_plan.md` "Track 0" and `HISTORY.md` 2026-08-03.
+
 # B1 — Evidence-floor decision memo (M0)
 
 > **Purpose.** Give the user the measured coverage picture (A2) plus the yield arithmetic so the

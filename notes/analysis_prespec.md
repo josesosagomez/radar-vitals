@@ -1,17 +1,21 @@
 # Analysis pre-specification — mmWave vital-signs study
 
-> **Status: DRAFT for the M0 deposit, prepared 2026-07-25.** This freezes the analysis decisions
-> that the study cannot be re-run to fix (`plans/implementation_plan.md` §M0). It is **binding once
-> deposited**; changes after freeze go through the amendment mechanism (§4). Companion frozen
-> documents in the same deposit: `notes/comparator_prespec.md` (HR scoring),
+> **Status: INTERNAL ENGINEERING SPEC — 2026-08-03.** **M0 was removed from the project**, so this
+> is no longer a deposit draft and **nothing here is pre-registered.** It remains binding *as
+> engineering*: `src/m4/window_grid.py` cites §7 as its authority and hard-errors against it, and
+> the decisions below are still the ones the study cannot be re-run to fix. Changes are made by
+> dated `HISTORY.md` entry plus CLAUDE.md §6 cross-review where it applies; §4's deposit/DOI
+> machinery is dead. **The prospective-only rule in §4 survives and still matters** — it is what
+> stops a threshold being chosen after seeing the data it will be judged on.
+>
+> Companion specs, same status: `notes/comparator_prespec.md` (HR scoring),
 > `notes/comparator_prespec_br.md` (BR scoring — **M3, cross-reviewed 2026-07-25/26; all findings
 > resolved**), `notes/protocol.md` (capture protocol), `notes/capture_inventory.md`.
 >
 > **Cross-review COMPLETE:** all M3 findings (M3R-01…48) are **resolved** across 17 rounds (see
-> `plans/m3_prespec_cross_review.md`); this pre-spec is **ready for the M0 freeze — NOT yet frozen**
-> (the freeze is the user's irreversible act).
+> `plans/m3_prespec_cross_review.md`). There is no freeze and no deposit — M0 was removed.
 >
-> **Post-cross-review edits (pre-freeze), logged so the deposit is self-documenting:**
+> **Change log, kept so the spec is self-documenting:**
 > **2026-07-27 — §6 item 7, location-only.** The parenthetical naming the code that sets
 > `selected_confidence == "low"` was updated from `live_demo.py:_run_warmup_selection` to
 > `src/warmup_select.py:run_warmup_selection`: the M4 Stage 0 refactor (`4b64eb8`) moved that
@@ -29,6 +33,41 @@
 > `k>=1` for comparative accuracy. This is a method-specific descriptive clarification before M0
 > deposit, not a relaxation of the prospective `frame0_epoch` requirement. It was included in the
 > five-discipline review of `plans/m8_step1b_ahmed_transfer.md`.
+>
+> **2026-08-03 — PENDING, NOT YET APPLIED: a third arm.** *(Lower stakes since M0's removal —
+> this is now an internal-consistency debt, not a pre-deposit blocker. It still decides what M6
+> can claim.)* IBEC approved an amendment to
+> `24IBEC051` adding a **seated HR-recovery arm** (`notes/protocol.md`, "HR dynamic-range arm").
+> The study design is now **10 subjects × 3 sessions**, and arm becomes
+> `a ∈ {natural, paced, recovery}`. **§1 below still says 2 sessions and 2 arms and has NOT been
+> edited** — the change needs CLAUDE.md §6 cross-model review first (the completed M3 review
+> covered the 2-arm design). **This banner exists so the contradiction is visible rather than
+> silent; `notes/protocol.md` is the newer document and governs what is captured.**
+>
+> What the edit must cover when it is made:
+> - **§1 estimand:** extend the arm set; add a third arm-conditional LoA. The two-level model
+>   survives intact — with one session per arm per subject still true at 3 arms, the
+>   "no session-within-subject variance component" argument is unchanged.
+> - **§1 non-exchangeability:** recovery is a third non-exchangeable regime, so it gets its own
+>   `μ_a` and LoA and is **never pooled** with natural or paced (M3R-27 already forbids a
+>   combined headline).
+> - **§2b per-subject floor** reads "≥ 4 evaluable windows (**across the 2 sessions**)" — the
+>   denominator changes at 3 sessions and the number must be re-decided, not silently rescaled.
+> - **§2b miss rule** names only natural and paced ("drop that subject's **natural** arm to
+>   descriptive; report **paced** only"). It has no branch for a recovery arm that misses.
+> - **§2b "No add-sessions lever"** and its conclusion that the *"`24IBEC051` permits > 2
+>   sessions/subject?"* question (A5(a)) is **moot** are now contradicted on their face. The
+>   distinction the edit must draw explicitly: the recovery arm is **not** an add-sessions lever
+>   in the §2b sense — it does not add sessions to raise evidence *yield*, it adds an arm to make
+>   the HR claim *falsifiable*. Option A still narrows rather than recruits. Say so, or a
+>   reviewer will read a plain contradiction.
+> - **§2a/§2b evidence floor — the real risk.** The recovery arm is *deliberately* non-stationary,
+>   and HR admissibility requires within-window PR spread ≤ 5 bpm
+>   (`src/comparator.py:_HR_STATIONARITY_MAX_BPM`). Early-recovery windows will legitimately fail
+>   it. **The floor may not be achievable in this arm**, and whether it is arm-specific must be
+>   decided *before* that arm is captured — not after seeing its yield. An honesty rule now, not a
+>   governance one.
+> - **Order:** sessions run natural → paced → recovery, fixed, no counterbalancing.
 
 ---
 

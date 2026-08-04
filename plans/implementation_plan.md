@@ -22,10 +22,9 @@ from one subject — only three of which carry a Masimo reference**. Ethics
 approval is in hand, so the expensive, irreversible step — collecting 20 sessions from 10 people —
 is unblocked and imminent. Two things must be true before that happens: the known-broken parts
 must be fixed (breathing rate is currently on a **known-buggy path**, which matters much more now
-that BR is a stated goal), and the evaluation rules must be **frozen and deposited before the
-confirmatory data is collected**, or the paper's central methodological claim is unverifiable.
-(Deliberately *not* "before any data exists" — four captures already exist and already informed the
-method's design. See M0, which states the claim at the strength it actually holds.)
+that BR is a stated goal). **Pre-registration (M0) was removed from the project on 2026-08-03 by
+user decision**, so no evaluation rule is frozen in advance and every agreement result is
+exploratory/descriptive rather than confirmatory — see Track 0.
 
 The plan also schedules first-ever real-data validation of the two KAUST reference papers in
 `literature/ref_papers/`. Both are **simulation-only**, and both claim to solve the exact problem
@@ -44,14 +43,16 @@ implemented as an **offline comparison arm**, not production replacements; seque
 
 **Paper-grade goal.** Quantified agreement vs Masimo for **both** HR (vs `Beats / min`) and BR
 (vs `Breaths / min` + paced rate): MAE, RMSE, Bland–Altman limits of agreement, **always reported
-with coverage**, across 10 subjects, under a pre-registered comparator.
+with coverage**, across 10 subjects, under a fixed comparator (`notes/comparator_prespec*.md` —
+an internal spec, not a pre-registration; see Track 0).
 
 **Method goal.** An evidence-based comparison of four estimators on the same data under the same
 comparator: ECA+AHET (current), Harmonic Accumulation (Paper 1), joint-Doppler (Paper 2), and a
 published-pipeline baseline. **ECA+AHET is the pre-declared primary estimator; the other three are
 secondary and exploratory** unless promoted by a separate documented decision. The primary endpoint
-and the comparison discipline are frozen in M0 — otherwise one small dataset would be used to
-implement, tune, select *and* crown a winner.
+and the comparison discipline are fixed in `notes/analysis_prespec.md` as an internal engineering
+spec — otherwise one small dataset would be used to implement, tune, select *and* crown a winner.
+That risk is real whether or not anything is pre-registered.
 
 ---
 
@@ -110,124 +111,73 @@ Bland–Altman on post-reset data · `figures/` · the 10-subject study.
 ## Milestone map
 
 ```
-TRACK A — blockers. None produces a study capture, which is why all four may precede M0.
+TRACK A — blockers.
   M1  live-chain smoke test ......  independent · UNSCORED engineering check
   M2  respiration-collapse fix ...  independent · offline, on existing captures
-  M3  BR comparator pre-spec .....  independent · reference-only design
+  M3  BR comparator spec .........  independent · reference-only design
   M4  offline evaluation harness .  needs M3 + the linalg-free DSP review
 
-        M3 ──►  M0 Pre-registration freeze  ──►  ▓▓ HARD GATE ▓▓
-                                                 no study capture (M5 on) before this DOI
-                                                          │
-        ┌─────────────────────────────────────────────────┘
-        ▼
-TRACK B (data)                  TRACK C (methods — offline, in PARALLEL on existing captures)
-  M5  pilot 1–2 subjects          M8   Paper 1: HA reproduction → adaptation → collision claim
-        POST-FREEZE EXPLORATORY   M9   Paper 2: faithful control → 4-RX ablation → joint Doppler
-  M6  main study 10×2             M10  baselines (TI on-chip + published pipeline)
-        CONFIRMATORY
-  M7  collision capture           M11  open defects: coverage, candidate ranking, Stage 1B
-        ethics CLEARED
+TRACK C — METHODS (current focus, 2026-08-03).  Offline, on the 8 existing captures.
+  M8   Paper 1 — Ahmed et al., Harmonic Accumulation
+  M9   Paper 2 — Kotte et al., joint high-amplitude-difference Doppler (uses the 4 RX
+                 channels currently thrown away)
+  M10  baselines (TI on-chip + published pipeline)
+  M11  open defects: coverage, candidate ranking, Stage 1B
+        │
+TRACK B (data) — no longer gated
+  M5  pilot 1–2 subjects
+  M6  main study 10×3 (natural / paced / recovery)
+  M7  collision capture · ethics CLEARED
         │                                │
         └────────────────┬───────────────┘
                          ▼
               M12  results, figures, chapter + paper
 ```
 
-**Critical path:** M3 → M0 → M5 → M6 → M12. **M1, M2 and M4 are parallel prerequisites of M5**, not
-predecessors of M0 — M0 waits only on M3. M4 is additionally gated on the linalg-free DSP
-cross-model review. Track C runs alongside Track B on the eight existing captures and is re-run on
-study data when it lands.
+**Critical path (2026-08-03):** M8/M9 → M12. Track C is the current focus: establish whether either
+published method recovers HR or BR on the captures we already have, before spending any more
+subject time. Track B is available whenever wanted and is no longer gated by anything.
 
-**Read the gate correctly.** M0 is a hard gate on **study captures** (M5 onward), not on all work.
-M1–M4 precede it legitimately because none of them is a study capture: M2/M3/M4 are offline on
-existing data and M1 is an unscored engineering check. Note M5 is itself *exploratory* — the gate
-sits before the pilot, not merely before the confirmatory M6, so it is the strictest available
-placement. Anything M1–M4 discovers about the protocol or a comparator must land in the deposit
-**before** M0 is frozen, and every capture that exists at freeze time is enumerated in it as
-exploratory.
+> **M0 (pre-registration freeze and deposit) was REMOVED from the project on 2026-08-03 by user
+> decision — see "Track 0" below.** Its hard gate on study captures is gone with it. Every
+> reference to a freeze, a deposit, a DOI or a "post-freeze" status elsewhere in this plan is
+> obsolete; where such wording survives, the removal note governs.
 
 ---
 
-## Track 0 — Governance
+## Track 0 — Governance · **REMOVED**
 
-### M0 — Freeze and deposit the pre-registrations · **HARD GATE**
-**Goal.** Make the project's timing claim externally verifiable — and state that claim at the
-strength it actually holds.
+### M0 — Freeze and deposit the pre-registrations · **REMOVED 2026-08-03**
 
-> **The claim is "frozen before the confirmatory data", not "before any data".** The stronger
-> version is unavailable to this project and has been since July 2026: eight captures already exist,
-> and they **informed the method's design** — the harmonic-veto work was built on them
-> (`THIRD_CHAPTER.md` §10.1; `notes/analysis_prespec.md` §3.1 classifies all eight as
-> development/exploratory). A deposit made today cannot predate data that already shaped the method. What it *can*
-> do, and what carries the paper's argument, is predate **every capture the agreement claims are
-> computed on**. The deposit must therefore **enumerate every capture in existence at freeze time**
-> — the eight existing ones, plus M1's smoke test if it has run — and label them exploratory, so a
-> reader can see exactly what was known when the rules were fixed. Overstating this in
-> `JOURNAL_PAPER.md` §3.1 or §10 would be the same class of error as the withdrawn "MAE 0.16 bpm".
+**Removed from the project by user decision, 2026-08-03**, on grounds of time cost. The
+milestone is not deferred or postponed — it is not being done. Its **hard gate on study
+captures is removed with it**: M5, M6 and M7 are no longer blocked by anything in Track 0.
 
-**Depends on:** M3 (the BR comparator must exist to be frozen with it).
-**Work.** Combine `notes/comparator_prespec.md` (HR, existing) + the new BR comparator (M3) +
-`notes/protocol.md` into one deposit; publish to OSF/Zenodo; record the DOI in `HISTORY.md` and
-both writing files. Log the ethics approval reference number and issuing board at the same time.
+**What this costs, recorded once so the paper does not overstate itself.** Nothing in this
+project is pre-registered. The agreement results are therefore **exploratory / descriptive**,
+not confirmatory, and must be written that way — no "pre-specified", "pre-registered",
+"frozen before data" or "confirmatory" language anywhere in `JOURNAL_PAPER.md` or the thesis
+chapter. Analysis decisions made after seeing data are legitimate; presenting them as though
+they preceded it is not. This is the same discipline as CLAUDE.md §4, applied to claims about
+timing rather than about numbers.
 
-The deposit must additionally freeze **four analysis decisions** that are currently unstated and
-that the study cannot be re-run to fix:
+**What SURVIVES the removal — these are load-bearing and must not be deleted:**
 
-1. **Agreement model.** Bland–Altman for **repeated measurements**, clustered by subject —
-   10 subjects × 2 sessions × ~9 windows are *not* independent pairs. The pooled
-   `bias ± 1.96·SD` with `se_loa = sqrt(3·SD²/n)` over pooled windows in
-   `scripts/plot_bland_altman.py` is **not paper-grade for the study, and was never valid for the
-   pilot either**: windows from one subject do not become independent by being non-overlapping,
-   and a single subject carries no between-subject variance, so population limits of agreement are
-   unidentifiable from it. Treat every number it has produced as **descriptive/exploratory only**.
-   Name the clustering level, the variance components, the confidence-interval method, and how
-   unequal accepted-window counts per subject are handled.
-2. **Evidence floor and precision target.** A minimum number of **evaluable (accepted *and*
-   comparator-admissible) non-overlapping windows** per session and per subject, plus the
-   agreement precision the study is powered to claim — with a **prospective** rule for what
-   happens if the floor is missed. Recording length is already set to **10 minutes** (2026-07-24,
-   at the approval ceiling), giving ~3.8–17.5 accepted windows per subject before Masimo
-   exclusions; since that lever is spent, the remaining ones are **add sessions** or **reduce the
-   claim**. **The floor itself is still open as of 2026-07-24** and must be fixed before the
-   deposit — a floor chosen after seeing the pilot yield is not a floor.
-3. **Method-comparison discipline.** Name the **primary estimator** (ECA+AHET, the current system)
-   and the **primary endpoint** (HR MAE with coverage, under the frozen HR comparator). Every
-   other estimator — HA (M8), joint-Doppler (M9), the baselines (M10) — is a **secondary,
-   exploratory** comparator unless promoted by a separate documented decision. Fix which data may
-   be used for implementation/tuning versus evaluation, state the confirmatory contrasts, and say
-   how multiplicity is handled. Without this, the same small dataset implements, tunes, selects
-   and then crowns a winner.
-4. **Amendment mechanism.** How a post-deposit change to a comparator or to the protocol is
-   versioned, justified, cross-reviewed and **re-deposited** (see M5).
+| Document | What it is now |
+|---|---|
+| `notes/analysis_prespec.md` | internal analysis spec — the window grid, agreement model and evidence floor. `src/m4/window_grid.py` cites §7 as its authority and hard-errors against it. |
+| `notes/comparator_prespec.md` | internal HR scoring spec — implemented by `src/comparator.py`. |
+| `notes/comparator_prespec_br.md` | internal BR scoring spec (M3, cross-reviewed). |
+| `notes/protocol.md` | the capture protocol. Still governs what is captured. |
+| `notes/capture_inventory.md` | the capture record. |
 
-**Ordering rule (binding).** The deposit must be timestamped **before the first study capture** —
-that is, before **M5**. Three capture classes, and the distinction is the whole point:
+They stop being *deposit artifacts* and continue as *engineering specifications*. The
+frozen-grid invariants in code stay frozen: they exist so results stay comparable across runs,
+which is an engineering property independent of pre-registration.
 
-| Class | Which | Status |
-|---|---|---|
-| **Pre-freeze exploratory** | the 8 existing captures, plus M1's smoke test | informed or could inform the rules; enumerated in the deposit; never confirmatory |
-| **Post-freeze exploratory** | **M5**, the pilot | collected under the frozen rules but allowed to *change* them (see M5), so excluded from confirmatory metrics |
-| **Confirmatory** | **M6** (and M7 if it clears its ethics gate) | scored under the frozen rules; the evidence base for the paper |
-
-Depositing before M5 therefore predates **both** post-freeze classes — it is the strictest
-available gate, not a weakened one. M1–M4 legitimately run *before* M0 because none of them
-produces a study capture: M2, M3 and M4 are offline work that may use the eight existing
-exploratory captures, and **M1 is an unscored engineering smoke test** whose readout is never
-paper-grade (CLAUDE.md §4). Three
-conditions make that safe, and all three are binding:
-
-1. Any protocol or comparator change surfaced by M1–M4 is folded into the deposit **before** M0 is
-   frozen — the discovery lands *inside* the pre-registration, not after it.
-2. The deposit **lists every capture that exists at freeze time**, M1's included, labelled
-   exploratory (see the claim note above).
-3. **All existing captures, and M1's, are exploratory** — they informed or could inform the
-   method's design and can never serve as confirmatory evidence.
-**Done when:** a public DOI exists, dated **before the first pilot capture (M5)**, carrying both
-comparators, the protocol, and the four decisions above; cited in `JOURNAL_PAPER.md` §10.
-**Risk:** miss the window and the paper's headline claim degrades to self-assertion. Irreversible.
-
----
+**Retired with M0:** `plans/m0_preregistration.md` and `plans/m0_b1_evidence_floor_memo.md`
+(both marked RETIRED in place, not deleted — CLAUDE.md §9). The evidence-floor *values* remain
+useful as a design target; they are simply no longer a commitment made in advance.
 
 ## Track A — Blockers (all four before any subject is recorded)
 
@@ -237,8 +187,8 @@ comparators, the protocol, and the four decisions above; cited in `JOURNAL_PAPER
 amount of offline work will reveal.
 **Status of its output:** this is an **engineering check, not data.** Its capture is never scored,
 never promoted to paper-grade, and never counted as a study session (CLAUDE.md §4). That is why it
-may precede M0's deposit — see M0's ordering rule. If it surfaces a protocol defect, that defect is
-fixed *in* the protocol before M0 freezes it.
+If it surfaces a protocol defect, that defect is fixed *in* the protocol, and dated in
+`HISTORY.md`.
 **Work.** Run `scripts/live_demo.py` live on yourself under the real protocol — **run the full
 10 min**, so this doubles as the first check that the bin lock survives a long session. Verify with
 `scripts/verify_live_demo_artifacts.py` + `scripts/diagnose_live_run.py` that all five artefacts
@@ -303,7 +253,7 @@ derived from FFT resolution; non-overlapping windows; coverage reported alongsid
 the **paced cross-check**: in paced sessions compare against the commanded metronome rate and
 report both. Permissible design evidence is the Masimo traces, the metronome command, and
 resolution arithmetic — **radar–reference agreement is not admissible evidence here.**
-**Done when:** spec written, cross-model reviewed, and frozen into M0's deposit **before M4
+**Done when:** spec written, cross-model reviewed, and settled **before M4
 computes any BR agreement number**. All existing radar/reference pairs are declared **exploratory**
 in the spec itself.
 **Risk:** RRp may prove too weak to validate against — if so, the plan pivots to metronome-only
@@ -325,7 +275,8 @@ SHA-256. Reuse `src/compare.py`, `src/windowing.py`, `src/masimo.py`. Include th
 sensitivity table (3/5/8 bpm). Fix the `elapsed_s` wall-clock bug or make the harness immune to it
 by using `frame_idx / frame_rate_hz`.
 
-- **Bland–Altman must implement M0's repeated-measures model**, clustered by subject.
+- **Bland–Altman must implement `notes/analysis_prespec.md` §1's repeated-measures model**,
+  clustered by subject.
   `scripts/plot_bland_altman.py` pools every window as an independent pair
   (`se_loa = sqrt(3·SD²/n)`, `n` = pooled windows, no subject or session term). That is wrong for
   10 subjects × 2 sessions, and it was never right for the one-subject pilot either — its output
@@ -349,43 +300,43 @@ reports through it.
 
 ## Track B — Data collection
 
-### M5 — Pilot: 1–2 subjects, both arms · **POST-FREEZE EXPLORATORY**
+### M5 — Pilot: 1–2 subjects · **EXPLORATORY**
 **Goal.** Validate protocol, BR reference, settle criterion and bin lock on people who are not you,
 **before** committing 20 sessions.
-**Depends on:** M0, M1, M2, M3, M4. **This is the first study capture — M0's deposit must already
-be public and timestamped.**
-**Status of its data:** the pilot is **exploratory and excluded from the confirmatory M6 metrics.**
-Its whole purpose is to expose defects that will change the protocol, and data that is allowed to
-change the rules cannot also be evidence under them. Pool it with M6 and the pre-registration
-becomes decorative.
+**Depends on:** M1, M2, M3, M4. **No longer gated by Track 0** (M0 removed 2026-08-03).
+**Status of its data:** the pilot is **still excluded from the M6 metrics**, and the reason is
+unchanged by M0's removal: its whole purpose is to expose defects that will change the protocol,
+and data that is allowed to change the rules cannot also be evidence under them. That argument
+never depended on a deposit.
 **Work.** Full protocol per `notes/protocol.md`: seated, 0.8–1.4 m, **10 min**, natural + paced
 arms, settle criterion enforced. Record distance, time of day, resting HR, and **|HR − 4·f_r|**
 margin.
 Run M4's harness immediately on each session.
 
-**Amendment discipline (this is what makes "fix it before M6" legitimate).** Any pilot-driven
-change to `notes/protocol.md` or to either comparator must be, *before M6 starts*: versioned as an
-amendment with its date and rationale; cross-model reviewed where CLAUDE.md §6 applies;
-**publicly re-deposited** as a dated amendment to M0's DOI; and applied **prospectively only** —
-never retro-fitted to already-collected data. If it is not re-deposited, the frozen version stands
-and M6 runs under it. An amendment that alters what a participant is asked to do must clear ethics
-before it is used (see M7).
+**Change discipline (this is what makes "fix it before M6" legitimate).** Any pilot-driven change
+to `notes/protocol.md` or to either comparator must be, *before M6 starts*: dated in `HISTORY.md`
+with its rationale; cross-model reviewed where CLAUDE.md §6 applies; and applied **prospectively
+only** — never retro-fitted to already-collected data. The public re-deposit step is gone with M0;
+**the prospective-only rule is not**, and it is the part that actually protects the result. An
+amendment that alters what a participant is asked to do must clear ethics before it is used
+(see M7).
 
 **Feasibility test — run this before M6 is scheduled.** Compute, on the pilot sessions, the number
 of **evaluable windows** (radar-accepted *and* comparator-admissible, non-overlapping) actually
-obtained per session, and compare against M0's frozen evidence floor. If the pilot cannot clear it,
+obtained per session, and compare against the `notes/analysis_prespec.md` §2b evidence floor. If
+the pilot cannot clear it,
 M6 as specified will not either, and the response is decided **now**, not after 20 sessions: add
 sessions per subject, or reduce the claim (recording length is already at the 10-min ceiling).
 **Run the pilot at the full 10 minutes**, so its yield measurement actually predicts M6's — and
 **check the locked bin still tracks the chest at minute 9–10**, which is the specific risk the
 longer session introduces.
 **Done when:** ≥2 sessions pass end to end; bin lock behaves on new body types; BR reference is
-usable; the evaluable-window yield is measured against M0's floor; any protocol defect is fixed,
-amended and re-deposited **before** M6. Logged in `HISTORY.md`.
+usable; the evaluable-window yield is measured against the §2b floor; any protocol defect is fixed
+and dated **before** M6. Logged in `HISTORY.md`.
 **Risk:** the −12 dB bin-lock threshold is a scene-scoped prior from one subject — this is where it
 gets its first real test.
 
-### M6 — Main study: 10 subjects × 2 sessions · **CONFIRMATORY**
+### M6 — Main study: 10 subjects × 3 sessions · **EXPLORATORY** (nothing is pre-registered)
 **Goal.** The evidence base the thesis and paper are missing. **This is the first confirmatory
 capture set** — the headline agreement numbers come from here and nowhere earlier.
 **Depends on:** M5 clean.
@@ -415,11 +366,11 @@ result. Windows available per session, after the ~30 s warmup, at 30 s non-overl
 At 5 minutes the pessimistic end was roughly **two** usable windows per subject, which would not
 support per-subject agreement, let alone clustered Bland–Altman limits. Ten minutes roughly doubles
 the evidence at no extra recruitment cost and sits at the approval ceiling, so **this lever is now
-spent** — it cannot be pulled again. M6 completes against M0's frozen **evidence floor and precision
+spent** — it cannot be pulled again. M6 completes against the §2b **evidence floor and precision
 target**; if the floor is still missed, the remaining levers are **add sessions** or **reduce the
 claim**. Not renegotiated after the fact.
 **Done when:** 20 sessions captured, all with raw streams; M4 run over the full set; **and the
-evaluable-window yield meets M0's frozen floor**, or the frozen shortfall rule has been applied and
+evaluable-window yield meets the §2b floor**, or the shortfall rule has been applied and
 logged.
 **Risk:** the **18 bpm arm is deliberately inside the failure zone** — report it separately, never
 pooled into headline metrics.
@@ -429,7 +380,7 @@ pooled into headline metrics.
 **Depends on:** M6 (needs a subject whose resting HR is known).
 **Ethics scope: CLEARED.** The user confirmed on **2026-07-24** that the existing approval covers
 the subject-specific collision manoeuvre. Recorded on the user's authority — no one in this repo
-has read the approval document. Two follow-ups remain open and belong in M0's deposit: the
+has read the approval document. Two follow-ups remain open: the
 **approval reference number and issuing board** (still unrecorded, and required for the Methods
 section), and confirmation that the paced rates M7 actually selects stay inside whatever range the
 approval names.
@@ -454,9 +405,9 @@ the fixture for M8's collision claim.
 ## Track C — Method comparison (offline; starts now on existing captures)
 
 All Track C milestones follow the project's **synthetic-control-first discipline**: synthetic
-controls proving the maths before any real-data claim. (This is a *method* rule and has nothing to
-do with milestone **M0**, which is the governance/pre-registration milestone — the two were
-previously conflated.) All are scored through M4's harness under the frozen comparators,
+controls proving the maths before any real-data claim. **This rule survives M0's removal** — it is
+a method rule about not believing your own implementation, which never depended on
+pre-registration. All are scored through M4's harness under the fixed comparators,
 as an **offline comparison arm** — no production promotion without a separate documented decision.
 
 ### M8 — Paper 1: Harmonic Accumulation (Ahmed et al., DOI 10.1109/TRS.2024.3412915)
@@ -509,8 +460,8 @@ claim.
 4. Optionally reproduce the paper's CRLB as a benchmark.
 **Done when:** **both** synthetic verdicts documented (1a reproduction, 1b adaptation, reported
 separately); and, if the gate/authorization chain permits real continuation, immutable radar-only
-and scored bundles contain complete BR/HR coverage and agreement evidence for every preregistered
-arm without a winner-selection claim.
+and scored bundles contain complete BR/HR coverage and agreement evidence for every declared arm
+without a winner-selection claim.
 **Risk / why it matters:** this addresses the project's central unsolved problem using a method
 already half-implemented in the repo. Cheapest high-value milestone in the plan.
 
@@ -594,7 +545,6 @@ tags**. Fill every `[CITATION NEEDED]`. Decide Paper A (methodology) vs Paper B 
 ## Cross-cutting rules (apply to every milestone)
 
 1. **Synthetic-control-first** — a synthetic control proving the maths before any real-data claim.
-   (Distinct from milestone **M0**, which is governance only. Do not call this "M0-first".)
 2. **Cross-model review** for anything touching range-FFT, phase extraction, filtering,
    peak-picking, or the Masimo parser (CLAUDE.md §6).
 3. **Every estimate leaves evidence** — dump intermediates so a wrong reading is diagnosable.
@@ -623,79 +573,41 @@ tags**. Fill every `[CITATION NEEDED]`. Decide Paper A (methodology) vs Paper B 
 - **Gate on paper-grade output:** no agreement number is trusted until the linalg-free DSP path has
   passed cross-model review (M4 prerequisite), and no Bland–Altman limit from the study is quoted
   from the pooled-independent statistics in `scripts/plot_bland_altman.py`.
-- **Evidence, not schedule:** M6 is verified against M0's frozen evaluable-window floor, not
-  against the session count.
+- **Evidence, not schedule:** M6 is verified against the `notes/analysis_prespec.md` §2b
+  evaluable-window floor, not against the session count.
 
 ---
 
 ## Immediate next actions
 
-> **Refreshed 2026-07-30.** Three items below were stale and are corrected: the evidence floor is
-> frozen (not open), the M2 fix has landed (only its validation is open), and Step 1b is approved
-> and largely implemented (not awaiting approval).
+> **Refreshed 2026-08-03.** M0 was removed from the project by user decision; the focus is now
+> Track C — establishing whether either published method recovers HR or BR on the eight captures
+> that already exist, before any further subject time is spent.
 
-1. **M0 — freeze and deposit.** Believed **unblocked**. Its one blocking decision was the evidence
-   floor, which the user froze on 2026-07-24/25 and which is written up in
-   `notes/analysis_prespec.md` §2a/§2b. M3 is closed (48/48 findings). What remains is assembly and
-   the user's irreversible deposit act, plus recording the ethics approval reference number and
-   issuing board. **This is now the critical path** — M5 cannot start before it.
-2. **M1** — live smoke test. Hours, no dependencies, unscored, highest risk-reduction per minute.
-   Does not wait on M0.
-3. **M2 done-when #5** — the *only* open part of M2. Needs a frozen-comparator BR score, which
-   needs a capture with non-approximate time alignment. **Blocked on data, not on DSP**; M1/M5
-   unblock it. Do not re-open the fix.
-4. **M8 step 1b** — approved (base plan + Addendum A) and implemented through the gate. Remaining:
-   the runner's decode/dispatch loop against a synthetic capture fixture, the production
-   serializer, `test_attestation.json`, then freeze the gate bundle. Real-data access still needs a
-   separate authorization.
-5. **M5 pilot**, once M0 is deposited.
+1. **M8 — Paper 1 (Ahmed, Harmonic Accumulation) on real data.** Step 1a is done and negative;
+   Step 1b is built through the synthetic gate and **has never opened a real capture**. The
+   remaining build is the runner's decode/dispatch loop against a synthetic capture fixture plus
+   the production serializer, then the real-data arm on the eight captures. **This is the shortest
+   path to an answer** — the plan already calls it the cheapest high-value milestone, and its
+   target (breathing harmonics masking the heartbeat) is exactly the failure the 2026-07-31 audit
+   measured.
+2. **M9 — Paper 2 (Kotte, joint high-amplitude-difference Doppler).** Not started. Uses the **4 RX
+   channels the current pipeline throws away**, and targets the lung-masks-heart problem directly.
+   Synthetic controls first, per the Track C rule.
+3. **M2 done-when #5** — the only open part of M2. Needs a BR score under the fixed comparator on a
+   capture with non-approximate time alignment. Still blocked on data, not DSP. Do not re-open the
+   fix.
+4. **M1** — live smoke test. Hours, no dependencies, unscored. No longer gated by anything, and now
+   also the cheapest way to unblock item 3.
+5. **M5 pilot** — available whenever wanted; no longer gated.
 
 Also start early, since it gates more than it looks like it does: the **linalg-free DSP cross-model
-review** — a prerequisite of M4, therefore of M5/M8/M9/M10.
+review** — a prerequisite of M4, therefore of M8/M9/M10.
 
-**Ethics scope is settled (2026-07-24, user-confirmed):** the approval covers M7's collision
-manoeuvre, and recordings may run **up to 10 minutes**. Both former blockers are closed.
-
-**Recording duration: settled at 10 minutes** (2026-07-24), and `notes/protocol.md` was updated the
-same day — before the deposit, so no amendment is needed. That was the cheapest lever against the
-evidence shortfall and it is now spent.
-
-**The evidence floor is FROZEN — this paragraph previously said otherwise and was stale.** The user
-selected it on 2026-07-24/25 and it is written up in `notes/analysis_prespec.md` §2a (Option A:
-≥1 evaluable window per session, ≥4 per subject, LoA CI half-width ≤ 5 bpm, plus the miss rule) and
-§2b (extensions). BR has **no** confirmatory floor — it is a secondary, exploratory endpoint
-reported descriptively with its own coverage. M0 therefore has no open decision blocking it.
-
-Deferred alongside it, and still genuinely open: whether to attack coverage (M11a) **before**
-freezing, so that a better estimator can be the pre-registered primary rather than a post-hoc
-footnote. Given that coverage (10–46%) is the acknowledged real bottleneck, this is worth an
-explicit decision rather than a default.
-
-Also still unrecorded, and needed for the Methods section: the **ethics approval reference number
-and issuing board**.
-
-COMMENTS OF CODEX
-
-NO MORE COMMENTS
-Subject to the two explicitly escalated ethics-scope questions, I consider this plan sound enough
-to derive `plans/<milestone>.md` files and to begin M1, M2, and M8 step 1a/1b. Before M0/M5, the
-user should decide whether recordings will remain at the approved/frozen five minutes (in which
-case IP-18 does not block M5) or whether approval for longer sessions will be sought; IP-09 must
-be decided before M7 and gates M7, M11c, and M8's engineered-collision arm. `JOURNAL_PAPER.md`
-and `THIRD_CHAPTER.md` are now stale on pre-registration strength, pooled Bland–Altman,
-per-distance claims, capture/test wording, and the revised exploratory/confirmatory split;
-`notes/protocol.md` is also stale on the collision rationale and timing details identified in
-this review.
-
-END OF COMMENTS
-
-DEBATE COMMENTS
-
-(Both escalations were decided by the user on 2026-07-24 and are closed:
-IP-09 — the ethics approval covers M7's subject-specific collision manoeuvre; M7 is
-unblocked, and the residual resting-HR-vs-paced-HR design flaw is now recorded in M7 itself.
-IP-18 — the approval permits recordings up to 10 minutes; longer sessions are a live lever
-for the evidence floor, and the duration decision now sits in M0 and M6.
-Nothing remains under debate.)
-
-END OF DEBATE
+**Two documentation debts left open by M0's removal**, both cheap and both capable of embarrassing
+the paper if forgotten:
+- `JOURNAL_PAPER.md` and `THIRD_CHAPTER.md` must carry **no** "pre-registered", "pre-specified",
+  "frozen before data" or "confirmatory" language about this study's own results.
+- `notes/analysis_prespec.md` still carries a PENDING banner for the 3-arm recovery change and its
+  arm-specific evidence-floor question. It is now an internal spec rather than a deposit, so the
+  urgency drops — but the floor question still decides what M6 can claim.

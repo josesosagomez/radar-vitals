@@ -8895,3 +8895,558 @@ unwrap. All three were wrong descriptions of working code.
 **Next:** warmup range-bin selection (`HANDOFF.md` §3). The cheapest first question is whether the
 three 0%-coverage captures (massimo3, massimo5, massimo7) are bad locks or genuinely signal-free —
 score them at every candidate bin rather than the locked one and compare.
+
+## 2026-07-31 - Per-bin sweep: the 0% captures are not bad locks; AHET harmonic verification is the binding constraint
+
+**Set out to do:** answer the question `HANDOFF.md` §3.2 named as the cheapest first step — score
+massimo3, massimo5 and massimo7 at **every** candidate bin instead of the warmup-locked one, to
+decide whether their 0% HR coverage is a bad bin lock or an absence of verifiable in-gate cardiac
+signal. The two answers imply different work, and only one of them justifies warmup effort.
+
+**Worked (with evidence):**
+
+- **Built `scripts/diagnose_bin_sweep.py`** — read-only, radar-side only. For each capture it runs
+  the production `run_window_dsp` once per candidate bin (19–32) per complete window of the frozen
+  grid (`src/m4/window_grid.py`, 30 s = 600 frames, k=0 scored, tail dropped). 3 captures × 20
+  windows × 14 bins = **840 cells**. Evidence at `results/diagnose/bin_sweep/20260731T004043Z/`
+  (on disk, gitignored): `windows.csv`, `per_bin.csv`, `report.md`, `run_meta.json`.
+- **No Masimo file was opened, by construction** (`masimo_opened: false` in `run_meta.json`).
+  §3.5 forbids choosing a bin because it agrees better with the reference, so the sweep was kept
+  structurally unable to do it. Conclusions below rest on radar-side yield alone.
+- **Provenance.** Git `9543c8e`, tree clean, `run_config_hash`
+  `60bf86663283a7b6a425e91d1c5b8f7fefb9ffb9a18bf1eb8337ad77f0f236c6`, seed 42. The three
+  `adc_stream.bin` SHA-256s recomputed at run time **match the values recorded in this file on
+  2026-07-31** — same bytes, independently confirmed. Caveat: the script was untracked when the run
+  was produced, so this run is draft evidence until the script is committed; it is regenerable.
+- **Window 0 reproduces each capture's recorded live warmup evidence across all 14 bins**
+  (`hr_valid`, rejection reason, BR rate, BR confidence). Warmup ran on the first 600 frames, which
+  is window 0 of the frozen grid, so `warmup_bin_selection.json` is a free per-bin expected value.
+  Agreement validates the new frame-range decoder, the active config and the raw mirror's frame-0
+  alignment simultaneously. This check is permanent in the script, and does **not** abort on
+  mismatch — a reproduction failure is itself the finding (M4R-10).
+- **THE ANSWER: it is not a bad lock.** Pooled over 840 cells, split at the −12 dB
+  energy-eligibility line (computed per window, in-window relative energy):
+
+  | bin class | cells | hr_valid | yield | `ratio_db_low` |
+  |---|---|---|---|---|
+  | energy-eligible (≥ −12 dB, plausibly the chest) | 491 | 4 | **0.8%** | 68.6% |
+  | skirt (< −12 dB) | 349 | 20 | 5.7% | 49.3% |
+
+  Every energy-eligible bin in all three captures yields ~0%. Per capture the eligible-bin yield is
+  massimo3 2/165, massimo5 1/171, massimo7 1/155.
+- **The only bins with any yield are 20–34 dB down** — exactly the bins the eligibility threshold
+  exists to distrust (`src/warmup_select.py:79-90`). Best bin per capture: massimo3 bin 21 → 15%
+  (−23.8 dB mean), massimo5 bin 28 → 5%, massimo7 bin 20 → 30% (−28.7 dB mean). None is usable
+  coverage, and none is a bin any defensible selection rule would pick on energy.
+- **The binding constraint is AHET's second-harmonic check, not bin choice.** At energy-eligible
+  bins the best available second-harmonic peak-to-floor ratio has **median −2.23 dB** against a
+  `candidate_min_second_harmonic_ratio_db` gate of **+1.0 dB**; only 14.1% of eligible cells reach
+  the gate at all (p90 = 1.68 dB, max = 5.75 dB). The second harmonic of the candidate cardiac
+  frequency typically sits *below* the in-band noise floor. AHET cannot verify what is not there,
+  and no bin in the gate has it.
+- **Second failure mode quantified: AHET is never attempted in 232/840 cells (27.6%).** All 232 have
+  `spectrum_stage == 0`, the `f_r_hz is None or f_r_is_outlier` no-ECA path
+  (`src/vitals.py:523`), so `hr_valid` is False by construction; 173 of them also have
+  `br_valid == 0`. Together the two modes account for 88.6% of all cells; only 2.9% pass.
+- **Warmup is locking onto the subject, confirmed independently by breathing.** Locked-bin BR
+  validity is 17/20, 16/20, 16/20 for massimo3/5/7, and the highest-BR-yield bins are high-energy
+  in-gate bins adjacent to the lock (massimo3 24/25, massimo5 22/24, massimo7 23/26). Phase
+  extraction works and the chest is where warmup says it is; the cardiac component at that bin fails
+  harmonic verification.
+- **massimo7's bin 32 lock is corroborated as anomalous** (`HANDOFF.md` §3.3 flagged it): bins 23
+  and 26 have BR validity 19/20 against bin 32's 16/20 and sit 5–7 dB higher. But relocking would
+  not help — bins 23 and 26 both yield **0%** HR over 20 windows.
+- **15 tests added** (`tests/test_diagnose_bin_sweep.py`) covering decoder equivalence against
+  `read_adc_bin` on both I/Q conventions, the window-0 reproduction check, the verdict logic, and
+  LF-pinned CSV output. Suite: **2064 passed, 5 skipped** (was 2049 + 15).
+
+**Failed / did not work, and why:**
+
+- **The script's own automated verdict is too weak and should not be quoted on its own.** It reports
+  `another_in_gate_bin_yields_more` for all three captures, which is literally true (15% > 0%,
+  5% > 0%, 30% > 5%) but misleading: it compares yields without weighing that the winners are
+  20–34 dB skirt bins with unusable absolute coverage. The verdict string is a pointer to the
+  evidence, not the conclusion. The conclusion is the eligible-vs-skirt table above.
+- **Whether the skirt-bin passes are real remains unresolved and was not chased.** massimo7 bin 20
+  (6 passes, median 80.3 bpm, successive-difference MAD 5.6 bpm) and massimo3 bin 21 (3 passes,
+  median 87.1, MAD 4.0) look like plausible, temporally coherent heart rates; massimo3 bin 27 (2
+  passes, 56.3 then 93.5 bpm, MAD 37.1) clearly does not. Deciding this needs a reference
+  comparison, which is precisely the §3.5 hazard, so it was left open rather than settled badly.
+- A first pass omitted the AHET ratio value and had to be re-run to record
+  `peak_to_floor_ratio_db`. Without it the sweep could say *that* verification failed but not
+  *by how much* — the difference between "the gate is marginally too strict" and "there is no second
+  harmonic", which is the whole finding. Cost: one 3-minute re-run.
+
+**Retired / no longer used:** the framing in `HANDOFF.md` §3.2 that the massimo3/5/7 0% coverage is
+"unknown — bad lock or no signal". It is answered: not a bad lock. Warmup range-bin selection is
+demoted from "the active task" — it is not where the coverage bottleneck lives.
+
+**Next:** the coverage bottleneck is HR estimation after the bin is chosen, in two parts —
+(a) AHET second-harmonic verification failing at chest bins because the harmonic is below the noise
+floor, and (b) 27.6% of windows never reaching AHET because respiration is invalid. Neither is a
+warmup problem. Open and deliberately unanswered: whether the deep-skirt-bin passes are true cardiac
+readings, which cannot be settled on radar-side evidence alone.
+
+## 2026-07-31 - Signal-presence audit: BR is extractable, HR is not demonstrated, and these captures cannot demonstrate it
+
+**Set out to do:** answer the user's prior question before any acceptance criterion is
+written — are the 8 existing captures good enough, i.e. do they actually carry recoverable
+breathing and cardiac signal? Not "is our estimator right", but "is the information there".
+
+**Worked (with evidence):**
+
+- **Built `scripts/diagnose_signal_presence.py`** (+ 13 tests in
+  `tests/test_diagnose_signal_presence.py`). It runs production phase extraction per
+  window per candidate bin, takes a detrended Hann rFFT with **no bandpass** (the heart
+  band stops at 2.0 Hz and the second-harmonic question needs content above it), and
+  measures peak-to-median SNR at the frequency the reference says is true, with every
+  verification gate off. Evidence:
+  `results/diagnose/signal_presence/20260731T155946Z/` (on disk, gitignored). Suite:
+  **2077 passed, 5 skipped**.
+- **Framing recorded in the script and its report:** these are **feasibility ceilings, not
+  results.** Every `oracle_*` column used the Masimo reference to decide where to look.
+  Legitimate for "is extraction possible" (a detectability question whose answer is an
+  upper bound); **forbidden** as accuracy/coverage, and forbidden as a source of any
+  threshold, band edge or bin choice (HANDOFF §3.5, CLAUDE.md §4).
+- **The reference is not the weak link.** All 8 captures: **100% of Masimo rows have
+  PI ≥ 0.5** (medians 3.8–15.0), PR medians 67–91 bpm, RR medians 15–18 bpm, and full
+  temporal overlap with the radar capture. Reference quality was a candidate explanation
+  and is eliminated.
+- **BR: the signal is demonstrably present.**
+  - Decoy control (same statistic at random frequencies on the same spectra): the true
+    respiration frequency beats decoys in **7 of 8** captures (beat fraction 0.57–0.68),
+    sign-test significant in 4 individually — sweep `p=.038`, massimo3 `p=.021`,
+    massimo4 `p=.006`, massimo6 `p=.006`. Only massimo7 is below chance (0.42), and its
+    lock is the known-bad bin 32.
+  - **Tracking demonstrated in `sweep`** — permutation `p=.001`, Spearman **+0.56** at the
+    locked bin (`p=.024`) and **+0.90** at the best bin (Bonferroni-corrected `p<.001`).
+    This is the only capture whose protocol deliberately varies BR (stepped 12→15→18→21),
+    and it is the only one that *can* demonstrate tracking at all.
+  - BR oracle SNR at the locked bin is **+8.2 to +17.3 dB** in 7 of 8 (massimo7 +3.4 dB).
+- **HR: not demonstrated, on two independent grounds.**
+  - Decoy control significant in only **2 of 8** — massimo1 (0.82, `p=.016`) and massimo2
+    (0.79, `p=.016`), the two short 2026-07-13 captures. massimo3/4 are marginal
+    (`p=.058`), and sweep, massimo5, massimo6, massimo7 show nothing (0.36–0.57,
+    `p=.13–.99`).
+  - **No tracking anywhere.** Permutation `p = .30–1.00` for every capture. No Spearman
+    survives 14-bin multiplicity correction except massimo2's best bin (+0.97,
+    corrected `p=.018`) on n=6 windows — too small to lean on.
+  - At the locked bin the radar heart-band argmax is **worse than a constant predictor in
+    all 8 captures** (locked hit 0–50% vs constant 83–100%).
+- **THE STRUCTURAL FINDING, and the reason this matters before an acceptance criterion:**
+  within-session PR spread (p10–p90) is **2.6–5.2 bpm**, i.e. **narrower than the ±5 bpm
+  hit tolerance**. A predictor that ignores the radar entirely and emits the session-median
+  PR scores **83–100%**. So these captures **cannot distinguish a working HR estimator from
+  a stub that returns 85 bpm.** Any HR acceptance criterion written against them is
+  unfalsifiable. This is a *protocol* limitation, not only an algorithm one — `sweep`
+  solves exactly this problem for BR by commanding a stepped rate, and **nothing analogous
+  exists for HR in any capture.**
+- **Alignment is not the limiter.** `frame0_epoch` is `start_wall_utc` and approximate, but
+  the band argmax does not move with a global offset — only the reference it is compared
+  against does. A ±60 s offset scan is flat (best offset changes HR hit rate by ≤1 point in
+  every capture), and a session-median variant that pairs nothing at all agrees.
+
+**Failed / did not work, and why:**
+
+- **The first version of this audit produced a badly over-optimistic headline and I nearly
+  reported it.** Its table showed "HR hit (ceiling)" of 50–100% — including 75% on
+  massimo3, a capture the production pipeline scores at 0% coverage — which reads as "the
+  signal is there and the estimator is throwing it away". Two controls killed it: a
+  permutation null showed the ceiling is a max over 14 bins that shuffled data reaches just
+  as often (`p=.29–1.00`), and a constant baseline showed the reference barely moves. The
+  ceiling was measuring selection bias plus a narrow reference, not signal. CLAUDE.md §4's
+  "if a result looks too good, treat it as a bug" applied exactly as written.
+- **Two of the new tests failed on first run and the test expectations were wrong, not the
+  code.** `decoy_fraction` on a single noise spectrum returned 0.275, not ~0.5 — correctly,
+  because for one fixed spectrum the reference frequency has one fixed SNR and its beat
+  fraction is itself a random draw. The property only holds in the mean over spectra, which
+  is precisely why the script sign-tests across windows. Test rewritten to assert the mean
+  over 40 realizations. The planted-tone case returned 0.93 not >0.95, also correct: a decoy
+  drawn within a search half-width of the tone captures the same peak and ties.
+- **`oracle SNR` and the AHET `ratio_db` of the 2026-07-31 bin sweep are NOT comparable and
+  must not be quoted against each other.** They use different spectra (no-ECA vs post-ECA
+  second pass) and different floors (band median over 0.8–2.0 Hz vs over 1.6–4.0 Hz for H2).
+  The H2 oracle SNR of +2.6 to +8.1 dB does not contradict the earlier finding that AHET's
+  own ratio runs a median −2.2 dB below its gate.
+
+**Retired / no longer used:** the working assumption that the 8 captures are a usable basis
+for HR validation. They are usable for BR. For HR they can support exploratory work only,
+and cannot falsify an acceptance criterion.
+
+**Next:** before an HR acceptance criterion is worth writing, the capture protocol needs HR
+**dynamic range** — a controlled perturbation (e.g. a seated post-exertion recovery segment,
+or a paced-breathing block driving RSA) so PR spans meaningfully more than the tolerance
+within a session, the way `sweep` does for BR. Open question deliberately not answered here:
+whether HR is weakly present but subdominant (massimo1/massimo2 hint yes) or absent —
+n=2 of 8 with 6 windows each is too little to call.
+
+## 2026-07-31 - Protocol amendment drafted: the seated HR-recovery arm (PROPOSED, ethics-blocked)
+
+**Set out to do:** on the user's instruction, draft the capture-protocol amendment that the
+signal-presence audit showed is needed before any HR acceptance criterion can be falsified.
+
+**Worked (with evidence):**
+
+- **Added "HR dynamic-range arm — the seated RECOVERY capture" to `notes/protocol.md`**,
+  marked **PROPOSED / NOT APPROVED / not part of the frozen protocol**, placed alongside the
+  stepped-sweep arm as a sibling method-development capture.
+- **Found and documented the root tension, which was not visible before reading the protocol
+  against the comparator.** Two existing requirements *both* enforce HR stationarity, and
+  between them they are what removes falsifiability: the protocol's SETTLE CRITERION forbids
+  starting a capture while PR drifts (last-20 s vs first-20 s ≤ 3 bpm), and the comparator
+  admits a window only if within-window PR spread ≤ 5 bpm
+  (`src/comparator.py:_HR_STATIONARITY_MAX_BPM`). Both are individually correct. They
+  reconcile with across-session range in exactly one shape — a **slow monotonic ramp** — which
+  is what selects post-exertion recovery over every alternative.
+- **Rejected slow-paced-breathing RSA on two independent grounds, recorded so it is not
+  re-proposed.** (1) Wrong axis: RSA oscillates HR *within* the window, inflating within-window
+  spread past the 5 bpm gate and making windows **inadmissible**, rather than adding
+  across-window range. (2) 6 bpm = 0.10 Hz is the **exact bottom edge** of
+  `respiration.band_hz`, which the M2 `resp_edge_veto` permanently invalidates (HANDOFF §5) —
+  it would break BR outright. Cold pressor and uncontrolled day-to-day variation also
+  tabulated and rejected.
+- **Pre-specified an adequacy criterion so the arm can fail honestly**, computed from the
+  Masimo CSV **alone** (so checking it cannot leak radar performance into a protocol decision,
+  CLAUDE.md §4): ≥ 10 comparator-admissible windows; admissible PR span ≥ 20 bpm;
+  constant-predictor hit rate < 50% at ±5 bpm.
+- **Calibrated that criterion against all 8 existing captures — all 8 fail, as intended.**
+  Over comparator-admissible windows only: admissible counts 4/5/5/8/9/11/12/13 (67 total,
+  matching the known figure), PR spans **1.0–8.0 bpm**, and the **constant-predictor hit rate
+  is 100% on every single capture**. Criterion 1 already passes on three captures so it is not
+  the discriminator; **criterion 3 is**. Restricting to admissible windows makes the picture
+  *worse* than the whole-session figure (spans 1.0–8.0 vs p10–p90 2.6–5.2), because
+  admissibility itself selects for stationarity.
+- **The SETTLE CRITERION is explicitly disapplied to this arm only**, with the reason stated
+  in place; it still binds every other arm without exception.
+- `notes/protocol.md` "Resolved / remaining decisions" updated with the two open questions
+  (seek the ethics amendment vs accept the fallback; ramp as separate arm vs inside M6
+  sessions). `HANDOFF.md` gains §2.2.
+
+**Failed / did not work, and why:**
+
+- **Nothing was captured, and nothing may be.** The arm adds physical exertion, which approval
+  `24IBEC051` does not describe. It is blocked on a written IBEC, KAUST determination plus
+  health screening (PAR-Q+ or equivalent) and cardiovascular exclusion criteria, which the
+  current protocol has none of because it never needed them. This gate is **independent of and
+  additional to** the M0 gate.
+- **Not cross-reviewed.** CLAUDE.md §6 covers experimental-plan changes; this is one.
+- **Consistency propagation deliberately NOT done.** `notes/protocol.md`'s header requires
+  protocol changes to propagate to `scripts/live_demo_config.yaml`, CLAUDE.md and
+  `notes/approach.md` in the same commit. The arm changes no DSP setting so the config is
+  genuinely unaffected, but CLAUDE.md and `approach.md` were left alone **on purpose** —
+  propagating an unapproved arm would make it read as frozen protocol. Recorded as a checklist
+  item inside the amendment, to be done on approval only.
+- **The fallback is materially weaker and this is stated rather than glossed.** If exertion is
+  refused, a seated silent-arithmetic stress segment raises PR only ~5–15 bpm and may never
+  clear the ≥ 20 bpm adequacy bar; the honest consequence is that per-subject HR agreement
+  stays exploratory and the paper reports HR as feasibility, not a validated measurement.
+
+**Retired / no longer used:** the assumption, implicit in the protocol until now, that a
+stationary seated session is a sufficient basis for an HR agreement claim. It is sufficient for
+BR (the stepped sweep demonstrates tracking); it is not sufficient for HR.
+
+**Next:** user decision on whether to seek the ethics amendment; CLAUDE.md §6 cross-review of
+the amendment; then either a BR-scoped acceptance criterion now, or the full HR+BR criterion
+once an adequate capture exists.
+
+## 2026-07-31 - Draft IBEC amendment request written for the HR-recovery arm
+
+**Set out to do:** draft the ethics-amendment submission text needed to unblock the seated
+HR-recovery arm proposed earlier the same day.
+
+**Worked (with evidence):**
+
+- **Wrote `notes/ethics_amendment_hr_recovery.md`** — a 12-section amendment request against
+  approval `24IBEC051`: administrative header, requested change, what is currently approved,
+  scientific justification, alternatives considered, the procedure, risk assessment, risk
+  mitigation, consent changes, fallback, what does not change, determination requested, and a
+  pre-submission checklist.
+- **The scientific justification (§4) is the load-bearing section and is fully traceable.** It
+  states the measured defect in plain language for a non-specialist reader: within-session PR
+  spread 2.6–5.2 bpm against a ±5 bpm tolerance; over comparator-admissible windows, spread
+  1.0–8.0 bpm and a constant predictor correct on **100% of windows in all eight recordings**.
+  It draws the honest conclusion — that no HR result under the approved protocol can be
+  falsified, and that running 20 sessions unchanged would ask 10 people for their time to
+  produce data incapable of supporting or refuting the claim.
+- **§5 records the rejected alternatives** (RSA paced breathing, natural day-to-day variation,
+  cold pressor) with the technical reason each fails. Included deliberately: boards expect to
+  see that less-invasive options were considered, and the reasons are real rather than
+  decorative.
+- **§10 states the fallback honestly rather than presenting it as equivalent** — a seated
+  mental-arithmetic task gives only ~5–15 bpm, may fail the ≥20 bpm adequacy criterion, and
+  the stated consequence is that HR becomes a feasibility result and the headline claim
+  narrows to BR.
+- Cross-referenced from `notes/protocol.md`'s ethics gate and from `HANDOFF.md` §2.2 and its
+  pointers table.
+
+**Failed / did not work, and why:**
+
+- **It is a draft and must not be submitted as it stands.** Three blocking caveats are written
+  into the document header rather than left implicit:
+  - **22 unresolved `[[PLACEHOLDER]]` markers**, covering PI name, approval date, project
+    title, emitted-power figure, exertion modality, HR target, participant/session count,
+    supervision and first-aid arrangements, and the board's own risk vocabulary. Each marks
+    something that could not be verified from the project record. Guessing any of them would
+    put an unverified claim in front of an ethics board.
+  - **§7 (risk) and §8 (mitigation) were written without medical training** and are flagged
+    in-document as needing qualified review, not as finished text. The exertion modality and
+    heart-rate target in §6 need the same review.
+  - **It is content, not format** — it must be transposed into IBEC's own amendment form.
+- **PAR-Q+ is named but deliberately not cited.** Marked `[[CITATION NEEDED]]` to be cited
+  from source in the final submission — CLAUDE.md §4 forbids invented citations, and a
+  misremembered version number in an ethics submission is worse than an obvious gap.
+- The full formal expansion of "IBEC" is still unconfirmed and is now blocking two things:
+  this submission and the paper's Methods section.
+
+**Retired / no longer used:** nothing.
+
+**Next:** resolve the placeholders; obtain medical review of §6–§8; decide whether the arm is
+a third session for the 10 subjects, a methods-development subset, or team-only in the first
+instance (§6 — the board will expect a definite answer and it changes the risk calculus);
+then transpose and submit. Independent cross-review of the underlying protocol amendment
+(CLAUDE.md §6) is still outstanding and is separate from the ethics route.
+
+## 2026-08-03 - IBEC approved the exertion amendment; recovery arm is live protocol, three gates behind it
+
+**Set out to do:** the user reported that IBEC, KAUST approved the amendment to `24IBEC051`
+using the drafted submission, and pointed at the filled-in document for details. Propagate the
+approval through every document the protocol's own header rule requires.
+
+**Worked (with evidence):**
+
+- **Read the approved parameters from `notes/ethics_amendment_hr_recovery.md`** (filled in and
+  submitted by the user; PI Slim Alouini, submitting researcher Jose Maria Sosa, project
+  *Contactless Heart-Rate Estimation with a 77 GHz FMCW Radar*, parent approval dated
+  2026-05-25, amendment submitted 2026-07-25): **self-paced step-ups to 100–120 bpm, under
+  4 minutes**, in the lab with the researcher present and the Masimo worn throughout;
+  monitored afterwards until PR is within **5 bpm** of pre-exertion resting; **a third session
+  for the existing 10 participants**; residual risk rated 2 on the board's scale.
+- **`notes/protocol.md` — arm promoted from PROPOSED to approved**, with the placeholders
+  replaced by the approved values, the stopping rules and continuous-monitoring requirement
+  written into the procedure, and a new mandatory **"Screening and exclusions"** block
+  (PAR-Q+ before any exertion, any positive response excluding the subject *from this arm
+  only*; the cardiovascular/respiratory/musculoskeletal/pregnancy/HR-medication/acute-illness
+  exclusions; amended consent and information sheet). Recorded that beta blockers are excluded
+  on two grounds — risk, and flattening the very HR response the arm depends on.
+- **Study design updated to 10 subjects × 3 sessions**, order fixed natural → paced →
+  recovery. Recovery is placed **last deliberately**: it is the only arm involving exertion, so
+  a subject who withdraws after it still contributes two complete arms. Also required not to
+  fall on the same day as another session, so residual fatigue cannot confound the recovery
+  curve.
+- **Propagated per `notes/protocol.md`'s header rule**, which the 2026-07-31 draft had
+  deliberately deferred until approval: **CLAUDE.md §1** now states that an HR agreement claim
+  counts only on sessions carrying HR dynamic range, with the measured justification;
+  **`notes/approach.md` §8** updated to 3 sessions with the same caveat.
+  **`scripts/live_demo_config.yaml` verified genuinely unaffected** — the arm changes no DSP
+  setting.
+- **Found the pre-spec conflict and, importantly, the correct route for it.**
+  `notes/analysis_prespec.md` §1 specifies 10 × 2 sessions and `a ∈ {natural, paced}`. The
+  first framing written into the protocol called this a §4 amendment; **that was wrong and was
+  corrected** — the pre-spec's own header says it is "ready for the M0 freeze — **NOT yet
+  frozen**", so this is a **pre-freeze edit, and no new version DOI is implied.** A dated
+  PENDING banner was added to the existing pre-freeze edit log rather than editing the frozen
+  estimand text, so the contradiction is visible instead of silent.
+- **Recorded what the 3-arm extension does and does not break.** The two-level variance model
+  survives intact: with one session per arm per subject still true at three arms, the
+  "no session-within-subject variance component" argument is unchanged. Recovery is a third
+  non-exchangeable regime, so it takes its own `μ_a` and LoA and is never pooled (M3R-27).
+
+**Failed / did not work, and why:**
+
+- **Nothing can be captured yet, and the approval does not change that.** Three separate
+  points, all now written into `HANDOFF.md` §2.2 because the natural reading of "ethics
+  approved" is the opposite:
+  - **The M0 gate is untouched.** No study capture until the pre-registration is deposited,
+    and that gate sits before M5. Session 3 is a study session.
+  - **Ethics approval is not scientific review.** The arm has still not had its CLAUDE.md §6
+    cross-review; the board ruled on safety and consent, not on whether the design answers the
+    question.
+  - **The pre-spec edit is not done**, so protocol and pre-spec currently disagree.
+- **A live risk was identified and is not yet resolved: the evidence floor may be unreachable
+  in this arm.** The recovery arm is deliberately non-stationary, while HR admissibility
+  requires within-window PR spread ≤ 5 bpm (`src/comparator.py:_HR_STATIONARITY_MAX_BPM`), so
+  early-recovery windows will legitimately fail. Whether the §2a/§2b floor is **arm-specific**
+  must be decided *before* the M0 freeze — a floor adjusted after seeing this arm's yield is
+  not a floor. Flagged in three places; not decided.
+- **A wording mismatch survives in the approved document and was deliberately not "fixed".**
+  Its exclusion list says "any condition making **stair climbing** inadvisable" while the
+  agreed modality is **step-ups**. The intent is plainly the same class of exertion. Editing an
+  approved submission after the fact would be falsifying the record, so the approved wording
+  stands and the operational criterion is read as "the exertion in §6". Noted in
+  `notes/protocol.md` in case the board ever raises it.
+- **One field is still unrecorded:** the amendment's own determination reference and date as
+  issued by the board. Left as an explicit `[[RECORD]]` marker in `notes/protocol.md` rather
+  than guessed — it will be wanted for the paper's Methods, alongside the still-outstanding
+  formal expansion of "IBEC".
+
+**Retired / no longer used:** the mental-arithmetic fallback (§10 of the submission). It
+existed only in case exertion was refused; it was not, so it is moot and must not be run in
+place of the approved arm.
+
+**Next:** CLAUDE.md §6 cross-review of the recovery arm; the `notes/analysis_prespec.md`
+pre-freeze edit (3 arms + the arm-specific evidence-floor decision). Those two are now the
+shortest path to a deposit-ready M0, since the pre-spec cannot be frozen while it contradicts
+the protocol.
+
+**Addendum (same session):** a consistency sweep for residual two-session claims found three
+further conflicts beyond the arm set, all inside the §2b evidence floor, and they are now
+enumerated in the pre-spec's PENDING banner rather than left to be discovered at freeze time:
+(1) the per-subject floor is defined as "≥ 4 evaluable windows **across the 2 sessions**", so
+its denominator changes; (2) the miss rule has branches only for natural and paced and none for
+a recovery arm that misses; (3) §2b's **"No add-sessions lever"** clause declares the
+*"`24IBEC051` permits > 2 sessions/subject?"* question (A5(a)) **moot** — now contradicted on
+its face. The distinction the edit must draw: the recovery arm is *not* an add-sessions lever in
+the §2b sense (it does not add sessions to raise evidence yield; it adds an arm to make the HR
+claim falsifiable), and Option A still narrows rather than recruits. Stated explicitly because a
+reviewer would otherwise read a plain contradiction. `notes/protocol.md`'s "Resolved" section,
+which still said 10 × 2, was corrected.
+
+## 2026-08-03 - M0 pre-registration REMOVED from the project; focus switched to the two published methods
+
+**Set out to do:** on user instruction — "I will not be doing M0, remove it from the project" —
+remove the pre-registration milestone and its gate, then re-point the project at establishing
+whether either published method (Ahmed HA, Kotte joint-Doppler) recovers HR or BR.
+
+**Worked (with evidence):**
+
+- **M0 removed, not postponed.** `plans/implementation_plan.md` Track 0 replaced with a dated
+  removal record; the milestone map, critical path and "immediate next actions" rewritten around
+  Track C. The **hard gate on study captures is gone** — M5/M6/M7 are no longer blocked by
+  governance.
+- **Drew the line between the deposit and the specs, which is what makes this safe.** Removed:
+  the freeze, the deposit, the DOI, the amendment-by-re-deposit machinery. **Kept, and explicitly
+  marked must-not-delete:** `notes/analysis_prespec.md`, `comparator_prespec.md`,
+  `comparator_prespec_br.md`, `protocol.md`, `capture_inventory.md`. Code depends on them —
+  `src/m4/window_grid.py` cites `analysis_prespec` §7 as its authority and hard-errors against it,
+  and `src/comparator.py` implements `comparator_prespec`. They are reframed as **internal
+  engineering specs**. The frozen-grid invariants stay frozen: they keep results comparable across
+  runs, which never depended on pre-registration.
+- **`plans/m0_preregistration.md` and `plans/m0_b1_evidence_floor_memo.md` marked RETIRED in
+  place, not deleted** (CLAUDE.md §9), with a banner separating what is dead (freezing,
+  depositing, DOIs) from what survives as a design target (the evidence-floor reasoning).
+- **The cost recorded once, in three places** (`implementation_plan.md` Track 0, `HANDOFF.md` §4,
+  and banners on both writing files): **nothing in this project is pre-registered**, so agreement
+  results are exploratory/descriptive, never confirmatory, and no "pre-registered",
+  "pre-specified", "frozen before data" or "confirmatory" language about this study's own results
+  may reach `JOURNAL_PAPER.md` or `THIRD_CHAPTER.md`.
+- **Rules that survive M0's removal were identified and kept**, because they were never
+  governance: **synthetic-control-first** (a method rule about not believing your own
+  implementation); **prospective-only** changes (what stops a threshold being chosen after seeing
+  the data it will be judged on); the pilot's exclusion from M6 metrics (data allowed to change
+  the rules cannot also be evidence under them); and CLAUDE.md §6 cross-review.
+- **Focus switched to Track C** and recorded as the critical path: **M8** (Ahmed, Harmonic
+  Accumulation — DOI 10.1109/TRS.2024.3412915) and **M9** (Kotte, joint high-amplitude-difference
+  Doppler — DOI 10.1109/TRS.2024.3352189). Both are simulation-only papers targeting exactly the
+  problem this project is stuck on; M8's own plan entry already calls it "the cheapest high-value
+  milestone in the plan".
+- Suite re-run after the sweep: **2077 passed, 5 skipped** — documentation-only changes, no code
+  touched.
+
+**Failed / did not work, and why:**
+
+- **The paper loses its planned headline, and this is not yet resolved.** `JOURNAL_PAPER.md`
+  listed "comparator pre-registration" as the primary novelty (§ Headline, §10, and the abstract
+  sketch at line ~277: *"pre-registered before data collection"*). That claim is no longer
+  available. A banner now voids it, and the banner names the strongest remaining candidate — the
+  **first real-data validation of two simulation-only published methods under one common
+  comparator with coverage reported** — but **neither writing file has been rewritten around it.**
+  That is an open task, deliberately not attempted in the same pass as the removal.
+- **`THIRD_CHAPTER.md` §7.2 is titled "The pre-registered specification … registered 2026-07-14"**
+  and §7.1/§10.1 make similar claims. Banner-voided only; the prose still needs rewriting.
+- **10 residual "M0" mentions remain in `plans/implementation_plan.md`** and more across
+  `plans/m3_*`, `plans/m4_*`, `notes/comparator_prespec_br.md`, `notes/capture_inventory.md` and
+  `notes/note_stage1b_lag_statistic.md`. All are now historical references inside review logs and
+  older notes rather than live instructions, and review logs are append-only records of what was
+  reviewed at the time. Not rewritten; flagged here so nobody reads one as current.
+- The `notes/analysis_prespec.md` 3-arm PENDING banner is unchanged in substance but downgraded
+  from a pre-deposit blocker to an internal-consistency debt. **It still decides what M6 can
+  claim**, so it is not dismissed.
+
+**Retired / no longer used:** M0 in its entirety — the freeze, the deposit, the DOI, the
+amendment-by-re-deposit mechanism, and the hard gate on study captures. The mental-arithmetic
+ethics fallback was already moot (2026-08-03 earlier entry).
+
+**Next:** M8 real-data arm (finish the runner's decode/dispatch loop and production serializer,
+then score HA on the eight captures as a BR and HR estimator), and M9 synthetic controls. Read
+`HANDOFF.md` §2.1 first: the eight captures can demonstrate **BR agreement** and **HR
+coverage/feasibility**, but **not HR tracking** — a constant predictor scores 100% on every
+admissible window. Design the comparison to state that limit up front.
+
+## 2026-08-03 - Pre-registration language purged from both writing files; headline replaced
+
+**Set out to do:** on user instruction — remove every "pre-registered specification" claim from
+`THIRD_CHAPTER.md` and `JOURNAL_PAPER.md` (not just banner them), record the removal in
+`HISTORY.md` so it cannot resurface, and adopt the replacement headline.
+
+### THE STANDING RULE — read this before writing any manuscript text
+
+**M0 (pre-registration) was REMOVED from this project on 2026-08-03. It is not postponed, not
+deferred, and not pending. There is no deposit, no DOI, and no registration of any kind.**
+
+Therefore, **in `JOURNAL_PAPER.md`, `THIRD_CHAPTER.md`, any manuscript, abstract, title, cover
+letter, rebuttal or talk**, the following may **never** be claimed about this study's own
+specifications or results:
+
+- "pre-registered", "preregistered", "pre-specified", "specified in advance"
+- "frozen before data", "registered <date>", "deposited"
+- "confirmatory" (as a status claim about our own results)
+
+**What IS true and IS defensible, and should be said instead:** the comparator and analysis
+specifications are **written down in full and applied identically to every estimator compared**
+(`notes/comparator_prespec.md`, `notes/comparator_prespec_br.md`, `notes/analysis_prespec.md`).
+That is a **transparency** contribution, not a **timing** contribution. It is what makes the
+method comparison interpretable, and it is checkable by any reader. Claiming more is the same
+class of error as the withdrawn "MAE 0.16 bpm", and a reviewer who checks dates will catch it.
+
+**All agreement results in this project are exploratory / descriptive.** Nothing is confirmatory.
+
+**Anyone — human or agent — who finds pre-registration framing in a planning or manuscript file
+should delete it, not restore it.** If a future session believes pre-registration should return,
+that is a new decision requiring the user's explicit instruction, and it would have to start from
+scratch: the specs exist, but no timing claim can ever be made about documents written after the
+eight existing captures.
+
+### Worked (with evidence)
+
+- **`JOURNAL_PAPER.md` rewritten**, not merely banner-flagged: the contributions table, the
+  venue-recommendation rationale (§3.3), the Paper A headline row (§3.4), the comparator-argument
+  paragraph (§4.1), the manuscript outline rows for Abstract / I / II / V (§5), **all three title
+  options** (§6), the **full abstract skeleton** (§6), the Bland–Altman model note, the
+  reproducibility/open-science section (§10), and the immediate-next-actions list (§12).
+- **`THIRD_CHAPTER.md` rewritten**: the claimed-contributions list (§1 — new headline inserted as
+  item 1, old item 1 rewritten as a transparency claim, **remaining items renumbered 3–6**), the
+  protocol paragraph (§3, also corrected to 10 × **3** sessions), the related-work gap statement
+  (§4), the comparator-bridge paragraph (§7.1), the **§7.2 heading** (was "The pre-registered
+  specification … registered 2026-07-14"), the Bland–Altman note, the **§10.1 heading**, the §11.6
+  heading, the §13 next-actions item 2, the §17 engineering-practices list, and the framing advice.
+- **Verified by sweep.** After the rewrite, `grep -Ei "pre-?regist|pre-?specif|frozen before|
+  confirmatory|registered [0-9]|deposit"` returns **seven** hits across both files and **every one
+  is a prohibition or a negation** ("*not* pre-registered", "must not be described as one", "Do
+  not reintroduce…", "Never describe them as…"). **No affirmative claim survives in either file.**
+- **Headline replaced, per user agreement:** *first real-data validation of two simulation-only
+  published methods (Ahmed harmonic accumulation [R1]; Kotte joint high-amplitude-difference
+  Doppler [R2]) under one common comparator, with coverage reported.* Both papers claim to solve
+  the respiratory-harmonic problem; neither has been tested outside simulation. This is now
+  contribution 1 in the chapter, the Paper A headline, title option 1, and the opening of the
+  abstract skeleton.
+
+### Failed / did not work, and why
+
+- **The new headline is IN PROGRESS, not done, and the files say so.** M8's real-data arm has
+  never opened a capture and M9 has not started. If the methods work is abandoned, the paper has
+  no headline — the old one is gone and cannot be reinstated.
+- **A known limit is now baked into the paper plan rather than left to surface in review:** the
+  eight existing captures can support **BR agreement** and **HR coverage/feasibility** but **not
+  HR tracking** (a constant predictor scores 100% on every admissible window — `HANDOFF.md` §2.1).
+  `JOURNAL_PAPER.md` §12 item 2 now states this explicitly.
+- Residual historical "M0" mentions remain in append-only review logs under `plans/` (`m3_*`,
+  `m4_*`) and in `notes/comparator_prespec_br.md`, `notes/capture_inventory.md`,
+  `notes/note_stage1b_lag_statistic.md`. Those are records of what was reviewed at the time, not
+  live instructions, and rewriting them would falsify a review record. **They are not a licence to
+  reinstate the claim** — this entry governs.
+
+**Retired / no longer used:** "Comparator pre-registration" as the paper's primary novelty; all
+three original title options; the original abstract skeleton's pre-registration sentence; and the
+§10 action "publicly deposit the comparator pre-registration".
+
+**Next:** M8 real-data arm and M9 synthetic controls — the headline now depends on them.

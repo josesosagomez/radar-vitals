@@ -1,3 +1,22 @@
+> # ⚠ PRE-REGISTRATION CLAIMS IN THIS FILE ARE VOID — 2026-08-03
+>
+> **M0 (pre-registration freeze and deposit) was removed from the project by user decision.**
+> No deposit exists, no DOI exists, and **nothing in this study is pre-registered.**
+>
+> Every occurrence below of "pre-registered", "pre-specified", "frozen before data",
+> "deposited", "registered <date>" or "confirmatory" **about this study's own results** is
+> obsolete and must not reach the manuscript. The comparator specifications still exist and are
+> still applied — they are **internal engineering specs** (`notes/comparator_prespec*.md`,
+> `notes/analysis_prespec.md`), not registrations, and must be described that way.
+>
+> **This affects the planned headline.** "Comparator pre-registration" was listed here as the
+> paper's primary novelty; that claim is no longer available. The strongest remaining candidate
+> is the **first real-data validation of two simulation-only published methods** (M8 Ahmed,
+> M9 Kotte) under one common comparator with coverage reported — which is now the project's
+> active work. **This file has not yet been rewritten around that; doing so is an open task.**
+>
+> See `plans/implementation_plan.md` "Track 0", `HANDOFF.md` §4, `HISTORY.md` 2026-08-03.
+
 # Journal Paper — planning and content source
 
 > **What this file is.** Everything needed to write and place a journal paper from this project:
@@ -16,7 +35,8 @@
 > (see `HISTORY.md`, same date): the test count, the respiration-collapse count (4/4 → 3/3), the
 > Bland–Altman treatment (pooled-independent is invalid for a repeated-measures design), the
 > per-distance claim (downgraded to descriptive — the protocol does not stratify distance), the
-> pre-registration's defensible strength (§10), and the session size (recordings are now 10 min).
+> the comparator specification's status (§10 — see the 2026-08-03 banner), and the session size
+> (recordings are now 10 min).
 >
 > **This is a living document.** The project is ongoing. The readiness gate in §1, the claim
 > rankings in §3.2, and the results in §4 are all expected to change as data arrives — that is
@@ -39,7 +59,8 @@
 | Coverage at a defensible level | **WEAK** — 10–46% of windows produce an estimate |
 | Ethics approval / informed consent for human subjects | **OBTAINED** (confirmed 2026-07-23) — record the reference number for the Methods section (§10) |
 | Working system, verified | **DONE** [VERIFIED — 796 passed, 1 xfailed] |
-| Pre-registered evaluation methodology | **DONE** [VERIFIED — a genuine differentiator] |
+| Explicit, auditable evaluation methodology | **DONE** — specified and applied consistently. *Not* pre-registered (M0 removed 2026-08-03), so it is a transparency contribution, not a timing claim |
+| **First real-data validation of two simulation-only published methods** | **IN PROGRESS** — the headline. M8 (Ahmed HA) / M9 (Kotte joint-Doppler) |
 | Reproducible pipeline, seeds, hashes | **DONE** |
 
 **Minimum viable path to submission**, in order:
@@ -62,7 +83,8 @@ from one subject, on ~10–20% of windows, from sessions that informed the metho
 with a single scorable window in one session. A reviewer who notices any of that — and a good
 one will — will distrust the whole paper. Our own project history contains exactly this lesson:
 a "MAE 0.16 bpm" result was reported internally and had to be withdrawn once the comparator was
-pre-registered (§4.1). **Lead with the methodology, report accuracy with coverage attached.**
+written down explicitly (§4.1). **Lead with the method comparison, report accuracy with coverage
+attached.**
 
 ---
 
@@ -81,8 +103,9 @@ You said high-impact and undecided. Here is the honest landscape for *this* pape
 | **IEEE J. Electromagnetics, RF and Microwaves in Medicine and Biology (J-ERM)** | ~3 | **Good topical fit** — RF for medicine | Smaller, specialised readership | Reasonable niche fallback |
 
 **Recommendation: target JBHI.** It rewards exactly what this project has (a real system, a
-clinical reference, honest agreement statistics) and what makes it distinctive (the comparator
-pre-registration). TBME is the better home if you decide the *methodology* is the headline
+clinical reference, honest agreement statistics) and what makes it distinctive (the first
+real-data test of two published simulation-only methods, scored under one common comparator with
+coverage reported). TBME is the better home if you decide the *methodology* is the headline
 rather than the sensor. Keep npj Digital Medicine as a later ambition contingent on a clinical
 cohort, not as a target for this manuscript.
 
@@ -142,7 +165,7 @@ evaluation methodology, and the bin-selection fix.**
 
 | | **Paper A — "How to evaluate"** | **Paper B — "System + validation"** |
 |---|---|---|
-| Headline | Comparator pre-registration; coverage-aware reporting; two silent failure modes | A 77 GHz seated HR system validated against a clinical reference across 10 subjects |
+| Headline | First real-data validation of two simulation-only published methods under one common comparator; coverage-aware reporting; two silent failure modes | A 77 GHz seated HR system validated against a clinical reference across 10 subjects |
 | Venue | TBME, JBHI | JBHI, IEEE Sensors J. |
 | Needs 10 subjects? | Strongly preferred, not strictly required | **Yes, absolutely** |
 | Risk | "Methodology paper without enough data" | Crowded field; needs competitive numbers |
@@ -172,9 +195,11 @@ the arithmetic mean of instantaneous rates. When the reference moves inside the 
 no single true value, and no comparator is defensible — so the fix is to detect and exclude that
 case, not to pick a cleverer average.
 
-The pre-registered specification (median PI-gated PR, ≥80% sample coverage, and a stationarity
-gate at 5 bpm derived from the 2 bpm FFT bin width — 2.5 bins, not a tuned value) follows from
-that argument. Report exclusion sensitivity at 3 / 5 / 8 bpm so the choice is auditable.
+The specification we adopt (median PI-gated PR, ≥80% sample coverage, and a stationarity gate at
+5 bpm derived from the 2 bpm FFT bin width — 2.5 bins, not a tuned value) follows from that
+argument. It is stated in full and applied uniformly to every estimator compared, which is what
+makes the comparison meaningful; it is **not** a pre-registration, and must not be described as
+one. Report exclusion sensitivity at 3 / 5 / 8 bpm so the choice is auditable.
 
 ### 4.2 Pilot agreement [PRELIMINARY — report with every caveat attached]
 
@@ -237,12 +262,12 @@ Assumes a ~9,000-word JBHI/TBME-style paper; compress for IEEE Sensors J.
 | Section | Content | Words | Source |
 |---|---|---|---|
 | **Title** | §6 | — | — |
-| **Abstract** | Problem → gap (comparator + silent failures) → what we did → key numbers with coverage → implication | 200 | — |
-| **I. Introduction** | Contactless monitoring motivation [R7, R11]; harmonic interference problem; the two gaps (unreported comparator, unreported coverage); contribution list | 1000 | CH §1 |
-| **II. Related work** | Table of the six harmonic-interference approaches; foundations [R5–R8]; explicit statement that none pre-register a comparator or report coverage | 1200 | CH §4 |
+| **Abstract** | Problem → gap (two published methods never tested on real data; comparator + silent failures) → what we did → key numbers with coverage → implication | 200 | — |
+| **I. Introduction** | Contactless monitoring motivation [R7, R11]; harmonic interference problem; the gaps (two leading methods are simulation-only; unreported comparators; unreported coverage); contribution list | 1000 | CH §1 |
+| **II. Related work** | Table of the six harmonic-interference approaches; foundations [R5–R8]; **which of them have ever been run on real radar data** (Ahmed and Kotte have not); explicit statement that none states its comparator or reports coverage | 1200 | CH §4 |
 | **III. Signal model and system** | FMCW ranging, phase-displacement relation (3.2 rad/mm at 77 GHz), the harmonic sum model, hardware and chirp table, protocol | 1500 | CH §2, §3 |
 | **IV. Method** | ECA + AHET spec with equations; deviations from [R1] declared; **warmup bin selection with the energy-eligibility rule**; diagnostics commitment | 1800 | CH §5, §6, §9 |
-| **V. Evaluation methodology** | The comparator problem; the pre-registered spec; why 5 bpm is derived from FFT resolution; non-overlapping windows; coverage-with-accuracy rule; Bland–Altman [R16] | 1300 | CH §7 |
+| **V. Evaluation methodology** | The comparator problem; the explicit comparator specification applied uniformly to every estimator; why 5 bpm is derived from FFT resolution; non-overlapping windows; coverage-with-accuracy rule; Bland–Altman [R16] | 1300 | CH §7 |
 | **VI. Results** | Comparator demonstration; per-subject agreement + Bland–Altman [PENDING]; coverage; mislock case study; baselines [PENDING]; 18 bpm arm reported separately | 1800 | CH §10 |
 | **VII. Discussion** | Coincidence identifiability limit; why harmonic verification cannot reject a respiratory harmonic; accuracy–coverage trade-off; what this implies for reading the literature | 1200 | CH §12 |
 | **VIII. Limitations** | Explicit, unhedged (§8 below) | 500 | CH §12.6 |
@@ -259,30 +284,38 @@ of methodology papers look for it there.
 
 **Title options** (all avoid claiming accuracy we cannot yet defend):
 
-1. *"How You Compare Matters: Pre-Registered Evaluation of Contactless Heart-Rate Estimation with
-   a 77 GHz FMCW Radar"* — leads with the methodology claim.
+1. *"Do They Work on Real Radar? First Empirical Evaluation of Two Simulation-Only Methods for
+   mmWave Vital-Sign Estimation"* — leads with the headline claim.
 2. *"Coverage, Comparators, and Silent Failures in mmWave Radar Heart-Rate Estimation"* — leads
-   with the three findings; strong for TBME.
-3. *"Contactless Heart-Rate Estimation with a 77 GHz FMCW Radar: A Pre-Registered Agreement Study
-   Against Pulse Oximetry"* — conventional, best for JBHI, safest.
+   with the findings; strong for TBME.
+3. *"Contactless Heart-Rate and Breathing-Rate Estimation with a 77 GHz FMCW Radar: An Agreement
+   Study Against Pulse Oximetry"* — conventional, best for JBHI, safest.
+
+> **Do not reintroduce "pre-registered" into any title.** M0 was removed 2026-08-03; the claim is
+> unavailable. See the banner at the top of this file.
 
 **Abstract skeleton** (fill bracketed values from the 10-subject study):
 
 > Contactless heart-rate estimation from millimetre-wave radar is limited by respiratory
 > harmonics that fall inside the cardiac band. Reported accuracies across the literature are
-> difficult to compare, because the mapping from a windowed radar estimate to an instantaneous
-> physiological reference is an unreported degree of freedom. We implement an extensive
-> cancellation and harmonic-verification pipeline on a 77 GHz FMCW radar for seated subjects at
-> 0.8–1.4 m, and evaluate it against a fingertip pulse oximeter under a comparator specification
-> pre-registered before data collection. We show that the same radar output, scored against the
-> same reference by two defensible comparators, differs by [17×] in mean absolute error —
-> exceeding the reported differences between competing methods. We further identify two silent
-> failure modes: a range-bin selection error that produces a confident but entirely spurious
-> heart rate [28 dB below the true chest return], and a structural limitation whereby
-> second-harmonic verification cannot reject a respiratory harmonic. Across [N] subjects, the
+> difficult to compare, and two of the leading proposed remedies — harmonic accumulation [R1] and
+> joint high-amplitude-difference Doppler [R2] — have been evaluated **only in simulation**. We
+> give both their first evaluation on real radar data, alongside an extensive-cancellation and
+> harmonic-verification pipeline, on a 77 GHz FMCW radar for seated subjects at 0.8–1.4 m,
+> validated against a fingertip pulse oximeter. All estimators are scored on identical
+> non-overlapping windows under a single explicitly stated comparator, with coverage reported
+> alongside accuracy. [Headline finding: which methods transfer to real data and which do not.]
+> We further show that the mapping from a windowed radar estimate to an instantaneous
+> physiological reference is itself an unreported degree of freedom: the same radar output,
+> scored against the same reference by two defensible comparators, differs by [17×] in mean
+> absolute error — exceeding the reported differences between competing methods. We identify two
+> silent failure modes: a range-bin selection error that produces a confident but entirely
+> spurious heart rate [28 dB below the true chest return], and a structural limitation whereby
+> second-harmonic verification cannot reject a respiratory harmonic. Across [N] subjects the
 > system achieves [MAE] bpm on [coverage]% of windows [with Bland–Altman limits of agreement of
-> ±X bpm]. We argue that agreement claims in this field require a pre-registered comparator and
-> must report coverage alongside accuracy.
+> ±X bpm]. We argue that simulation-only results should not be cited as solutions until tested on
+> real data, and that agreement claims in this field must state their comparator and report
+> coverage alongside accuracy.
 
 ---
 
@@ -302,7 +335,8 @@ Each must come from a committed script in `figures/` — no hand-edited figures.
    measurements)**. `scripts/plot_bland_altman.py` may be reused for *plotting only*: its
    statistics pool every window as an independent pair (`se_loa = sqrt(3·SD²/n)`, no subject or
    session term), which for 10 subjects × 2 sessions × ~19 windows yields falsely narrow limits.
-   The model must be pre-specified in the deposit — see `plans/implementation_plan.md` M0/M4.
+   The model is specified in `notes/analysis_prespec.md` §1 (an internal engineering spec, not a
+   registration) and must be stated in the Methods.
 7. Radar HR vs Masimo PR time series, rejected windows shaded.
 8. Coverage vs accuracy trade-off across gate settings.
 
@@ -366,21 +400,19 @@ Reviewers penalise concealment far more than limitation. State all of these plai
   is impractical. Note the ethics follow-up above: approval to *collect* is not automatically
   approval to *share*.
 - **Code availability.** The repository is a genuine strength — tests, pinned environment, seeds,
-  input hashing, pre-registered specifications. Plan a cleaned public release; it is an easy
-  credibility win in review.
-- **Pre-registration — and state its strength precisely.** `notes/comparator_prespec.md` was
-  registered internally before the relevant captures. Deposit it publicly (OSF or similar)
-  **before** the pilot, so the claim is externally verifiable rather than self-asserted. This
-  materially strengthens the paper's central argument.
+  input hashing, and explicit written specifications for the comparator and the analysis. Plan a
+  cleaned public release; it is an easy credibility win in review.
+- **Publish the comparator and analysis specifications alongside the code** —
+  `notes/comparator_prespec.md`, `notes/comparator_prespec_br.md`, `notes/analysis_prespec.md`.
+  Describe them as **specifications applied uniformly to every estimator compared**, which is what
+  makes the method comparison interpretable. That is a genuine and checkable contribution.
 
-  > **The defensible claim is "frozen before the confirmatory data", NOT "before any data
-  > existed."** Four captures already exist and they **informed the method's design** (see
-  > [THIRD_CHAPTER.md §10.1](THIRD_CHAPTER.md) — exploratory, not held-out), so no deposit made now
-  > can predate the data that shaped the method. What the deposit *can* do — and what carries the
-  > argument — is predate every capture the agreement numbers are computed on. The deposit should
-  > therefore **enumerate every capture in existence at freeze time** and label it exploratory.
-  > Overstating this is the same class of error as the withdrawn "MAE 0.16 bpm" (§4.1), and a
-  > reviewer who checks the dates will catch it.
+  > **Never describe them as pre-registered, and make no timing claim about them.** M0 was removed
+  > on 2026-08-03: nothing was deposited, no DOI exists, and the captures that exist informed the
+  > method's design. Claiming or implying otherwise is the same class of error as the withdrawn
+  > "MAE 0.16 bpm" (§4.1), and a reviewer who checks will catch it. The honest and still-strong
+  > framing is: *one comparator, stated in full, applied identically to every method compared,
+  > with coverage reported.*
 - **Preprint.** arXiv (eess.SP) is standard in this field and compatible with IEEE policy.
 - **Author contributions, funding, conflicts** — collect early.
 
@@ -453,11 +485,15 @@ annotated versions with the role each plays in the argument are in
 
 1. **Run a live hardware smoke test** before subject 1 — the live capture path has not been
    exercised since 2026-07-14. This is now the first blocker.
-2. **Publicly deposit the comparator pre-registration** before the study — it converts the
-   paper's main claim from self-asserted to verifiable. Time-sensitive: it only counts as a
-   pre-registration if it is deposited *before* the data it governs is collected.
-3. **Run the 10-subject study**, including the collision-provoking arm. Ethics approval is in
-   hand; log the reference number for the Methods section.
+2. **Deliver the headline: M8 (Ahmed HA) and M9 (Kotte joint-Doppler) on the eight existing
+   captures.** This is the paper's primary contribution and needs no new subject data. Note the
+   limit measured 2026-07-31: those captures can support **BR agreement** and **HR
+   coverage/feasibility**, but **not HR tracking** — a constant predictor scores 100% on every
+   admissible window (`HANDOFF.md` §2.1). State that limit in the paper rather than letting a
+   reviewer find it.
+3. **Run the 10-subject study**, including the collision-provoking arm and the recovery arm.
+   Ethics approval is in hand (`24IBEC051` + the 2026-08-03 exertion amendment); log the
+   reference numbers for the Methods section.
 4. **Choose Paper A or Paper B** (§3.4) once the data is in and you can see how the numbers land.
 5. **Run the baselines** — the single most common reason a paper like this gets rejected.
 6. **Complete every `[CITATION NEEDED]`** in §11.
