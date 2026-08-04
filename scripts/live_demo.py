@@ -222,6 +222,13 @@ class LiveFrameSource(FrameSource):
         self.zero_filled_bytes: int = 0
         self.mirror_truncated_bytes: int = 0
         self._frame_idx: int = 0
+        #: UTC epoch at receipt of the FIRST data packet of the stream, and the leading
+        #: zero-fill that preceded it. Together these give frame 0's true epoch — which
+        #: `start_wall_utc` does not, because it is written before the sensor is even
+        #: configured (chirp-profile upload over UART takes seconds). Scoring a 30 s window
+        #: grid against a 5-15 s error is a third of a window; see `_frame0_epoch_utc`.
+        self.t_first_packet_utc: float | None = None
+        self.leading_zero_filled_bytes: int = 0
 
     def start(self) -> None:
         import socket as _socket
@@ -273,6 +280,11 @@ class LiveFrameSource(FrameSource):
 
                 if first_seq is None:
                     first_seq = seq
+                    # Stamped here, not at frame assembly: this is the closest observable
+                    # moment to the radar emitting frame 0. Receipt lags emission by
+                    # transmission + buffering (tens of ms), far below the 1 Hz resolution
+                    # of the Masimo reference, so it is not worth modelling.
+                    self.t_first_packet_utc = datetime.now(timezone.utc).timestamp()
                     # Leading-loss zero-fill: only for a fresh stream we started.
                     # In --no-configure mode we are attaching mid-stream; seq may be
                     # 50000+, so zero-filling that many packets would corrupt alignment.
@@ -285,6 +297,7 @@ class LiveFrameSource(FrameSource):
                         if mirror:
                             mirror.write(zeros)
                         self.zero_filled_bytes += gap_bytes
+                        self.leading_zero_filled_bytes = gap_bytes
                 elif seq > last_seq + 1:
                     # Mid-stream gap
                     gap = seq - last_seq - 1
@@ -323,6 +336,19 @@ class LiveFrameSource(FrameSource):
                         with self._raw_mirror_path.open("r+b") as fh:
                             fh.truncate(size - remainder)
                         self.mirror_truncated_bytes = remainder
+
+    def frame0_epoch_utc(self, frame_rate_hz: float) -> float | None:
+        """True UTC epoch of frame 0, or None if no packet ever arrived.
+
+        Corrects the first-packet timestamp backwards by any *leading* zero-fill: when the
+        stream is joined after sequence 1, those missing packets are zero-filled into the
+        buffer, so the data that becomes frame 0 actually began before the first packet we
+        saw. Mid-stream gaps do not shift the origin and are excluded.
+        """
+        if self.t_first_packet_utc is None:
+            return None
+        lead_frames = self.leading_zero_filled_bytes / self._bytes_per_frame
+        return self.t_first_packet_utc - lead_frames / float(frame_rate_hz)
 
     def get_frame(self, timeout_s: float = 0.0):
         try:
@@ -748,6 +774,11 @@ def main() -> None:
         "command": " ".join(sys.argv),
         "start_wall_utc": datetime.now(timezone.utc).isoformat(),
         "end_wall_utc": None,
+        # Set at the end of a live run from the actual first-packet timestamp. NOT the same
+        # as start_wall_utc, which is written above — before the DCA1000 and IWR1642 are
+        # configured, so it precedes frame 0 by seconds.
+        "frame0_epoch_utc": None,
+        "frame0_epoch_source": None,
         "mode": mode,
         "session_id": session_id,
         "locked_bin": locked_bin,
@@ -909,7 +940,16 @@ def main() -> None:
                 "n_dropped": frame_source.n_dropped,
                 "zero_filled_bytes": frame_source.zero_filled_bytes,
                 "mirror_truncated_bytes": frame_source.mirror_truncated_bytes,
+                "leading_zero_filled_bytes": frame_source.leading_zero_filled_bytes,
             }
+            # The window grid's true origin. Absent (null) on every capture taken before
+            # 2026-08-04, which is why score_offline.py still supports the approximate
+            # start_wall_utc fallback rather than requiring this field.
+            _f0 = frame_source.frame0_epoch_utc(float(cfg["session"]["frame_rate_hz"]))
+            run_meta["frame0_epoch_utc"] = _f0
+            run_meta["frame0_epoch_source"] = (
+                "first_packet_receipt_minus_leading_zero_fill" if _f0 is not None else None
+            )
         _write_metadata(meta_path, run_meta)
         print(f"Artifacts: {run_dir}")
 

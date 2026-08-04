@@ -89,6 +89,34 @@ ORIGIN_CAVEAT = (
     "start_wall_utc is pre-capture-start and approximate; this row is provisional "
     "evidence, not a frozen score"
 )
+#: Captures taken from 2026-08-04 carry `frame0_epoch_utc`, stamped at receipt of the first
+#: UDP packet. `start_wall_utc` is written before the DCA1000 and IWR1642 are configured, so
+#: it precedes frame 0 by seconds — a 5-15 s error against a 30 s window grid. Where the true
+#: origin exists it is used and the approximation caveat does not apply.
+ORIGIN_EXACT_CAVEAT = ""
+
+
+def resolve_frame0_epoch(capture_run_metadata: dict) -> tuple[float, str, bool, str]:
+    """(frame0_epoch, origin_source, is_approximate, caveat).
+
+    Prefers the recorded first-packet origin; falls back to `start_wall_utc` for the eight
+    pre-2026-08-04 captures, which have no such field. The fallback is retained rather than
+    made an error because those captures are still the project's entire dataset.
+    """
+    exact = capture_run_metadata.get("frame0_epoch_utc")
+    if exact is not None:
+        return (
+            float(exact),
+            str(capture_run_metadata.get("frame0_epoch_source") or "frame0_epoch_utc"),
+            False,
+            ORIGIN_EXACT_CAVEAT,
+        )
+    return (
+        datetime.fromisoformat(capture_run_metadata["start_wall_utc"]).timestamp(),
+        "start_wall_utc_approximate",
+        True,
+        ORIGIN_CAVEAT,
+    )
 HR_SENSITIVITY_BPM = (3.0, 5.0, 8.0)
 BR_SENSITIVITY_BPM = (2.0, 3.0, 5.0)
 
@@ -770,6 +798,9 @@ def score_window(
     session_type: str,
     paced_schedule: Optional[PacedSchedule],
     paced_unavailable_reason: Optional[str],
+    origin_source: str = "start_wall_utc_approximate",
+    origin_is_approximate: bool = True,
+    origin_caveat: str = ORIGIN_CAVEAT,
 ) -> dict:
     """Build one `window_scores.csv` row (Step 7/8). Every row is self-describing
     — the origin caveat and comparator_status travel with every row, not only the
@@ -778,9 +809,9 @@ def score_window(
         "k": w.k, "frame_start": w.frame_start, "frame_end": w.frame_end,
         "epoch_start": w.epoch_start, "epoch_end": w.epoch_end,
         "frame0_epoch": frame0_epoch,
-        "origin_source": "start_wall_utc_approximate",
-        "origin_is_approximate": True,
-        "origin_caveat": ORIGIN_CAVEAT,
+        "origin_source": origin_source,
+        "origin_is_approximate": origin_is_approximate,
+        "origin_caveat": origin_caveat,
         "comparator_status": "exploratory_non_frozen",
         "hr_valid": est.hr_valid,
         "hr_bpm": est.hr_bpm,
@@ -1012,8 +1043,9 @@ def run_capture(
     masimo_csv_path = discover_masimo_csv(capture_dir, masimo_csv_override)
     masimo_df = masimo.load_masimo(masimo_csv_path)
 
-    frame0_epoch = datetime.fromisoformat(capture_run_metadata["start_wall_utc"]).timestamp()
-    origin_source = "start_wall_utc_approximate"
+    frame0_epoch, origin_source, origin_is_approximate, origin_caveat = resolve_frame0_epoch(
+        capture_run_metadata
+    )
 
     paced_schedule = (
         parse_paced_schedule_value(paced_schedule_raw) if paced_schedule_raw is not None else None
@@ -1090,6 +1122,9 @@ def run_capture(
                 row = score_window(
                     w, dsp, est, outcome_class, hr_refs_by_k[w.k], br_refs_by_k[w.k],
                     frame0_epoch, session_type, paced_schedule, paced_target_unavailable,
+                    origin_source=origin_source,
+                    origin_is_approximate=origin_is_approximate,
+                    origin_caveat=origin_caveat,
                 )
                 rows.append(row)
                 raw_dsp_list.append(dsp)
@@ -1134,7 +1169,8 @@ def run_capture(
                 "run_config_hash": cfg_hash,
                 "validated_fs": validated_fs, "n_frames": n_frames, "n_windows": len(windows),
                 "frame0_epoch": frame0_epoch, "origin_source": origin_source,
-                "origin_is_approximate": True, "comparator_status": "exploratory_non_frozen",
+                "origin_is_approximate": origin_is_approximate,
+                "comparator_status": "exploratory_non_frozen",
                 "estimator_id": ESTIMATOR_ID, "ahet_gate_mode": cfg["heart"]["ahet_gate_mode"],
                 "lock_provenance": lock_prov_dict,
                 "isolation": (

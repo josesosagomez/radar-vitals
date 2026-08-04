@@ -9450,3 +9450,321 @@ three original title options; the original abstract skeleton's pre-registration 
 §10 action "publicly deposit the comparator pre-registration".
 
 **Next:** M8 real-data arm and M9 synthetic controls — the headline now depends on them.
+
+## 2026-08-04 - CORRECTION: the eight captures are FOUR subjects, not one
+
+**Set out to do:** correct a factual error in the project record, reported by the user.
+
+### The correction
+
+**The eight existing captures come from four subjects, not one.** User-stated 2026-08-04:
+
+| Subject | Captures |
+|---|---|
+| A | `massimo1`, `massimo2` |
+| B | `massimo3`, `sweep` |
+| C | `massimo4`, `massimo5` |
+| D | `massimo6`, `massimo7` |
+
+Recorded authoritatively in `notes/capture_inventory.md` under "Subject map". **Subject identity
+is not machine-recorded anywhere** — no `run_metadata.json` field carries it and it cannot be
+recovered from the artifacts, so that table is the only record.
+
+### Worked (with evidence)
+
+- **Swept the whole repo** for `single.subject|one subject|n=1|self-capture` and corrected every
+  live claim: `HANDOFF.md` (2 places), `notes/capture_inventory.md` (header + 2 body claims + the
+  new Subject map), `notes/analysis_prespec.md`, `notes/approach.md`,
+  `notes/comparator_prespec_br.md` (3), `JOURNAL_PAPER.md` (5),
+  `THIRD_CHAPTER.md` (5), `plans/implementation_plan.md` (3),
+  `src/warmup_select.py` docstring, `src/m4/estimator_scoring.py` docstring.
+- **`src/warmup_select.py` mattered most of the code changes.** Its −12 dB energy-eligibility
+  threshold documented its empirical basis as "4 recorded sessions / 1 subject". That understated
+  the evidence; corrected, with an explicit note pointing at the Subject map.
+- Suite after the edits: **2077 passed, 5 skipped** — docstring-only changes to `src/`.
+
+### What the correction changes
+
+- **The 5-bin relock tracker is live again.** It was deferred 2026-07-28 (Option C) *specifically*
+  because "the evidence is n=1 subject who barely moved; a higher-movement subject could change
+  it." **That stated condition no longer holds.** `HANDOFF.md` §3.4 updated to say so. A working
+  prior implementation still sits in `git stash@{0}` (commit `0022845`), stale relative to HEAD.
+- **The 2026-07-31 findings are better supported than they were recorded as being.** The
+  signal-presence and bin-sweep conclusions — BR extractable, HR not demonstrated, bin selection
+  not the coverage bottleneck — were drawn across four subjects, not one. None of the conclusions
+  reverses; their generality was understated.
+- **The agreed train/test split becomes subject-level rather than capture-level.** Discovery on
+  A + B (`massimo1`, `massimo2`, `massimo3`, `sweep`); the held-out test on C + D (`massimo4`,
+  `massimo5`, `massimo6`, `massimo7`) is touched **once**, feature set already frozen. That tests
+  generalisation to a new body rather than a new session — leave-one-capture-out would have leaked
+  a subject across the split.
+
+### Failed / did not work, and why
+
+- **`plans/m8_step1b_ahmed_transfer.md` was deliberately NOT edited**, though it contains four
+  "single-subject" phrases. It is a frozen authority document that passed five-discipline review
+  on exact bytes, SHA-256 `9294cb05…`. Editing it would invalidate that review. **Verified
+  byte-identical after this session's edits** (hash recomputed and matched). Its
+  `development_apparent_single_subject` string was checked and is doc-only, not a code identifier.
+- Historical review logs under `plans/` (`bin_drift_diagnostic.md` in particular, which records
+  "rejected: n=1 subject" as a design rationale) were left alone — they are records of what was
+  believed at the time. **They are not evidence for the single-subject claim; this entry governs.**
+- **Four subjects is still small and non-randomly sampled.** Nothing here makes any result
+  confirmatory, and the `exploratory` label on all eight captures is unchanged.
+
+**Retired / no longer used:** the claim that the eight captures are a single researcher
+self-capture, and the "n=1 subject" rationale for deferring the relock tracker.
+
+**Next:** simulate 5-bin relock policies on the per-bin BR data already computed, on the training
+subjects (A + B) only.
+
+## 2026-08-04 - Bin-policy simulation on train: modest gain from neighbourhood reads; relock is inert
+
+**Set out to do:** before porting the stashed 5-bin relock tracker, replay candidate policies
+against per-bin BR estimates already computed, on the training subjects only.
+
+**Worked (with evidence):**
+
+- **Re-ran `diagnose_bin_sweep.py` over all 8 captures** (`results/diagnose/bin_sweep/
+  20260804T131040Z/`, 1792 rows = 8 captures x windows x 14 bins) to get the production BR
+  estimate per bin per window.
+- **Built `scripts/simulate_bin_policy.py`.** Four policies: `P0_static_lock` (production today),
+  `P2_consistency` (keep anchor, read a neighbour when the anchor disagrees with recent history),
+  `P3_relock` (P2 plus relock after a neighbour wins `dwell` windows running), and
+  `P1_oracle_CEILING` (best bin per window chosen using the reference — a labelled ceiling, not a
+  policy). 38 parameter combinations, **all recorded** in `summary.csv`, not just the winner.
+  Train/test discipline is **enforced in code**: `--split test` refuses to run without
+  `--i-have-frozen-the-policy`.
+- **FOUND AND FIXED A BASELINE DEFECT BEFORE IT CORRUPTED THE RESULT.** The sweep's warmup
+  reproduction check failed on exactly 3 captures — `massimo1` (14 mismatched fields), `massimo2`
+  (9), `sweep` (8) — while `massimo3`-`massimo7` reproduced perfectly. The mismatches carry the
+  signature `warmup_json br_bpm = 6.0`, i.e. **the respiration-collapse bug**: 6 bpm is the
+  0.10 Hz band floor. Those three were captured 2026-07-13/14, *before* the M2 fix. Their recorded
+  `locked_bin` was therefore chosen by buggy code, and `notes/capture_inventory.md` already
+  records massimo2's and sweep's live locks as outright mislocks. Anchoring `P0` on them would
+  have compared every new policy against a known-bad baseline and flattered it. **Fixed:** the
+  simulator re-derives each anchor with today's code via `run_warmup_selection` on window 0.
+- **Independent confirmation that the M2 fix repaired those mislocks.** Current code re-locks
+  massimo1 23->27, massimo2 20->26, sweep 21->26. **26 is exactly the "corrected bin" already
+  documented for massimo2 and sweep** — arrived at independently here.
+
+**Results, TRAIN only (massimo1, massimo2, massimo3, sweep; 48 windows, 41 scored under P0):**
+
+| policy | coverage | MAE bpm | hit ±3 bpm |
+|---|---|---|---|
+| `P1_oracle_CEILING` (not a policy) | 100% | 0.69 | 95% |
+| `P2_consistency` tol=5, hw=2 | **93%** | **1.44** | **81%** |
+| `P0_static_lock` (production today) | 85% | 1.56 | 80% |
+| `P2_consistency` tol=2, hw=2 | 68% | 0.97 | 91% |
+
+Per capture under P0: massimo1 bin 27, 67% cov, MAE 3.07 (only 4 scored windows); massimo2 bin 26,
+100% cov, MAE 0.38; sweep bin 26, 88% cov, MAE 0.81; massimo3 bin 26, 85% cov, MAE 1.98.
+
+**Failed / did not work, and why:**
+
+- **`P3_relock` is inert. Across all 38 combinations it fired 0 or 1 relocks in total.** The dwell
+  requirement almost never triggers, so P3 is numerically identical to P2 nearly everywhere. This
+  independently reproduces the bin-drift diagnostic's finding (frequent short argmax flicker,
+  almost no sustained drift). **The relock half of the stashed tracker is not earning its
+  complexity on this data; the neighbourhood-read half is doing all the work.**
+- **The result is underpowered and must not be over-read.** Four captures, 48 windows, 41 scored;
+  massimo1 contributes 4 scored windows and massimo2 six. The 85% -> 93% coverage gain is about
+  **four windows**. Differences of a few points are noise at this n.
+- **The pooled figures are a mean over captures, weighting massimo1's 4 windows equally with
+  massimo3's 17.** Pooling by window instead would give a different headline; neither is wrong,
+  but the choice must be stated.
+- **The best-of-38 is a selection.** Legitimate on train, but the operating point must be frozen
+  *before* the held-out subjects are touched, or the holdout estimate is destroyed.
+- A CSV-quoting bug in the first version of the script wrapped the JSON `params` field in quotes
+  without doubling its inner quotes, so `csv.DictReader` silently mis-parsed the table into the
+  wrong columns while still looking plausible. Replaced with the stdlib `csv.writer`.
+
+**Retired / no longer used:** the assumption that `run_metadata.json`'s `locked_bin` is a valid
+baseline for the three pre-M2-fix captures. It is not; re-derive with current code.
+
+**Next:** choose and freeze one operating point on train, then score the held-out subjects
+(massimo4-7) exactly once.
+
+## 2026-08-04 - FROZEN: BR bin policy P2_consistency(hw=2, history=3, tol=2.0) — written before the holdout was touched
+
+**This entry was written BEFORE `massimo4`-`massimo7` were scored.** That ordering is the whole
+point: a frozen choice recorded after seeing the holdout is not frozen.
+
+**Frozen policy, user decision 2026-08-04:**
+
+```
+policy : P2_consistency
+params : {"half_width": 2, "history": 3, "tol_bpm": 2.0}
+```
+
+Keep the warmup-selected anchor bin. Each window, if the anchor's BR estimate is within 2.0 bpm
+of the median of the last 3 accepted outputs, use it. Otherwise consider bins anchor±1, anchor±2
+and take whichever is closest to that recent median — but only if it too is within 2.0 bpm;
+otherwise report nothing for that window. **No relock.** Decisions use radar-side values only.
+
+**Why these values.** Six of the 38 evaluated combinations tie exactly on train at 68% coverage /
+MAE 0.97 / 91% hit-±3. Ties were broken toward the simplest: **P2 over P3** because relock fired
+0-1 times across the entire grid and adds machinery for no measured gain; **history=3 over 5**
+because it carries less state for an identical result.
+
+**Why tol=2 over tol=5** (user decision): tol=5 gave 93% coverage with accuracy essentially
+unchanged from production (MAE 1.44 vs 1.56); tol=2 gives 68% coverage but MAE 0.97 and 91%
+hit-±3. BR coverage is not currently a bottleneck (70-95% at most bins), so trading coverage for
+accuracy is the more useful direction.
+
+**Train figures being carried forward as the prediction** (massimo1, massimo2, massimo3, sweep):
+
+| | coverage | MAE bpm | hit ±3 bpm |
+|---|---|---|---|
+| `P0_static_lock` (production) | 85% | 1.56 | 80% |
+| **frozen P2** | **68%** | **0.97** | **91%** |
+| `P1_oracle_CEILING` | 100% | 0.69 | 95% |
+
+**What would count as the policy failing on the holdout:** coverage falling far below 68%, or
+MAE/hit-±3 not beating `P0_static_lock` on the same captures. Both are recorded here in advance.
+
+**Enforcement added to `scripts/simulate_bin_policy.py`:** `--split test` now additionally
+requires `--only-policy` and `--only-params`, so a holdout run evaluates exactly one combination.
+Previously it would have written all 38 test numbers to disk, leaving the frozen choice revisable
+to whichever won — which is the failure this discipline exists to prevent.
+
+**Next:** score the holdout once, and report whatever comes out.
+
+## 2026-08-04 - HOLDOUT RESULT: frozen BR bin policy — mixed, and the train estimate was badly optimistic
+
+**Set out to do:** score the policy frozen earlier today against the held-out subjects
+(`massimo4`-`massimo7`, subjects C + D), exactly once.
+
+**Result (holdout, 4 captures, 76 windows):**
+
+| | coverage | MAE bpm | hit ±3 bpm |
+|---|---|---|---|
+| `P1_oracle_CEILING` (not a policy) | 100% | 1.38 | 90% |
+| `P0_static_lock` (production today) | 89% | 3.41 | 57% |
+| **frozen P2** (hw=2, history=3, tol=2.0) | **46%** | **2.60** | **63%** |
+
+Per capture:
+
+| capture | bin | P0 cov / MAE / hit3 | P2 cov / MAE / hit3 |
+|---|---|---|---|
+| massimo4 | 25 | 100% / 2.80 / 65% | 55% / **1.42** / **82%** |
+| massimo5 | 25 | 80% / 3.36 / 69% | 25% / **3.59** / **40%** |
+| massimo6 | 24 | 95% / 2.61 / 68% | 65% / **1.53** / **92%** |
+| massimo7 | 32 | 80% / 4.87 / 25% | 40% / **3.86** / **38%** |
+
+**Against the failure criteria recorded in advance:**
+
+- *"MAE / hit-±3 not beating `P0_static_lock`"* — **PASSED.** MAE 2.60 vs 3.41; hit-±3 63% vs 57%.
+  Improved in 3 of 4 captures.
+- *"coverage falling far below 68%"* — **FAILED.** 46% against 68% predicted. Roughly half the
+  windows produce nothing.
+
+**Worked (with evidence):**
+
+- The policy does what it was designed to do: it trades coverage for accuracy, and on the holdout
+  it beat production on both accuracy measures.
+- All four holdout captures re-derived the same anchor bin as their recorded live lock (25, 25,
+  24, 32) — expected, since all four post-date the M2 fix. The three train captures that differed
+  were all pre-fix. Consistent, and a second confirmation of that diagnosis.
+- The one-shot discipline held: the holdout run evaluated exactly one combination, enforced by
+  `--only-policy` / `--only-params`.
+
+**Failed / did not work, and why:**
+
+- **The train estimate was optimistic by a wide margin: MAE 0.97 -> 2.60, hit-±3 91% -> 63%.**
+  Selection over 38 combinations on 4 captures / 41 scored windows produced a "best" that was
+  substantially selection noise. **This is the single most useful thing the holdout bought**, and
+  it is an argument for having held out at all rather than against the method.
+- **Part of that gap is subject difficulty, not overfitting, and the two cannot be separated at
+  n=2 subjects per side.** `P0` itself is much worse on the holdout (MAE 3.41 vs 1.56 on train),
+  and even the *oracle ceiling* degrades (1.38 vs 0.69). Subjects C + D are simply harder.
+- **`massimo5` is an outright regression on both axes** — MAE 3.36 -> 3.59, hit-±3 69% -> 40%,
+  coverage 80% -> 25%. The policy is not robust across subjects.
+- **Coverage cost is severe** — 89% -> 46% pooled. Halving usable windows for ~0.8 bpm of MAE is a
+  poor trade when BR coverage was not the bottleneck.
+
+**The most useful forward-looking number is not the policy's.** On the holdout, the oracle ceiling
+is MAE **1.38** / 90% hit-±3 against production's **3.41** / 57%. A perfect per-window bin selector
+would more than halve BR error on these subjects. **So bin choice does matter a great deal for BR
+accuracy — we simply do not have a rule that captures much of that headroom.** Temporal
+consistency alone recovers only a small part of it.
+
+**Retired / no longer used:** nothing yet — the frozen policy is not adopted, but neither is it
+formally rejected; that is a user decision.
+
+**IMPORTANT for whoever works on this next: the holdout is SPENT for this question.** Re-tuning
+`tol_bpm` (or anything else) against `massimo4`-`massimo7` and reporting the result would be
+fitting to the holdout — precisely what the freeze existed to prevent. Any new operating point
+needs new held-out data, i.e. the M5/M6 captures.
+
+**Next:** user decision on whether to adopt, drop, or shelve the policy. The alternative lever the
+ceiling points at — a genuinely better per-window bin rule — needs the feature work discussed
+2026-08-04, and fresh data to validate on.
+
+## 2026-08-04 - Fixed the capture-origin defect: frame 0's true epoch is now recorded
+
+**Set out to do:** before taking any new captures, fix the time-alignment problem so the new
+data is worth more than the old. The user asked how to solve the protocol step 3a clock sync
+given no control over the Masimo device.
+
+**The finding: there were TWO problems, and the larger one was not about clocks.**
+
+`scripts/live_demo.py` wrote `start_wall_utc` at line 749, but the radar is not started until
+lines 829-837 (`dca.configure()`, `iwr.configure()`, `dca.start()`, `iwr.start()`) — and
+configuring the IWR1642 means pushing the whole chirp profile over UART. **`start_wall_utc`
+therefore precedes frame 0 by an unknown but likely 5-15 s.** Against a 600-frame/30 s window
+grid a 12 s error misassigns 240 frames, i.e. **40% of a window**. No amount of NTP fixes this;
+it is a software gap, not a clock gap, and it is why `score_offline.py` stamped every row
+`origin_source="start_wall_utc_approximate"`.
+
+The user confirmed the phone and PC UTC clocks do not differ (automatic network time on), so
+problem 2 — the PC/phone offset — is already satisfactory. Note the Masimo `Timestamp` is
+integer Unix seconds, so ±1 s is the achievable floor regardless.
+
+**Worked (with evidence):**
+
+- **`scripts/live_demo.py`** — `LiveFrameSource` now stamps `t_first_packet_utc` at receipt of
+  the first data packet, and tracks `leading_zero_filled_bytes` separately from total
+  `zero_filled_bytes`. New method `frame0_epoch_utc(frame_rate_hz)` returns the first-packet
+  time **corrected backwards** by the leading zero-fill: when the stream is joined after
+  sequence 1 the missing packets are zero-filled into the buffer, so the data that becomes
+  frame 0 began before the first packet observed. Mid-stream gaps do **not** shift the origin
+  and are excluded from the correction.
+- Stamped at first *packet*, not at first assembled frame: it is the closest observable moment
+  to the radar emitting frame 0. Receipt lags emission by transmission and buffering (tens of
+  ms), far below the reference's 1 Hz resolution.
+- `run_metadata.json` gains **`frame0_epoch_utc`** and **`frame0_epoch_source`**, plus
+  `leading_zero_filled_bytes` inside `live_packet_stats`. Declared as `null` in the initial
+  metadata dict so the schema is stable even on a crashed run.
+- **`scripts/score_offline.py`** — new `resolve_frame0_epoch()` prefers the recorded origin and
+  falls back to `start_wall_utc` when absent, returning the caveat and
+  `origin_is_approximate` alongside. `score_window()` takes them as parameters instead of
+  hardcoding `origin_source="start_wall_utc_approximate"`, `origin_is_approximate=True`. Rows
+  and summaries stay self-describing (OSR-01 R2) but now tell the truth per capture.
+- **10 tests** in `tests/test_frame0_epoch.py`: no-packet returns None rather than a fabricated
+  timestamp; leading-loss correction and its scaling with frame rate; partial-frame leading
+  loss; mid-stream gaps leaving the origin alone; scorer preference; fallback for the eight
+  pre-2026-08-04 captures; explicit-null fallback; and a regression guard asserting the size of
+  the error being fixed (240 frames = 40% of a window at 12 s) so nobody later decides the
+  approximation was good enough. Suite: **2087 passed, 5 skipped** (was 2077).
+
+**Failed / did not work, and why:**
+
+- **The eight existing captures cannot be retrofitted.** They have no first-packet record and
+  it is unrecoverable from the artifacts, so they keep `start_wall_utc_approximate` and the
+  caveat. The fallback is deliberately retained rather than made an error, because those eight
+  are still the project's entire dataset.
+- **This does not by itself discharge M2 done-when #5.** That needs a *capture* with
+  non-approximate alignment; the code can now produce one, but none exists yet. The first new
+  capture taken with this build should close it.
+- The physical sync-marker option discussed (briefly lifting the sensored hand to create a
+  simultaneous Masimo dropout and radar phase spike) was **not** implemented in the protocol —
+  it is unnecessary now that both clocks agree and the origin is recorded, and it would violate
+  the hands-still rule if done inside a scored window.
+
+**Retired / no longer used:** the assumption that `start_wall_utc` is a usable window-grid
+origin for captures taken from 2026-08-04 onward.
+
+**Next:** the three new captures. Taken with this build they will carry a true origin, which
+makes them the first data able to discharge M2 done-when #5 and the first clean test set for
+the BR bin-selection feature study.
