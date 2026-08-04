@@ -1,12 +1,20 @@
 # Comparator pre-specification — how the Masimo is compared to the radar
 
-> **PRE-REGISTERED 2026-07-14, before the next capture.** This document fixes, *in advance*, how a
-> radar window is scored against the Masimo. It exists because we discovered the hard way that the
-> answer depends on the choice — and choosing after seeing the data is not science.
+> **Status: INTERNAL ENGINEERING SPEC — banner corrected 2026-08-04.** **M0 was removed from the
+> project on 2026-08-03**, so **nothing here is pre-registered** and no claim may be made about
+> when this document was written. This banner previously asserted the opposite; that assertion was
+> void from 2026-08-03 and is retracted here. Companion spec with the identical status:
+> `notes/analysis_prespec.md`, which already names this file as such.
+>
+> What survives, and it is the part that was ever load-bearing: this document fixes how a radar
+> window is scored against the Masimo, **in full and in one place, and it is applied identically
+> to every estimator compared.** That is a **transparency** property, not a timing one. It exists
+> because we discovered the hard way that the answer depends on the choice.
 >
 > **Binding on every agreement number in the paper.** No MAE / RMSE / Bland-Altman may be cited
-> unless it was produced under this specification, or under a documented amendment made *before*
-> the data it scores was collected.
+> unless it was produced under this specification, or under a documented amendment. **The
+> prospective-only rule survives** (`analysis_prespec.md` §4): a threshold may not be chosen after
+> seeing the data it will be judged on.
 
 ---
 
@@ -45,9 +53,11 @@ For a radar window ending at time `t`, the span is the **half-open** interval `[
 > windows. It is corrected here to the **half-open** `[t − 30 s, t)` so that (a) each integer second
 > belongs to exactly one window and (b) HR and BR use the **identical** endpoint rule — the exact
 > frame-index grid `[E(k·600), E((k+1)·600))` with integer-`epoch_utc` inclusion frozen in
-> `notes/analysis_prespec.md` §7, which is binding for both comparators. This is a **pre-deposit
-> clarification** (no public DOI existed at the time — `plans/m0_preregistration.md`), not a
-> post-deposit amendment. The illustrative exclusion percentages in §2.3 predate this clarification
+> `notes/analysis_prespec.md` §7, which is binding for both comparators. This was recorded as a
+> clarification rather than an amendment because nothing had yet been published or scored under the
+> closed form. **No deposit or DOI ever existed** — M0 was removed on 2026-08-03 — so the
+> pre/post-deposit distinction the original wording drew is void. The illustrative exclusion
+> percentages in §2.3 predate this clarification
 > and remain exploratory design evidence, not frozen scores.
 
 ### 2.1 Reference value
@@ -60,8 +70,8 @@ For a radar window ending at time `t`, the span is the **half-open** interval `[
 - Alignment uses the integer `Timestamp` (Unix epoch, UTC) column **only** — never the `Date`/`Time`
   strings (CLAUDE.md §9).
 
-> **PRE-DEPOSIT CLARIFICATION — the usable-sample set (user decision 2026-07-26, M4 plan review
-> M4R-11).** This specification said "PI-gated PR samples" and "≥ 80 % of the 30 expected samples
+> **CLARIFICATION — the usable-sample set (user decision 2026-07-26, M4 plan review M4R-11).**
+> This specification said "PI-gated PR samples" and "≥ 80 % of the 30 expected samples
 > surviving the PI gate", which did **not** settle whether a row with an acceptable PI but a
 > **non-finite `pr_bpm`** counts toward the coverage floor. The case is reachable: `src/masimo.py`
 > parses with `pd.to_numeric(..., errors="coerce")`, so any missing or malformed marker becomes NaN.
@@ -86,8 +96,9 @@ For a radar window ending at time `t`, the span is the **half-open** interval `[
 > n=272, `demo_sweep.csv` n=574). This clarification therefore changes no existing number; it
 > forecloses a silent divergence that would first appear in M5/M6.
 >
-> **Status:** pre-deposit clarification (no public DOI yet), same class as the M3R-40 half-open
-> harmonisation and the M4R-09 quantile method. It resolves an ambiguity; the `PI ≥ 0.5` threshold
+> **Status:** a clarification, same class as the M3R-40 half-open harmonisation and the M4R-09
+> quantile method — made before anything had been scored under the ambiguity (and no deposit or
+> DOI ever existed). It resolves an ambiguity; the `PI ≥ 0.5` threshold
 > and the 80 % coverage floor are unchanged.
 
 ### 2.2 Window admissibility — ALL of these, or the window is excluded
@@ -98,7 +109,7 @@ For a radar window ending at time `t`, the span is the **half-open** interval `[
 | **Coverage** | require ≥ **80 %** of the 30 expected samples to be **usable** per §2.1 (i.e. ≥ 24) | a window scored on a handful of samples is not scored |
 | **Stationarity** | exclude if **`p90 − p10` of the PI-gated PR inside the window > 5.0 bpm**, quantiles computed with the **`linear`** method (see below) | see §2.3 |
 
-> **PRE-DEPOSIT CLARIFICATION — quantile method (user decision 2026-07-26, M4 plan review M4R-09).**
+> **CLARIFICATION — quantile method (user decision 2026-07-26, M4 plan review M4R-09).**
 > This specification did not name a quantile interpolation method, and the omission is **not**
 > cosmetic: with integer-valued PR over 24–30 samples, `p10` and `p90` usually fall *between* order
 > statistics, so the interpolation rule alone can decide the verdict.
@@ -126,8 +137,9 @@ For a radar window ending at time `t`, the span is the **half-open** interval `[
 > at every call site**, never left to a library default, in this gate, the §2.3 sensitivity table and
 > the `notes/analysis_prespec.md` §1 bootstrap CI endpoints.
 >
-> **Status:** a pre-deposit clarification, in the same class as the M3R-40 half-open harmonisation —
-> **no public DOI exists yet**. It resolves an ambiguity; it does not change a decided threshold.
+> **Status:** a clarification, in the same class as the M3R-40 half-open harmonisation — made
+> before anything had been scored under the ambiguity, and no deposit or DOI ever existed. It
+> resolves an ambiguity; it does not change a decided threshold.
 
 **Reference intended-use disposition (device-wide; user decision 2026-07-26, M3R-34).** The Masimo
 MightySat™ Rx *Home Care Manual* (`literature/ref_papers/lab-10168a_master.pdf`, p. 10) states the

@@ -28,7 +28,7 @@ from dataclasses import dataclass
 import numpy as np
 
 #: FROZEN by `notes/analysis_prespec.md` §7. Not a tunable — a change here is an amendment
-#: to a pre-registered analysis decision, not a config edit.
+#: to a frozen analysis decision, not a config edit.
 WINDOW_SECONDS = 30.0
 FRAME_RATE_HZ = 20.0
 FRAMES_PER_WINDOW = 600
@@ -62,7 +62,7 @@ def _require_frozen_grid(fs, frames_per_win) -> tuple[float, int]:
     The parameters exist so the frozen values are *visible at the call site* rather than
     buried as literals — not so a different grid can be built. Accepting `fs=10.0` silently
     produced 60 s reference spans while every docstring still said 30 s: the estimand changed
-    and nothing raised. A different grid is an amendment to a pre-registered analysis decision
+    and nothing raised. A different grid is an amendment to a frozen analysis decision
     (`notes/analysis_prespec.md` §4 amendment mechanism), never a keyword argument.
 
     Returns the **validated** values, which callers must use in place of their arguments —

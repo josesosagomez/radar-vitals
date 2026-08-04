@@ -33,7 +33,7 @@ CAUSALITY: trailing history only. Hop t uses hops <= t. No Viterbi, no future wi
     (The existing scripts/diagnose_step6_candidate_tracks.py uses viterbi_track(), a max-score
     DP over the FULL sequence — a legitimate offline oracle, but NOT a real-time discriminator.)
 
-FIXED PARAMETERS (pre-specified, not swept):
+FIXED PARAMETERS (fixed in this docstring, not swept):
     TOL_BPM        = 3.0    label tolerance
     HIST           = 5      trailing hops required (warm-up cost; counted against yield)
     MAX_JUMP_BPM   = 6.0    trajectory association max jump per hop
@@ -75,7 +75,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 from src import masimo  # noqa: E402
 
-# ── Pre-specified constants (do not tune) ──────────────────────────────────────────────────
+# ── Fixed constants (do not tune) ──────────────────────────────────────────────────────────
 TOL_BPM      = 3.0
 HIST         = 5
 MAX_JUMP_BPM = 6.0
@@ -274,7 +274,7 @@ def main() -> None:
 
     print(SEP)
     print("STAGE 1B — temporal continuity as a respiratory-harmonic discriminant")
-    print("  Statistic + threshold rule were PRE-SPECIFIED in the module docstring before any run.")
+    print("  Statistic + threshold rule are FIXED in the module docstring and applied unchanged.")
     print("  Causal (trailing history only). Two same-subject sessions => FEASIBILITY, not validation.")
     print(SEP)
 
@@ -369,7 +369,7 @@ def main() -> None:
               f"({100*scored_hops/max(s['n_hops'],1):.0f}% of all hops)")
 
     print("\n" + SEP)
-    print("PASS CRITERIA (pre-specified):")
+    print("PASS CRITERIA (fixed in the module docstring):")
     print("  1. BOTH held-out directions reject every known confident decoy   -> see section 5")
     print("  2. No severe Masimo errors introduced                            -> see section 4 (sens)")
     print("  3. Yield / warm-up / latency reported                            -> see section 6")

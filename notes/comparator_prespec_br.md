@@ -1,18 +1,30 @@
 # Comparator pre-specification — Masimo breathing rate (RR) vs radar
 
-> **DRAFT for the M0 deposit, prepared 2026-07-25. Designed from the REFERENCE ALONE** — the
+> **Status: INTERNAL ENGINEERING SPEC — BINDING (user decision 2026-08-04).** Prepared 2026-07-25
+> as a draft for the M0 deposit; **M0 was removed on 2026-08-03, and this document is now binding
+> in its own right** rather than pending anyone's freeze. **Nothing here is pre-registered** and no
+> claim may be made about when it was written — its force is that it is written out in full and
+> applied identically to every estimator compared. Companion specs, same status:
+> `notes/analysis_prespec.md`, `notes/comparator_prespec.md`.
+>
+> `src/comparator.py:br_reference` implements §2.1/§2.2 and is the only place they become code.
+>
+> **Designed from the REFERENCE ALONE** — the
 > Masimo trace, the metronome command, and FFT-resolution arithmetic. **No gate below refers to
 > radar output** (CLAUDE.md §4; `plans/implementation_plan.md` M3). Deriving reference
 > admissibility from radar agreement would be the mirror image of the tuning §4 forbids.
 >
-> **Binding, once frozen, on every BR agreement number in the paper** — mirrors
-> `notes/comparator_prespec.md` (HR). No BR MAE / RMSE / Bland–Altman may be cited unless produced
-> under this specification, or a documented amendment made *before* the data it scores.
+> **Binding on every BR agreement number in the paper** — mirrors `notes/comparator_prespec.md`
+> (HR). No BR MAE / RMSE / Bland–Altman may be cited unless produced under this specification, or
+> a documented amendment. **The prospective-only rule survives** (`analysis_prespec.md` §4): an
+> amendment may not be made after seeing the data it will govern.
 >
 > **Cross-model review COMPLETE** (CLAUDE.md §6 — it touches peak-picking / reference handling):
 > **all M3 findings (M3R-01…48) resolved across 17 rounds — see `plans/m3_prespec_cross_review.md`.**
-> Status: **cross-reviewed; READY FOR THE M0 FREEZE — NOT yet frozen** (the freeze is the user's
-> irreversible act).
+> Status: **cross-reviewed and binding.** The old "READY FOR THE M0 FREEZE — NOT yet frozen"
+> line named an act that can no longer happen; it was resolved by the 2026-08-04 decision above.
+> First use under this status: the BR bin-selection pre-flight of 2026-08-04, whose primary
+> labelling gate is §2.2's `admitted`.
 
 ---
 
@@ -81,7 +93,7 @@ behaviour, exactly as M3 requires. **PI is deliberately NOT a primary BR admissi
 | **Availability (coverage)** | require **≥ 24 finite `rr_bpm` samples** in the exact 30 s (600-frame) interval — i.e. ≥ 80 % of the 30 expected once-per-second values are present and non-missing | a median resting on a few samples is not a reference; counts *finite RRp*, not "samples surviving a PI gate". |
 | **Stationarity** | exclude if **`p90 − p10` of the finite RRp inside the window > 2.0 bpm**, quantiles computed with the **`linear`** method (see below) | see §2.3. |
 
-> **PRE-DEPOSIT CLARIFICATION — quantile method (user decision 2026-07-26, M4 plan review M4R-09).**
+> **CLARIFICATION — quantile method (user decision 2026-07-26, M4 plan review M4R-09).**
 > Neither comparator named a quantile interpolation method. With integer-valued samples over a 24–30
 > sample window, `p10` and `p90` usually fall *between* order statistics, so the interpolation rule
 > alone can decide the verdict — see the **self-contained worked example** in
@@ -100,7 +112,8 @@ behaviour, exactly as M3 requires. **PI is deliberately NOT a primary BR admissi
 > site — this gate, the §2.3 sensitivity table, and the `notes/analysis_prespec.md` §1 bootstrap CI
 > endpoints. Recorded identically in `notes/comparator_prespec.md` §2.2.
 >
-> **Status:** pre-deposit clarification (no public DOI yet), same class as M3R-40. It resolves an
+> **Status:** a clarification, same class as M3R-40 — made before anything had been scored under
+> the ambiguity (and no deposit or DOI ever existed). It resolves an
 > ambiguity; it does not change the 2.0 bpm threshold, and §2.3's "exactly 2.0 bpm is retained"
 > boundary rule is unaffected.
 
@@ -251,11 +264,12 @@ In **paced** sessions the commanded metronome rate is a second, **target-concord
   pinned in the script.) It **imports no radar-pipeline code and reads no radar estimate** (it reads
   `run_metadata.json` only for the `start_wall_utc` timestamp).
 - **All existing radar/RRp pairs are EXPLORATORY** (four subjects; the sessions informed the
-  method's design). No confirmatory BR number may come from them.
+  method's design). No primary BR number may come from them.
 
 ## 5. Risk and adequacy rule — decided at M5, prospectively
 Whether RRp is an adequate BR reference is decided at the **M5 pilot**, not retrospectively on M6:
-- **M5 defines the trigger**, before M6: a pre-specified, quantitative RRp-adequacy criterion built
+- **M5 defines the trigger**, before M6: a quantitative RRp-adequacy criterion, fixed before the
+  pilot runs, built
   **only from quantities the approved steady-rate pilot actually records** (M3R-41). The M5 protocol
   paces each subject at **one steady rate** — it has **no** paced steps or transitions, so an "RRp lag
   across paced steps" measure is **not available** and is **not** used. Admissible pilot quantities
@@ -267,8 +281,9 @@ Whether RRp is an adequate BR reference is decided at the **M5 pilot**, not retr
   existing stepped "sweep" capture is a method-development arm, not an M5 study session.)*
 - If the M5 pilot fails that criterion, the plan **amends before M6** to
   **metronome-target-concordance for paced sessions and natural-BR exploratory-only**, and that
-  amendment is **re-deposited before the confirmatory data it governs** (`analysis_prespec.md` §4,
+  amendment is **recorded before the primary data it governs** (`analysis_prespec.md` §4,
   `plans/implementation_plan.md` §M5).
 - **M6 may not retrospectively switch truth sources.** Once M6 data exist, the frozen (or
   M5-amended) RRp-primary analysis stands regardless of result. A data-triggered comparator switch
-  on M6 would void the pre-registration and is forbidden.
+  on M6 is **forbidden** — it would mean choosing the comparator by the answer it gives, which is
+  the exact failure this spec exists to prevent.

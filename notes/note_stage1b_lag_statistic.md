@@ -110,7 +110,7 @@ Unchanged from draft 4.
 
 ## 6. Data budget (unchanged)
 
-All 3 existing sessions remain exploratory-only. A confirmatory claim requires a new capture,
+All 3 existing sessions remain exploratory-only. A primary claim requires a new capture,
 taken after every contract in §§2-4 and §7(c)-(h) is frozen.
 
 ---
@@ -121,7 +121,7 @@ taken after every contract in §§2-4 and §7(c)-(h) is frozen.
 
 ### (b) The decisive endpoint — unchanged: severe-false-accept reduction vs. baseline
 
-### (c) Numeric pre-registration (2026-07-15 — first real derivation; NOT yet cross-model
+### (c) Numeric specification (2026-07-15 — first real derivation; NOT yet cross-model
 reviewed, see "Status" note below before treating as frozen)
 
 **Baseline data this section is derived from.** All 3 exploratory sessions were re-processed
@@ -159,9 +159,9 @@ this dataset — see the "Scope note" at the end of this subsection.
 retained as correct: BLOCKED, not derivable.** There is no baseline severe-accept population on
 current data (0/41 scorable accepts across all 3 sessions) to define a conversion target
 against. This is an empty-population problem, not a small-sample one — no number derived from
-it would mean anything. Also blocks the tied §7(g)-stage-2 sub-item, the **pre-registered
+it would mean anything. Also blocks the tied §7(g)-stage-2 sub-item, the **declared
 minimum harmful-example-rejection rate** (same empty population). **Both are DEFERRED to the
-confirmatory capture** — see the scope note below on what that capture needs to do differently.
+primary capture** — see the scope note below on what that capture needs to do differently.
 
 **(ii) Safety bar — retention rate for baseline non-severe/genuine-cardiac accepts (must not
 regress): retention = 100% (0/41 real, comparator-prespec-scorable AHET-accepted decisions may
@@ -171,7 +171,7 @@ against the only real population available (natural n=1, paced16 n=21, sweep n=1
 n=41). Any candidate threshold that vetoes even one of these 41 fails stage 1 outright.
 **Power caveat (report honestly, don't oversell)**: with n=41 and 0 required false vetoes, the
 rule-of-three gives a 95% CI upper bound on the TRUE false-veto rate of only ≈3/41 ≈ 7.3% —
-passing this bar is necessary, not a tight guarantee; the confirmatory capture's larger n will
+passing this bar is necessary, not a tight guarantee; the primary capture's larger n will
 sharpen it. `natural`'s own n=1 is too small to check anything on its own; the pooled n=41 is
 the operative population.
 
@@ -180,7 +180,7 @@ retained yield = 100% of current AHET-accepted count, on the 3 existing sessions
 mechanical corollary of (i)+(ii), not an independent choice: with 0 known real severe accepts to
 justify vetoing anything, and (ii) requiring all 41 known non-severe accepts retained, the only
 safety-feasible behavior on current data IS a no-op. This bound only becomes a real
-(non-trivial) test once the confirmatory capture supplies real severe accepts to trade off
+(non-trivial) test once the primary capture supplies real severe accepts to trade off
 against retained yield.
 
 **(iv) Evaluability floor — minimum leverage coverage and minimum exact-track coverage.**
@@ -226,14 +226,14 @@ against retained yield.
   false-harmonic classification here fails stage 1 outright, zero tolerance (not a
   noise-floor judgment call like the null control above, because ground truth here is certain).
 
-**(vi) Confirmatory-capture block-resampling parameters and minimum independent blocks.**
+**(vi) Primary-capture block-resampling parameters and minimum independent blocks.**
 Same sign-test logic as (iv): **minimum 5 independent, non-overlapping 16-hop (48 s) blocks
-containing at least one baseline severe accept**, before the confirmatory capture can support
+containing at least one baseline severe accept**, before the primary capture can support
 any directional claim about severe-accept conversion. **Capture-design implication, not just a
 statistics parameter**: baseline severe-accept rate is apparently very low-to-zero even in a
 486 s stepped-rate session post-fix (`sweep` produced 0 severe accepts despite being the most
 provocative capture taken so far) — a repeat of the existing stepped-rate protocol is not
-guaranteed to produce ANY severe accepts to test against. The confirmatory capture should be
+guaranteed to produce ANY severe accepts to test against. The primary capture should be
 explicitly designed around a scenario plausible to still trigger one post-bin-fix (e.g. the
 `k×f_r ≈ HR` collision the stepped-rate protocol was originally built around, HANDOFF §4),
 not assumed to reproduce one by default.
@@ -244,7 +244,7 @@ real-world mechanism Stage 1B was built to catch: on the corrected pipeline, AHE
 conservatism at the correct bin appears to leave nothing severe behind on these 3
 short/single-subject sessions. This does not mean the mechanism (respiratory-harmonic false
 accepts) is impossible in general — only that it isn't currently observed. Items (i) and the
-tied utility sub-item stay open until the confirmatory capture (vi) supplies a real target
+tied utility sub-item stay open until the primary capture (vi) supplies a real target
 population; everything else above (ii–v) is usable now.
 
 **Status: not yet cross-model reviewed.** Draft 7's design (§§2–7g structure) went through 6
@@ -281,7 +281,7 @@ internally inconsistent.
    (§7c), and valid leverage/persistence accounting (§3/§3b).
 2. **Utility/mechanism filter**, applied only to thresholds that passed stage 1: correctly
    classifies every required M0 harmonic-positive case as harmonic, AND clears the
-   pre-registered minimum harmful-example-rejection rate (§7c). The pass-all sentinel is
+   declared minimum harmful-example-rejection rate (§7c). The pass-all sentinel is
    expected to fail this stage (it vetoes nothing, so it cannot flag M0's positives) — that
    is the intended, correct behavior, not a bug: failing stage 2 while passing stage 1 is
    exactly what "feasible but not useful" means.
@@ -297,7 +297,7 @@ internally inconsistent.
      all), not merely "classified" one way or the other by the harmonic/cardiac models.
    - **Optional stress/out-of-domain cases**: reported diagnostically, explicitly EXCLUDED
      from the all-pass gate — unless a case is deliberately promoted into the supported
-     domain in the numeric pre-registration (§7c) before any real run.
+     domain in the numeric specification (§7c) before any real run.
 3. **Objective + tie-break**, applied only to thresholds that passed BOTH stage 1 and stage
    2: maximize the count of baseline severe accepts (real, exploratory) correctly vetoed to
    NaN; break ties by preferring the smallest SCORE value among tied thresholds (most
@@ -357,10 +357,10 @@ count, and the candidate threshold set is a finite, exactly-deduplicated collect
 observed breakpoints — there is no continuous search and no floating-point "near-tie" to
 resolve.
 
-Selected once, on the 3 exploratory sessions only (§6), locked before the confirmatory
+Selected once, on the 3 exploratory sessions only (§6), locked before the primary
 capture, never re-fit against it.
 
-### (h) In-sample threshold-fit vs. confirmatory validation (unchanged — round-4 finding 9:
+### (h) In-sample threshold-fit vs. primary validation (unchanged — round-4 finding 9:
 RESOLVED, correctly labeled)
 
 ### (i) Claim boundaries — unchanged (round-4 finding 10: confirmed no prior resolution reopened)
@@ -372,15 +372,15 @@ RESOLVED, correctly labeled)
 1. **Implement the full control scaffold** — DONE (`scripts/stage1b_lag_statistic.py`,
    verified 2026-07-15: M0 48/48 supported + 6/6 gap cases, threshold-selector self-test PASS).
 2. Safeguards from round-6 review — preserved as coded (see script docstring); unchanged.
-3. **§7(c) numeric pre-registration — PARTIALLY DONE (2026-07-15)**. Items (ii)-(vi) filled in
+3. **§7(c) numeric specification — PARTIALLY DONE (2026-07-15)**. Items (ii)-(vi) filled in
    with real derivations from fresh current-HEAD baseline data. Item (i) (the objective bar) and
    its tied §7(g)-stage-2 utility sub-item are BLOCKED — zero baseline severe accepts exist on
-   current data — and DEFERRED to the confirmatory capture. **Still open before anything in §7c
+   current data — and DEFERRED to the primary capture. **Still open before anything in §7c
    is frozen**: (a) cross-model review of this new numeric content (CLAUDE.md §6 — the §§2-7g
    *structure* was reviewed 6 rounds, this numeric content was not); (b) computing the actual
    non-overlapping-origin independent-attempt count per session for item (iv)'s exact-track
    floor (currently only the overlapping raw count is measured).
-4. **Plan the new confirmatory capture** (§6) — now more urgent than "eventually": item (i)
+4. **Plan the new primary capture** (§6) — now more urgent than "eventually": item (i)
    cannot be unblocked without one, and it should be designed to plausibly still trigger a
    severe accept post-bin-fix (e.g. the `k×f_r ≈ HR` collision), not assume a repeat of the
    existing stepped-rate protocol will produce one.

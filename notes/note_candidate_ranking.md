@@ -143,7 +143,7 @@ This separates three mechanisms that must not be conflated: candidate-generation
 gate failure, and post-gate selection failure. Report per session and do not treat overlapping
 hops as independent observations.
 
-The census must be produced offline from the saved raw `adc_stream.bin`, using the pre-specified
+The census must be produced offline from the saved raw `adc_stream.bin`, using the frozen
 PI-gated Masimo PR comparator aligned through integer `Timestamp`. Live estimates and live
 intermediates may guide exploration, but they are not paper-grade evidence under `CLAUDE.md` §4.
 
@@ -180,7 +180,7 @@ verified mis-ranking hop.
    comparable score may require evidence computed on a common spectrum or projection basis, not
    merely a shared scalar denominator.
 3. **Temporal continuity — defer.** Stage 1B round 1 failed and its exploratory motion redesign is
-   not confirmatory. It cannot yet serve as a production tiebreaker.
+   not primary. It cannot yet serve as a production tiebreaker.
 4. **Collect more examples — accepted.** If multi-pass selection regret recurs on untouched
    captures, then a ranking design is warranted. If it remains a one-hop event, conservative
    abstention or no change is preferable to a tuned ranker.

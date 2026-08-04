@@ -11,7 +11,7 @@ Two rules shape everything here:
 
 **Scoring mode fails loudly on any missing required field.** Not "warns", not "defaults" —
 a missing field means the frozen estimand set cannot be formed, and guessing one is how a
-session that was never part of the design ends up inside a pre-registered result.
+session that was never part of the design ends up inside a headline result.
 
 **M4 recomputes the session disposition from the primitive fields and refuses to proceed
 if it disagrees with the operator's verdict** (M4R-04). An operator verdict alone is an
@@ -56,7 +56,7 @@ class DataRole(str, Enum):
     DEVELOPMENT = "development"    # the 4 existing captures: exploratory, apparent/in-sample
     ENGINEERING = "engineering"    # M1 smoke test: never scored, never evaluation
     PILOT = "pilot"                # M5: post-freeze exploratory
-    EVALUATION = "evaluation"      # M6: the confirmatory evidence base, never tuning
+    EVALUATION = "evaluation"      # M6: the primary evidence base, never tuning
     COLLISION = "collision"        # M7: role is method-specific (see §3.1)
 
 
@@ -204,17 +204,17 @@ MANIFEST_SCHEMA_VERSION = 2
 #: SCORING mode at parse time — mode alone was not a control, because mode is supplied
 #: out-of-band by the caller and a fully-populated `development` manifest passed as SCORING.
 #:
-#: * `evaluation` — "the confirmatory evidence base" (§3.1).
-#: * `collision`  — "role is method-specific"; confirmatory *only* for an estimator not fit,
+#: * `evaluation` — "the primary evidence base" (§3.1).
+#: * `collision`  — "role is method-specific"; **primary only** for an estimator not fit,
 #:   tuned or selected on M7, so it is admissible here and the per-method exclusion is the
 #:   pooling table's job (§3.2), not the schema's.
 #:
-#: Barred: `development` ("never confirmatory/headline"), `engineering` ("never scored, never
-#: evaluation"), `pilot` ("excluded from confirmatory metrics").
+#: Barred: `development` ("never primary/headline"), `engineering` ("never scored, never
+#: evaluation"), `pilot` ("excluded from primary metrics").
 _SCORING_LOADABLE_ROLES = frozenset({DataRole.EVALUATION, DataRole.COLLISION})
 
 #: Roles that are **unconditionally** scorable once loaded. `collision` is deliberately absent
-#: (S12R-11 R2): §3.1 makes M7's role *method-specific* — confirmatory only for an estimator
+#: (S12R-11 R2): §3.1 makes M7's role *method-specific* — primary only for an estimator
 #: not fit, tuned or selected on M7 — so no method-agnostic boolean can answer it. Asking
 #: `is_scorable` of a collision session is asking a question that has no answer until the
 #: consuming method is named; see `SessionManifest.scorable_for`.
@@ -1077,7 +1077,7 @@ def parse_session(
     # Mode is supplied out-of-band so a manifest cannot promote itself; the cost is that
     # nothing stopped a caller from handing a `development` or `engineering` session to
     # SCORING. §3.1 makes engineering "never scored, never evaluation", development "never
-    # confirmatory/headline" and the pilot "excluded from confirmatory metrics", so the
+    # primary/headline" and the pilot "excluded from primary metrics", so the
     # binding is between the *role* and the mode, not the mode alone.
     if mode is Mode.SCORING and role is not None and role not in _SCORING_LOADABLE_ROLES:
         allowed = ", ".join(sorted(r.value for r in _SCORING_LOADABLE_ROLES))
@@ -1733,7 +1733,7 @@ def _ineligibility_reason(s: SessionManifest, method: MethodProvenance | None = 
                     "but §3.1 makes evaluation data NEVER tuning — that declaration is itself "
                     "a protocol violation, not permission to confirm on the same data")
         return (f"method {method.method_id!r} was fit/tuned/selected on it — for that method "
-                "this capture is development, not confirmatory (§3.1)")
+                "this capture is development, not primary (§3.1)")
     if s.data_role not in _SCORING_LOADABLE_ROLES:
         return (f"data_role={s.data_role.value if s.data_role else None}, which §3.1 never "
                 "scores")

@@ -1,10 +1,10 @@
 """Stage 1B — EXPLORATORY redesign. Motion statistic, leakage-free, Masimo-endpoint.
 
 Plan: notes/plan_eca_forbidden_zone.md PART IV Stage 1B. Round 1 lives in
-scripts/stage1b_temporal_continuity.py and is PRESERVED as the failed pre-specified experiment.
+scripts/stage1b_temporal_continuity.py and is PRESERVED as the failed round-1 experiment.
 
 =============================================================================================
-THIS IS EXPLORATORY, NOT CONFIRMATORY.
+THIS IS EXPLORATORY, NOT PRIMARY.
 I have already seen round-1 outcomes on these same two sessions. Nothing here can be reported
 as clean held-out evidence. Its ONLY purpose is to decide what to FREEZE and then test on
 untouched captures. Any number below is a design aid, not a result.
@@ -244,7 +244,7 @@ def main() -> None:
     SEP = "=" * 96
     print(SEP)
     print("STAGE 1B — EXPLORATORY redesign (motion statistic; leakage-free; Masimo endpoint)")
-    print("*** EXPLORATORY, NOT CONFIRMATORY — round-1 outcomes on this data are already seen. ***")
+    print("*** EXPLORATORY, NOT PRIMARY — round-1 outcomes on this data are already seen. ***")
     print("*** Purpose: decide what to FREEZE, then test on untouched captures.               ***")
     print(SEP)
 
@@ -294,7 +294,8 @@ def main() -> None:
     print("   the window — and in the natural run it is: PR ran 75 -> 94 -> 65 bpm over the first")
     print("   25 s (PI 7-10, so the excursion is REAL, not an artefact). An FFT peak over 30 s")
     print("   estimates the DOMINANT frequency, which is not the arithmetic mean of instantaneous")
-    print("   rates. The comparator must be pre-specified, and settling windows excluded.")
+    print("   rates. The comparator must be written down and applied unchanged, and settling")
+    print("   windows excluded.")
 
     # ── 2. Does the motion score separate cardiac from harmonic? (DIAGNOSTIC labels) ──
     print("\n2. MOTION SCORE vs DIAGNOSTIC LABELS  (labels are diagnostics, NOT the endpoint)")

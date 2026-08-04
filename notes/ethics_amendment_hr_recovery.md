@@ -1,4 +1,14 @@
 Amendment request to approval `24IBEC051`
+
+> **RECORD AS SUBMITTED — header added 2026-08-04, body untouched.** This is the text as sent
+> to the IBEC board, so it is a record and **must not be edited to match later project
+> vocabulary** — the same reasoning that forbids "fixing" the Step 1a bundle digests
+> (`HISTORY.md`). Project rules changed on **2026-08-03**: M0 was removed and **nothing in this
+> study is pre-registered**. The phrase "pre-specified quality criteria" below therefore
+> reflects the submission, not current project vocabulary, and no timing claim derived from
+> it may be repeated in any manuscript, talk or spec. The criteria themselves are real and
+> unchanged: `notes/comparator_prespec.md` §2.2 (HR stationarity/coverage gates).
+> *Submission status was recorded on the user's authority 2026-08-04.*
 ---
 
 ## 1. Administrative

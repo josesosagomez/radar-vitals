@@ -1,7 +1,7 @@
 # Capture inventory
 
 > **Status: internal record.** Prepared 2026-07-25; M0 was removed from the project 2026-08-03, so
-> this is no longer a deposit artifact. Every capture is **exploratory** — none is confirmatory
+> this is no longer a deposit artifact. Every capture is **exploratory** — none is primary
 > evidence. Hashes computed with `sha256sum` on 2026-07-25.
 >
 > **CORRECTION 2026-08-03 — the eight captures are FOUR subjects, not one.** User-stated; it
@@ -58,15 +58,37 @@ not sessions. They contain no `adc_stream.bin`. Used for the A2 coverage charact
 
 ## 3. What of this inventory is PUBLIC (A6 privacy decision, 2026-07-25)
 
-Approved public participant metadata schema (`plans/m0_preregistration.md` A6; ethics approval
+Approved public participant metadata schema (the A6 privacy decision, recorded in the retired
+`plans/m0_preregistration.md` — the plan is dead, the privacy decision stands; ethics approval
 `24IBEC051`, issuing board **IBEC, KAUST**, covers publication): **subject label, date, duration,
 sex, age, height, cardiac condition, file hashes, class label** — nothing else. No names, no date
 of birth, no raw recordings in the public payload.
 
-Rows above span four subjects (see "Subject map"), so third-party participant data
-exists yet; the schema governs the amendment inventories that will carry M5/M6 participants. The
-researcher's own sex/age/height/cardiac fields are **[to fill if the user chooses to publish own
-demographics]** — not fabricated here.
+> **CORRECTED 2026-08-05.** This paragraph was written when the eight captures were believed to be
+> a single researcher self-capture, and said no third-party participant data existed yet. The
+> 2026-08-03 four-subject correction broke that sentence and left it garbled. The corrected
+> position is below, and it is materially different.
+
+Rows above span **four subjects**, so **third-party participant data already exists** in this
+dataset. The A6 schema therefore governs these captures **now** — it is not merely prospective
+cover for the M5/M6 participants it was written for.
+
+Two consequences, both open:
+
+- **The schema cannot be populated for subjects A–D.** Sex, age, height and cardiac condition were
+  never recorded for these captures and cannot be recovered from the artifacts. Of the approved
+  fields, only **subject label, date, duration, file hashes and class label** exist. Nothing else
+  may be published for them, and nothing may be reconstructed or estimated to fill the gap.
+- **The record does not establish that `24IBEC051` was in force when these captures were taken.**
+  The approval document is not in this repo and **its issue date is recorded nowhere** — only the
+  dates the user confirmed its existence and scope (2026-07-24, 2026-07-25). Subjects A and B were
+  captured 2026-07-13/14, before those confirmation dates. This is **not** an assertion that
+  anything was done outside approval; it is a statement that the repo cannot demonstrate either
+  way. **Confirm the approval date, and that consent was obtained under it for all four subjects,
+  before any of this data or its derived metadata is published.**
+
+The researcher's own sex/age/height/cardiac fields are **[to fill if the user chooses to publish
+own demographics]** — not fabricated here.
 
 ## Provenance
 - Method: `sha256sum` over `adc_stream.bin` and the Masimo CSV in each session folder;
@@ -105,8 +127,27 @@ better supported than they were recorded as being:
   "n=1 subject who barely moved". **That deferral condition no longer holds.**
 
 **What it does NOT change.** Four subjects is still small, and the subjects were not randomly
-sampled. Nothing here becomes confirmatory.
+sampled. Nothing here becomes primary.
 
-**Train/test split agreed 2026-08-03** for the BR bin-selection work: discovery on **A + B**
-(`massimo1`, `massimo2`, `massimo3`, `sweep`); the held-out test on **C + D** (`massimo4`,
-`massimo5`, `massimo6`, `massimo7`) is touched **once**, with the feature set already frozen.
+## Train/test split for the BR bin-selection work
+
+> **SUPERSEDED 2026-08-03, corrected here 2026-08-05.** This section previously read: *"discovery
+> on A + B (`massimo1`, `massimo2`, `massimo3`, `sweep`); the held-out test on C + D (`massimo4`…
+> `massimo7`) is touched once, with the feature set already frozen."* **That split is dead and must
+> not be used.**
+
+**C + D are SPENT as a holdout.** `massimo4`–`massimo7` were scored under **two** operating points
+of the same policy family (tol=2, then tol=5 at the user's request) on 2026-08-04 — evidence
+`results/diagnose/bin_policy/20260804T151531Z/` and `…152351Z/`. Two touches is not one, so they
+are no longer a clean holdout for **any** bin-policy question.
+
+**Current split (agreed 2026-08-04):**
+
+| role | captures |
+|---|---|
+| **Training / discovery** | **all eight** — subjects A, B, C, D |
+| **Held-out test, touched once** | **three new captures, subjects E, F, G** — not yet collected |
+
+The BR bin rule was frozen against the training set on 2026-08-04
+(`results/diagnose/br_bin_rule/20260804T204634Z_freeze/frozen_rule.json`) and has **not** been
+scored on any holdout, because none exists yet. `HANDOFF.md` §4.1/§4.2a is the current authority.

@@ -345,7 +345,7 @@ def test_posture_must_equal_the_canonical_seated(bad):
 
 @pytest.mark.parametrize(
     "key, bad",
-    [("arm", "sitting"), ("data_role", "confirmatory"), ("retry_status", "redone"),
+    [("arm", "sitting"), ("data_role", "primary"), ("retry_status", "redone"),
      ("disposition", "maybe")],
 )
 def test_unknown_enum_values_are_rejected_and_the_error_lists_the_allowed_set(key, bad):
@@ -476,7 +476,7 @@ def test_a_completed_run_whose_LAST_window_is_short_is_still_RETAINED():
     `floor(11999/600)=19 < floor(600*20/600)=20` made the old rule call it corrupt.
 
     This is a **regression test for an over-exclusion**: a wrong answer here silently drops
-    an admissible session out of a pre-registered analysis, which looks like caution."""
+    an admissible session out of a frozen analysis, which looks like caution."""
     verdict, reasons, flags = recompute_disposition(
         admissible(truncation_bytes=4096, n_frames=11999), "S", raw_digest_ok=True
     )
@@ -728,7 +728,7 @@ def test_require_scoring_mode_passes_for_scoring_sessions():
 @pytest.mark.parametrize("role", ["development", "engineering", "pilot"])
 def test_a_never_scored_data_role_cannot_be_parsed_in_scoring_mode(role):
     """§3.1 makes engineering "never scored, never evaluation", development "never
-    confirmatory/headline" and the pilot "excluded from confirmatory metrics".
+    primary/headline" and the pilot "excluded from primary metrics".
 
     Mode alone was not a control: mode is supplied out-of-band by the caller, so a fully
     populated `data_role="development"` manifest parsed as SCORING, reported
@@ -749,7 +749,7 @@ def test_a_scoring_eligible_data_role_LOADS(role):
 def test_only_evaluation_is_unconditionally_scorable():
     """`is_scorable` deliberately answers False for `collision`: §3.1 makes M7's role
     method-specific, so a method-agnostic boolean cannot encode it — and the first version
-    answered True, i.e. asserted the confirmatory reading in the permissive direction, which
+    answered True, i.e. asserted the primary-role reading in the permissive direction, which
     is how tuning data reaches a headline."""
     ev = parse_session(admissible(data_role="evaluation"), Mode.SCORING, verified=_verified())
     col = parse_session(admissible(data_role="collision"), Mode.SCORING, verified=_verified())
@@ -1620,7 +1620,7 @@ def _method(name="eca_v2", fitted=()):
 
 
 def test_collision_data_confirms_a_method_that_was_not_fit_on_it():
-    """§3.1: M7 is "confirmatory only for an estimator that was not fit, tuned, or selected
+    """§3.1: M7 is "primary only for an estimator that was not fit, tuned, or selected
     using M7"."""
     from src.m4.manifest import require_agreement_scoring
 
@@ -1735,7 +1735,7 @@ def test_every_existing_capture_loads_in_development_mode(session_id, arm, rate,
 )
 def test_no_existing_capture_can_be_scored(session_id, arm, rate, schedule):
     """§3.1: the four existing captures are "development/tuning AND exploratory evaluation
-    only; never confirmatory/headline". The bar must hold for every one of them."""
+    only; never primary/headline". The bar must hold for every one of them."""
     from src.m4.manifest import MethodProvenance, require_agreement_scoring
 
     fields = {"session_id": session_id, "arm": arm, "data_role": "development"}

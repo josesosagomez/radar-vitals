@@ -361,7 +361,7 @@ synthetic gate, but no real path is touched until a clean,
 `promotion_eligible=true` gate and one comprehensive pre-data authorization
 exist. Any negative transfer is recorded rather than tuned; descriptive real
 continuation would additionally require a gate-bound user rationale. Real
-outputs use the unchanged `delta_before_mean` phase mapping, six preregistered
+outputs use the unchanged `delta_before_mean` phase mapping, six declared
 \(H\)/suppression arms, separate recorded/rerun lock estimands, the exact
 non-overlapping 30 s grid, and Masimo-independent radar artifacts. `k=0` is
 retained as lock-selection-in-sample diagnostics; only `k>=1` supports

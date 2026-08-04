@@ -405,7 +405,7 @@ def tracking_tests(
       tolerance this scores near 100%, and hit rate becomes incapable of demonstrating
       anything. This is a property of the CAPTURE, not of the estimator.
     * **Spearman correlation** — tolerance-free, so it is not hostage to either. Reported
-      at the locked bin (one pre-specified bin, no selection, so its p is usable as-is)
+      at the locked bin (a single fixed bin, no selection, so its p is usable as-is)
       and at the best bin (max over 14, so its p is NOT — multiplicity uncorrected).
     """
     argmax_col, ref_col = f"{band}_argmax_bpm", f"{band}_ref_bpm"
@@ -573,7 +573,7 @@ def render_report(meta: dict, summaries: list[dict], scans: dict, medians: dict)
         "",
         "`ceiling` is the best of 14 bins chosen using the reference; `null` is the same",
         "statistic with the window/reference pairing shuffled, so `p` already accounts for that",
-        "selection. Spearman is tolerance-free; the locked-bin p is a single pre-specified bin",
+        "selection. Spearman is tolerance-free; the locked-bin p is a single fixed bin",
         "and usable as-is, the best-bin p is a max over 14 and shown Bonferroni-corrected.",
         "",
         "| capture | band | n | locked | ceiling | null p50 | perm p | constant | ref spread | ρ locked (p) | ρ best (p corr) |",

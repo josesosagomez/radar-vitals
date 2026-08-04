@@ -1159,7 +1159,7 @@ evidence region is the correct mechanism to test next, subject to the points bel
     synthetic decoy right but has a known collision-erasure failure; that is not enough evidence
     to promote it. Keep all configs explicitly unpromoted until the same offline, Masimo-gated
     comparison is run for `legacy`, current, and v2. Replace §17's "v2 is dead and we ship legacy"
-    with "v2 is rejected; choose a fallback only from the pre-specified comparison criteria."
+    with "v2 is rejected; choose a fallback only from the comparison criteria fixed below."
 
 **Recommended implementation order after this review:** first make the §14.2 probe reproducible
 and repair §8.4's assertion; then implement only the common 4.0 Hz ceiling plus complete artifacts;
@@ -1240,11 +1240,11 @@ take for granted. Everything downstream of ECA inherits k · Δf_r.
 | 20.5 | column count is not the risk; mismatch/coherence are. §16.4 is technically wrong | **Accepted — my error.** The bandpass is an exact FFT mask on the *input*; it does not make the sine/cosine *basis* ill-conditioned. Conditioning is set by the window and the frequencies. §16.4 withdrawn. Test basis rank/coherence separately from edge attenuation. |
 | 20.6 | diagnostics cannot verify silently-dropped basis columns | **Accepted.** `n_eca_projected` counts *selected orders*, not columns surviving the Gram-Schmidt norm guard. `eca_project()` must return retained/dropped basis diagnostics (candidate-wise on 2nd passes). → **Stage 0.** |
 | 20.7 | near-collision arithmetic in §16.2 is wrong | **Accepted — my error.** A bin is 2 bpm, so `2δ ≤ 1 bin` only for **δ ≤ 1.0 bpm**, not the "1–2 bpm" I wrote. Replace the fixed boundary with a **continuous offset sweep**. |
-| 20.8 | honest NaN is right, but report the selection effect | **Accepted.** Yield/coverage must be **stratified by distance to the nearest respiratory harmonic**, with MAE *and* rejected-window fraction inside and outside a pre-specified ambiguity band. Otherwise the method looks accurate by rejecting exactly its hardest windows. |
+| 20.8 | honest NaN is right, but report the selection effect | **Accepted.** Yield/coverage must be **stratified by distance to the nearest respiratory harmonic**, with MAE *and* rejected-window fraction inside and outside an ambiguity band fixed in advance of scoring. Otherwise the method looks accurate by rejecting exactly its hardest windows. |
 | 20.9 | do not scale `k_max_cap` with f_r; cap 16 is a silent partial implementation | **Accepted.** Full 4.0 Hz coverage needs **cap 20** at a declared 12 bpm minimum, **cap 26** at the 0.15 Hz physiological gate. Either cover the declared domain, or explicitly flag `eca_coverage_incomplete` and **forbid AHET verification** where the required `2k` order exceeds the cap. |
 | 20.10 | the pilot is under-specified; stage it separately | **Accepted.** Pilot is **removed from the critical path**. Also correct: at **f_r < 0.20 Hz the ±0.10 Hz guard spans 0.20 Hz ≥ the harmonic spacing**, so two adjacent harmonics can fall inside one guard → false ambiguity at 9–12 bpm. |
 | 20.11 | the AHET verdict rests on a cross-band score | **Accepted — verified in code.** `peak2_magnitude` is measured near 2×candidate (up to 4 Hz) but `comparison_floor = median(spec2[cardiac_mask])` is the **0.8–2.0 Hz band** (`vitals.py`). Extending ECA changes numerator and denominator **differently**, so the existing dB thresholds are **not calibrated** for any extended-ceiling mode. Must be validated against a **local** 2nd-harmonic-region floor. |
-| 20.12 | do not auto-ship `legacy` if v2 fails | **Accepted.** §17's *"v2 is dead and we ship `legacy`"* is **withdrawn** and replaced by: *"v2 is rejected; a fallback is chosen only from the pre-specified offline comparison."* `legacy` has its own known collision-erasure failure; one synthetic win does not earn promotion. **All configs stay unpromoted.** |
+| 20.12 | do not auto-ship `legacy` if v2 fails | **Accepted.** §17's *"v2 is dead and we ship `legacy`"* is **withdrawn** and replaced by: *"v2 is rejected; a fallback is chosen only from the offline comparison fixed below."* `legacy` has its own known collision-erasure failure; one synthetic win does not earn promotion. **All configs stay unpromoted.** |
 
 ---
 
@@ -1487,7 +1487,7 @@ would be circular.
 Specify a **direct band-floor-lock rule** (e.g. f_r within ε of the search-band edge for ≥ N
 consecutive hops), **report the excluded contiguous spans**, and **reset the tracker after each gap**.
 
-### 1B.7 Pass criteria — pre-specified, not "a usable margin"
+### 1B.7 Pass criteria — fixed here, not "a usable margin"
 
 **All** of the following, or 1B fails:
 1. **Both held-out directions (A→B and B→A) reject every known confident decoy**, including the ones
@@ -1554,7 +1554,7 @@ recovered.
 
 ---
 
-### Stage 5 — offline scoring, pre-specified (20.12, 20.8)
+### Stage 5 — offline scoring, criteria fixed below (20.12, 20.8)
 
 Only now: `experiments/exp_eca_modes/` (30 s / 3 s), raw `adc_stream.bin` + SHA-256, scoring
 **`legacy` vs `skip_forbidden_harmonics_v1` vs the Stage-2 mode** against Masimo PR.
@@ -1566,7 +1566,7 @@ re-measured.
 **Direct, falsifiable prediction:** on paced-16, the **34% of hops where a respiratory harmonic was
 the top candidate must collapse.**
 
-**Promotion** is decided *only* from these pre-specified criteria. Not before.
+**Promotion** is decided *only* from the criteria above, fixed before the scoring run. Not before.
 
 ---
 

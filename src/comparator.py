@@ -1,8 +1,11 @@
 """The frozen HR/BR comparator specification, implemented.
 
 `notes/comparator_prespec.md` (HR) and `notes/comparator_prespec_br.md` (BR) are
-pre-registered and binding on every agreement number in the paper. This module is
-the one place those specs are turned into code.
+frozen and binding on every agreement number in the paper — a **transparency** claim
+(the specs are written out in full and applied identically to every estimator
+compared), never a claim about when they were written. Nothing in this project is
+pre-registered; see CLAUDE.md §4. This module is the one place those specs are turned
+into code.
 
 Distinct from `src/masimo.py` (raw CSV parsing — untouched) and from
 `src/compare.py`'s existing `compare()`/`metrics()` (mean-based, SUPERSEDED by the
@@ -40,8 +43,8 @@ _QUANTILE_METHOD = "linear"
 def hr_reference(df: pd.DataFrame, epoch_start: float, epoch_end: float) -> dict:
     """`notes/comparator_prespec.md` §2.1/§2.2 — the HR (PR) reference for one window.
 
-    Usable = finite `pr_bpm` AND finite `pi` AND `pi >= 0.5` (the §2.1 pre-deposit
-    clarification: one usable-sample set, used for the median, the stationarity
+    Usable = finite `pr_bpm` AND finite `pi` AND `pi >= 0.5` (the §2.1 clarification:
+    one usable-sample set, used for the median, the stationarity
     quantiles and the coverage count alike — never a second, differently-defined
     denominator).
 

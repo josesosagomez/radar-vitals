@@ -21,9 +21,9 @@ WHAT THIS MODULE IS NOT
 ------------------------
 It does NOT compute a real lag-10 SCORE distribution as a scientific result, fit a final
 threshold against real sessions, or evaluate the decisive endpoint (design Sec 7b). All of
-that requires the numeric pre-registration in design Sec 7(c), which is NOT yet frozen. Any
+that requires the numeric specification in design Sec 7(c), which is NOT yet frozen. Any
 real-session numbers printed by this script (the "real per-decision surrogate" section) are
-plumbing/diagnostic checks that the code runs end-to-end -- not confirmatory results, and not
+plumbing/diagnostic checks that the code runs end-to-end -- not headline results, and not
 a fitted threshold. Running the M0 gate first and stopping if it fails follows the same
 discipline as scripts/stage1a_harmonic_coherence.py.
 
@@ -227,7 +227,7 @@ def score_track(
 #                     never scored at all.
 #   "stress"       -- optional, out-of-domain (e.g. very low SNR); reported diagnostically,
 #                     EXCLUDED from the all-pass gate unless explicitly promoted in the
-#                     numeric pre-registration (Sec 7c) before a real run.
+#                     numeric specification (Sec 7c) before a real run.
 
 @dataclass
 class M0Case:
@@ -620,7 +620,7 @@ def run_cardiac_rsa_control(
     print(f"  power, not a floor effect): {dict(mono.round(2))}")
     print("  None of the tested gain/drift combinations crossed into eligible+negative here --")
     print("  that boundary (if it exists) sits at a larger gain/drift than tested; the actual")
-    print("  acceptable bound is a Sec 7(c) pre-registration question, not answered by this run.")
+    print("  acceptable bound is a Sec 7(c) specification question, not answered by this run.")
     return df
 
 
@@ -686,8 +686,8 @@ def run_real_surrogate(run_name: str = "sweep") -> pd.DataFrame:
         print("  endpoints never happen to land on an AHET-accepted hop -- getting a full")
         print("  16-consecutive-hop run AND landing on one of the (sparse) accepted hops is a")
         print("  restrictive joint condition on these short sessions. This is exactly the kind")
-        print("  of data-sparsity problem Sec 7(c)'s pre-registration and the planned new")
-        print("  confirmatory capture need to account for.")
+        print("  of data-sparsity problem Sec 7(c)'s specification and the planned new")
+        print("  primary capture need to account for.")
     print("  NOTE: 'frac_negative' above is NOT a false-harmonic rate against a real threshold --")
     print("  no threshold is frozen yet (Sec 7c). This only confirms the plumbing (frozen k_hat")
     print("  reuse, real Delta f_r, gated PR substitution, exclusion accounting) runs end-to-end.")
@@ -699,7 +699,7 @@ def run_real_surrogate(run_name: str = "sweep") -> pd.DataFrame:
 # GENERIC, reusable logic -- exercised below only against a small hand-computed synthetic
 # scenario (verifying the code matches the design exactly), NEVER against real per-session
 # SCORE populations to pick a "final" threshold. That requires Sec 7(c)'s numeric
-# pre-registration, which is not yet frozen. `SCORE <= threshold` => classified harmonic => veto.
+# specification, which is not yet frozen. `SCORE <= threshold` => classified harmonic => veto.
 
 def build_candidate_thresholds(*populations: np.ndarray) -> tuple[np.ndarray, int, float | None]:
     """Union of SCORE breakpoints from every population used by the objective or any
@@ -835,7 +835,7 @@ def main() -> None:
     print("*** This run exercises CONTROLS ONLY. It does not compute a real lag-10 SCORE   ***")
     print("*** distribution as a scientific result, fit a final threshold against real     ***")
     print("*** sessions, or evaluate the decisive endpoint. That requires Sec 7(c)'s       ***")
-    print("*** numeric pre-registration, which is not yet frozen (notes/note_stage1b_lag_  ***")
+    print("*** numeric specification, which is not yet frozen (notes/note_stage1b_lag_    ***")
     print("*** statistic.md). Any real-session numbers below are plumbing checks only.     ***")
     print(SEP)
 
@@ -860,7 +860,7 @@ def main() -> None:
     print("CONTROL SCAFFOLD COMPLETE.")
     print("Next (per notes/note_stage1b_lag_statistic.md): freeze Sec 7(c)'s numeric bars with")
     print("real derivations, then -- and only then -- compute a real lag-10 SCORE distribution,")
-    print("fit the threshold on the 3 exploratory sessions, and plan the new confirmatory capture.")
+    print("fit the threshold on the 3 exploratory sessions, and plan the new primary capture.")
     print(SEP)
 
 

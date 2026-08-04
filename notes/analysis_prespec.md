@@ -27,17 +27,20 @@
 > **2026-07-30 — M8 existing-data clarification, pre-freeze.** The existing exploratory inventory
 > is now eight captures, not four. All eight are development/apparent data (four subjects — corrected
 > 2026-08-03; previously recorded as one) and remain
-> ineligible for confirmatory/headline use. The reviewed M8 Step 1b plan permits explicitly
+> ineligible for primary/headline use. The reviewed M8 Step 1b plan permits explicitly
 > `exploratory_non_frozen` reference scoring from the approximate `start_wall_utc` origin only if
 > every row/manifest/table/plot states that timing limitation and its ineligibility for promotion or
 > final agreement claims. It retains `k=0` as lock-selection-in-sample diagnostics and uses only
-> `k>=1` for comparative accuracy. This is a method-specific descriptive clarification before M0
-> deposit, not a relaxation of the prospective `frame0_epoch` requirement. It was included in the
+> `k>=1` for comparative accuracy. This is a method-specific descriptive clarification, **not** a
+> relaxation of the prospective `frame0_epoch` requirement. (It was originally positioned as coming
+> "before M0 deposit"; no deposit ever existed — M0 was removed 2026-08-03 — and the clarification
+> stands on its own terms.) It was included in the
 > five-discipline review of `plans/m8_step1b_ahmed_transfer.md`.
 >
-> **2026-08-03 — PENDING, NOT YET APPLIED: a third arm.** *(Lower stakes since M0's removal —
-> this is now an internal-consistency debt, not a pre-deposit blocker. It still decides what M6
-> can claim.)* IBEC approved an amendment to
+> **2026-08-03 — PENDING, NOT YET APPLIED: a third arm.** *(An internal-consistency debt, not a
+> blocker on anything — M0 is gone. It still decides what M6 can claim.)* **Trigger, set by the
+> user 2026-08-04: this edit must land BEFORE ANY M5 PILOT SESSION.** It does not block the
+> three new BR captures (subjects E/F/G), which are not M5.* IBEC approved an amendment to
 > `24IBEC051` adding a **seated HR-recovery arm** (`notes/protocol.md`, "HR dynamic-range arm").
 > The study design is now **10 subjects × 3 sessions**, and arm becomes
 > `a ∈ {natural, paced, recovery}`. **§1 below still says 2 sessions and 2 arms and has NOT been
@@ -158,7 +161,7 @@ estimate — with no external formula to transcribe and no not-yet-existing impl
 clusters with all its windows); on each resample recompute `μ_a`, `σ²_w = MSW`,
 `σ²_b = max((MSB − MSW)/n0, 0)` and `LoA_a = μ_a ± 1.96·√(σ²_b + σ²_w)`; **B = 10 000** replicates;
 fixed **seed = 20260725**; **two-sided 95 %** percentile interval (2.5 / 97.5), taken per endpoint,
-with the percentile computed by the **`linear`** method (**pre-deposit clarification, user decision
+with the percentile computed by the **`linear`** method (**clarification, user decision
 2026-07-26, M4 plan review M4R-09** — the same convention now named in `notes/comparator_prespec.md`
 §2.2 and `notes/comparator_prespec_br.md` §2.2 for the `p90 − p10` stationarity gates; it must be
 passed explicitly at every call site, never left to a library default, so the CI endpoints and the
@@ -170,10 +173,10 @@ conditions** (`S_a ≥ 2`, `N_a > S_a`).
 
 **Declared limitation of the primary — it is ANTI-CONSERVATIVE for the precision gate (stated
 plainly, M3R-45).** A percentile cluster bootstrap over `S_a ≤ 10` clusters has **no coverage
-guarantee** and is known to **under-cover** at this sample size, so the deposited CIs may be
+guarantee** and is known to **under-cover** at this sample size, so the reported CIs may be
 **optimistically narrow**. For the ≤ 5 bpm CI-half-width precision gate (§2a/§2b) this is
 **anti-conservative, not conservative**: an over-narrow CI can turn a *true* half-width **above** 5 bpm
-into an *observed* half-width **≤ 5**, letting an arm **falsely retain its confirmatory headline** when
+into an *observed* half-width **≤ 5**, letting an arm **falsely retain its primary headline** when
 a better-calibrated interval would have sent it to descriptive-only. The gate can therefore be
 **passed too easily** at small `S_a`. This is a **declared limitation**, reported with every LoA
 alongside the `S_a ≤ 10` caveat; it is **not** self-correcting and is **not** claimed to be.
@@ -208,7 +211,7 @@ The pooled `bias ± 1.96·SD` with
 as a limit of agreement.
 
 **Assumption diagnostics — MANDATORY, not conditional (M3R-18).** The constant-`μ ± 1.96·SD` LoA is
-the **primary, pre-registered** estimand and is **never** switched post-hoc. For **every arm**,
+the **primary, frozen** estimand and is **never** switched post-hoc. For **every arm**,
 three items are **always computed and reported** (no "if breached" trigger): (i) proportional-bias /
 heteroscedasticity — the slope of difference-vs-mean and residual-spread-vs-magnitude; (ii)
 difference-tail normality — residual skew and a QQ summary; (iii) a **serial-correlation summary =
@@ -253,13 +256,22 @@ transform *as the new primary* after M6 is **forbidden**.
 
 ## 2. Evidence floor and precision target
 
+> **Status after M0's removal — BINDING AS ENGINEERING (user decision 2026-08-04).** The floor
+> was written when it was also governance for a deposit gate. **The deposit is gone; the floor
+> is not.** It keeps its force: a below-floor result **narrows the claim and is logged**, it is
+> not quietly ignored. What it never was, and must never be described as, is a *timing* claim —
+> nothing here is pre-registered. Its value is that it is written out in full and applied
+> identically to every estimator compared, and that it is fixed **before** the yield it judges
+> is seen (the §4 prospective-only rule, which also survived M0). A floor chosen after seeing
+> the pilot yield is not a floor — that reasoning never depended on a deposit.
+
 The minimum number of **evaluable** (radar-accepted **and** comparator-admissible,
 non-overlapping 30 s) windows the study is powered to report.
 
 **Vital-sign scope (M3R-28).** Option A below is the **HR (primary-endpoint) evidence floor** — it
 was derived from the HR AHET-acceptance yield and the HR comparator
-(`plans/m0_b1_evidence_floor_memo.md`). **BR is a secondary, exploratory endpoint (§3) and has NO
-confirmatory evidence floor**: BR agreement is reported **descriptively wherever BR-evaluable
+(`plans/m0_b1_evidence_floor_memo.md`). **BR is a secondary, exploratory endpoint (§3) and carries
+no evidence floor for primary/headline claims**: BR agreement is reported **descriptively wherever BR-evaluable
 windows exist, always with its own coverage**, using a BR-evaluable count (radar BR estimate present
 **and** `comparator_prespec_br.md`-admissible) that is computed and reported **separately** from the
 HR count. The ≤ 5 bpm precision target and the miss rule apply to the **HR** primary endpoint only;
@@ -282,16 +294,16 @@ lower) to each of its two CI endpoints is ≤ 5 bpm — evaluated **per arm** on
 
 ### 2b. Extensions — FROZEN (user decision 2026-07-25, adopting the cross-review recommendation)
 The following complete the HR evidence floor and are now binding:
-- **Study-wide floor:** the study-wide confirmatory HR agreement claim requires **≥ 8 of the 10
+- **Study-wide floor:** the study-wide primary HR agreement claim requires **≥ 8 of the 10
   subjects** to meet the per-subject floor. If fewer than 8 do, the **study-wide claim weakens to
   descriptive** (bias and observed spread; no population LoA), reported as a limitation.
 - **Symmetric zero-window handling:** the §2a miss rule is **symmetric** — **either** arm (natural
   *or* paced) that yields **< 1 evaluable window** has **that arm** reported descriptive-only; the
-  subject's other arm still contributes to its arm-specific confirmatory analysis.
+  subject's other arm still contributes to its arm-specific primary analysis.
 - **No automatic whole-subject exclusion.** A subject below the **≥ 4** per-subject floor is **not**
   removed: its **eligible arm data remain in the arm-specific analysis**, flagged **below-floor**
   with counts reported. The **≥ 8/10 study-wide rule** (above) — not deletion of the subject — is
-  what governs whether the study-wide confirmatory claim survives. (This keeps a below-floor
+  what governs whether the study-wide primary claim survives. (This keeps a below-floor
   subject's otherwise-usable data in the analysis rather than discarding it on a count.)
 - **Precision-miss consequence:** if the ≤ 5 bpm CI-half-width target (§2a) is not met for an arm,
   that arm's **headline weakens to descriptive** (bias and observed spread; no population LoA),
@@ -371,14 +383,14 @@ declared, prospective outcome, not a post-hoc rescue.
 ### 3.1 Data-roles table (binding)
 | data | role |
 |---|---|
-| 8 existing captures | **development/tuning AND exploratory evaluation only; never confirmatory/headline.** Exploratory agreement (e.g. M4's HR reproduction, M8/M9/M10 offline arms) is permitted and labelled exploratory; performance on a capture a method was tuned on is additionally labelled **apparent / in-sample**. For M8, approximate-origin reference scoring is additionally labelled `exploratory_non_frozen` and is ineligible for promotion/final agreement claims. |
+| 8 existing captures | **development/tuning AND exploratory evaluation only; never primary/headline.** Exploratory agreement (e.g. M4's HR reproduction, M8/M9/M10 offline arms) is permitted and labelled exploratory; performance on a capture a method was tuned on is additionally labelled **apparent / in-sample**. For M8, approximate-origin reference scoring is additionally labelled `exploratory_non_frozen` and is ineligible for promotion/final agreement claims. |
 | M1 smoke test | **engineering-only** — never scored, never evaluation (CLAUDE.md §4). |
-| M5 pilot | post-freeze exploratory — may change the rules; excluded from confirmatory metrics |
-| M6 | evaluation only — never tuning; the confirmatory evidence base |
-| **M7 collision capture** | **role is method-specific.** Confirmatory **only** for an estimator that was *not* fit, tuned, or selected using M7. For any method whose parameters/thresholds are fit or chosen using M7 — e.g. the Stage 1B lag-10 veto (M11c) and M8's collision tuning — M7 is **method-development/exploratory** and is **excluded from that method's confirmatory/headline metrics**. A capture cannot both fit and confirm the same method. |
+| M5 pilot | post-freeze exploratory — may change the rules; excluded from primary metrics |
+| M6 | evaluation only — never tuning; the primary evidence base |
+| **M7 collision capture** | **role is method-specific.** **Primary only** for an estimator that was *not* fit, tuned, or selected using M7. For any method whose parameters/thresholds are fit or chosen using M7 — e.g. the Stage 1B lag-10 veto (M11c) and M8's collision tuning — M7 is **method-development/exploratory** and is **excluded from that method's primary/headline metrics**. A capture cannot both fit and confirm the same method. |
 
 ### 3.2 Pooling table (binding)
-- **M5 pilot never enters** confirmatory or headline metrics.
+- **M5 pilot never enters** primary or headline metrics.
 - **18 bpm paced arm — HR only.** For **HR**, the 18 bpm arm is **always reported separately and
   never pooled** into headline metrics (it sits inside the 4·f_r ≈ HR collision zone —
   `notes/protocol.md`). **For BR this exclusion does NOT apply** (the collision is an HR-cancellation
@@ -416,9 +428,12 @@ declared, prospective outcome, not a post-hoc rescue.
 ## 4. Amendment mechanism
 
 An amendment is: a dated changelog entry (what changed, why); cross-model review where CLAUDE.md §6
-applies; a **new Zenodo version DOI** under the concept DOI; applied **prospectively only** (never
-retrofitted to already-collected data). An un-re-deposited change is void — the frozen version
-governs. An amendment changing what a participant does clears ethics (`24IBEC051`) first.
+applies; a dated `HISTORY.md` entry; applied **prospectively only** (never retrofitted to
+already-collected data). An unrecorded change is void — the version in this file governs.
+*(The original wording required "a new Zenodo version DOI under the concept DOI" and called an
+un-re-deposited change void. No Zenodo record ever existed — M0 was removed 2026-08-03 — so the
+recording mechanism is `HISTORY.md`. **The prospective-only requirement is untouched and is the
+part that ever mattered.**)* An amendment changing what a participant does clears ethics (`24IBEC051`) first.
 
 ## 5. Endpoint definitions
 
@@ -528,7 +543,8 @@ evidence-floor rule, **not** by discretionary exclusion.
   > previously wrote this span as the **closed** `[t − 30 s, t]`, which for integer-second samples
   > differs from this half-open grid by one endpoint (a closed span can double-count the boundary
   > second across adjacent windows). The user authorised **harmonising the HR comparator to the
-  > half-open `[t − 30 s, t)`** — a pre-deposit clarification (no public DOI existed yet), applied in
+  > half-open `[t − 30 s, t)`** — a clarification made before anything was scored under the closed
+  > form (and no deposit or DOI ever existed), applied in
   > `notes/comparator_prespec.md` §2.1. **HR and BR now use the identical half-open endpoint rule**,
   > this frame-index grid being binding for both.
   **`frame0_epoch` is bound to a
@@ -559,12 +575,12 @@ evidence-floor rule, **not** by discretionary exclusion.
   outputs, not options.
 - **Distance is descriptive, not inferential:** reported as error against the measured continuous
   distance. **No post-hoc distance strata and no per-distance agreement claim** unless separately
-  pre-specified by amendment (`plans/implementation_plan.md` §M4). NB: distance was not recorded in
+  specified by a documented amendment (`plans/implementation_plan.md` §M4). NB: distance was not recorded in
   the 8 existing exploratory captures — this breakdown applies from M5 onward.
 
-## 8. Deliberately not pre-specified (open degrees of freedom)
+## 8. Deliberately left open (open degrees of freedom)
 
-The deposit freezes **only the enumerated rules**. These are intentionally left open; resolving any
+This document fixes **only the enumerated rules**. These are intentionally left open; resolving any
 of them uses only design/tuning data (§3.1) and, where noted, an amendment:
 - Coverage-improvement work (M11a) and any resulting estimator changes — amendment required to
   make one the primary.
@@ -575,7 +591,11 @@ of them uses only design/tuning data (§3.1) and, where noted, an amendment:
 
 ---
 
-### Open-items checklist (all must close before the deposit is frozen)
+### Open-items checklist
+
+> **Re-scoped 2026-08-04.** These previously "all had to close before the deposit is frozen".
+> There is no deposit — M0 was removed 2026-08-03. They remain a real checklist of engineering
+> debt; what they gate is stated per item, or nothing.
 - [x] §1 statistical citations verified 2026-07-25 (BA 1986/2007, Carstensen 2008, Zou 2013)
 - [x] §1 agreement model corrected (2-level per-arm; **cluster-bootstrap primary CI** — M3R-29
       Option A, user 2026-07-26 — with its **anti-conservative-precision-gate** limitation declared

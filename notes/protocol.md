@@ -14,8 +14,9 @@
   > **Changed from 2 to 3 on 2026-08-03**, when IBEC approved the exertion amendment. Session 3
   > is the **HR dynamic-range (recovery) arm** — see its own section below for why it exists
   > and what it requires. `notes/analysis_prespec.md` is still frozen at 2 sessions and
-  > **must be amended before M0 is deposited**; until then the two files disagree and this one
-  > is the newer.
+  > **must be amended before any M5 pilot session** (trigger re-set by the user 2026-08-04, the
+  > old "before M0 is deposited" trigger having died with M0); until then the two files disagree
+  > and this one is the newer and governs what is captured.
 - **Session 1: natural breathing.** Subject breathes normally; no pacing.
 - **Session 2: paced breathing** with a metronome at a fixed target rate.
   - Rates: **12, 15, 18 breaths/min**, one steady rate per subject, assigned by
@@ -120,9 +121,10 @@
   `dsp_override` (not discarded). Radar-acceptance and reference gates then reduce this
   count; report coverage alongside accuracy.
 
-  > **Changed from 5 to 10 minutes on 2026-07-24** — decided *before* the
-  > pre-registration deposit, so it is part of the frozen protocol rather than a
-  > later amendment. **The ethics approval permits up to 10 minutes** (user-confirmed
+  > **Changed from 5 to 10 minutes on 2026-07-24**, before any session was captured under it,
+  > so it is simply what the protocol has always said rather than a later amendment. (The
+  > original wording justified this by its position relative to the M0 deposit; no deposit ever
+  > existed — M0 was removed 2026-08-03 — but the decision and its date are unaffected.) **The ethics approval permits up to 10 minutes** (user-confirmed
   > 2026-07-24; recorded on the user's authority — the approval document itself is
   > not in this repo). Approval **`24IBEC051`**, issuing board **IBEC, KAUST**, covers
   > both collection and publication (user-confirmed 2026-07-25). **Do not exceed 10 minutes.**
@@ -379,7 +381,7 @@ protocol, which carries no cardiovascular exclusions because it never needed any
 recovery decays fastest, so those windows legitimately breach within-window stationarity. The
 usable evidence is the slower mid-to-late ramp, which is both admissible and wide.
 
-### Adequacy criterion — pre-specified, so the arm can fail
+### Adequacy criterion — fixed before the arm runs, so the arm can fail
 
 A capture from this arm is **adequate for HR validation** only if, computed from the Masimo
 CSV alone and **before** any radar comparison:
@@ -442,9 +444,11 @@ must not be run in place of the approved arm.
       > legitimately fail. Whether the §2a/§2b floor is arm-specific must be decided **before**
       > the freeze — a floor adjusted after seeing this arm's yield is not a floor.
 
-**The M0 gate is unaffected and still stands.** `HANDOFF.md` §4: no study capture may be taken
-until the pre-registration is deposited, and that gate sits before M5. Ethics approval permits
-this arm; it does not lift M0. **Nothing about 2026-08-03 makes a study session capturable.**
+**There is no longer a governance gate before study capture.** This paragraph previously read
+"no study capture may be taken until the pre-registration is deposited" — **that gate was removed
+with M0 on 2026-08-03** (`HANDOFF.md` §3) and asserting it here was simply wrong. M5/M6/M7 are
+blocked by nothing. What still governs capture is unchanged and is not governance: ethics
+approval `24IBEC051`, the settle criterion, the clock-sync step, and the protocol below.
 
 ---
 
@@ -498,12 +502,14 @@ a separate method-development arm. **Until one of these lands, an HR acceptance 
 cannot be validated on any data this study will produce** — a BR criterion is unaffected and
 can proceed on the stepped-sweep evidence.
 
-**Open, and blocking the pre-registration deposit (M0):**
-- **The evidence floor** — the minimum number of evaluable (radar-accepted *and*
-  comparator-admissible) non-overlapping windows per session and per subject, and
-  the agreement precision the study claims. Deferred by the user 2026-07-24, but it
-  must be fixed **before** M0 freezes: a floor chosen after seeing the pilot yield
-  is not a floor.
+**Open (nothing is blocked on a deposit — M0 was removed 2026-08-03):**
+- ~~**The evidence floor**~~ — **CLOSED 2026-07-25.** Fixed as Option A in
+  `notes/analysis_prespec.md` §2a/§2b: per-session ≥ 1 evaluable window, per-subject ≥ 4,
+  study-wide ≥ 8 of 10 subjects, LoA CI half-width ≤ 5 bpm, natural-drop miss rule. **It
+  survived M0's removal and remains binding as engineering** (user decision 2026-08-04): a
+  below-floor result narrows the claim and is logged, it is not ignored. The reason it had to
+  be fixed before the pilot is unchanged and has nothing to do with any deposit — a floor
+  chosen after seeing the yield is not a floor.
 - **Ethics approval** — reference **`24IBEC051`**, issuing board **IBEC, KAUST**
   (user-confirmed 2026-07-25; covers collection *and* publication). For the Methods
   section, confirm the full formal expansion of "IBEC" as it appears on the approval.
