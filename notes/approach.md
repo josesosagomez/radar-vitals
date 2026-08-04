@@ -497,8 +497,15 @@ cross-model DSP review has not been done** — required before this path is pape
 - Computed on **non-overlapping 30 s windows** (§3), reporting **coverage (% of windows
   with a reported HR) alongside accuracy** — never accuracy on surviving windows alone.
 - Conditions: seated (hands on legs, back straight, facing radar), chest 0.8-1.4 m;
-  10 subjects × 2 sessions (natural + paced). Posture fixed; distance varies within the
-  warmup search range.
+  **10 subjects × 3 sessions (natural + paced + recovery)**. Posture fixed; distance varies
+  within the warmup search range.
+- **HR agreement is claimed only on sessions carrying HR dynamic range.** Measured 2026-07-31
+  (`scripts/diagnose_signal_presence.py`): across all 8 pilot captures the within-session PR
+  spread was narrower than the agreement tolerance, and a constant predictor was correct on
+  **100%** of admissible windows in every one — such sessions cannot falsify an HR claim.
+  Session 3 (seated post-exertion recovery, ethics-approved 2026-08-03) supplies the range;
+  see `notes/protocol.md`. BR is unaffected — the stepped-sweep capture already demonstrates
+  BR tracking.
 - Quality gate: exclude/flag Masimo segments with low Perfusion Index. Never tune the
   radar algorithm to chase a low-PI reference segment.
 - Baselines: TI on-chip vital-signs output; a published phase-based pipeline.

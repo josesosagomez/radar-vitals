@@ -10,7 +10,12 @@
 
 ## Study design
 
-- **10 subjects, 2 sessions each** (20 sessions total).
+- **10 subjects, 3 sessions each** (30 sessions total).
+  > **Changed from 2 to 3 on 2026-08-03**, when IBEC approved the exertion amendment. Session 3
+  > is the **HR dynamic-range (recovery) arm** — see its own section below for why it exists
+  > and what it requires. `notes/analysis_prespec.md` is still frozen at 2 sessions and
+  > **must be amended before M0 is deposited**; until then the two files disagree and this one
+  > is the newer.
 - **Session 1: natural breathing.** Subject breathes normally; no pacing.
 - **Session 2: paced breathing** with a metronome at a fixed target rate.
   - Rates: **12, 15, 18 breaths/min**, one steady rate per subject, assigned by
@@ -35,12 +40,18 @@
   - The **18 bpm arm is deliberately inside that failure zone** and is being run to
     measure it on the current pipeline. Its results must be **reported separately and
     never pooled into the headline agreement metrics**.
+- **Session 3: HR dynamic-range (recovery).** Seated recording following brief submaximal
+  exertion, so PR declines through the session. Natural breathing, no pacing. Full procedure,
+  screening and gates in "HR dynamic-range arm" below.
 - **Sessions are on different days** (not back-to-back). This reduces within-day
   fatigue/carryover but adds day-to-day and time-of-day HR variability: **record
   the time of day** for every session and **re-measure the radar-to-chest
-  distance** each day (a new setup each visit).
-- **Order is fixed** (natural first, then paced) — record as a study limitation
-  (no counterbalancing).
+  distance** each day (a new setup each visit). **This matters more for session 3** — it must
+  not follow another session on the same day, so no residual fatigue confounds the recovery
+  curve.
+- **Order is fixed** (natural, then paced, then recovery) — record as a study limitation
+  (no counterbalancing). Recovery is placed last deliberately: it is the only arm involving
+  exertion, so a subject who withdraws after it still contributes two complete arms.
 - Both sessions otherwise follow the identical fixed conditions below.
 
 ---
@@ -255,6 +266,188 @@ approval's 10-minute ceiling, which applies to this arm too.
   a step, and those windows would poison both experiments.
 - Everything else (posture, distance, hands, warmup, stillness) is unchanged.
 
+---
+
+## HR dynamic-range arm — the seated RECOVERY capture
+
+> **STATUS: ETHICS-APPROVED 2026-08-03; part of the protocol. Two non-ethics gates remain
+> open — see "Remaining gates" below. Do not capture a study session yet.**
+> The amendment to **`24IBEC051`** adding brief submaximal exertion was submitted 2026-07-25
+> and approved by IBEC, KAUST. Submission text: `notes/ethics_amendment_hr_recovery.md`
+> (PI Slim Alouini; submitting researcher Jose Maria Sosa; project *Contactless Heart-Rate
+> Estimation with a 77 GHz FMCW Radar*). Determination reference: `[[RECORD — the amendment's
+> own approval reference and date, as issued; `24IBEC051` is the parent approval]]`.
+
+### Why this arm has to exist
+
+**Measured 2026-07-31** (`scripts/diagnose_signal_presence.py`, evidence
+`results/diagnose/signal_presence/20260731T155946Z/`, write-up in `HISTORY.md`): across all
+8 existing captures the within-session Masimo PR spread (p10–p90) is **2.6–5.2 bpm**, which
+is **narrower than the ±5 bpm agreement tolerance**. A predictor that ignores the radar
+entirely and emits the session-median PR scores **83–100%** on those captures.
+
+That is not a statement about the estimator. It is a statement about the data: **these
+sessions cannot distinguish a working HR estimator from a stub that returns 85 bpm.** Any HR
+acceptance criterion validated on them is unfalsifiable, and running M6 unchanged would
+reproduce the defect across 20 sessions instead of 8.
+
+The BR side already solved this. The stepped sweep arm above deliberately moves the
+breathing rate 12 → 21 bpm, and it is the **only** capture in which BR tracking has been
+demonstrated (permutation `p = .001`, Spearman +0.56 at the locked bin). **This arm is the
+HR equivalent, and nothing else in the protocol supplies it.**
+
+### The tension this arm must resolve, and the only shape that resolves it
+
+Two existing requirements pull in opposite directions, and both are correct:
+
+* the **SETTLE CRITERION** above forbids starting a capture while PR is drifting
+  (last-20 s vs first-20 s ≤ 3 bpm), and
+* the comparator admits a window only if its within-window PR spread is
+  **≤ 5 bpm** (`src/comparator.py:_HR_STATIONARITY_MAX_BPM`) over ≥ 24 usable samples —
+  a 30 s window whose HR swings wildly has no well-defined single truth value.
+
+Between them they guarantee HR stationarity, which is precisely what removes falsifiability.
+They are reconcilable in exactly one shape: a **slow monotonic ramp**. Each 30 s window stays
+locally stationary (spread within tolerance, so it is admissible), while the *session* spans
+a wide PR range. Post-exertion seated recovery is that shape — HR decays quickly at first,
+then slowly, over several minutes.
+
+**Rejected alternatives, and why — do not re-propose these without new argument:**
+
+| candidate | why it fails |
+|---|---|
+| **Slow paced breathing (~6 bpm) to drive RSA** | Wrong axis: RSA oscillates HR *within* the window, inflating within-window spread past the 5 bpm gate and making windows **inadmissible** rather than adding across-session range. It also breaks BR outright — 6 bpm = 0.10 Hz is the exact bottom edge of `respiration.band_hz`, which the M2 `resp_edge_veto` permanently invalidates (HANDOFF §5). Fails twice. |
+| **Natural day-to-day / time-of-day variation** | Real but uncontrolled and *between* sessions, not within one. Does nothing for a per-session agreement claim, and cannot be commanded or logged as a design variable. |
+| **Cold pressor / Valsalva** | Larger HR excursion, but adds discomfort and a materially higher risk profile for no advantage over recovery. Would need the same ethics amendment and more. |
+
+### Protocol (as approved)
+
+1. Set up and verify the room exactly as "Fixed conditions" and the equipment checklist
+   require. Do this **before** the exertion, so the subject sits down into a ready rig.
+2. **Exertion, away from the radar: self-paced step-ups**, in the laboratory, on a dry
+   unobstructed surface, in suitable footwear, with the researcher present and the Masimo worn
+   throughout. Raise PR to **100–120 bpm**, confirmed on the live Masimo. **Expected duration
+   under 4 minutes.** Stop on the Masimo reading, never on a fixed repetition count — the
+   target is a heart rate, not a dose of exercise. The subject sets the intensity and may stop
+   at any moment without giving a reason.
+   - **Stopping rules (researcher halts immediately):** chest pain or tightness,
+     light-headedness or faintness, disproportionate breathlessness, palpitations, nausea,
+     visible distress — or on subject request.
+   - PR and SpO2 stay visible on the Masimo throughout exertion and recovery.
+3. Seat the subject in the fixed posture and clip the Masimo. **Record the seated PR at
+   t = 0.**
+4. **The SETTLE CRITERION above is deliberately NOT applied to this arm** — it forbids exactly
+   the monotonic drift this capture exists to create. It is replaced by: start recording once
+   the subject is in the fixed posture, still, and hands are resting; typically < 30 s after
+   sitting.
+5. Record the standard **10 minutes** (the approval ceiling applies to this arm too), subject
+   still and breathing naturally throughout. No pacing — pacing moves HR (documented above)
+   and would confound the ramp with a respiratory effect.
+6. Everything else — posture, distance, hands, scene, warmup, clock sync (step 3a), stillness
+   — is unchanged.
+7. **The subject stays seated and monitored until PR is within 5 bpm of their pre-exertion
+   resting value before leaving.** Record that value and the time taken.
+
+### Screening and exclusions — mandatory for this arm
+
+Approved on condition of the screening below. These are **additional** to the existing
+protocol, which carries no cardiovascular exclusions because it never needed any.
+
+- [ ] **PAR-Q+** (Physical Activity Readiness Questionnaire for Everyone) completed **before**
+      any exertion. **Any positive response excludes the subject from this arm** — they may
+      still take part in the natural and paced arms.
+- [ ] **Exclusion criteria:** known cardiovascular, respiratory or musculoskeletal condition;
+      current pregnancy; any medication affecting heart rate; acute illness on the day; any
+      condition making the exertion inadvisable.
+      > Beta blockers in particular are excluded on **two** grounds — they raise the risk and
+      > they flatten the very HR response this arm depends on, so an included subject on them
+      > would likely fail the adequacy criterion anyway.
+- [ ] Researcher present for the whole session.
+- [ ] Consent form and participant information sheet **in their amended versions** (§9 of the
+      submission: exertion description, risks, right to decline this arm while remaining in
+      the study, screening and what a positive response means, and that no fitness measure is
+      recorded or reported).
+
+> **Wording note, harmless but worth knowing.** The approved submission's exclusion list says
+> "any condition making **stair climbing** inadvisable" while the agreed modality is
+> **step-ups** (§6 of the same document). The intent is plainly the same class of exertion.
+> The approved wording is left as approved — **do not edit the submitted document** — and the
+> operational criterion is read as "the exertion in §6". Raise it with the board only if they
+> ask.
+
+**Expect the first few windows to be excluded and that is correct, not a failure.** Early
+recovery decays fastest, so those windows legitimately breach within-window stationarity. The
+usable evidence is the slower mid-to-late ramp, which is both admissible and wide.
+
+### Adequacy criterion — pre-specified, so the arm can fail
+
+A capture from this arm is **adequate for HR validation** only if, computed from the Masimo
+CSV alone and **before** any radar comparison:
+
+1. **≥ 10 comparator-admissible windows** (`hr_reference(...)["admitted"]`), and
+2. the admissible windows' reference PR spans **≥ 20 bpm** (max − min of `median_pr_bpm`), and
+3. the **constant-predictor baseline scores < 50%** at ±5 bpm — i.e. emitting the session
+   median PR fails on most admissible windows.
+
+Criterion 3 is the operative one: it is the direct negation of the defect found on
+2026-07-31, and it is what makes a later HR agreement claim falsifiable. **All three are
+computed from the reference only**, so checking them cannot leak radar performance into the
+protocol decision (CLAUDE.md §4).
+
+If a capture fails adequacy, record it and re-run the arm — do not weaken the criterion.
+
+**Calibration check, 2026-07-31.** The criterion was evaluated against all 8 existing
+captures, from their Masimo CSVs alone. **All 8 fail**, which is the intended behaviour — it
+is the defect they exhibit. Over *comparator-admissible* windows only:
+
+| capture | admissible windows | PR span (bpm) | constant-predictor hit |
+|---|---|---|---|
+| massimo1 | 5 | 1.0 | 100% |
+| massimo2 | 5 | 3.0 | 100% |
+| sweep | 8 | 7.0 | 100% |
+| massimo3 | 11 | 8.0 | 100% |
+| massimo4 | 13 | 4.0 | 100% |
+| massimo5 | 9 | 2.5 | 100% |
+| massimo6 | 12 | 5.0 | 100% |
+| massimo7 | 4 | 3.0 | 100% |
+
+Criterion 1 (≥ 10 windows) already passes on three captures, so it is not the discriminator;
+**criterion 3 is**, and it fails at 100% on every capture — a constant predictor is never
+wrong on any admissible window we own. Restricting to admissible windows makes the picture
+*worse* than the whole-session figure (spans of 1.0–8.0 bpm against 2.6–5.2 p10–p90), because
+admissibility itself selects for stationarity.
+
+### Gates
+
+**Ethics — DISCHARGED 2026-08-03.** Approved by IBEC, KAUST as an amendment to `24IBEC051`.
+The screening in "Screening and exclusions" above is a condition of that approval, not a
+suggestion. The mental-arithmetic fallback described in §10 of the submission is **moot** and
+must not be run in place of the approved arm.
+
+**Two gates remain, and neither is ethics:**
+
+- [ ] **Cross-review (CLAUDE.md §6).** This arm is an experimental-plan change and **has not
+      been independently reviewed**. Ethics approval is a safety and consent determination —
+      it says nothing about whether the design answers the scientific question. Record the
+      outcome here.
+- [ ] **Analysis pre-spec edit (`notes/analysis_prespec.md` §1).** The pre-spec says
+      **10 subjects × 2 sessions** with arm `a ∈ {natural, paced}`. This arm makes it three.
+      It is **not yet frozen** (the freeze is the user's irreversible M0 act), so this is a
+      **pre-freeze edit, not a §4 amendment** — no new version DOI is implied. It still needs
+      CLAUDE.md §6 cross-model review, since the completed M3 review covered the 2-arm design.
+      A dated PENDING banner in that file makes the contradiction visible; **this file is the
+      newer one and governs what is captured.**
+      > **Watch the evidence floor.** This arm is deliberately non-stationary while HR
+      > admissibility requires within-window PR spread ≤ 5 bpm, so early-recovery windows will
+      > legitimately fail. Whether the §2a/§2b floor is arm-specific must be decided **before**
+      > the freeze — a floor adjusted after seeing this arm's yield is not a floor.
+
+**The M0 gate is unaffected and still stands.** `HANDOFF.md` §4: no study capture may be taken
+until the pre-registration is deposited, and that gate sits before M5. Ethics approval permits
+this arm; it does not lift M0. **Nothing about 2026-08-03 makes a study session capturable.**
+
+---
+
 ## Files & logging
 
 - The live demo writes everything to `results/live_demo/<run_dir>/`
@@ -268,9 +461,9 @@ approval's 10-minute ceiling, which applies to this arm too.
 
 ## Resolved / remaining decisions
 
-Resolved (see Study design above): 10 subjects x 2 sessions; session 1 natural,
-session 2 paced; **10-min recordings** (2026-07-24, within the approval's 10-min
-ceiling); seated 0.8-1.4 m warmup auto-lock.
+Resolved (see Study design above): **10 subjects x 3 sessions** — session 1 natural,
+session 2 paced, session 3 recovery (added 2026-08-03, ethics-approved); **10-min recordings**
+(2026-07-24, within the approval's 10-min ceiling); seated 0.8-1.4 m warmup auto-lock.
 
 **Capture tool — resolved:** raw `.bin` is recorded by `scripts/live_demo.py` in
 live mode (mirrors the raw ADC to `adc_stream.bin`). **This is the study capture
@@ -293,6 +486,17 @@ and in the sweep session ran 80-88 bpm, which is why that capture's real collisi
 landed on the **21 bpm** step rather than the designed 18 (HISTORY.md 2026-07-14).
 Set the rate from HR measured *during* a short paced warm-up, or bracket a narrow
 range around the prediction. Full design lives in `plans/implementation_plan.md` M7.
+
+**HR dynamic range — OPEN, and it constrains what M6 can claim.** Measured 2026-07-31: the
+within-session PR spread of all 8 existing captures (2.6–5.2 bpm) is narrower than the
+agreement tolerance, so those sessions cannot falsify an HR claim — a constant predictor
+scores 83–100% on them. The **seated recovery arm** proposed above is the fix, and it is
+**blocked on an ethics amendment** because it adds exertion. Two decisions are outstanding:
+(1) whether to seek that amendment or accept the weaker mental-stress fallback; and
+(2) whether the M6 sessions themselves should carry a ramp segment, or whether the ramp stays
+a separate method-development arm. **Until one of these lands, an HR acceptance criterion
+cannot be validated on any data this study will produce** — a BR criterion is unaffected and
+can proceed on the stepped-sweep evidence.
 
 **Open, and blocking the pre-registration deposit (M0):**
 - **The evidence floor** — the minimum number of evaluable (radar-accepted *and*
