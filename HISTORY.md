@@ -10249,3 +10249,200 @@ having no entry in the frozen window-count table.
 --sweep-run <dir> --presence-run <dir> --subject-map <suffix>=E <suffix>=F <suffix>=G`. Those
 captures need a `diagnose_bin_sweep` and a `diagnose_signal_presence` run first. Separately, the
 2-vs-3-session spec amendment is due before any M5 pilot session.
+
+## 2026-08-05 - M8 Step 1b REAL DATA: Ahmed harmonic accumulation fails on every bin, and the mechanism is identified
+
+**Set out to do:** run Ahmed fixed-H harmonic accumulation on real captures for the first time —
+the paper's headline claim — at **every** candidate range bin rather than one, so that "the bin was
+wrong" could not be offered as an excuse for whatever came out.
+
+**Decisions taken first (user, 2026-08-05):** (1) keep the frozen synthetic gate bundle but drop the
+pre-data authorization YAML and the `_SCOPED_TREES` provenance-gating chain, which were designed
+under the pre-registration discipline M0's removal killed; (2) build the harness for Ahmed +
+production now, with Kotte and Alizadeh to reuse it later.
+
+**Worked (with evidence):**
+
+**The first canonical gate bundle exists.** Frozen on a clean tree after committing the session:
+run_id `20260804T230307.833878Z_779928f3a61c`, manifest
+`14f134cb80b170c5b7141b4d54e65892f2d4c40b362ca810c18ce28674917b27`, **promotion: eligible**,
+gate_status passed, verdicts exactly as predeclared. Every real-data artifact records it as
+`parent_gate_bundle`, so the ordering claim — synthetic control passed *before* real data was
+opened — is checkable rather than asserted.
+
+New: `scripts/m8_ahmed_all_bins.py`, `scripts/m8_ahmed_score.py`,
+`tests/test_m8_ahmed_all_bins.py` (15 tests). Suite **2140 → 2155 passed, 5 skipped**.
+
+**The sweep:** 8 captures × every complete window × 14 candidate bins × 6 arms (H∈{3,5} ×
+3 suppression profiles) = **10,752 rows in 301 s** on the laptop. IBEX was not needed and is not
+needed at this scale. Evidence `results/m8/ahmed_all_bins/20260804T230549Z/`, which **opens no Masimo file** — scoring is a separate step,
+so no bin, band or threshold was chosen by reference agreement.
+
+**THE RESULT — Ahmed is not competitive on real data, at any bin.** Pooled, weighted by scored
+windows, evidence `results/m8/ahmed_score/20260804T231230Z/`:
+
+| vital | method | condition | coverage | MAE bpm | hit |
+|---|---|---|---|---|---|
+| HR | **constant_session_median** (ignores the radar) | no_radar | 1.000 | **1.06** | 100 % ±5 |
+| HR | production ECA+AHET | production lock | 0.301 | **2.77** | 77.8 % ±5 |
+| HR | Ahmed (best of 6 arms) | **best bin, chosen by the reference — CEILING** | 1.000 | **14.49** | 50.8 % |
+| HR | Ahmed (best of 6 arms) | production lock | 1.000 | **27.50** | 13.4 % |
+| BR | **constant_session_median** | no_radar | 1.000 | **1.32** | 92.9 % ±3 |
+| BR | production | production lock | 0.868 | **2.56** | 69.3 % ±3 |
+| BR | Ahmed (best arm) | **best bin — CEILING** | 1.000 | **8.22** | 20.5 % |
+| BR | Ahmed (best arm) | production lock | 1.000 | **10.13** | 4.5 % |
+
+**Even at the oracle-selected best bin** — a bin no deployable selector could choose — Ahmed is
+14.5 bpm off on HR and 8.2 on BR. Bin choice is not the explanation, which is exactly what
+sweeping all 14 was for.
+
+**The mechanism, measured not assumed.** On the 938 admissible HR cells:
+
+- reference HR **median 86 bpm** (range 65–95); Ahmed emits **median 56** (range 48–94);
+- `|est − ref|` MAE **23.74**, but `|est − ref/2|` MAE **18.63** — the estimate sits closer to
+  *half* the reference than to the reference;
+- the true half-rate (32–47 bpm) lies **below the 48 bpm heart-band floor in 100 % of cells**, so
+  the method cannot emit it and **saturates at the band edge instead**: 43 % of cells land within
+  4 bpm of 48 bpm, and 46 % of all cells are ≤52 bpm.
+
+**This is the subharmonic trap Step 1a found in simulation, reproduced on real data.** Scoring a
+candidate `f` by summing `|X(f)|+|X(2f)|+…+|X(Hf)|` means a candidate at `f/2` also sweeps up the
+energy at `f`, so the score is maximised toward the bottom of the band. Step 1a predicted 80 bpm
+and got 40.0 (H=3) / 20.0 (H=5); real data shows the same pull, clipped by the band floor.
+
+**The same failure appears in BR, and we have seen it before.** 63 % of BR cells sit at exactly
+**6.0 bpm** — the 0.10 Hz breath-band floor. That is the identical signature of the pre-M2-fix
+respiration collapse in our own production pipeline (`br_bpm = 6.0`), which needed
+`resp_edge_veto` plus STFT-consistency gates to fix. **Ahmed has no band-edge veto, so it collapses
+the way production used to.** This is the most useful finding for the paper: the failure is
+explicable, reproducible, and connects to a known phenomenon rather than being a black box.
+
+**Two properties that change how the table must be read:**
+
+1. **Ahmed never abstains.** It has no verification stage and emits an argmax for every cell, so
+   its 100 % coverage is by construction. Production's 30 % HR coverage is AHET *refusing to
+   guess*. These coverages are not comparable quantities and are recorded as such in
+   `run_meta.json:coverage_note`.
+2. **Native transform length gives 2 bpm resolution** (600 samples at 20 Hz → 1/30 Hz), comparable
+   to the ±2 bpm BR tolerance. Every Ahmed output is quantised to even bpm.
+
+**Failed / did not work, and why:** nothing failed in the harness. Three test bugs were found and
+fixed during the build, all in the tests rather than the code: a substring guard that its own
+module docstring defeated, a 4-dp rounding tolerance, and a source-anchor that matched the
+docstring instead of the code.
+
+**Retired / no longer used:** the M8 pre-data authorization chain and `_SCOPED_TREES` provenance
+gating (user decision). `scripts/m8_ahmed_transfer.py`'s `real-smoke`/`real-radar`/`score` stubs
+remain unimplemented and are now superseded by `m8_ahmed_all_bins.py` + `m8_ahmed_score.py`.
+
+**THE INTERPRETATION LIMIT, WHICH BINDS EVERY HR NUMBER ABOVE.** `HANDOFF.md` §2.2: these captures
+support HR **coverage/feasibility**, not HR **tracking**. Within-session PR spread is 2.6–5.2 bpm,
+narrower than the ±5 bpm tolerance, which is why `constant_session_median` scores 100 %. That
+baseline is **not evidence that a constant is a good estimator** — it is evidence that these
+sessions cannot falsify an HR claim. What the table *does* support: Ahmed is 27.5 bpm from the
+reference at the deployable bin and 14.5 at an unreachable oracle bin, against a reference whose
+whole range is 65–95 bpm. That is not a marginal result needing better data to resolve.
+
+**Next:** M9 Kotte through the same harness — it is written to take another estimator suite. Then
+the paper's headline is answerable in the form it was agreed: first real-data validation of two
+simulation-only methods under one common comparator, with coverage reported. On present evidence
+the honest headline for the Ahmed half is a **negative result with an identified mechanism**.
+
+## 2026-08-05 - Cross-model review of the M9 Kotte implementation plan
+
+**Set out to do:** review `plans/m9_kotte_plan.md` against the full Kotte et al. paper, with
+readability and minimal architecture as the priorities. No implementation was requested or
+written.
+
+**Worked (with evidence):** the review is saved at `plans/m9_comments_plan.md`. Verdict:
+**needs changes**. The staged paper-control -> hardware-ablation -> synthetic-transfer ->
+real-data sequence can remain, but the proposed primary `segment_rx` arm changes the paper's
+snapshot model; the two DOA-free objective arms are not meaningfully distinct; slow-time mean
+removal makes the `N_c=16` sample covariance singular; the signed-frequency and singular-`H`
+cases are omitted; and the planned CSV sweep would discard the intermediate arrays required for
+debugging. The review recommends an `rx_only` loaded primary, a direct-`Y_t` paper control, one
+small core module, explicit arms, and a shorter end-to-end-first build order.
+
+**Failed / did not work, and why:** no code or experiment was run. The paper does not specify a
+consistent fast-time configuration for a full Fig. 5 range/DOA reconstruction: its stated chirp
+duration, sample count, and sample rate do not describe one chirp, and `N_r` is unspecified. The
+review therefore leaves a blocking scope question rather than inventing missing parameters.
+
+**Retired / no longer used:** none yet. The current M9 plan remains a draft and must be revised
+before implementation; no proposed module or arm exists in code.
+
+**Next:** decide whether Fig. 5 means Doppler surfaces from directly constructed `Y_t` or the full
+range/DOA chain, then revise `plans/m9_kotte_plan.md` around the mathematical and architecture
+findings in `plans/m9_comments_plan.md` and obtain cross-model agreement before build.
+
+## 2026-08-06 - M9 Kotte plan: authored, nine review passes applied, five user decisions
+
+**Set out to do:** plan M9 (Kotte joint-Doppler, the second half of the paper headline) end to
+end before any code, and carry the plan through cross-model review to build-ready.
+
+**Worked (with evidence):**
+- **The plan** is `plans/m9_kotte_plan.md`; the review record with per-pass dispositions is
+  `plans/m9_comments_plan.md`. Nine review passes were received and processed; **every comment
+  was verified against the paper extraction, its page renders, or the repo code before acting**.
+  All verified items were applied. Exactly one comment was rebutted with evidence: the claim
+  that Fig. 8's caption says 5 m — the page-09 render shows caption and prose both say 3 m.
+- **Verified mathematical corrections that reshaped the design** (each re-derived, not taken on
+  faith): (1) `||w^H Y||^2/M = w^H R w = 1^T H^-1 1` — my two "objectives" were one quantity;
+  Stage A now has a single `loaded_capon_power`. (2) Algorithm 1's published selection line is
+  `argmax w^H E{Y_t Y_t^H} w`, so the reproduction gate's primary objective was corrected from
+  the eq-26 analysis surface to the algorithm's own criterion, with a truth table over both.
+  (3) Exact per-RX mean removal makes the sample covariance exactly singular (`R_t 1 = 0`).
+  (4) Temporal segment pooling decorrelates the two components (incoherent ~rank-2 vs the
+  paper's coherent rank-1), so it cannot be the paper-faithful primary; `rx_only` + declared
+  loading per CPI is, with a 2D-medoid reporting step. (5) Averaging objective surfaces across
+  CPIs deletes the `beta1 beta2*` cross-term (relative phase advances `2pi (f1-f2) N_c T_PRI`
+  per CPI) — it silently converts the coherent estimator into an incoherent one. (6) Exact
+  phase-invariance holds only for a per-RX unitary applied to the whole column (signal+noise);
+  whole-column gain imbalance is scalar-in-expectation, so it is a unit test, not an
+  oracle-predicted gate item. (7) The transfer SNR must be defined on the mean-removed dynamic
+  component: at small modulation index the extracted echo is dominated by the DC/J0 line that
+  Stage-A mean removal deletes.
+- **Verified process/code findings:** `BundleWriter.publish_latest()` checks completion and
+  promotion eligibility but not `gate_status` (a failed gate could publish) — the M9 CLI now
+  enforces it and sweep/scorer verify it. The obvious production comparator run
+  (`results/diagnose/bin_sweep/20260804T131040Z`) records `git_tree_clean: false`,
+  `config_hash: null` — ineligible; a single owner command (`scripts/m9_production_comparator.py`)
+  will regenerate the production table AND the sole `current_production_rerun_lock` map from one
+  clean commit. `src/m4/estimator_scoring.paired_partitions` silently overwrites duplicate keys
+  and takes admission from the production row while erroring from each row's own reference —
+  the M9 wrapper pre-asserts one-row-per-key and per-pair reference identity. The M8 scorer
+  reopens `adc_stream.bin` to re-derive locks — the M9 scorer is radar-free and consumes the
+  hashed lock map. The approximate-origin scoring exception in `notes/analysis_prespec.md`
+  (:559-565) names M8 only — M9 scoring requires a prospective amendment.
+- **Five user decisions recorded** (2026-08-05): (1) Step 1a reproduces Figs 5+7+8 with
+  FFT+MUSIC; Fig 9 Monte Carlo and Yule-AR are declared descopes. (2) `notes/analysis_prespec.md`
+  will be amended prospectively (with CLAUDE.md section 6 cross-review, before any M9 scoring
+  run) to extend the approximate-origin `exploratory_non_frozen` treatment to M9; all scored
+  outputs carry the no-promotion/no-final-claim taint. (3) Stage-B MAE is subject-weighted.
+  (4) Its exact formula: natural-only captures, pooled within subject, subjects averaged
+  equally; floors >=3 subjects with >=5 natural paired windows each and >=30 total;
+  paced/stepped captures scored descriptively only. (5) The paper headline is reworded to
+  "first real-data **evaluation**" ("validation" reserved for exact-origin data);
+  `JOURNAL_PAPER.md`/`THIRD_CHAPTER.md` to be reworded when M9 lands.
+
+**Failed / did not work, and why:** my own drafts required nine passes. Two rebuttals of mine
+were overturned by later passes and are recorded as such in the disposition file: importing
+scoring functions from `scripts/m8_ahmed_score.py` (transitive module graph + a tautological
+identity test; replaced by local copies + a golden-fixture equality test), and the pass-8
+lock-map design, which created two owners for the same artifact (fixed in pass 9 with the
+single-owner comparator command). The review protocol — verify each claim against paper/code
+before applying, rebut only with evidence — caught real errors in both directions and is worth
+repeating.
+
+**Retired / no longer used:** nothing in code (no M9 code exists). Superseded inside the plan
+during review: the `segment_rx` primary arm, the two-objective arm axis, the 14-file gate
+manifest (now gate-scoped runtime sources + declaration hashes), amplitude diagnostics in
+Stage A, coordinate-wise median aggregation, the ADC-domain SNR definition, and the
+"validation" headline wording.
+
+**Next:** implementation, in the plan's execution order. Step 0 is administrative and blocking:
+commit the outstanding M8 real-data work and the two M9 plan files (the M9 discipline requires
+clean-tree evidence runs), commit the analysis-spec amendment and
+`experiments/m9_kotte/config.yaml` (capture manifest with protocol roles, `stage_b_decision`),
+and write the `notes/approach.md` Kotte section. Then `src/m9/kotte_core.py` + the R1 control
+per the build order in `plans/m9_kotte_plan.md`.
