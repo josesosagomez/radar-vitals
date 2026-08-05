@@ -27,20 +27,15 @@ Two things the one-liner hides, both of which have caused real mistakes:
 
 **Infrastructure is strong; the science is thin, and what exists is exploratory.**
 
-Active branch **`vital_signs_ahmed_v10`**, HEAD `b89729e`. Suite **2155 passed, 5 skipped**
-(verified 2026-08-05; only plan/log markdown has changed since). The 5 skips are honest absences
-(4 OSR-03 tests need replay artifacts that no longer exist), not passes.
-
-> **THE WORKING TREE IS DIRTY, and committing it is the first task.** Uncommitted: the M8
-> real-data scripts (`scripts/m8_ahmed_all_bins.py`, `scripts/m8_ahmed_score.py`,
-> `tests/test_m8_ahmed_all_bins.py` — built and run 2026-08-05, results in `results/m8/`), the
-> M9 plan pair (`plans/m9_kotte_plan.md`, `plans/m9_comments_plan.md`), and the
-> `HISTORY.md`/`HANDOFF.md` updates. M9's discipline requires clean-tree evidence runs, so
-> nothing else starts before this commit.
+Active branch **`vital_signs_ahmed_v10`**, HEAD `2aebd72`, **tree clean** (verified
+2026-08-06 — the M8 real-data scripts landed in `275a01d`, the M9 plan pair and session records
+in `2aebd72`). Suite **2155 passed, 5 skipped** (verified 2026-08-05; only plan/log markdown has
+changed since). The 5 skips are honest absences (4 OSR-03 tests need replay artifacts that no
+longer exist), not passes.
 
 | Track | Milestone | Status |
 |---|---|---|
-| C | **M8 — Ahmed harmonic accumulation** | **REAL DATA DONE 2026-08-05, NEGATIVE at every bin, mechanism identified** — §5. Scripts not yet committed (see above) |
+| C | **M8 — Ahmed harmonic accumulation** | **REAL DATA DONE 2026-08-05, NEGATIVE at every bin, mechanism identified** — §5 |
 | C | **M9 — Kotte joint-Doppler** | **PLAN COMPLETE, BUILD-READY** — nine review passes applied, five user decisions recorded. **This is the active task** — §4.1 |
 | C | M10 baselines | not started |
 | A | M1 live smoke test | not run |
@@ -180,16 +175,15 @@ regeneration → scoring + Stage-B decision. Stage B (DOA) is out of scope beyon
 5. Headline reworded to "first real-data **evaluation**" (§3).
 
 **First actions, in order (the plan's execution order §"Execution order and gates"):**
-1. **Commit the outstanding work** (see §2 banner) — M9's clean-tree discipline demands it.
-2. Write + commit the **analysis-spec amendment** and `experiments/m9_kotte/config.yaml`
+1. Write + commit the **analysis-spec amendment** and `experiments/m9_kotte/config.yaml`
    (capture manifest with protocol roles from `notes/capture_inventory.md`; `stage_b_decision`
    section). The amendment needs §6 cross-review.
-3. Write the `notes/approach.md` Kotte section (signal model, Algorithm 1's selection line, the
+2. Write the `notes/approach.md` Kotte section (signal model, Algorithm 1's selection line, the
    verified identities, rank rule, Bessel-comb analysis, aggregation contract).
-4. Build `src/m9/kotte_core.py` + the R1 control path + core tests; commit; run the official R1
+3. Build `src/m9/kotte_core.py` + the R1 control path + core tests; commit; run the official R1
    verdict (clean tree). **Gate: `behaviorally_reproduced` per the truth table — a NO-GO ends
    the milestone with a documented non-reproduction and real data is never touched.**
-5. Continue per the plan: ablation → aggregation contract → oracle → commit checkpoint →
+4. Continue per the plan: ablation → aggregation contract → oracle → commit checkpoint →
    transfer gate → sweep/scorer build + smoke → radar-only sweep → comparator → scoring.
 
 **Non-negotiables while implementing (details and rationale in the plan):**
@@ -273,7 +267,7 @@ real-data artifact records it as `parent_gate_bundle`.
 method. `scripts/m8_ahmed_all_bins.py` → `results/m8/ahmed_all_bins/`;
 `scripts/m8_ahmed_score.py` → `results/m8/ahmed_score/`. 8 captures × every window × **all 14
 bins** × 6 arms = 10,752 rows in 301 s. Sweeping every bin removes "the bin was wrong" as an
-explanation. (Both scripts + their 15 tests are **uncommitted** — §2 banner.)
+explanation.
 
 **The outcome.** Pooled, weighted by scored windows:
 
@@ -398,7 +392,7 @@ superseded by the two scripts above.
 | Approved IBEC amendment (recovery arm) — record as submitted | `notes/ethics_amendment_hr_recovery.md` |
 | M8 Step 1b authority (both required) | `plans/m8_step1b_ahmed_transfer.md` + `…_addendum_a.md` |
 | M8 suite/gate/provenance modules (templates for M9; DO NOT EDIT) | `src/m8/`, `src/m4/estimator_suite.py`, `src/m4/bundle.py` |
-| M8 real-data sweep + scorer (uncommitted) | `scripts/m8_ahmed_all_bins.py`, `scripts/m8_ahmed_score.py` |
+| M8 real-data sweep + scorer | `scripts/m8_ahmed_all_bins.py`, `scripts/m8_ahmed_score.py` |
 | Production DSP | `src/respiration.py`, `src/vitals.py`, `src/window_pipeline.py` |
 | Warmup selection + regression check | `src/warmup_select.py`; `scripts/validate_warmup_selection.py` |
 | Offline scorer / comparators | `scripts/score_offline.py`, `src/comparator.py` |
