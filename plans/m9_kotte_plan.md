@@ -117,9 +117,22 @@ only).
 - §III-B (:809-816): per-row mean removal is in the paper, but exact per-channel removal makes
   the sample covariance **exactly singular** (`R_t·1 = 0`).
 - §IV: 24 GHz, 1 TX / **20 RX** λ/2 ULA, **T_PRI = 50 ms**, **N_c = 16**, SNR 0 dB (two-line
-  signal-to-noise power ratio in `Y_t`). Fig 8: target **3 m**/−30° (caption and prose agree —
+  signal-to-noise power ratio). Fig 8: target **3 m**/−30° (caption and prose agree —
   verified against the page-09 render), (2, 1) Hz, β2 ∈ {β1, β1/2, β1/10}. Fig 7 row 2:
   (1.5, 1) Hz, Δ=0.5 < 1/CPI=1.25 Hz. Disambiguation prior licenses **ordering**, not sign.
+  > **AMENDED 2026-08-06 (user decision, option B of `plans/m9_step1a_snr_finding.md`).**
+  > The paper's 0 dB is read as **fast-time-referred**: the range FFT's processing gain
+  > `10·log10(N_s = 128)` is folded in before `Y_t(κ)` is formed, so the **effective
+  > Y_t-domain SNR is ≈ 21.07 dB**. The literal Y_t-domain reading was measured and
+  > **cannot** reproduce Fig 8 for a structural reason (the selection objective is a
+  > constrained *minimum*, bounded at truth below the inter-truth ridge — proven on the
+  > exact ensemble covariance, so it is not a sampling artifact), and the paper's own
+  > colorbars (~90/70/50, separation-independent) confirm the published surface is not
+  > that bounded quantity. The literal reading survives as the `snr_reference_literal`
+  > audit. **`weak_tolerance_hz` 0.25 → 0.625** (= half mainlobe `1/(2·N_c·T_PRI)`), since
+  > interacting Dirichlet mainlobes displace each other's maxima by a measured 0.27–0.46 Hz
+  > and the paper's "detects both" is qualitative two-peak visibility. §6 cross-review of
+  > this amendment is pending; the memo is the authority for the details.
 
 ## Established mechanics (verified 2026-08-05)
 
@@ -268,10 +281,12 @@ allowed):
 - **Descopes in config:** Fig 9 MC; Yule-AR; range/DOA.
 
 Primary config values: T_PRI=50e-3, N_c=16, n_R=20, Table I, `Y_t`-domain AWGN per the paper's
-two-line power ratio, per-case deterministic seeds, grid **[−10, 10)** Hz step 0.05 + rcond
-mask. **Audits (one field; cannot upgrade):** ensemble covariance (Cases-1–4 oracle); grid
-0.02/0.10; mean removal on + tiny loading; MUSIC p=4; merge radius 0.15/0.40; Fig 5 at 10 dB;
-**cancellation** β2 = −β1 (predicted failure).
+two-line power ratio **at the fast-time-referred effective SNR ≈ 21.07 dB (amended
+2026-08-06 — see the §"The method, pinned to the paper" note)**, per-case deterministic seeds,
+grid **[−10, 10)** Hz step 0.05 + rcond mask. **Audits (one field; cannot upgrade):** ensemble
+covariance (Cases-1–4 oracle); **`snr_reference_literal` (the pre-amendment 0 dB reading)**;
+grid 0.02/0.10; mean removal on + tiny loading; MUSIC p=4; merge radius 0.15/0.40; Fig 5 at
+10 dB; **cancellation** β2 = −β1 (predicted failure).
 
 ## Control 2 — the 4-RX ablation (paper geometry, synthetic; `ablation` subcommand)
 

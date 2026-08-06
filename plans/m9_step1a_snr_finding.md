@@ -1,13 +1,30 @@
 # M9 Step 1a — implementation finding: the declared SNR reading blocks reproduction
 
-> **Status: DECISION REQUIRED (user + CLAUDE.md §6 cross-review) before the official R1
-> verdict runs.** Written 2026-08-06 during step 1 of `plans/m9_kotte_plan.md`. Nothing
-> official has run; nothing is scored; the committed config still declares the original
-> assumption. The step-1 build is complete and committed (`3c0efc7`, 42 tests passing,
-> full suite 2197/5 skipped). This memo exists because running a milestone-ending
-> verdict on an assumption the paper's own figures contradict would mismeasure the
-> paper, and silently changing the assumption would violate the plan's review
-> discipline. Both bad options are declined; the decision is surfaced instead.
+> **Status: RESOLVED — the user chose OPTION B on 2026-08-06.** The amendment is applied
+> to `experiments/m9_kotte/config.yaml` and committed **before** any official control run.
+> What was applied, exactly:
+> 1. `snr_reference: fast_time_with_range_fft_gain` + `n_s_fast_time: 128` (the paper's
+>    own `N_s`, §IV) → effective Y_t-domain SNR = `0 + 10·log10(128)` ≈ **21.07 dB**,
+>    resolved by `src/m9/paper_control.py::effective_snr_db`, which **fails closed** on an
+>    absent or unknown reference.
+> 2. The literal Y_t-domain reading is retained as the one-field audit
+>    `snr_reference_literal`, which re-runs R1 at effective 0 dB so §2(b)'s
+>    non-reproduction stays on the record as a measured fact. Like every audit, it cannot
+>    change a verdict.
+> 3. Comparator sub-decision **(ii)**: `weak_tolerance_hz` 0.25 → **0.625** = the half
+>    mainlobe width `1/(2·N_c·T_PRI)`. No amplitude criterion was added — see §3 note.
+> 4. `run_r1` now reports `verdict_source`, `comparator_role`, and an enumerated
+>    `comparator_mismatches` list, so the truth table's "differing cells recorded as
+>    diagnostic" is explicit in the artifact rather than implied.
+>
+> **Still required before the run is authoritative: CLAUDE.md §6 cross-review of this
+> amendment** (the other model family), recorded in §6 below.
+>
+> Written 2026-08-06 during step 1 of `plans/m9_kotte_plan.md`. The step-1 build is
+> committed (`3c0efc7`, full suite 2197/5 skipped). This memo exists because running a
+> milestone-ending verdict on an assumption the paper's own figures contradict would
+> mismeasure the paper, and silently changing the assumption would violate the plan's
+> review discipline. Both bad options were declined; the decision was surfaced instead.
 
 ## 1. The finding, in one paragraph
 
@@ -113,6 +130,26 @@ non-reproduction of the literal reading) plus a declared gain-corrected secondar
 the behavioral-reproduction claim attaches to whichever arm the user designates. Most
 exhaustive, most complex to report; the transfer gate would inherit two SNR regimes.
 
+### 3.1 CHOSEN: option B (user, 2026-08-06) — and why no amplitude criterion
+
+Applied as listed in the status block. One sub-decision deserves its own record, because
+it makes a comparator cell disagree with the paper **and that was accepted deliberately**.
+
+Widening the weak tolerance to 0.625 Hz admits all three genuinely-pulled peaks (0.27,
+0.30, 0.46 Hz) — but it also admits **MUSIC at β2 = β1/2**, whose second peak sits at
+0.55 Hz where the paper says MUSIC fails. Measured peak amplitudes at the primary SNR
+(normalized pseudospectrum): that peak reads **0.229**, while pure floor bumps in the
+same spectrum read **0.221** (−7.75 Hz) and **0.215** (−6.1 Hz). It is not a resolved
+component; which bump lands second is close to a coin flip across realizations.
+
+An amplitude threshold would "fix" the cell, and was rejected: no fixed cutoff separates
+0.229 from 0.221 robustly across seeds, so the rule would be fitted to this realization —
+precisely the tuning the project forbids. The mismatch is instead **recorded as a
+diagnostic**, which the truth table already provides for. Note the direction of the
+error: counting a floor bump as a MUSIC detection **understates** the proposed method's
+claimed advantage over MUSIC. The declared rule therefore errs against our own result,
+which is the safe direction and must not be "corrected" later without new evidence.
+
 ## 4. What this does NOT change
 
 - Stage A's objective (`loaded_capon_power`), the rank rule, grids, alias collapse,
@@ -123,7 +160,19 @@ exhaustive, most complex to report; the transfer gate would inherit two SNR regi
 - The approximate-origin amendment and its pending cross-review.
 - M8. No M8 file is touched.
 
-## 5. Provenance
+## 5. Cross-review status (CLAUDE.md §6)
+
+`m9_snr_amendment_cross_review: pending`
+
+The amendment is committed and the official controls run against it, but a control
+verdict is **not** treated as settled evidence for the paper until the other model
+family has independently checked: the bound argument in §2(a), the colorbar reading in
+§2(c), the `10·log10(N_s)` gain identification, and the 0.625 Hz tolerance derivation.
+Flip this line to `completed` only when that review has passed, recording reviewer and
+date. This is the same discipline as `notes/analysis_prespec.md`'s Amendment M9-1, whose
+cross-review is also still `pending`.
+
+## 6. Provenance
 
 - Committed machinery used: `src/m9/kotte_core.py`, `src/m9/paper_control.py` at
   `3c0efc7`; config `experiments/m9_kotte/config.yaml` at `b39888f`.

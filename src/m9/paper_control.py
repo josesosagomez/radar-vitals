@@ -117,6 +117,30 @@ def case_seed(root_seed: int, case_id: str) -> int:
     return int.from_bytes(digest[:4], "big")
 
 
+def effective_snr_db(controls: Mapping) -> float:
+    """Resolve the declared SNR reference to the effective Y_t-domain SNR.
+
+    Amendment 2026-08-06 (option B of plans/m9_step1a_snr_finding.md): the paper's SNR
+    is fast-time-referred, so the range FFT's processing gain
+    ``10*log10(n_s_fast_time)`` is folded in before ``Y_t`` is formed. The literal
+    Y_t-domain reading survives as the ``snr_reference_literal`` audit. Fail-closed:
+    an absent or unknown ``snr_reference`` is an error, never a silent default.
+    """
+    reference = controls.get("snr_reference")
+    base = float(controls["snr_db"])
+    if reference == "fast_time_with_range_fft_gain":
+        n_s = int(controls["n_s_fast_time"])
+        if n_s < 2:
+            raise ValueError(f"n_s_fast_time must be >= 2, got {n_s}")
+        return base + 10.0 * float(np.log10(n_s))
+    if reference == "yt_domain_literal":
+        return base
+    raise ValueError(
+        f"unknown snr_reference {reference!r}; declare "
+        "'fast_time_with_range_fft_gain' or 'yt_domain_literal'"
+    )
+
+
 def _beta(entry: Mapping[str, float]) -> complex:
     return complex(float(entry["re"]), float(entry["im"]))
 
@@ -437,7 +461,7 @@ def run_r1(config: ControlsConfig, *, snr_override_db: float | None = None) -> d
     grid = _grid_from_controls(controls)
     beta1 = _beta(r1["beta1"])
     truth = (float(r1["f_strong_hz"]), float(r1["f_weak_hz"]))
-    snr_db = float(snr_override_db if snr_override_db is not None else controls["snr_db"])
+    snr_db = float(snr_override_db if snr_override_db is not None else effective_snr_db(controls))
 
     cases = []
     comparator_cells = []
@@ -495,11 +519,29 @@ def run_r1(config: ControlsConfig, *, snr_override_db: float | None = None) -> d
 
     case_verdicts = [classify_case(c.primary_hit, c.secondary_hit) for c in cases]
     verdict = combine_verdicts(case_verdicts)
+    mismatches = []
+    for cell in comparator_cells:
+        for key in ("fft_weak", "music_weak", "proposed"):
+            if cell["observed"][key] != cell["expected"][key]:
+                mismatches.append(
+                    {
+                        "ratio": cell["observed"]["ratio"],
+                        "quantity": key,
+                        "expected": cell["expected"][key],
+                        "observed": cell["observed"][key],
+                    }
+                )
     return {
         "section": "r1_fig8",
         "snr_db": snr_db,
         "verdict": verdict,
+        # The VERDICT comes from the truth table alone (plan, Step 1a). The comparator
+        # matrix is evaluated alongside it: agreeing cells corroborate, differing cells
+        # are recorded as diagnostics and can neither fail nor upgrade the verdict.
+        "verdict_source": "truth_table_over_proposed_primary_and_secondary",
         "comparator_matrix_matches": all(cell["matches"] for cell in comparator_cells),
+        "comparator_mismatches": mismatches,
+        "comparator_role": "diagnostic_corroboration_not_gating",
         "comparator_cells": comparator_cells,
         "cases": [c.to_dict() for c in cases],
         "case_verdicts": case_verdicts,
@@ -511,7 +553,7 @@ def run_r2(config: ControlsConfig, *, snr_override_db: float | None = None) -> d
     """Fig 5 surfaces: per-target argmax within one grid step (swap allowed)."""
     controls = config.controls
     grid = _grid_from_controls(controls)
-    snr_db = float(snr_override_db if snr_override_db is not None else controls["snr_db"])
+    snr_db = float(snr_override_db if snr_override_db is not None else effective_snr_db(controls))
     cases = []
     case_map = {}
     for target in controls["r2_fig5"]["targets"]:
@@ -557,7 +599,7 @@ def run_r3(config: ControlsConfig, *, snr_override_db: float | None = None) -> d
     controls = config.controls
     r3 = controls["r3_fig7_row2"]
     grid = _grid_from_controls(controls)
-    snr_db = float(snr_override_db if snr_override_db is not None else controls["snr_db"])
+    snr_db = float(snr_override_db if snr_override_db is not None else effective_snr_db(controls))
     beta1 = _beta(r3["beta1"])
     truth = (float(r3["f_strong_hz"]), float(r3["f_weak_hz"]))
     case_id = "r3_fig7_row2"
@@ -629,7 +671,7 @@ def run_audits(config: ControlsConfig) -> dict:
             n_c=int(controls["n_c"]),
             n_r=int(controls["n_r"]),
             t_pri_s=float(controls["t_pri_s"]),
-            snr_db=float(kwargs.pop("snr_db", controls["snr_db"])),
+            snr_db=float(kwargs.pop("snr_db", effective_snr_db(controls))),
             seed=seed,
         )
         grid_local = kwargs.pop("grid_hz", grid)
@@ -661,7 +703,7 @@ def run_audits(config: ControlsConfig) -> dict:
             )[:, 0]
             s = beta1 * a1 + beta2 * a2
             sigma2 = (abs(beta1) ** 2 + abs(beta2) ** 2) / (
-                10.0 ** (float(controls["snr_db"]) / 10.0)
+                10.0 ** (effective_snr_db(controls) / 10.0)
             )
             r_ens = np.outer(s, s.conj()) + sigma2 * np.eye(int(controls["n_c"]))
             seed = case_seed(root_seed, case_id)
@@ -674,7 +716,7 @@ def run_audits(config: ControlsConfig) -> dict:
                 n_c=int(controls["n_c"]),
                 n_r=int(controls["n_r"]),
                 t_pri_s=float(controls["t_pri_s"]),
-                snr_db=float(controls["snr_db"]),
+                snr_db=effective_snr_db(controls),
                 seed=seed,
             )
             result, _ = evaluate_proposed(
@@ -689,6 +731,29 @@ def run_audits(config: ControlsConfig) -> dict:
             )
             rows.append(result.to_dict())
         audits["ensemble_covariance"] = rows
+
+    # Literal Y_t-domain SNR reading — the assumption the config's `snr_reference`
+    # amendment replaced (option B, plans/m9_step1a_snr_finding.md). Retained so the
+    # non-reproduction of the LITERAL reading stays on the record as a measured fact,
+    # under the same declared seeds. It is an audit: it cannot change any verdict.
+    if audits_cfg.get("snr_reference_literal"):
+        literal_snr_db = float(controls["snr_db"])
+        rows = []
+        for ratio in ratios:
+            row = eval_r1_variant(
+                f"audit:snr_literal:ratio={ratio}", ratio, snr_db=literal_snr_db
+            )
+            row["snr_db_effective"] = literal_snr_db
+            rows.append(row)
+        audits["snr_reference_literal"] = {
+            "snr_db_effective": literal_snr_db,
+            "primary_snr_db_effective": effective_snr_db(controls),
+            "cases": rows,
+            "note": (
+                "the literal Y_t-domain reading; recorded as a measured non-reproduction "
+                "(plans/m9_step1a_snr_finding.md §2) and NEVER as a verdict"
+            ),
+        }
 
     for step in audits_cfg.get("grid_step_hz", []):
         rows = [
@@ -735,7 +800,7 @@ def run_audits(config: ControlsConfig) -> dict:
             n_c=int(controls["n_c"]),
             n_r=int(controls["n_r"]),
             t_pri_s=float(controls["t_pri_s"]),
-            snr_db=float(controls["snr_db"]),
+            snr_db=effective_snr_db(controls),
             seed=seed,
         )
         row = {"ratio": ratio}
@@ -812,7 +877,7 @@ def run_ablation(config: ControlsConfig) -> dict:
             n_c=int(controls["n_c"]),
             n_r=max(endpoints),
             t_pri_s=float(controls["t_pri_s"]),
-            snr_db=float(controls["snr_db"]),
+            snr_db=effective_snr_db(controls),
             seed=seed,
         )
         for n_r in endpoints:
@@ -854,7 +919,7 @@ def run_ablation(config: ControlsConfig) -> dict:
         beta1=spec["beta1"], beta2=spec["beta2"], f1_hz=spec["truth"][0],
         f2_hz=spec["truth"][1], theta0_deg=spec["theta0_deg"],
         n_c=int(controls["n_c"]), n_r=max(endpoints),
-        t_pri_s=float(controls["t_pri_s"]), snr_db=float(controls["snr_db"]), seed=seed,
+        t_pri_s=float(controls["t_pri_s"]), snr_db=effective_snr_db(controls), seed=seed,
     )
     y4 = y_full[:, :4]
     phases = np.exp(1j * np.array([0.5, -1.2, 2.0, 0.9]))

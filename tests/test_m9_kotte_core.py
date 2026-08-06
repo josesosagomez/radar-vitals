@@ -495,6 +495,7 @@ from src.m9.paper_control import (  # noqa: E402
     case_seed,
     classify_case,
     combine_verdicts,
+    effective_snr_db,
     evaluate_comparators,
     generate_case_yt,
     load_experiment_config,
@@ -598,6 +599,89 @@ def test_audits_cannot_upgrade_and_carry_no_verdict():
     assert "cannot upgrade" in audits["note"]
     assert "ensemble_covariance" in audits
     assert "comparator_rules" in audits
+
+
+# --- The 2026-08-06 option-B amendment (plans/m9_step1a_snr_finding.md) ---------------
+
+
+def test_effective_snr_db_folds_range_fft_gain():
+    controls = {
+        "snr_db": 0.0,
+        "snr_reference": "fast_time_with_range_fft_gain",
+        "n_s_fast_time": 128,
+    }
+    np.testing.assert_allclose(
+        effective_snr_db(controls), 10.0 * np.log10(128.0), rtol=1e-12
+    )
+    # The gain is additive on top of whatever base SNR is declared.
+    np.testing.assert_allclose(
+        effective_snr_db({**controls, "snr_db": -3.0}),
+        -3.0 + 10.0 * np.log10(128.0),
+        rtol=1e-12,
+    )
+
+
+def test_effective_snr_db_literal_reference_is_identity():
+    controls = {"snr_db": 0.0, "snr_reference": "yt_domain_literal"}
+    assert effective_snr_db(controls) == 0.0
+
+
+def test_effective_snr_db_fails_closed_on_missing_or_unknown_reference():
+    with pytest.raises(ValueError, match="unknown snr_reference"):
+        effective_snr_db({"snr_db": 0.0})
+    with pytest.raises(ValueError, match="unknown snr_reference"):
+        effective_snr_db({"snr_db": 0.0, "snr_reference": "guessed"})
+    with pytest.raises(ValueError, match="n_s_fast_time"):
+        effective_snr_db(
+            {
+                "snr_db": 0.0,
+                "snr_reference": "fast_time_with_range_fft_gain",
+                "n_s_fast_time": 1,
+            }
+        )
+
+
+def test_committed_config_declares_the_amended_assumptions():
+    controls = load_experiment_config().controls
+    assert controls["snr_reference"] == "fast_time_with_range_fft_gain"
+    assert controls["n_s_fast_time"] == 128, "the paper's own N_s (§IV)"
+    np.testing.assert_allclose(effective_snr_db(controls), 21.0721, atol=1e-4)
+    rule = controls["comparators"]["weak_peak_rule"]
+    # Half mainlobe width 1/(2 * n_c * t_pri) = 0.625 Hz.
+    expected = 1.0 / (2.0 * int(controls["n_c"]) * float(controls["t_pri_s"]))
+    np.testing.assert_allclose(float(rule["weak_tolerance_hz"]), expected, rtol=1e-12)
+    assert controls["audits"]["snr_reference_literal"] is True
+
+
+def test_literal_snr_audit_is_recorded_and_carries_no_verdict():
+    config = load_experiment_config()
+    audits = run_audits(config)
+    literal = audits["snr_reference_literal"]
+    assert literal["snr_db_effective"] == 0.0
+    np.testing.assert_allclose(literal["primary_snr_db_effective"], 21.0721, atol=1e-4)
+    assert "verdict" not in literal
+    assert len(literal["cases"]) == 3
+    # The measured fact this audit exists to preserve: the literal reading misses.
+    assert not any(case["primary_hit"] for case in literal["cases"])
+
+
+def test_r1_verdict_comes_from_truth_table_not_the_comparator_matrix():
+    config = load_experiment_config()
+    result = run_r1(config)
+    result.pop("_case_map")
+    assert result["verdict_source"] == "truth_table_over_proposed_primary_and_secondary"
+    assert result["comparator_role"] == "diagnostic_corroboration_not_gating"
+    # Every enumerated mismatch is a real expected-vs-observed disagreement.
+    for entry in result["comparator_mismatches"]:
+        cell = next(
+            c for c in result["comparator_cells"]
+            if c["observed"]["ratio"] == entry["ratio"]
+        )
+        assert cell["expected"][entry["quantity"]] == entry["expected"]
+        assert cell["observed"][entry["quantity"]] == entry["observed"]
+    assert result["comparator_matrix_matches"] == (not result["comparator_mismatches"])
+    # The verdict is a pure function of the per-case truth-table classifications.
+    assert result["verdict"] == combine_verdicts(result["case_verdicts"])
 
 
 def test_clean_tree_refusal_official_vs_smoke(monkeypatch):

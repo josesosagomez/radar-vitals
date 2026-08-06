@@ -36,6 +36,15 @@ controls:
   # SNR = 10*log10((|beta1|^2 + |beta2|^2) / sigma^2), sigma^2 = per-element complex
   # noise power in Y_t (the paper's two-line power ratio, page-07 render).
   snr_definition: two_line_power_ratio
+  # AMENDED 2026-08-06 (user decision — option B of plans/m9_step1a_snr_finding.md,
+  # committed BEFORE any official control run): the paper's SNR is read as
+  # fast-time-referred; the range FFT's processing gain 10*log10(n_s_fast_time) is
+  # folded in before Y_t(kappa) is formed, so the effective Y_t-domain SNR is
+  # snr_db + 10*log10(128) ~= 21.07 dB. n_s_fast_time = 128 is the paper's own N_s
+  # (§IV) — a paper-derived constant, not a tuned value. The literal Y_t-domain
+  # reading is retained as the one-field audit `snr_reference_literal`.
+  snr_reference: fast_time_with_range_fft_gain
+  n_s_fast_time: 128
   mean_removal: none            # §III-B per-row mean removal is in the paper but OFF here:
                                 # exact per-channel removal makes R_t exactly singular.
   grid:
@@ -66,7 +75,16 @@ controls:
     weak_peak_rule:                   # one peak rule for every row of R1/R3
       merge_radius_hz: 0.25           # local maxima within this radius merge (keep larger)
       top_k: 2                        # weak truth must be hit by one of the top-k peaks
-      weak_tolerance_hz: 0.25
+      # AMENDED 2026-08-06 (option B): 0.25 -> 0.625 = the half mainlobe width
+      # 1/(2*n_c*t_pri). Two interacting Dirichlet mainlobes displace each other's
+      # maxima (measured pulls 0.27-0.46 Hz at the Fig-8 geometry); the paper's
+      # "detects both" is qualitative two-peak visibility, not +-0.25 Hz accuracy.
+      # NO amplitude criterion is added: none separates a real pulled peak from a
+      # pseudospectrum floor bump robustly across realizations, and the one cell this
+      # rule is expected to misjudge (MUSIC at beta1/2 counting a floor bump as a
+      # detection) errs AGAINST the proposed method's claimed advantage — recorded as
+      # a diagnostic, never tuned away.
+      weak_tolerance_hz: 0.625
 
   # R1 (GATING): Fig 8 amplitude ladder — 3 m / −30°, SNR 0 dB, (2, 1) Hz.
   r1_fig8:
@@ -110,8 +128,11 @@ controls:
     expected: {fft_weak: fail, music_weak: fail, proposed: resolves_both}
 
   # Audits — ONE field varied each; a passing audit can NEVER upgrade a failed primary.
+  # SNR-valued audit overrides are EFFECTIVE Y_t-domain values (documented 2026-08-06).
   audits:
     ensemble_covariance: true         # exact E{Y_t Y_t^H}; Cases-1–4 oracle check
+    snr_reference_literal: true       # rerun R1 at the literal Y_t-domain reading
+                                      # (effective 0 dB) — records the memo §2(b) fact
     grid_step_hz: [0.02, 0.10]
     mean_removal_on_loading_delta: 1.0e-6   # per-row mean removal ON + tiny loading
     music_model_order: [4]
