@@ -559,10 +559,28 @@ evidence-floor rule, **not** by discretionary exclusion.
 - **The 8 existing exploratory captures lack a persisted `frame0_epoch`.** Any window alignment
   reconstructed for them from `start_wall_utc` is **APPROXIMATE** (the offset is the capture-startup
   latency, not sub-second). It is never a frozen scoring number. M8 may use it only for the
-  explicitly `exploratory_non_frozen`, apparent/descriptive analysis registered in
+  explicitly `exploratory_non_frozen`, apparent/descriptive analysis declared in
   `plans/m8_step1b_ahmed_transfer.md`; every output must carry the approximate-origin and
   no-promotion/final-claim taint. Other uses remain limited to reference-characterization design
   evidence (`notes/comparator_prespec_br.md` §1).
+
+  > **Amendment M9-1 (2026-08-06, prospective — committed before any M9 scoring run).**
+  > `m9_approx_origin_amendment_version: 1`
+  > `m9_amendment_cross_review: pending`
+  >
+  > The identical `exploratory_non_frozen` treatment above is extended to **M9 (Kotte
+  > joint-Doppler, `plans/m9_kotte_plan.md`)**, per the user decision of 2026-08-05: M9 may
+  > score the 8 existing captures against `start_wall_utc`-reconstructed window origins only
+  > as apparent/descriptive analysis. Every M9 scored row, table, metric, and decision —
+  > including `stage_b_decision.json` — must persist per capture the numeric epoch used,
+  > `origin_source="start_wall_utc"`, the timezone-normalized value, and
+  > `origin_is_approximate=true`, and must carry the approximate-origin and
+  > no-promotion/no-final-agreement-claim taint. The captures stay exploratory and are never
+  > headline evidence; validation-grade claims require exact-origin data (`frame0_epoch`,
+  > available from the E/F/G captures onward). `scripts/m9_kotte_score.py` refuses to run
+  > unless this amendment is present in a committed, clean-tree copy of this file **and**
+  > the cross-review line above reads `completed` (CLAUDE.md §6 review by the other model
+  > family; flip the line only when that review has passed, recording reviewer and date).
   - **Selection is boundary-aligned, not greedy:** each window is scored by the single estimate
     whose 600-frame analysis window is exactly `[k·600, (k+1)·600)`. Greedy selection of accepted
     hops is forbidden (it would maximise accepted windows and is estimator-dependent).
