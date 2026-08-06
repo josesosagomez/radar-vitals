@@ -36,14 +36,23 @@ from typing import Mapping, Sequence
 import numpy as np
 
 from src.m4.bundle import strict_json_bytes
-from src.m4.estimator_suite import canonical_plain
+from src.m4.estimator_suite import (
+    EstimatorArmSpec,
+    SuiteWindowResult,
+    canonical_plain,
+    freeze_array,
+    validate_arm_specs,
+    validate_returned_arms,
+)
 
 __all__ = [
     "AllMaskedError",
+    "CPI_CAUSE_CODES",
     "CaponContext",
     "CollapsedSurface",
     "CovarianceFailure",
     "KotteArm",
+    "KotteEstimatorSuite",
     "KotteJointDopplerConfig",
     "SurfaceResult",
     "alias_collapse",
@@ -51,11 +60,15 @@ __all__ = [
     "beta_surface",
     "canonical_hash",
     "capon_power_at",
+    "estimate_window",
+    "extract_rx_slow_time",
     "joint_beta_at",
     "joint_capon_surface",
     "make_grid_hz",
+    "medoid_of_cpi_estimates",
     "numerical_rank",
     "pair_margin_db",
+    "prepare_cpis",
     "remove_per_rx_mean",
     "sample_covariance",
     "signed_band_grid_hz",
@@ -64,6 +77,24 @@ __all__ = [
 ]
 
 ESTIMATOR_FORMS = ("cpi_medoid", "mean_surface", "pooled")
+
+#: Integer codebook for per-CPI validity causes. Persisted in the evidence NPZ, which
+#: loads with allow_pickle=False, so causes must be integers rather than strings.
+CPI_CAUSE_CODES = {
+    "valid": 0,
+    "covariance_nonfinite": 1,
+    "rank_zero": 2,
+    "rank_deficient_unloaded": 3,
+    "nonpositive_loaded_spectrum": 4,
+    "all_masked": 5,
+}
+_CAUSE_FROM_REASON = {
+    "nonfinite_covariance": CPI_CAUSE_CODES["covariance_nonfinite"],
+    "nonfinite_eigenvalues": CPI_CAUSE_CODES["covariance_nonfinite"],
+    "rank_zero": CPI_CAUSE_CODES["rank_zero"],
+    "rank_deficient_unloaded": CPI_CAUSE_CODES["rank_deficient_unloaded"],
+    "nonpositive_loaded_spectrum": CPI_CAUSE_CODES["nonpositive_loaded_spectrum"],
+}
 
 
 class CovarianceFailure(Exception):
@@ -502,6 +533,304 @@ def pair_margin_db(
 # DSP-only configuration (no capture knowledge — enforced by construction and by test)
 # ---------------------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------------------
+# Front end: raw cube -> Z (slow time x RX) at one range bin
+# ---------------------------------------------------------------------------------------
+
+def extract_rx_slow_time(cube_slice: np.ndarray, locked_bin: int) -> np.ndarray:
+    """Complex slow-time x RX matrix at ``locked_bin``.
+
+    Mirrors ``src/respiration.py::extract_chest_phase``'s front end exactly — Hann window
+    over ADC samples, complex range FFT, bin selection — but aggregates **only over
+    chirps** (coherent mean) and keeps the RX axis, because Kotte's ``Y_t`` needs the RX
+    channels as separate snapshots. No phase is extracted: M9 is the first non-phase
+    consumer in this harness.
+
+    Parameters
+    ----------
+    cube_slice : (N_frames, chirps, rx, adc_samples) complex
+    locked_bin : range FFT bin index.
+
+    Returns
+    -------
+    Z : complex128 (N_frames, n_rx)
+    """
+    cube = np.asarray(cube_slice)
+    if cube.ndim != 4:
+        raise ValueError(f"cube_slice must be 4-D, got shape {cube.shape}")
+    n_adc = cube.shape[3]
+    if not (0 <= int(locked_bin) < n_adc):
+        raise ValueError(f"locked_bin={locked_bin} out of range [0, {n_adc - 1}]")
+    hann = np.hanning(n_adc).astype(np.float32)
+    range_fft = np.fft.fft(cube * hann, axis=3)
+    bin_vals = range_fft[:, :, :, int(locked_bin)]      # (N, chirps, rx)
+    return bin_vals.mean(axis=1).astype(np.complex128)  # coherent mean over chirps
+
+
+def prepare_cpis(z: np.ndarray, n_c: int) -> tuple[np.ndarray, int, int]:
+    """Retain -> detrend -> split, in the pinned order.
+
+    ``extract N frames -> retain the first n_cpis*n_c -> subtract the per-RX mean over
+    the RETAINED support -> split into CPIs``. The discarded tail provably cannot affect
+    any result because it is dropped before the mean is taken.
+
+    Returns ``(cpis, frame_start_used, frame_end_used)`` with ``cpis`` shaped
+    ``(n_cpis, n_c, n_rx)`` and a half-open ``[start, end)`` frame span.
+    """
+    z = np.asarray(z)
+    if z.ndim != 2:
+        raise ValueError(f"z must be 2-D (frames, rx), got shape {z.shape}")
+    n_frames = z.shape[0]
+    n_cpis = n_frames // int(n_c)
+    if n_cpis < 1:
+        raise ValueError(f"{n_frames} frames cannot fill one CPI of {n_c}")
+    end = n_cpis * int(n_c)
+    retained = z[:end]
+    detrended = retained - retained.mean(axis=0, keepdims=True)
+    return detrended.reshape(n_cpis, int(n_c), z.shape[1]), 0, end
+
+
+# ---------------------------------------------------------------------------------------
+# Aggregation across CPIs
+# ---------------------------------------------------------------------------------------
+
+def medoid_of_cpi_estimates(estimates_bpm: np.ndarray) -> int:
+    """Index of the 2-D L1 medoid; ties resolve to the lowest CPI index.
+
+    ``estimates_bpm`` is ``(n_cpis, 2)`` holding ``(br_bpm, hr_bpm)`` per CPI. The medoid
+    minimizes the summed L1 distance to every other CPI estimate — a member of the set,
+    so the reported pair is always one the estimator actually produced (unlike a
+    coordinate-wise median, which can invent a pair no CPI selected).
+    """
+    values = np.asarray(estimates_bpm, dtype=np.float64)
+    if values.ndim != 2 or values.shape[1] != 2:
+        raise ValueError(f"estimates must be (n_cpis, 2), got {values.shape}")
+    if not np.all(np.isfinite(values)):
+        raise ValueError("medoid requires finite estimates")
+    distances = np.abs(values[:, None, :] - values[None, :, :]).sum(axis=(1, 2))
+    return int(np.argmin(distances))  # argmin returns the FIRST minimum => lowest index
+
+
+def _band_grids(config: "KotteJointDopplerConfig") -> tuple[np.ndarray, np.ndarray]:
+    step_hz = float(config.grid_step_bpm) / 60.0
+    return (
+        signed_band_grid_hz(config.breath_band_hz, step_hz),
+        signed_band_grid_hz(config.heart_band_hz, step_hz),
+    )
+
+
+def _cpi_surface(
+    y_t: np.ndarray,
+    *,
+    config: "KotteJointDopplerConfig",
+    loading_delta: float,
+    f1_grid: np.ndarray,
+    f2_grid: np.ndarray,
+    t_pri_s: float,
+) -> tuple[SurfaceResult | None, np.ndarray, int, int]:
+    """One CPI's masked selection surface. Returns (surface|None, eigvals, rank, cause)."""
+    covariance = sample_covariance(y_t)
+    try:
+        ctx = CaponContext.from_covariance(
+            covariance, loading_delta=loading_delta, rank_rtol=config.rank_rtol
+        )
+    except CovarianceFailure as exc:
+        eigvals = np.full(y_t.shape[0], np.nan)
+        return None, eigvals, 0, _CAUSE_FROM_REASON.get(exc.reason, 1)
+    surface = joint_capon_surface(
+        ctx,
+        f1_grid,
+        f2_grid,
+        n_c=y_t.shape[0],
+        t_pri_s=t_pri_s,
+        condition_mask_threshold=config.condition_mask_threshold,
+    )
+    cause = (
+        CPI_CAUSE_CODES["all_masked"]
+        if surface.masked.all()
+        else CPI_CAUSE_CODES["valid"]
+    )
+    return surface, ctx.eigvals, ctx.rank, cause
+
+
+def _select_from_surface(
+    surface: np.ndarray, f1_grid: np.ndarray, f2_grid: np.ndarray
+) -> tuple[float, float, float]:
+    """Alias-collapse, argmax, and margin. Returns ``(br_bpm, hr_bpm, margin_db)``."""
+    collapsed = alias_collapse(surface, f1_grid, f2_grid)
+    i, j = argmax_masked(collapsed.objective)
+    margin = pair_margin_db(collapsed.objective, [(i, j)], exclusion_steps=1)
+    return (
+        float(collapsed.abs_f1_hz[i] * 60.0),
+        float(collapsed.abs_f2_hz[j] * 60.0),
+        float(margin),
+    )
+
+
+def estimate_window(
+    z: np.ndarray,
+    *,
+    config: "KotteJointDopplerConfig",
+    arm: "KotteArm",
+    fs_hz: float,
+) -> tuple[dict, dict]:
+    """Evaluate one window for one arm. Returns ``(native_result, evidence_arrays)``.
+
+    Missing concepts are ABSENT keys, never sentinel values (plan section "Native dict
+    per arm"). A window fails closed: any invalid CPI yields ``dsp_failed`` because
+    ``min_valid_cpi_fraction`` is exactly 1.0.
+    """
+    t_pri_s = 1.0 / float(fs_hz)
+    f1_grid, f2_grid = _band_grids(config)
+    cpis, frame_start, frame_end = prepare_cpis(z, arm.n_c)
+    n_cpis = cpis.shape[0]
+    n_rx = cpis.shape[2]
+
+    base: dict[str, object] = {
+        "arm_id": arm.arm_id,
+        "estimator_form": arm.estimator_form,
+        "loading_delta": float(arm.loading_delta),
+        "n_cpis_expected": int(n_cpis),
+        "frame_start_used": int(frame_start),
+        "frame_end_used": int(frame_end),
+        "band_edge_low": float(config.breath_band_hz[0]),
+        "band_edge_high": float(config.heart_band_hz[1]),
+        "selection_method": f"kotte_{arm.estimator_form}",
+    }
+
+    if arm.estimator_form == "pooled":
+        # One covariance over every snapshot from every CPI — full rank, but an
+        # incoherent model that is OURS, not the paper's.
+        stacked = np.concatenate([cpis[k] for k in range(n_cpis)], axis=1)
+        surface, eigvals, rank, cause = _cpi_surface(
+            stacked, config=config, loading_delta=arm.loading_delta,
+            f1_grid=f1_grid, f2_grid=f2_grid, t_pri_s=t_pri_s,
+        )
+        evidence = {
+            "z": freeze_array(z),
+            "pooled_eigvals": freeze_array(np.asarray(eigvals)),
+            "f1_grid_hz": freeze_array(f1_grid),
+            "f2_grid_hz": freeze_array(f2_grid),
+        }
+        if surface is None or cause != CPI_CAUSE_CODES["valid"]:
+            base.update(
+                br_valid=False, hr_valid=False, rej_reason="dsp_failed",
+                cpi_cause_code=int(cause), rank_rt=int(rank),
+                n_snapshots=int(n_cpis * n_rx), n_cpis_valid=0,
+            )
+            return base, evidence
+        br_bpm, hr_bpm, margin = _select_from_surface(surface.objective, f1_grid, f2_grid)
+        base.update(
+            br_valid=True, hr_valid=True, br_bpm=br_bpm, hr_raw=hr_bpm,
+            pair_margin_db=margin, masked_fraction_mean=float(surface.masked_fraction),
+            rank_rt=int(rank), n_snapshots=int(n_cpis * n_rx), n_cpis_valid=int(n_cpis),
+            selected_hz=[br_bpm / 60.0, hr_bpm / 60.0],
+        )
+        evidence["objective"] = freeze_array(surface.objective)
+        return base, evidence
+
+    # Per-CPI forms: cpi_medoid and mean_surface both evaluate every CPI first.
+    surfaces: list[np.ndarray] = []
+    masks: list[np.ndarray] = []
+    eig_rows: list[np.ndarray] = []
+    ranks: list[int] = []
+    causes: list[int] = []
+    masked_fractions: list[float] = []
+    for k in range(n_cpis):
+        surface, eigvals, rank, cause = _cpi_surface(
+            cpis[k], config=config, loading_delta=arm.loading_delta,
+            f1_grid=f1_grid, f2_grid=f2_grid, t_pri_s=t_pri_s,
+        )
+        eig_rows.append(np.asarray(eigvals, dtype=np.float64))
+        ranks.append(int(rank))
+        causes.append(int(cause))
+        if surface is None:
+            surfaces.append(np.full((f1_grid.size, f2_grid.size), np.nan))
+            masks.append(np.ones((f1_grid.size, f2_grid.size), dtype=bool))
+            masked_fractions.append(1.0)
+        else:
+            surfaces.append(surface.objective)
+            masks.append(surface.masked)
+            masked_fractions.append(float(surface.masked_fraction))
+
+    cause_array = np.asarray(causes, dtype=np.int16)
+    validity = cause_array == CPI_CAUSE_CODES["valid"]
+    n_valid = int(validity.sum())
+    evidence = {
+        "z": freeze_array(z),
+        "cpi_eigvals": freeze_array(np.stack(eig_rows)),
+        "cpi_ranks": freeze_array(np.asarray(ranks, dtype=np.int32)),
+        "cpi_valid": freeze_array(validity),
+        "cpi_cause_codes": freeze_array(cause_array),
+        "cpi_masked_fraction": freeze_array(np.asarray(masked_fractions)),
+        "f1_grid_hz": freeze_array(f1_grid),
+        "f2_grid_hz": freeze_array(f2_grid),
+    }
+    base.update(
+        n_cpis_valid=n_valid,
+        rank_rt=int(np.max(ranks)) if ranks else 0,
+        n_snapshots=int(n_rx),
+        masked_fraction_mean=float(np.mean(masked_fractions)),
+    )
+
+    if n_valid < n_cpis:  # min_valid_cpi_fraction is exactly 1.0 -> fail closed
+        first_bad = int(np.argmin(validity))
+        base.update(
+            br_valid=False, hr_valid=False, rej_reason="invalid_cpi",
+            failing_cpi_index=first_bad,
+            failing_cpi_cause_code=int(cause_array[first_bad]),
+        )
+        return base, evidence
+
+    if arm.estimator_form == "mean_surface":
+        # Raw surface mean over the fixed CPI set under the COMMON mask: a cell masked
+        # in any CPI is masked in the mean, so every retained cell averages the same
+        # number of terms.
+        common_mask = np.any(np.stack(masks), axis=0)
+        stack = np.stack(surfaces)
+        with np.errstate(invalid="ignore"):
+            mean_surface = np.where(common_mask, np.nan, np.nanmean(stack, axis=0))
+        if not np.isfinite(mean_surface).any():
+            base.update(br_valid=False, hr_valid=False, rej_reason="dsp_failed")
+            return base, evidence
+        br_bpm, hr_bpm, margin = _select_from_surface(mean_surface, f1_grid, f2_grid)
+        base.update(
+            br_valid=True, hr_valid=True, br_bpm=br_bpm, hr_raw=hr_bpm,
+            pair_margin_db=margin, selected_hz=[br_bpm / 60.0, hr_bpm / 60.0],
+            common_mask_fraction=float(common_mask.mean()),
+        )
+        evidence["mean_objective"] = freeze_array(mean_surface)
+        return base, evidence
+
+    # cpi_medoid (the PRIMARY form): per-CPI estimates, then the 2-D L1 medoid.
+    per_cpi = np.empty((n_cpis, 2), dtype=np.float64)
+    per_cpi_margin = np.empty(n_cpis, dtype=np.float64)
+    for k in range(n_cpis):
+        br_bpm, hr_bpm, margin = _select_from_surface(surfaces[k], f1_grid, f2_grid)
+        per_cpi[k] = (br_bpm, hr_bpm)
+        per_cpi_margin[k] = margin
+    medoid_index = medoid_of_cpi_estimates(per_cpi)
+    evidence["cpi_estimates_bpm"] = freeze_array(per_cpi)
+    evidence["cpi_pair_margin_db"] = freeze_array(per_cpi_margin)
+    evidence["medoid_index"] = int(medoid_index)
+    base.update(
+        br_valid=True,
+        hr_valid=True,
+        br_bpm=float(per_cpi[medoid_index, 0]),
+        hr_raw=float(per_cpi[medoid_index, 1]),
+        # Window diagnostics are the MEDOID CPI's, not an average over CPIs.
+        pair_margin_db=float(per_cpi_margin[medoid_index]),
+        medoid_cpi_index=int(medoid_index),
+        cpi_iqr_br_bpm=float(np.subtract(*np.percentile(per_cpi[:, 0], [75, 25]))),
+        cpi_iqr_hr_bpm=float(np.subtract(*np.percentile(per_cpi[:, 1], [75, 25]))),
+        selected_hz=[
+            float(per_cpi[medoid_index, 0]) / 60.0,
+            float(per_cpi[medoid_index, 1]) / 60.0,
+        ],
+    )
+    return base, evidence
+
+
 @dataclass(frozen=True)
 class KotteArm:
     arm_id: str
@@ -639,3 +968,86 @@ class KotteJointDopplerConfig:
                 "arms": [arm.to_plain() for arm in self.arms],
             }
         )
+
+
+# ---------------------------------------------------------------------------------------
+# The suite: every declared arm evaluated once per window
+# ---------------------------------------------------------------------------------------
+
+KOTTE_ESTIMATOR_ID = "kotte_joint_doppler_v1"
+
+
+class KotteEstimatorSuite:
+    """Evaluates one window and returns exactly its declared arms.
+
+    Satisfies `src.m4.estimator_suite.WindowEstimatorSuite`. The extracted ``Z`` is
+    computed **once** per window and shared by every arm through
+    ``shared_signal_hash``; the optional M8-specific spec fields stay ``None``.
+    """
+
+    suite_id = "kotte_joint_doppler_suite_v1"
+
+    def __init__(self, config: KotteJointDopplerConfig) -> None:
+        if not isinstance(config, KotteJointDopplerConfig):
+            raise TypeError("config must be a KotteJointDopplerConfig")
+        self._config = config
+        self.suite_config_hash = config.suite_config_hash()
+        self.arm_specs = tuple(
+            EstimatorArmSpec(
+                arm_id=arm.arm_id,
+                estimator_id=KOTTE_ESTIMATOR_ID,
+                run_config_hash=config.run_config_hash(arm),
+                harmonic_count=None,
+                suppression_profile=None,
+                outcome_classifier_id=None,
+            )
+            for arm in config.arms
+        )
+        validate_arm_specs(self.arm_specs)
+        self.outcome_classifiers: dict = {}
+
+    @property
+    def config(self) -> KotteJointDopplerConfig:
+        return self._config
+
+    def __call__(self, frames, locked_bin: int, fs: float) -> SuiteWindowResult:
+        z = extract_rx_slow_time(frames, int(locked_bin))
+        frozen_z = freeze_array(z)
+        signal_hash = canonical_hash(
+            {
+                "z_sha256": sha256(np.ascontiguousarray(z).tobytes()).hexdigest(),
+                "locked_bin": int(locked_bin),
+                "fs_hz": float(fs),
+            }
+        )
+        natives: dict[str, dict] = {}
+        for arm in self._config.arms:
+            native, _evidence = estimate_window(
+                frozen_z, config=self._config, arm=arm, fs_hz=float(fs)
+            )
+            native["shared_signal_hash"] = signal_hash
+            natives[arm.arm_id] = native
+        result = SuiteWindowResult(
+            shared_evidence={
+                "suite_id": self.suite_id,
+                "suite_config_hash": self.suite_config_hash,
+                "fs_hz": float(fs),
+                "locked_bin": int(locked_bin),
+                "shared_signal_hash": signal_hash,
+                "n_frames": int(z.shape[0]),
+                "n_rx": int(z.shape[1]),
+            },
+            arm_native_results=natives,
+        )
+        validate_returned_arms(self.arm_specs, result)
+        return result
+
+    def window_evidence(self, frames, locked_bin: int, fs: float) -> dict[str, dict]:
+        """Per-arm evidence arrays for the NPZ writer (kept out of the native payloads)."""
+        z = freeze_array(extract_rx_slow_time(frames, int(locked_bin)))
+        return {
+            arm.arm_id: estimate_window(
+                z, config=self._config, arm=arm, fs_hz=float(fs)
+            )[1]
+            for arm in self._config.arms
+        }

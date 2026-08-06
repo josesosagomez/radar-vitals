@@ -12,20 +12,26 @@ import pytest
 import yaml
 
 from src.m9.kotte_core import (
+    CPI_CAUSE_CODES,
     AllMaskedError,
     CaponContext,
     CovarianceFailure,
     KotteArm,
+    KotteEstimatorSuite,
     KotteJointDopplerConfig,
     alias_collapse,
     argmax_masked,
     beta_surface,
     capon_power_at,
+    estimate_window,
+    extract_rx_slow_time,
     joint_beta_at,
     joint_capon_surface,
     make_grid_hz,
+    medoid_of_cpi_estimates,
     numerical_rank,
     pair_margin_db,
+    prepare_cpis,
     remove_per_rx_mean,
     sample_covariance,
     signed_band_grid_hz,
@@ -482,6 +488,292 @@ def test_bands_pinned_to_m8_domain_and_live_demo_config():
     config = KotteJointDopplerConfig.from_stage_a(_stage_a_dict())
     assert list(config.breath_band_hz) == [float(v) for v in live["respiration"]["band_hz"]]
     assert list(config.heart_band_hz) == [float(v) for v in live["heart"]["band_hz"]]
+
+
+# =======================================================================================
+# Aggregation contract (plan step 3): extraction, tail/detrend order, forms, suite
+# =======================================================================================
+
+FS_HZ = 20.0
+
+
+def _synthetic_cube(
+    n_frames: int = 600,
+    *,
+    f_breath_hz: float = 0.30,
+    f_heart_hz: float = 1.35,
+    breath_amp_m: float = 5.0e-5,
+    heart_amp_m: float = 2.5e-5,
+    target_bin: int = 7,
+    n_chirps: int = 4,
+    n_rx: int = 4,
+    n_adc: int = 32,
+    seed: int = 4,
+    noise_scale: float = 0.01,
+) -> np.ndarray:
+    """A small chest-like cube: a range-bin tone modulated by two displacement lines."""
+    rng = np.random.default_rng(seed)
+    t = np.arange(n_frames) / FS_HZ
+    lam = 3.79e-3
+    displacement = breath_amp_m * np.sin(2 * np.pi * f_breath_hz * t) + heart_amp_m * (
+        np.sin(2 * np.pi * f_heart_hz * t)
+    )
+    phase = (4.0 * np.pi / lam) * displacement
+    envelope = np.exp(1j * phase)  # (n_frames,)
+    n = np.arange(n_adc)
+    range_tone = np.exp(2j * np.pi * target_bin * n / n_adc) / np.hanning(n_adc).clip(1e-6)
+    cube = np.empty((n_frames, n_chirps, n_rx, n_adc), dtype=np.complex128)
+    for rx in range(n_rx):
+        gain = 1.0 + 0.05 * rx
+        cube[:, :, rx, :] = (
+            gain * envelope[:, None, None] * range_tone[None, None, :]
+        )
+    cube += noise_scale * (
+        rng.standard_normal(cube.shape) + 1j * rng.standard_normal(cube.shape)
+    )
+    return cube
+
+
+def _stage_a_config() -> KotteJointDopplerConfig:
+    return KotteJointDopplerConfig.from_stage_a(_stage_a_dict())
+
+
+def test_extract_rx_slow_time_averages_only_chirps_and_keeps_rx():
+    cube = _synthetic_cube(n_frames=40, noise_scale=0.0)
+    z = extract_rx_slow_time(cube, locked_bin=7)
+    assert z.shape == (40, 4)
+    assert z.dtype == np.complex128
+    # Exactly the coherent chirp mean of the per-chirp range-FFT bin.
+    hann = np.hanning(cube.shape[3]).astype(np.float32)
+    expected = np.fft.fft(cube * hann, axis=3)[:, :, :, 7].mean(axis=1)
+    np.testing.assert_allclose(z, expected, rtol=1e-12, atol=1e-12)
+
+
+def test_extract_rejects_out_of_range_bin():
+    cube = _synthetic_cube(n_frames=8)
+    with pytest.raises(ValueError, match="locked_bin"):
+        extract_rx_slow_time(cube, locked_bin=999)
+
+
+def test_prepare_cpis_retains_592_of_600_at_nc16():
+    z = np.arange(600 * 4, dtype=np.complex128).reshape(600, 4)
+    cpis, start, end = prepare_cpis(z, 16)
+    assert (start, end) == (0, 592)
+    assert cpis.shape == (37, 16, 4)
+
+
+def test_tail_is_immutable_discarded_frames_cannot_affect_any_result():
+    """The pinned order (retain -> detrend -> split) makes the tail provably inert."""
+    z = np.asarray(
+        np.random.default_rng(0).standard_normal((600, 4))
+        + 1j * np.random.default_rng(1).standard_normal((600, 4))
+    )
+    perturbed = z.copy()
+    perturbed[592:] += 1e6 + 1e6j  # obliterate the discarded tail
+    a, _, _ = prepare_cpis(z, 16)
+    b, _, _ = prepare_cpis(perturbed, 16)
+    np.testing.assert_array_equal(a, b)
+
+
+def test_detrend_is_over_the_retained_support_not_the_full_window():
+    z = np.zeros((600, 1), dtype=np.complex128)
+    z[592:] = 100.0  # only the discarded tail carries the offset
+    cpis, _, _ = prepare_cpis(z, 16)
+    # If the mean had been taken over all 600 frames, every retained sample would be
+    # shifted by -100*8/600; over the retained support the retained data is all zeros.
+    np.testing.assert_allclose(cpis, 0.0, atol=1e-12)
+
+
+def test_medoid_picks_a_member_and_breaks_ties_to_lowest_index():
+    estimates = np.array([[18.0, 80.0], [18.5, 81.0], [40.0, 120.0]])
+    idx = medoid_of_cpi_estimates(estimates)
+    assert idx in (0, 1)
+    # A member of the set, never an invented pair.
+    assert tuple(estimates[idx]) in {tuple(row) for row in estimates}
+    # Exact tie between two identical candidates -> the lower index wins.
+    tied = np.array([[10.0, 60.0], [10.0, 60.0], [90.0, 200.0]])
+    assert medoid_of_cpi_estimates(tied) == 0
+
+
+def test_medoid_is_deterministic_across_calls():
+    rng = np.random.default_rng(3)
+    estimates = rng.normal(size=(37, 2)) * 10 + np.array([18.0, 80.0])
+    first = medoid_of_cpi_estimates(estimates)
+    for _ in range(5):
+        assert medoid_of_cpi_estimates(estimates) == first
+
+
+def test_estimate_window_cpi_medoid_reports_medoid_cpi_diagnostics():
+    config = _stage_a_config()
+    arm = next(a for a in config.arms if a.estimator_form == "cpi_medoid")
+    z = extract_rx_slow_time(_synthetic_cube(), locked_bin=7)
+    native, evidence = estimate_window(z, config=config, arm=arm, fs_hz=FS_HZ)
+    assert native["br_valid"] and native["hr_valid"]
+    assert native["n_cpis_expected"] == 37 and native["n_cpis_valid"] == 37
+    assert (native["frame_start_used"], native["frame_end_used"]) == (0, 592)
+    idx = native["medoid_cpi_index"]
+    # The window's reported pair IS the medoid CPI's pair, not an average.
+    np.testing.assert_allclose(native["br_bpm"], evidence["cpi_estimates_bpm"][idx, 0])
+    np.testing.assert_allclose(native["hr_raw"], evidence["cpi_estimates_bpm"][idx, 1])
+    np.testing.assert_allclose(
+        native["pair_margin_db"], evidence["cpi_pair_margin_db"][idx]
+    )
+    # Estimates land inside the configured bands.
+    assert 6.0 <= native["br_bpm"] <= 30.0
+    assert 48.0 <= native["hr_raw"] <= 120.0
+
+
+def test_estimate_window_missing_concepts_are_absent_keys():
+    config = _stage_a_config()
+    pooled = next(a for a in config.arms if a.estimator_form == "pooled")
+    z = extract_rx_slow_time(_synthetic_cube(), locked_bin=7)
+    native, _ = estimate_window(z, config=config, arm=pooled, fs_hz=FS_HZ)
+    # The pooled form has no per-CPI medoid, so the key is ABSENT rather than a sentinel.
+    assert "medoid_cpi_index" not in native
+    assert "cpi_iqr_br_bpm" not in native
+    assert native["n_snapshots"] == 37 * 4
+
+
+def test_pooled_form_reaches_full_rank_where_a_single_cpi_cannot():
+    config = _stage_a_config()
+    pooled = next(a for a in config.arms if a.estimator_form == "pooled")
+    z = extract_rx_slow_time(_synthetic_cube(), locked_bin=7)
+    native, _ = estimate_window(z, config=config, arm=pooled, fs_hz=FS_HZ)
+    # 4 RX snapshots per CPI cannot span 16 dimensions; pooled snapshots can.
+    assert native["rank_rt"] == 16
+    assert native["br_valid"]
+
+
+def test_single_cpi_rank_is_four_at_four_rx():
+    config = _stage_a_config()
+    arm = next(a for a in config.arms if a.estimator_form == "cpi_medoid")
+    z = extract_rx_slow_time(_synthetic_cube(), locked_bin=7)
+    native, evidence = estimate_window(z, config=config, arm=arm, fs_hz=FS_HZ)
+    assert native["rank_rt"] == 4
+    assert set(np.unique(evidence["cpi_ranks"])) == {4}
+
+
+def test_zeroed_block_becomes_a_rank_one_dc_cpi_and_stays_valid():
+    """Detrending runs AFTER retention, so a zeroed block is not a zero CPI.
+
+    Subtracting the per-RX mean turns an all-zero block into a constant (DC) block,
+    which carries energy and has rank 1 — valid under the pinned rule. Pinned because
+    the naive expectation ("zeroing frames kills the CPI") is wrong and would otherwise
+    be re-derived incorrectly later.
+    """
+    config = _stage_a_config()
+    arm = next(a for a in config.arms if a.estimator_form == "cpi_medoid")
+    z = np.array(extract_rx_slow_time(_synthetic_cube(), locked_bin=7))
+    z[16:32, :] = 0.0
+    native, evidence = estimate_window(z, config=config, arm=arm, fs_hz=FS_HZ)
+    assert native["br_valid"] is True
+    assert evidence["cpi_ranks"][1] == 1
+    assert evidence["cpi_valid"].all()
+
+
+def test_any_invalid_cpi_fails_the_whole_window():
+    """min_valid_cpi_fraction is exactly 1.0 — the window fails closed."""
+    config = _stage_a_config()
+    arm = next(a for a in config.arms if a.estimator_form == "cpi_medoid")
+    # One CPI is exactly the retained-support mean, so it is identically zero after
+    # detrending -> lambda_max == 0 -> rank 0. The other CPIs alternate about that
+    # same mean, so they keep energy and stay valid.
+    z = np.zeros((592, 4), dtype=np.complex128)
+    alternating = np.where(np.arange(592) % 2 == 0, 1.0, -1.0)
+    z[:, :] = alternating[:, None]
+    z[16:32, :] = 0.0  # this block equals the (zero) global mean exactly
+    native, evidence = estimate_window(z, config=config, arm=arm, fs_hz=FS_HZ)
+    assert native["br_valid"] is False and native["hr_valid"] is False
+    assert native["rej_reason"] == "invalid_cpi"
+    assert native["failing_cpi_index"] == 1
+    assert native["failing_cpi_cause_code"] == CPI_CAUSE_CODES["rank_zero"]
+    assert evidence["cpi_valid"][1] == False  # noqa: E712
+    assert evidence["cpi_valid"].sum() == 36
+    assert "br_bpm" not in native
+
+
+def test_a_single_nonfinite_sample_fails_the_whole_window():
+    """One NaN contaminates every CPI, because the detrend mean spans the window.
+
+    Pinned deliberately: the failure is total, not localized to the CPI containing the
+    NaN, so `failing_cpi_index` is 0 and is NOT a pointer to the corrupt sample. The
+    outcome is fail-closed, which is what matters; anyone diagnosing a nonfinite window
+    must look at the raw Z, not at the reported index.
+    """
+    config = _stage_a_config()
+    arm = next(a for a in config.arms if a.estimator_form == "cpi_medoid")
+    z = np.array(extract_rx_slow_time(_synthetic_cube(), locked_bin=7))
+    z[40, 2] = np.nan  # lands in CPI index 2, but poisons RX column 2 for all CPIs
+    native, evidence = estimate_window(z, config=config, arm=arm, fs_hz=FS_HZ)
+    assert native["br_valid"] is False and native["hr_valid"] is False
+    assert native["rej_reason"] == "invalid_cpi"
+    assert native["failing_cpi_index"] == 0
+    assert native["failing_cpi_cause_code"] == CPI_CAUSE_CODES["covariance_nonfinite"]
+    assert not evidence["cpi_valid"].any()
+    assert set(np.unique(evidence["cpi_cause_codes"])) == {
+        CPI_CAUSE_CODES["covariance_nonfinite"]
+    }
+
+
+def test_evidence_arrays_are_npz_safe_and_immutable():
+    config = _stage_a_config()
+    for arm in config.arms:
+        z = extract_rx_slow_time(_synthetic_cube(n_frames=160), locked_bin=7)
+        _native, evidence = estimate_window(z, config=config, arm=arm, fs_hz=FS_HZ)
+        for key, value in evidence.items():
+            if isinstance(value, np.ndarray):
+                assert value.dtype != object, key
+                assert not value.flags.writeable, key
+
+
+def test_evidence_npz_round_trips_without_pickle(tmp_path):
+    config = _stage_a_config()
+    arm = config.arms[0]
+    z = extract_rx_slow_time(_synthetic_cube(n_frames=160), locked_bin=7)
+    _native, evidence = estimate_window(z, config=config, arm=arm, fs_hz=FS_HZ)
+    arrays = {k: v for k, v in evidence.items() if isinstance(v, np.ndarray)}
+    target = tmp_path / "evidence.npz"
+    np.savez(target, **arrays)
+    with np.load(target, allow_pickle=False) as loaded:
+        assert set(loaded.files) == set(arrays)
+
+
+def test_suite_returns_exactly_its_declared_arms_with_one_shared_signal():
+    config = _stage_a_config()
+    suite = KotteEstimatorSuite(config)
+    cube = _synthetic_cube()
+    result = suite(cube, locked_bin=7, fs=FS_HZ)
+    assert set(result.arm_native_results) == {arm.arm_id for arm in config.arms}
+    hashes = {n["shared_signal_hash"] for n in result.arm_native_results.values()}
+    assert len(hashes) == 1, "Z is extracted once and shared by every arm"
+    assert result.shared_evidence["shared_signal_hash"] == hashes.pop()
+    assert result.shared_evidence["n_rx"] == 4
+    assert result.arm_outcomes == {}
+
+
+def test_suite_arm_specs_carry_unique_hashes_and_no_m8_fields():
+    config = _stage_a_config()
+    suite = KotteEstimatorSuite(config)
+    assert len({s.run_config_hash for s in suite.arm_specs}) == len(suite.arm_specs)
+    for spec in suite.arm_specs:
+        assert spec.harmonic_count is None
+        assert spec.suppression_profile is None
+        assert spec.outcome_classifier_id is None
+
+
+def test_suite_satisfies_the_neutral_protocol():
+    from src.m4.estimator_suite import WindowEstimatorSuite
+
+    assert isinstance(KotteEstimatorSuite(_stage_a_config()), WindowEstimatorSuite)
+
+
+def test_suite_is_deterministic():
+    config = _stage_a_config()
+    cube = _synthetic_cube()
+    first = KotteEstimatorSuite(config)(cube, locked_bin=7, fs=FS_HZ)
+    second = KotteEstimatorSuite(config)(cube, locked_bin=7, fs=FS_HZ)
+    for arm_id, native in first.arm_native_results.items():
+        assert native == second.arm_native_results[arm_id]
 
 
 # =======================================================================================
