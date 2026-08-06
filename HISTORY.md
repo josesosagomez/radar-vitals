@@ -10504,3 +10504,66 @@ amendment: `snr_reference: fast_time_with_range_fft_gain`, `n_s_fast_time: 128`,
 amendment -> official R1 verdict (clean tree) -> R2/R3 + audits -> ablation -> plan steps
 3-9 unchanged. Separately pending: cross-review of analysis-spec Amendment M9-1 (flip its
 line to `completed` only after review); E/F/G captures still awaited.
+
+## 2026-08-06 (later) - M9 option B applied; controls PASS on real paper geometry; oracle finds the transfer blocker
+
+**Set out to do:** apply the user's option-B decision on the step-1a SNR memo, run the
+official controls, and continue the plan's execution order.
+
+**Worked (with evidence):**
+- **Option B committed BEFORE any official run** (`2fec07e`): `snr_reference:
+  fast_time_with_range_fft_gain` + `n_s_fast_time: 128` -> effective Y_t SNR 21.07 dB,
+  resolved by `effective_snr_db()` which fails closed on an absent/unknown reference;
+  literal 0 dB retained as the `snr_reference_literal` audit; `weak_tolerance_hz`
+  0.25 -> 0.625 (half mainlobe `1/(2*n_c*t_pri)`); `run_r1` now emits `verdict_source`,
+  `comparator_role` and an enumerated `comparator_mismatches` list.
+- **OFFICIAL R1 = `behaviorally_reproduced`** (clean tree, commit `2fec07e`, run
+  `results/m9_kotte_controls/20260806T154753.144349Z_6bde60353be2`): all three Fig-8
+  amplitude ratios select **exactly (2.0, 1.0) Hz on BOTH the selection and eq-26
+  surfaces**. **The milestone gate is passed** - real data is now reachable.
+- **OFFICIAL R2 + R3 + audits** (run `…20260806T154841.509470Z_…`): R2
+  `behaviorally_reproduced`, all three Fig-5 targets exact ((-2,-1), (-1,4), (2.5,1));
+  R3 resolves (1.5, 1.0) at Delta=0.5 Hz. Audits: literal-0 dB 0/3 (the memo's finding
+  is now official evidence), ensemble covariance 3/3, cancellation beta2=-beta1 primary
+  MISS (the method's own predicted failure, reproduced), mean-removal-on 0/3 (confirms
+  why controls run it off), grid 0.02 3/3.
+- **Control 2 ablation: 24/24 rows pass** (run `…20260806T155022.295892Z_…`) - rank
+  exactly 4 at the 4-RX endpoint and 16 at 20 RX, both loading deltas, phase invariance
+  3.9e-12. The method survives our hardware's RX count on paper geometry, so a real-data
+  null is attributable to the vitals regime rather than to having 4 antennas.
+- **Step 3 aggregation contract** (`f2e74c5`): `extract_rx_slow_time` (chirp-only mean,
+  RX kept), `prepare_cpis` with the pinned retain->detrend->split order (tail perturbed
+  by 1e6 leaves CPIs bit-identical), the three forms, the 2-D L1 medoid (a MEMBER of the
+  per-CPI set, tie-break lowest index), fail-closed partial-CPI semantics with an integer
+  cause codebook, and `KotteEstimatorSuite` on the neutral protocol. 20 tests.
+- **Step 4 oracle + THE transfer finding** (`9078ed8`,
+  `plans/m9_step1b_oracle_finding.md`): a real sinusoidal displacement produces conjugate
+  sideband PAIRS (`J_{-1} = -J_{+1}`), so the signal carries >=4 lines where Kotte's
+  estimator constrains 2 - a **model-order misspecification**. Isolated against a
+  two-cisoid control at identical aperture/SNR/gains: two cisoids 9/9 at N_c=16/30 dB;
+  conjugate pairs **0/9 at N_c=16 AND N_c=32 at 10, 30 and 60 dB**. Fifty extra dB fixes
+  nothing; only aperture does (recovery near N_c=64 = 3.2 s, still with BR bias and a
+  sub-0.02 dB margin). On the full comb at the primary arm, S1 selects the 48 bpm floor
+  in 3 of 4 phase pairs, margins ~0.00 dB, per-seed HR spreads to 72 bpm.
+
+**Failed / did not work, and why:** two oracle covariance models were built and
+discarded before the right one, both recorded in the memo so they are not repeated:
+(1) an **incoherent** `sum |a_i|^2 s s^H`, which squared away every phase relationship -
+the tell was identical output for all four phase pairs; (2) the **ensemble** rank-1
+`v v^H + sigma^2 I`, which Sherman-Morrison shows is near-flat for a spread comb and
+cannot represent the 4-snapshot sample covariance the estimator actually sees. Also, two
+of my step-3 test expectations were wrong about the physics and the code was right:
+zeroing a block yields a rank-1 DC CPI (detrend runs after retention), and one NaN
+poisons every CPI through the detrend mean.
+
+**Retired / no longer used:** the literal Y_t-domain 0 dB reading as the controls'
+primary assumption (retained as an audit, not deleted).
+
+**Next:** the **step-4 commit checkpoint is blocked on a user decision** over
+`plans/m9_step1b_oracle_finding.md` options A/B/C (recommendation B: add a declared
+N_c=64 arm before freezing, so the gate tests the regime where the method can work at
+all and the paper gains a two-point aperture curve). `transfer.gate_criteria` stays
+`null` until then. Three cross-reviews are outstanding: analysis-spec Amendment M9-1,
+the step-1a SNR amendment, and this oracle finding. After the checkpoint: build
+`src/m9/kotte_gate.py` + `scripts/m9_kotte_transfer.py` (steps 4-5), then the
+sweep/comparator/scorer (steps 5-8).
