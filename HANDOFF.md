@@ -27,16 +27,15 @@ Two things the one-liner hides, both of which have caused real mistakes:
 
 **Infrastructure is strong; the science is thin, and what exists is exploratory.**
 
-Active branch **`vital_signs_ahmed_v10`**, HEAD `2aebd72`, **tree clean** (verified
-2026-08-06 — the M8 real-data scripts landed in `275a01d`, the M9 plan pair and session records
-in `2aebd72`). Suite **2155 passed, 5 skipped** (verified 2026-08-05; only plan/log markdown has
-changed since). The 5 skips are honest absences (4 OSR-03 tests need replay artifacts that no
-longer exist), not passes.
+Active branch **`vital_signs_ahmed_v10`**, HEAD `a3d7ece`, **tree clean** (verified
+2026-08-06 after the M9 step 0-1 commits `b39888f`/`3c0efc7`/`f75186d`). Suite **2197
+passed, 5 skipped** (verified 2026-08-06; includes the 42 new M9 tests). The 5 skips are
+honest absences (4 OSR-03 tests need replay artifacts that no longer exist), not passes.
 
 | Track | Milestone | Status |
 |---|---|---|
 | C | **M8 — Ahmed harmonic accumulation** | **REAL DATA DONE 2026-08-05, NEGATIVE at every bin, mechanism identified** — §5 |
-| C | **M9 — Kotte joint-Doppler** | **PLAN COMPLETE, BUILD-READY** — nine review passes applied, five user decisions recorded. **This is the active task** — §4.1 |
+| C | **M9 — Kotte joint-Doppler** | **Steps 0-1 BUILT + COMMITTED; official R1 verdict BLOCKED on a user decision** (the step-1a SNR finding) — §4.1 |
 | C | M10 baselines | not started |
 | A | M1 live smoke test | not run |
 | A | M2 respiration fix | landed; only done-when #5 open |
@@ -109,10 +108,10 @@ its hard gate on study captures. M5/M6/M7 are no longer blocked by governance.
 never confirmatory. **Never reintroduce** "pre-registered", "pre-specified", "frozen before data",
 "registered \<date\>", "deposited" or "confirmatory" about this study's own specs or results, in
 any file, manuscript, title or talk. Full rule: `HISTORY.md` 2026-08-03 and CLAUDE.md §4. Say
-"declared in the committed script before the run". The purge is complete repo-wide except one
-known leftover: "registered in" inside `notes/analysis_prespec.md`'s approximate-origin
-paragraph, which the M9 amendment (§4.1) fixes in passing. **If you sweep again, classify every
-match by hand — `grep -v` filters hid real hits three times on 2026-08-04.**
+"declared in the committed script before the run". The purge is complete repo-wide — the last
+known leftover ("registered in" inside `notes/analysis_prespec.md`'s approximate-origin
+paragraph) was fixed by Amendment M9-1 (`b39888f`, 2026-08-06). **If you sweep again, classify
+every match by hand — `grep -v` filters hid real hits three times on 2026-08-04.**
 
 **"Primary" is the project's word for the M6/M7 data role** (renamed from "confirmatory",
 2026-08-04, 41 sites). Watch the collision: `analysis_prespec.md` uses "primary" in three senses
@@ -174,17 +173,36 @@ regeneration → scoring + Stage-B decision. Stage B (DOA) is out of scope beyon
    scored descriptively only; sensitivity variant with low-contribution subjects dropped.
 5. Headline reworded to "first real-data **evaluation**" (§3).
 
-**First actions, in order (the plan's execution order §"Execution order and gates"):**
-1. Write + commit the **analysis-spec amendment** and `experiments/m9_kotte/config.yaml`
-   (capture manifest with protocol roles from `notes/capture_inventory.md`; `stage_b_decision`
-   section). The amendment needs §6 cross-review.
-2. Write the `notes/approach.md` Kotte section (signal model, Algorithm 1's selection line, the
-   verified identities, rank rule, Bessel-comb analysis, aggregation contract).
-3. Build `src/m9/kotte_core.py` + the R1 control path + core tests; commit; run the official R1
-   verdict (clean tree). **Gate: `behaviorally_reproduced` per the truth table — a NO-GO ends
-   the milestone with a documented non-reproduction and real data is never touched.**
-4. Continue per the plan: ablation → aggregation contract → oracle → commit checkpoint →
-   transfer gate → sweep/scorer build + smoke → radar-only sweep → comparator → scoring.
+**State as of 2026-08-06 (steps 0-1 of the execution order are DONE, except the official
+R1 run):**
+- **Step 0 committed** (`b39888f`): the config (all four sections; `transfer.gate_criteria`
+  is `null` until the oracle checkpoint), `notes/approach.md` §5.8, and analysis-spec
+  **Amendment M9-1** — its marker is `m9_approx_origin_amendment_version: 1` and its
+  cross-review line reads `pending`; the scorer must require `completed`. §6 cross-review
+  of the amendment has NOT happened yet.
+- **Step 1 build committed** (`3c0efc7`): `src/m9/kotte_core.py`, `src/m9/paper_control.py`,
+  `figures/reproduce_kotte_controls.py`, `tests/test_m9_kotte_core.py` (42 tests). The
+  aggregation contract (medoid, partial-CPI, tail/detrend, suite) is **step 3, not built**.
+- **The official R1 verdict was deliberately NOT run.** `plans/m9_step1a_snr_finding.md`
+  (`f75186d`) documents why: under the pinned Y_t-domain 0 dB reading the literal selection
+  objective provably cannot reproduce Fig 8 (bound argument + the paper's own colorbars),
+  while the fast-time-referred reading (+10·log10(128) ≈ 21.07 dB) reproduces R1+R2+R3
+  wholesale at the committed seeds. Comparator peak-pulling (0.27-0.46 Hz vs the ±0.25
+  weak tolerance) is part of the same decision.
+
+**BLOCKED ON THE USER: choose option A, B, or C in `plans/m9_step1a_snr_finding.md`**
+(recommendation: B — prospective config amendment `snr_reference:
+fast_time_with_range_fft_gain` + `n_s_fast_time: 128`, literal 0 dB kept as an audit,
+weak tolerance re-declared at a half-mainlobe 0.625 Hz), then §6 cross-review, commit,
+and only then:
+1. Run the **official R1 verdict** (clean tree, committed config). **Gate:
+   `behaviorally_reproduced` — a NO-GO ends the milestone with a documented
+   non-reproduction and real data is never touched.** Then R2/R3 + audits (same
+   commit-then-run discipline).
+2. Continue per the plan: ablation → aggregation contract (step 3) → oracle → commit
+   checkpoint → transfer gate → sweep/scorer build + smoke → radar-only sweep →
+   comparator → scoring. Two `--smoke` scratch runs exist under
+   `results/m9_kotte_controls/*_smoke/` — non-gating, never evidence.
 
 **Non-negotiables while implementing (details and rationale in the plan):**
 - **No M8 file is edited** — the frozen M8 gate bundle and its source-text-pinned tests must
@@ -383,8 +401,10 @@ superseded by the two scripts above.
 | Milestone roadmap | `plans/implementation_plan.md` |
 | **M9 plan — THE authority for the active task** | `plans/m9_kotte_plan.md` |
 | **M9 review dispositions (9 passes, 1 rebuttal, 5 user decisions)** | `plans/m9_comments_plan.md` |
+| **M9 step-1a SNR finding — the BLOCKING decision memo** | `plans/m9_step1a_snr_finding.md` |
+| M9 built code (steps 0-1) | `experiments/m9_kotte/config.yaml`, `src/m9/`, `figures/reproduce_kotte_controls.py`, `tests/test_m9_kotte_core.py` |
 | **Kotte paper extraction + page renders** | `literature/ref_papers/joint_estimation_high_amplitude_doppler/` |
-| Method rationale, ECA+AHET spec | `notes/approach.md` (Kotte section: to be written, step 3 of §4.1) |
+| Method rationale, ECA+AHET spec | `notes/approach.md` (Kotte: §5.8, written 2026-08-06) |
 | Analysis spec (window grid §7, evidence floor §2a/§2b, approx-origin rule :559-565) | `notes/analysis_prespec.md` |
 | HR / BR comparator specs | `notes/comparator_prespec.md`, `notes/comparator_prespec_br.md` |
 | Capture protocol, ethics, scene requirement | `notes/protocol.md` |
