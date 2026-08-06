@@ -10446,3 +10446,61 @@ clean-tree evidence runs), commit the analysis-spec amendment and
 `experiments/m9_kotte/config.yaml` (capture manifest with protocol roles, `stage_b_decision`),
 and write the `notes/approach.md` Kotte section. Then `src/m9/kotte_core.py` + the R1 control
 per the build order in `plans/m9_kotte_plan.md`.
+
+## 2026-08-06 - M9 steps 0-1 built; step-1a SNR finding blocks the official R1 verdict
+
+**Set out to do:** implement `plans/m9_kotte_plan.md` step by step with per-step tests:
+step 0 (config + approach note + analysis-spec amendment), then step 1 (kotte_core + R1
+control path + core tests -> commit -> official R1 verdict).
+
+**Worked (with evidence):**
+- **Step 0 committed** (`b39888f`): `experiments/m9_kotte/config.yaml` (controls with
+  Table-I targets verified against the page-07 render, pinned FFT/MUSIC comparator
+  assumptions, R1/R2/R3 expected matrices, one-field audits, ablation endpoints; transfer
+  S1-S3 with `gate_criteria: null` until the oracle checkpoint; stage_a DSP config + the
+  8-capture manifest with protocol roles as runner input; `stage_b_decision` with the
+  natural-only subject-weighted rule and floors). `notes/approach.md` section 5.8 (Kotte).
+  `notes/analysis_prespec.md` Amendment M9-1 (prospective, machine-checkable marker
+  `m9_approx_origin_amendment_version: 1`; the scorer additionally requires
+  `m9_amendment_cross_review: completed` — currently `pending`; fixes the "registered in"
+  vocabulary leftover).
+- **Step 1 build committed** (`3c0efc7`): `src/m9/kotte_core.py` (steering, snapshot-divisor
+  covariance, trace-relative loading, pinned rank rule, eigh-backed context refusing the
+  unloaded inverse on rank deficiency, vectorized selection + eq-26 surfaces with rcond
+  masking, alias collapse with deterministic tie-break, `pair_margin_db`, DSP-only config
+  dataclasses whose hashes provably ignore capture knowledge), `src/m9/paper_control.py` +
+  `figures/reproduce_kotte_controls.py` (case generator with sha256 per-case seeds, pinned
+  comparators + declared weak-peak rule, verdict truth table, non-upgrading audits, 4-RX
+  ablation with the rank-4 prediction verified, clean-tree enforcement + `--smoke`
+  segregation, full run_meta provenance). **42 new tests; full suite 2197 passed, 5
+  skipped.** Verified identities, Cases-1-4 oracle (case 1 exact; wrong cells 0.011-0.167
+  of |joint|), whole-column phase invariance exact, 4-RX rank exactly 4.
+- **A load-bearing negative finding, documented before any official run** (`f75186d`,
+  `plans/m9_step1a_snr_finding.md`): under the pinned Y_t-domain 0 dB reading, the literal
+  selection objective provably cannot reproduce Fig 8 — the constrained-minimum value at
+  truth is bounded (4.31) below the inter-truth ridge (5.18 on the exact ensemble
+  covariance; 0/15 truth hits across seeds), and the paper's own colorbars (~90/70/50,
+  separation-independent per Fig 7 row 1) prove the authors' surface was not that bounded
+  quantity. At fast-time-referred SNR (+10log10(128) = 21.07 dB), the same pinned
+  objective reproduces R1 + R2 + R3 wholesale at the committed seeds (proposed exact at
+  (2.0, 1.0) on both surfaces at every ratio; all Fig-5 targets exact; Fig-7 row 2
+  resolved). Residual comparator mismatches are measured FFT/MUSIC peak-pulling
+  (0.27-0.46 Hz vs the +-0.25 tolerance). Two labelled `--smoke` scratch runs exist under
+  `results/m9_kotte_controls/*_smoke/`.
+
+**Failed / did not work, and why:** the paper reproduction under the plan's declared SNR
+assumption — structural, not a bug (bound argument above). The nine review passes pinned
+"sample covariance, unloaded, 20 RX, SNR 0 dB in Y_t" without a numerical dry run; the
+first prototype exposed it. Also: my first Cases-1-4 test threshold (0.15) was tighter
+than the paper's own epsilon at 0 dB (measured 0.167 for the widest-lobe case) — loosened
+to 0.25 with the measurement recorded in the test comment.
+
+**Retired / no longer used:** nothing.
+
+**Next:** USER DECISION (then CLAUDE.md section 6 cross-review) on
+`plans/m9_step1a_snr_finding.md` options A/B/C — recommendation is B (prospective config
+amendment: `snr_reference: fast_time_with_range_fft_gain`, `n_s_fast_time: 128`, literal
+0 dB retained as an audit; plus the comparator weak-tolerance decision). Then: commit the
+amendment -> official R1 verdict (clean tree) -> R2/R3 + audits -> ablation -> plan steps
+3-9 unchanged. Separately pending: cross-review of analysis-spec Amendment M9-1 (flip its
+line to `completed` only after review); E/F/G captures still awaited.
