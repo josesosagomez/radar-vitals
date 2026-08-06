@@ -27,15 +27,15 @@ Two things the one-liner hides, both of which have caused real mistakes:
 
 **Infrastructure is strong; the science is thin, and what exists is exploratory.**
 
-Active branch **`vital_signs_ahmed_v10`**, HEAD `a3d7ece`, **tree clean** (verified
-2026-08-06 after the M9 step 0-1 commits `b39888f`/`3c0efc7`/`f75186d`). Suite **2197
-passed, 5 skipped** (verified 2026-08-06; includes the 42 new M9 tests). The 5 skips are
-honest absences (4 OSR-03 tests need replay artifacts that no longer exist), not passes.
+Active branch **`vital_signs_ahmed_v10`**, HEAD `a344eb3`, **tree clean** (verified
+2026-08-06). Suite **2223 passed, 5 skipped** (verified 2026-08-06; includes 68 M9 tests).
+The 5 skips are honest absences (4 OSR-03 tests need replay artifacts that no longer
+exist), not passes.
 
 | Track | Milestone | Status |
 |---|---|---|
 | C | **M8 — Ahmed harmonic accumulation** | **REAL DATA DONE 2026-08-05, NEGATIVE at every bin, mechanism identified** — §5 |
-| C | **M9 — Kotte joint-Doppler** | **Steps 0-1 BUILT + COMMITTED; official R1 verdict BLOCKED on a user decision** (the step-1a SNR finding) — §4.1 |
+| C | **M9 — Kotte joint-Doppler** | **Steps 0-3 DONE; controls PASSED; step-4 checkpoint BLOCKED on a user decision** (the oracle finding) — §4.1 |
 | C | M10 baselines | not started |
 | A | M1 live smoke test | not run |
 | A | M2 respiration fix | landed; only done-when #5 open |
@@ -173,36 +173,55 @@ regeneration → scoring + Stage-B decision. Stage B (DOA) is out of scope beyon
    scored descriptively only; sensitivity variant with low-contribution subjects dropped.
 5. Headline reworded to "first real-data **evaluation**" (§3).
 
-**State as of 2026-08-06 (steps 0-1 of the execution order are DONE, except the official
-R1 run):**
-- **Step 0 committed** (`b39888f`): the config (all four sections; `transfer.gate_criteria`
-  is `null` until the oracle checkpoint), `notes/approach.md` §5.8, and analysis-spec
-  **Amendment M9-1** — its marker is `m9_approx_origin_amendment_version: 1` and its
-  cross-review line reads `pending`; the scorer must require `completed`. §6 cross-review
-  of the amendment has NOT happened yet.
-- **Step 1 build committed** (`3c0efc7`): `src/m9/kotte_core.py`, `src/m9/paper_control.py`,
-  `figures/reproduce_kotte_controls.py`, `tests/test_m9_kotte_core.py` (42 tests). The
-  aggregation contract (medoid, partial-CPI, tail/detrend, suite) is **step 3, not built**.
-- **The official R1 verdict was deliberately NOT run.** `plans/m9_step1a_snr_finding.md`
-  (`f75186d`) documents why: under the pinned Y_t-domain 0 dB reading the literal selection
-  objective provably cannot reproduce Fig 8 (bound argument + the paper's own colorbars),
-  while the fast-time-referred reading (+10·log10(128) ≈ 21.07 dB) reproduces R1+R2+R3
-  wholesale at the committed seeds. Comparator peak-pulling (0.27-0.46 Hz vs the ±0.25
-  weak tolerance) is part of the same decision.
+**Execution-order status: steps 0-3 DONE, step 4 half done and blocked.**
 
-**BLOCKED ON THE USER: choose option A, B, or C in `plans/m9_step1a_snr_finding.md`**
-(recommendation: B — prospective config amendment `snr_reference:
-fast_time_with_range_fft_gain` + `n_s_fast_time: 128`, literal 0 dB kept as an audit,
-weak tolerance re-declared at a half-mainlobe 0.625 Hz), then §6 cross-review, commit,
-and only then:
-1. Run the **official R1 verdict** (clean tree, committed config). **Gate:
-   `behaviorally_reproduced` — a NO-GO ends the milestone with a documented
-   non-reproduction and real data is never touched.** Then R2/R3 + audits (same
-   commit-then-run discipline).
-2. Continue per the plan: ablation → aggregation contract (step 3) → oracle → commit
-   checkpoint → transfer gate → sweep/scorer build + smoke → radar-only sweep →
-   comparator → scoring. Two `--smoke` scratch runs exist under
-   `results/m9_kotte_controls/*_smoke/` — non-gating, never evidence.
+| Step | State |
+|---|---|
+| 0 groundwork | **done** `b39888f` — config, `notes/approach.md` §5.8, analysis-spec Amendment M9-1 |
+| 1 core + controls build | **done** `3c0efc7`; SNR amendment `2fec07e` |
+| 1 official R1 verdict | **done — `behaviorally_reproduced`. THE MILESTONE GATE IS PASSED.** |
+| 1 R2 / R3 / audits | **done** — R2 3/3 exact, R3 resolves Δ=0.5 Hz, audits recorded |
+| 2 4-RX ablation | **done — 24/24 rows pass**, rank 4 at 4 RX, phase invariance 3.9e-12 |
+| 3 aggregation contract | **done** `f2e74c5` — forms, medoid, partial-CPI, suite, 20 tests |
+| 4 oracle | **done** `9078ed8` — and it found a blocker (below) |
+| 4 checkpoint → gate → bundle | **BLOCKED on a user decision** |
+| 5-8 sweep / comparator / scorer | not started |
+
+**Control evidence lives in gitignored `results/`, so the run IDs are recorded here:**
+R1 `20260806T154753.144349Z_6bde60353be2`; R2/R3/audits
+`20260806T154841.509470Z_6bde60353be2`; ablation `20260806T155022.295892Z_6bde60353be2`
+— all clean-tree at commit `2fec07e`, `smoke: false`. Oracle:
+`results/m9/step1b/oracle/20260806T160339.308982Z/`. Anything under `*_smoke/` is
+non-gating scratch and can never be evidence.
+
+**BLOCKED ON THE USER: choose option A, B, or C in
+`plans/m9_step1b_oracle_finding.md`.** The oracle (which the plan requires to run
+*before* `kotte_gate.py` exists) found that a real sinusoidal chest displacement produces
+**conjugate sideband pairs** — `J_{-1} = −J_{+1}`, so `±f_b` and `±f_h` are all present
+even in the small-modulation limit. The signal carries **≥ 4 lines where Kotte's
+estimator constrains 2**: a model-order **misspecification**, not a noise problem.
+Isolated against a two-cisoid control at identical aperture/SNR/gains — two cisoids
+recover 9/9 at N_c=16/30 dB; **conjugate pairs recover 0/9 at N_c=16 AND N_c=32 at 10,
+30 and 60 dB.** Fifty extra dB fixes nothing; only aperture does, near N_c=64 (3.2 s),
+and even there BR is biased and the margin is < 0.02 dB. This predicts **P3 fails at the
+primary arm** and quantifies the plan's risk #7. Recommendation: **B** — add a declared
+`N_c=64` arm (config amendment + §6 cross-review) *before* freezing, keeping N_c=16 as
+primary, so the gate tests the regime where the method can work and the paper gains a
+two-point aperture curve instead of a bare null. `transfer.gate_criteria` stays `null`
+until the checkpoint happens.
+
+**After that decision, in order:** fill `gate_criteria` from the oracle → commit the
+checkpoint → build `src/m9/kotte_gate.py` + `scripts/m9_kotte_transfer.py` +
+`tests/test_m9_kotte_gate.py` → transfer gate → bundle (publication requires
+`gate_status == "passed"`) → steps 5-8 (sweep, production comparator, scorer, Stage-B).
+
+**Three §6 cross-reviews are outstanding** and all need the other model family:
+1. analysis-spec **Amendment M9-1** (`m9_amendment_cross_review: pending`) — **the scorer
+   refuses to run until this reads `completed`**, so it blocks step 8;
+2. the **step-1a SNR amendment** (`m9_snr_amendment_cross_review: pending`) — the
+   controls already ran against it; a verdict is not settled paper evidence until this
+   passes;
+3. the **oracle finding** (`m9_oracle_finding_cross_review: pending`).
 
 **Non-negotiables while implementing (details and rationale in the plan):**
 - **No M8 file is edited** — the frozen M8 gate bundle and its source-text-pinned tests must
@@ -401,8 +420,9 @@ superseded by the two scripts above.
 | Milestone roadmap | `plans/implementation_plan.md` |
 | **M9 plan — THE authority for the active task** | `plans/m9_kotte_plan.md` |
 | **M9 review dispositions (9 passes, 1 rebuttal, 5 user decisions)** | `plans/m9_comments_plan.md` |
-| **M9 step-1a SNR finding — the BLOCKING decision memo** | `plans/m9_step1a_snr_finding.md` |
-| M9 built code (steps 0-1) | `experiments/m9_kotte/config.yaml`, `src/m9/`, `figures/reproduce_kotte_controls.py`, `tests/test_m9_kotte_core.py` |
+| **M9 oracle finding — THE BLOCKING decision memo** | `plans/m9_step1b_oracle_finding.md` |
+| M9 step-1a SNR finding (resolved: option B applied) | `plans/m9_step1a_snr_finding.md` |
+| M9 built code (steps 0-4) | `experiments/m9_kotte/config.yaml`, `src/m9/`, `figures/reproduce_kotte_controls.py`, `scripts/m9_step1b_gate_prediction.py`, `tests/test_m9_kotte_core.py` |
 | **Kotte paper extraction + page renders** | `literature/ref_papers/joint_estimation_high_amplitude_doppler/` |
 | Method rationale, ECA+AHET spec | `notes/approach.md` (Kotte: §5.8, written 2026-08-06) |
 | Analysis spec (window grid §7, evidence floor §2a/§2b, approx-origin rule :559-565) | `notes/analysis_prespec.md` |
