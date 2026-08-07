@@ -1,22 +1,3 @@
-[mcp_servers.arxiv]
-url = "https://api.alphaxiv.org/mcp/v1"
-
-[mcp_servers.arxiv-latex]
-command = "uvx"
-args = ["arxiv-latex-mcp"]
-
-[mcp_servers.context7]
-command = "npx"
-args = [
-    "-y",
-    "@upstash/context7-mcp@latest",
-]
-
-[mcp_servers.wandb]
-command = "uvx"
-args = [
-    "--from",
-    "git+https://github.com/wandb/wandb-mcp-server.git",
-    "wandb-mcp-server",
-]
-env_vars = ["WANDB_API_KEY"]
+[agents]  
+max_threads = 6  
+max_depth = 1
