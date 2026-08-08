@@ -11,9 +11,9 @@
 >
 > **This affects the planned headline.** "Comparator pre-registration" was listed here as the
 > paper's primary novelty; that claim is no longer available. The strongest remaining candidate
-> is the **first real-data validation of two simulation-only published methods** (M8 Ahmed,
-> M9 Kotte) under one common comparator with coverage reported — which is now the project's
-> active work. **This file has not yet been rewritten around that; doing so is an open task.**
+> is the **real-data evaluation of two simulation-only published methods** (M8 Ahmed,
+> M9 Kotte) under one common comparator with coverage reported. **M8 Ahmed is complete;
+> M9 Kotte is the next method.**
 >
 > See `plans/implementation_plan.md` "Track 0", `HANDOFF.md` §4, `HISTORY.md` 2026-08-03.
 
@@ -32,7 +32,8 @@
 > - **[RETIRED]** — computed on data deleted 2026-07-09; **must never be reported as a result.**
 > - **[PENDING]** — not yet measured. A placeholder, not a promise.
 >
-> Last synchronised with the repository: **2026-07-24**, branch `vital_signs_v9c`, HEAD `b6f5b73`.
+> M8 Ahmed results synchronised with the repository: **2026-08-08**, branch
+> `vital_signs_ahmed_v11`; authoritative report `reports/m8_ahmed_correction_final_report.md`.
 > Sources: `notes/approach.md`, `notes/comparator_prespec.md`, `notes/protocol.md`,
 > `notes/note_stage1b_lag_statistic.md`, `HISTORY.md`, and the code itself.
 >
@@ -68,9 +69,10 @@
 | System implementation | **Yes** | — |
 | Evaluation methodology (comparator) | **Yes** | — |
 | Failure-mode analysis | **Yes** — this is a genuine strength | — |
+| Ahmed HA real-data comparison | **Yes, exploratory** | Complete two-lock × seven-arm M8 evaluation; approximate timing prevents final agreement claims |
 | Headline agreement results | **No** | 10-subject study not started; n=4 subjects exist |
 | Bland–Altman (subject-clustered), per-subject breakdown | **No** | Same; and the repeated-measures model is not implemented yet (§7.5) |
-| Baseline comparison (TI on-chip, published pipeline) | **No** | Never run |
+| Published-method comparison | **Partial** | Ahmed HA complete; Kotte and TI on-chip comparison remain |
 | Conclusions | **Partially** | Method conclusions yes; performance conclusions no |
 
 **The single largest gap is data.** The algorithmic and methodological work is mature; the
@@ -91,7 +93,7 @@ enough to track a clinical pulse-oximeter reference?
    harmonic accumulation [R1] and joint high-amplitude-difference Doppler [R2] — scored against a
    clinical reference on identical windows under one common comparator, with coverage reported.
    Both papers claim to solve the respiratory-harmonic problem; neither has been tested outside
-   simulation. **This is the headline contribution.** [IN PROGRESS — M8 / M9]
+   simulation. **This is the headline contribution.** [PARTIAL — M8 AHMED COMPLETE; M9 NEXT]
 2. **An explicit comparator specification for radar-vs-oximeter agreement**
    (`notes/comparator_prespec.md`), stated in full and applied identically to every estimator
    compared. We show that the *same* radar output scored against the *same* reference yields
@@ -111,7 +113,7 @@ enough to track a clinical pulse-oximeter reference?
 6. **Agreement with a clinical reference across subjects** [PENDING — this is the contribution
    the thesis examiner will look for first, and it does not exist yet]. **Across subjects, not
    across distances**: the protocol leaves the exact distance free within 0.8–1.4 m, so distance
-   is descriptive metadata rather than a designed factor (§10.3).
+   is descriptive metadata rather than a designed factor (§10.4).
 
 > **Framing advice.** Do not write the chapter as "we built an accurate HR sensor" — the data
 > does not support that yet. Write it as "we built the system, took the field's two leading
@@ -608,7 +610,60 @@ it accepts few windows." Both halves must be reported together.
 conservatism at the correct bin is now the limiting factor**, not accuracy. This is the honest
 headline of the current state of the system and should be stated as such.
 
-### 10.3 [PENDING] Everything else
+### 10.3 Ahmed harmonic accumulation on real FMCW data [VERIFIED IMPLEMENTATION; EXPLORATORY AGREEMENT]
+
+Ahmed et al.'s Section III-C harmonic-accumulation method was corrected and evaluated as a
+paired comparison on the same decoded cubes, windows, locks, and run identity as the production
+estimator. The canonical design contains the production arm and six Ahmed profiles: H=3/H=5
+crossed with figure-visible unsuppressed, Eq. 26 multiples-suppressed, and prose
+low-or-equal-suppressed interpretations. The original pulse-radar identity is `q=2f` and
+physiological rate `30q bpm`; the project's declared FMCW unwrapped-phase adaptation is `q=f`
+and `60q bpm`. Each score is `sum_h |S(hq)| / eta` with strict `Hq < f_Nyquist` support.
+
+The canonical run covered eight captures, two lock estimands, and seven paired arms, producing
+128 source spans, 256 shared cells, 1,792 estimator rows, and 3,584 unique scored HR/BR rows.
+Comparative metrics exclude k=0 and keep natural, paced, and unknown protocol strata separate.
+The following ranges span all six Ahmed profiles; they are **not** a post-hoc best-arm result.
+
+**Heart-rate agreement against Masimo `Beats / min`:**
+
+| Protocol stratum | Lock | Joint coverage | MAE range (bpm) | RMSE range (bpm) | Bias range (bpm) |
+|---|---|---:|---:|---:|---:|
+| Natural | recorded as captured | 1.000 | 4.55–7.35 | 6.51–9.03 | −7.35 to −4.15 |
+| Natural | current-production rerun | 1.000 | 4.25–9.05 | 7.39–10.93 | −7.35 to −2.15 |
+| Paced | recorded as captured | 0.650 | 23.46–25.46 | 24.52–26.34 | −25.46 to −23.46 |
+| Paced | current-production rerun | 0.650 | 17.77–18.85 | 22.66–23.74 | −17.92 to −17.00 |
+| Unknown | either lock | 0.505 | 31.65–33.57 | 32.77–34.42 | −33.57 to −31.65 |
+
+**Breathing-rate agreement against Masimo `Breaths / min`:**
+
+| Protocol stratum | Lock | Joint coverage | MAE range (bpm) | RMSE range (bpm) | Bias range (bpm) |
+|---|---|---:|---:|---:|---:|
+| Natural | recorded as captured | 1.000 | 9.00–11.40 | 10.23–11.55 | −11.40 to −9.00 |
+| Natural | current-production rerun | 1.000 | 11.40–11.80 | 11.45–11.86 | −11.80 to −11.40 |
+| Paced | recorded as captured | 1.000 | 8.85–9.35 | 9.52–9.86 | −9.35 to −8.85 |
+| Paced | current-production rerun | 1.000 | 8.95–9.35 | 9.65–9.85 | −9.35 to −8.95 |
+| Unknown | either lock | 0.842 | 10.30–11.16 | 10.69–11.34 | −11.16 to −10.16 |
+
+Ahmed produced a radar-valid estimate in every comparative cell, but measured joint coverage is
+lower where the reference stationarity/availability rules exclude windows. The predominantly
+negative bias shows that the FMCW adaptation generally underestimated both rates. It therefore
+ran successfully as an algorithm but **did not transfer as an accurate estimator on these
+recordings**.
+
+The Figure 8 successor independently failed its declared 80 bpm heart target: the
+visible-unsuppressed H=3 curve selected 40.0144 bpm and H=5 selected 20.0072 bpm, although both
+recovered the 20 bpm breath target as 20.0072 bpm. This outcome was retained honestly; no
+assumption was changed to force reproduction.
+
+**Claim boundary:** timestamps use an approximate capture origin with 5–15 s uncertainty; the
+scored bundle is single-development-dataset, exploratory, and explicitly ineligible for final
+agreement or population claims. These findings evaluate the **FMCW phase adaptation**, not
+Ahmed's original pulse-radar hardware/mapping. Exact profile-by-profile values, manifests, and
+evidence identities are in `reports/m8_ahmed_correction_final_report.md` and
+`results/m8_ahmed_transfer/scored/20260808T191921.669826Z_bc3ccf4635c5/`.
+
+### 10.4 [PENDING] Everything else
 
 - Agreement across 10 subjects; **per-subject** breakdown.
 - Bland–Altman bias and 95% limits of agreement on the full study, under a **subject-clustered
@@ -622,7 +677,7 @@ headline of the current state of the system and should be stated as such.
 - The 18 bpm paced arm reported separately as a failure-mode characterisation.
 - Sensitivity of exclusions to the stationarity gate at 3 / 5 / 8 bpm.
 
-### 10.4 [RETIRED] Pre-restart numbers — never cite
+### 10.5 [RETIRED] Pre-restart numbers — never cite
 
 Computed on raw data deleted 2026-07-09; inputs and run folders no longer exist, so per the
 reproducibility rule they **cannot appear in the thesis as results**: exp001 baseline (MAE 6.21,
@@ -681,6 +736,17 @@ draft 5 conflated feasibility with utility, breaking the pass-all control's enti
 **None were caught by re-reading; all three required either direct code verification or an
 independent reviewer.** Worth a methodological paragraph on verification discipline.
 
+### 11.9 Ahmed HA FMCW transfer — IMPLEMENTED CORRECTLY, DID NOT TRANSFER ACCURATELY
+
+The corrected Ahmed implementation passed paper-derived harmonic-bin, normalization, strict
+Nyquist, suppression-mask, factor-of-two, full-score-array, evidence-reconstruction, pairing,
+and scoring controls. Its failure on real data is therefore retained as a scientific result,
+not repaired by selecting a profile after observing Masimo error. Across the approved profiles,
+HR MAE rose from 4.25–9.05 bpm in the small natural stratum to 17.77–25.46 bpm in paced data and
+31.65–33.57 bpm in the unknown-protocol captures; bias was generally strongly negative. BR MAE
+was 8.85–11.80 bpm. This result concerns the declared FMCW phase adaptation and cannot be
+generalised to the original pulse-radar representation.
+
 ---
 
 ## 12. Open problems and limitations
@@ -725,7 +791,7 @@ AHET evaluates candidates in descending magnitude order, but magnitude order is 
 order, so it can verify the wrong candidate. Confirmed as a real bug with one clean example. No
 fix planned yet; deliberately not implemented ad hoc.
 
-### 12.4 Respiration collapse [OPEN, 3-for-3, unexplained]
+### 12.4 Respiration collapse [RESOLVED IN THE CURRENT PIPELINE; HISTORICAL FAILURE MODE]
 The estimated f_r pins to the 0.1 Hz (6 bpm) search-band floor while the validity flag
 `resp_valid` remains `True`. Observed on **all three Masimo-referenced captures** — `massimo1`
 (12 hops), `massimo2` (5), `sweep` (10) — and **absent** from the unreferenced `live_test1`
@@ -736,6 +802,11 @@ Unowned, unfixed. If breathing rate is reported anywhere in the thesis, this mus
 > **three** Masimo-referenced captures out of four raw captures, so that count was impossible.
 > `HISTORY.md` (2026-07-14) carries the same error and is corrected by a later dated entry rather
 > than edited.
+
+**Current disposition:** the accepted production path now rejects band-edge collapse and applies
+confidence/consistency gates. This historical mechanism remains important context, but it is no
+longer an open implementation blocker. Ahmed's independently poor BR agreement in §10.3 is a
+method-transfer result, not evidence that this production defect remains active.
 
 ### 12.5 Stage 1B lag-10 temporal continuity [DESIGNED, SCAFFOLDED, BLOCKED ON DATA]
 The current line of attack: a respiratory harmonic *tracks* f_r over time; a heartbeat does not.
@@ -864,8 +935,11 @@ Radar Systems vol. 2 (2024), both simulation-only:
   and 2f_b and their harmonics** — the even-harmonic structure is intrinsic to its demodulated
   model — whereas ours is all-harmonic phase (f_b, 2f_b, 3f_b…). Its Fig. 8(c)–(d) claims correct
   estimation *at* the 4·f_r = HR collision (f_h = 80/60 Hz, f_b = 20/60 Hz, f_c = 6.7 GHz,
-  d_h = 10 mm, d_b = 20 mm, SNR 10 dB) — the project's central unsolved problem. **Never validated
-  against Masimo.** Whether that robustness survives the adaptation is untested [PENDING].
+  d_h = 10 mm, d_b = 20 mm, SNR 10 dB) — the project's central unsolved problem. The corrected
+  Figure 8 successor did **not** reproduce the declared 80 bpm heart target, and the paired
+  FMCW real-data adaptation produced HR MAE ranges of 4.25–9.05 bpm (natural), 17.77–25.46 bpm
+  (paced), and 31.65–33.57 bpm (unknown protocol), with predominantly negative bias
+  [EXPLORATORY; §10.3]. This is not a test of the original pulse-radar hardware regime.
 - **Kotte et al., "Joint Estimation of High-Amplitude Difference Doppler"**
   (DOI 10.1109/TRS.2024.3352189). **Correction to an earlier characterisation:** this paper is
   *not* run on a 4-RX SIMO setup like ours. Its §IV simulates **one TX and 20 RX** at 24 GHz,
@@ -878,23 +952,27 @@ Radar Systems vol. 2 (2024), both simulation-only:
 
 ---
 
-## 15. Figures and tables to generate [all PENDING]
+## 15. Figures and tables
 
 Per the reproducibility rules, each must come from a committed script in `figures/`.
 
 1. System block diagram — hardware, signal chain, live/offline split.
 2. Signal-model illustration — respiration and cardiac spectra with harmonics annotated,
    cardiac band shaded (can be synthetic; label it as such).
-3. **Range-profile heatmap with the locked bin marked** — from `steps/range_plot/`.
-4. **The mislock figure** — correct bin vs skirt bin, phase spectra side by side, showing the
+3. **Ahmed Figure 8 successor [GENERATED]** — canonical output under
+   `figures/generated/m8_ahmed_fig8/`, titled with the honest non-reproduction status.
+4. **Ahmed real-data table [DATA READY]** — six profiles × two locks × three protocol strata,
+   always reporting coverage with MAE/RMSE/bias and never ranking profiles post hoc.
+5. **Range-profile heatmap with the locked bin marked** — from `steps/range_plot/`.
+6. **The mislock figure** — correct bin vs skirt bin, phase spectra side by side, showing the
    spurious 63–67 bpm peak. High value; the evidence exists.
-5. ECA before/after spectra with cancelled harmonics annotated.
-6. AHET verification illustration — f_h1, the 2·f_h1 search region, accept and reject cases.
-7. **Comparator comparison figure** — the same hops scored both ways, showing the 17× gap.
-8. **Bland–Altman** — `scripts/plot_bland_altman.py` is the only implementation.
-9. Radar HR vs Masimo PR time series with rejected windows shaded.
-10. Coverage vs accuracy trade-off across gate settings.
-11. Coincidence failure figure — the 18 bpm arm, |HR − 4·f_r| against error.
+7. ECA before/after spectra with cancelled harmonics annotated.
+8. AHET verification illustration — f_h1, the 2·f_h1 search region, accept and reject cases.
+9. **Comparator comparison figure** — the same hops scored both ways, showing the 17× gap.
+10. **Bland–Altman** — `scripts/plot_bland_altman.py` is the only implementation.
+11. Radar HR vs Masimo PR time series with rejected windows shaded.
+12. Coverage vs accuracy trade-off across gate settings.
+13. Coincidence failure figure — the 18 bpm arm, |HR − 4·f_r| against error.
 
 ---
 

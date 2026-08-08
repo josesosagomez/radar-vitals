@@ -8,7 +8,9 @@
 scoring are complete and documented in `reports/m8_ahmed_correction_final_report.md`. Figure 8
 remains not reproduced under declared assumptions; synthetic controls passed. Real metrics are
 approximate-origin, protocol-stratified, k>=1 descriptive rows only; do not pool locks or rank
-arms. Optional all-bin diagnostic was not authorized and was not run.
+arms. Optional all-bin diagnostic was not authorized and was not run. The thesis and journal
+writing sources now carry the same result in `THIRD_CHAPTER.md` §10.3 and `JOURNAL_PAPER.md`
+§4.4. The next method is M9 Kotte; resume only from its approved authority/current decision gate.
 
 ## 1. Project snapshot
 

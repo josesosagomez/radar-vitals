@@ -10579,3 +10579,15 @@ sweep/comparator/scorer (steps 5-8).
 **Retired / no longer used:** historical bundles remain immutable; no raw data or source results were changed.
 
 **Next:** use the final report as the M8 documentation pointer; do not pool locks or protocol strata.
+
+## 2026-08-08 - Ahmed results integrated into thesis and journal sources
+
+**Set out to do:** add the corrected Ahmed HA real-data outcome to `THIRD_CHAPTER.md` and `JOURNAL_PAPER.md` before moving to the next published method.
+
+**Worked (with evidence):** both writing sources now describe the approved six Ahmed profiles, two lock estimands, canonical cardinalities, Figure 8 non-reproduction, and protocol-stratified HR/BR MAE, RMSE, bias, and measured joint coverage from `results/m8_ahmed_transfer/scored/20260808T191921.669826Z_bc3ccf4635c5/metrics.json`. The manuscript tables report ranges across every approved Ahmed arm rather than selecting a winner. Stale statements that Ahmed was untested, in progress, or represented only by the historical 14-bin sweep were corrected.
+
+**Failed / did not work, and why:** Ahmed's FMCW adaptation did not provide accurate real-data estimates: HR MAE reached 17.77–25.46 bpm in paced data and 31.65–33.57 bpm in unknown-protocol captures; BR MAE was 8.85–11.80 bpm. These remain exploratory development-data results because capture origin is approximate.
+
+**Retired / no longer used:** manuscript language presenting Ahmed as pending or the superseded all-bin sweep as canonical evidence.
+
+**Next:** begin the next published method only under its approved plan and current owner decisions; preserve the Ahmed result without outcome-based profile changes.
