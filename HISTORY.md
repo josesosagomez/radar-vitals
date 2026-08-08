@@ -10567,3 +10567,15 @@ all and the paper gains a two-point aperture curve). `transfer.gate_criteria` st
 the step-1a SNR amendment, and this oracle finding. After the checkpoint: build
 `src/m9/kotte_gate.py` + `scripts/m9_kotte_transfer.py` (steps 4-5), then the
 sweep/comparator/scorer (steps 5-8).
+
+## 2026-08-08 - M8 Ahmed correction final documentation
+
+**Set out to do:** record the completed M5 canonical execution and its thesis-safe interpretation.
+
+**Worked (with evidence):** persisted Figure 8 successor, synthetic transfer, smoke, radar, and scored bundles are documented in `reports/m8_ahmed_correction_final_report.md`. Figure 8 remains `not_reproduced_under_declared_assumptions`; synthetic controls completed with 1292 passes and one declared real-data skip; canonical real evidence has 128 source, 256 shared, and 1792 estimator rows, and scoring has 3584 rows with claim-ineligible labels. Runner repair `df51a95`, gate source `3058fe1`, and authorization `e182288` are recorded.
+
+**Failed / did not work, and why:** the declared Figure 8 behavior did not reproduce. The optional all-bin diagnostic was not run and was not authorized. One legacy tester command read saved material read-only; it was excluded from validation evidence and made no writes.
+
+**Retired / no longer used:** historical bundles remain immutable; no raw data or source results were changed.
+
+**Next:** use the final report as the M8 documentation pointer; do not pool locks or protocol strata.

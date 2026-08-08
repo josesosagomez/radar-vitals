@@ -1,8 +1,14 @@
 # Handoff — resume here
 
-> Read this and `CLAUDE.md` before doing anything. **State verified 2026-08-06.**
+> Read this and `CLAUDE.md` before doing anything. **State verified 2026-08-08.**
 > `HISTORY.md` is the append-only log; this file is the always-current summary. Where they
 > disagree, this file is wrong and should be fixed.
+
+**M8 Ahmed documentation update (2026-08-08):** canonical two-lock × seven-arm execution and
+scoring are complete and documented in `reports/m8_ahmed_correction_final_report.md`. Figure 8
+remains not reproduced under declared assumptions; synthetic controls passed. Real metrics are
+approximate-origin, protocol-stratified, k>=1 descriptive rows only; do not pool locks or rank
+arms. Optional all-bin diagnostic was not authorized and was not run.
 
 ## 1. Project snapshot
 
@@ -27,14 +33,15 @@ Two things the one-liner hides, both of which have caused real mistakes:
 
 **Infrastructure is strong; the science is thin, and what exists is exploratory.**
 
-Active branch **`vital_signs_ahmed_v10`**, HEAD `a344eb3`, **tree clean** (verified
-2026-08-06). Suite **2223 passed, 5 skipped** (verified 2026-08-06; includes 68 M9 tests).
-The 5 skips are honest absences (4 OSR-03 tests need replay artifacts that no longer
-exist), not passes.
+Active branch **`vital_signs_ahmed_v11`**. M8's scientific source was frozen at `3058fe1`, the
+runner repair at `df51a95`, and the replacement real-evaluation authorization at `e182288`.
+The canonical M5 execution and documentation are complete; verify the current tip and tree with
+`git log -1 --oneline` and `git status --short` before starting new work. The final report is
+`reports/m8_ahmed_correction_final_report.md`.
 
 | Track | Milestone | Status |
 |---|---|---|
-| C | **M8 — Ahmed harmonic accumulation** | **REAL DATA DONE 2026-08-05, NEGATIVE at every bin, mechanism identified** — §5 |
+| C | **M8 — Ahmed harmonic accumulation** | **CORRECTED AND VALIDATED 2026-08-08** — Figure 8 not reproduced; canonical two-lock/seven-arm evaluation complete; claim-ineligible exploratory scoring in final report |
 | C | **M9 — Kotte joint-Doppler** | **Steps 0-3 DONE; controls PASSED; step-4 checkpoint BLOCKED on a user decision** (the oracle finding) — §4.1 |
 | C | M10 baselines | not started |
 | A | M1 live smoke test | not run |
@@ -302,49 +309,31 @@ and falls back to `start_wall_utc` for the 8 old captures, which cannot be retro
   cross-review applies; §2.2 forbids validating an HR criterion on the existing captures.
 - **M10 baselines** — not started.
 
-## 5. M8 Ahmed — REAL DATA DONE, negative at every bin, mechanism identified
+## 5. M8 Ahmed — corrected canonical evaluation complete
 
-Authority is the **pair** `plans/m8_step1b_ahmed_transfer.md` (five-discipline PASS) +
-`…_addendum_a.md` (user-approved); the addendum wins on conflict.
+Authority is `plans/m8_ahmed_correction_plan.md`, with the accepted Step 1a/Step 1b plans and
+addendum beneath it. The implementation preserves Layer A pulse-radar `q=2f`, `30q bpm` and the
+project's Layer B FMCW unwrapped-phase `q=f`, `60q bpm` mapping.
 
-**The gate bundle is frozen and promotion-eligible** (2026-08-05, clean tree): run_id
-`20260804T230307.833878Z_779928f3a61c`, manifest `14f134cb…917b27`, gate_status passed. Every
-real-data artifact records it as `parent_gate_bundle`.
+The replacement promotion-eligible synthetic gate is
+`results/m8_ahmed_transfer/synthetic/20260808T183335.468320Z_779928f3a61c` (manifest
+`3f0467d5…83d6`). The canonical paired radar bundle is
+`results/m8_ahmed_transfer/radar/20260808T183600.392760Z_bc3ccf4635c5` (manifest
+`51b68e93…5532`): eight captures × two locks × seven arms, with 128 source spans, 256 shared
+cells, 1,792 estimator rows, 1,536 Ahmed evidence rows, and 256 production evidence rows.
 
-**Ahmed has now been run on real radar** — the first time for this published, simulation-only
-method. `scripts/m8_ahmed_all_bins.py` → `results/m8/ahmed_all_bins/`;
-`scripts/m8_ahmed_score.py` → `results/m8/ahmed_score/`. 8 captures × every window × **all 14
-bins** × 6 arms = 10,752 rows in 301 s. Sweeping every bin removes "the bin was wrong" as an
-explanation.
+Canonical scoring is
+`results/m8_ahmed_transfer/scored/20260808T191921.669826Z_bc3ccf4635c5` (manifest
+`96b81120…835`), with 3,584 unique HR/BR rows. Comparative metrics use `k>=1`; k=0 is diagnostic
+only. Natural, paced, and unknown protocol strata and the two lock estimands remain separate.
+The complete exact tables are in `reports/m8_ahmed_correction_final_report.md`.
 
-**The outcome.** Pooled, weighted by scored windows:
-
-| vital | method | condition | coverage | MAE bpm | hit |
-|---|---|---|---|---|---|
-| HR | constant_session_median (no radar) | — | 1.000 | **1.06** | 100 % ±5 |
-| HR | production ECA+AHET | production lock | 0.301 | **2.77** | 77.8 % |
-| HR | Ahmed, best arm | **best bin — CEILING, unreachable** | 1.000 | **14.49** | 50.8 % |
-| HR | Ahmed, best arm | production lock | 1.000 | **27.50** | 13.4 % |
-| BR | production | production lock | 0.868 | **2.56** | 69.3 % ±3 |
-| BR | Ahmed, best arm | **best bin — CEILING** | 1.000 | **8.22** | 20.5 % |
-| BR | Ahmed, best arm | production lock | 1.000 | **10.13** | 4.5 % |
-
-**The mechanism is identified, which is what makes this publishable.** Reference HR median 86;
-Ahmed emits median 56; `|est − ref/2|` (18.6) beats `|est − ref|` (23.7). The true half-rate
-(32–47 bpm) is below the 48 bpm band floor in 100 % of cells, so the method saturates at the
-edge (43 % of cells within 4 bpm of 48) — **Step 1a's subharmonic trap on real data**. BR: 63 %
-of cells at exactly 6.0 bpm, the 0.10 Hz floor — the identical signature of our pre-M2-fix
-respiration collapse; Ahmed has no band-edge veto.
-
-**Two caveats that change how the table reads:** Ahmed never abstains (100 % coverage is by
-construction — not comparable to AHET's refusing-to-guess coverage), and its output is
-quantised to 2 bpm. **The §2.2 limit binds every HR number above** — these captures support HR
-coverage/feasibility, not HR tracking.
-
-**Retired 2026-08-05 (user decision):** the pre-data authorization YAML and the
-`_SCOPED_TREES` provenance-gating chain. The frozen gate bundle was kept.
-`scripts/m8_ahmed_transfer.py`'s `real-smoke`/`real-radar`/`score` stubs remain unimplemented,
-superseded by the two scripts above.
+The Figure 8 successor is honestly `not_reproduced_under_declared_assumptions`. Real scoring is
+`exploratory_non_frozen`, uses an approximate 5–15 s time-origin uncertainty, and is
+`not_eligible_for_promotion_or_final_agreement_claims`. Do not rank arms, pool protocols/locks,
+or describe Ahmed's 100% algorithmic validity as measured 100% joint coverage. The optional
+14-bin diagnostic was not authorized and was not run. Earlier sweep/scorer bundles remain
+historical-only and invalid as canonical evidence.
 
 ## 6. Settled questions — do not re-open without new data
 
@@ -363,8 +352,8 @@ superseded by the two scripts above.
 - **Respiration collapse** — fixed via `resp_edge_veto` + STFT-consistency gates. Do not
   re-open. Accepted cost: a genuine ~6 bpm breather on the edge bin is permanently invalid.
   Only done-when #5 remains open (needs a capture with non-approximate alignment).
-- **M8/Ahmed on real data** — done, negative, mechanism identified (§5). Do not re-run without
-  a new reason; the artifacts are on disk.
+- **M8/Ahmed on real data** — corrected canonical comparison is complete (§5). Do not re-run,
+  pool, rank, or promote it without new authority and a scientifically stated reason.
 
 ## 7. Gotchas that will bite you
 
@@ -441,9 +430,9 @@ superseded by the two scripts above.
 | Capture protocol, ethics, scene requirement | `notes/protocol.md` |
 | **Capture inventory + SUBJECT MAP + protocol roles** | `notes/capture_inventory.md` |
 | Approved IBEC amendment (recovery arm) — record as submitted | `notes/ethics_amendment_hr_recovery.md` |
-| M8 Step 1b authority (both required) | `plans/m8_step1b_ahmed_transfer.md` + `…_addendum_a.md` |
-| M8 suite/gate/provenance modules (templates for M9; DO NOT EDIT) | `src/m8/`, `src/m4/estimator_suite.py`, `src/m4/bundle.py` |
-| M8 real-data sweep + scorer | `scripts/m8_ahmed_all_bins.py`, `scripts/m8_ahmed_score.py` |
+| **M8 correction authority and final report** | `plans/m8_ahmed_correction_plan.md`, `reports/m8_ahmed_correction_final_report.md` |
+| M8 suite/gate/provenance modules (completed; do not change without invalidating its evidence chain) | `src/m8/`, `src/m4/estimator_runner.py`, `src/m4/estimator_scoring.py`, `src/m4/evidence_serialization.py` |
+| M8 canonical runner/scorer | `scripts/m8_ahmed_transfer.py` (`real-smoke`, `real-radar`, `score`) |
 | Production DSP | `src/respiration.py`, `src/vitals.py`, `src/window_pipeline.py` |
 | Warmup selection + regression check | `src/warmup_select.py`; `scripts/validate_warmup_selection.py` |
 | Offline scorer / comparators | `scripts/score_offline.py`, `src/comparator.py` |
