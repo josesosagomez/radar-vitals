@@ -1143,11 +1143,15 @@ def test_successor_title_is_status_derived_and_provenance_bytes_are_stable(figur
     )
     assert forward == reverse
     payload = json.loads(forward)
-    assert payload["official_publication_status"] == "withheld_until_m5"
+    assert payload["artifact_kind"] == "figure_8_successor"
     assert payload["figure_title"] == title
     assert payload["layer_a_profile_ids"] == [
         profile.profile_id for profile in LAYER_A_PROFILES
     ]
+    # The payload carries only declared scientific inputs, never a publication
+    # outcome, because publishing dirties the tracked figures/generated tree and
+    # would make the next identical run emit different bytes.
+    assert "official_publication_status" not in payload
     with pytest.raises(ValueError, match="unsupported Figure 8 acceptance status"):
         figure_script._status_derived_title("running")
 
@@ -1201,6 +1205,23 @@ def _pin_git_provenance(monkeypatch, figure_script, *, tracked, porcelain: str):
     monkeypatch.setattr(figure_script, "_git_text", fake_git_text)
 
 
+def _assert_successor_provenance_states_the_truth(run_dir: Path, status: dict) -> None:
+    """successor_provenance.json must describe this run truthfully and agree with it.
+
+    The file's SHA-256 is carried in provenance.json and in the published bundle
+    manifest, so a false string would be hash-committed into the evidence chain
+    (CLAUDE.md section 4). It must not name a publication outcome at all: that
+    depends on repository state, and this artifact is byte-stable by contract.
+    """
+    payload = json.loads(
+        (run_dir / "successor_provenance.json").read_text(encoding="utf-8")
+    )
+    assert payload["artifact_kind"] == "figure_8_successor"
+    assert "official_publication_status" not in payload
+    assert payload["acceptance_status"] == status["acceptance_status"]
+    assert payload["figure_title"] == status["figure_title"]
+
+
 def test_cli_execute_writes_strict_complete_artifacts(
     figure_script, tmp_path: Path, monkeypatch
 ):
@@ -1237,7 +1258,10 @@ def test_cli_execute_writes_strict_complete_artifacts(
     assert status["canonical_promoted"] is False
     assert status["canonical_bundle"] is None
     assert status["acceptance_status"] == "not_reproduced_under_declared_assumptions"
-    assert status["official_successor_status"] == "withheld_until_m5"
+    assert status["official_successor_status"] == "not_promoted"
+    assert status["official_successor_ineligibility_reasons"] == [
+        "git_tree_or_required_tracking_not_clean"
+    ]
     assert status["figure_title"] == figure_script._status_derived_title(
         status["acceptance_status"]
     )
@@ -1280,6 +1304,7 @@ def test_cli_execute_writes_strict_complete_artifacts(
     assert declared_evidence_hashes == actual_evidence_hashes
     stable_path = run_dir / "successor_provenance.json"
     assert hashes["successor_provenance_sha256"] == figure_script._sha256(stable_path)
+    _assert_successor_provenance_states_the_truth(run_dir, status)
     original = stable_path.read_bytes()
     stable_path.write_bytes(original + b" ")
     assert hashes["successor_provenance_sha256"] != figure_script._sha256(stable_path)
@@ -1300,10 +1325,10 @@ def _run_with_provenance(
     return run_dir, provenance, status, canonical
 
 
-def test_provenance_clean_tracked_tree_still_withholds_successor_until_m5(
+def test_provenance_clean_tracked_tree_promotes_official_successor(
     figure_script, tmp_path: Path, monkeypatch
 ):
-    _, provenance, status, canonical = _run_with_provenance(
+    run_dir, provenance, status, canonical = _run_with_provenance(
         figure_script,
         tmp_path,
         monkeypatch,
@@ -1313,16 +1338,126 @@ def test_provenance_clean_tracked_tree_still_withholds_successor_until_m5(
     assert provenance["git"]["clean_and_required_tracked"] is True
     assert all(provenance["git"]["required_files_tracked"].values())
     promotion = provenance["canonical_promotion"]
-    assert promotion["eligible"] is False
+    assert promotion["eligible"] is True
     assert promotion["contract_matches"] is True
-    assert promotion["ineligibility_reasons"] == ["official_successor_withheld_until_m5"]
-    assert status["canonical_promoted"] is False
-    assert status["canonical_bundle"] is None
-    assert status["official_successor_status"] == "withheld_until_m5"
-    assert not canonical.exists()
+    assert promotion["ineligibility_reasons"] == []
+    destination = canonical / run_dir.name
+    assert promotion["destination"] == str(destination.resolve())
+    assert status["canonical_promoted"] is True
+    assert status["canonical_bundle"] == str(destination.resolve())
+    assert status["official_successor_status"] == "promoted"
+    assert status["official_successor_ineligibility_reasons"] == []
+    _assert_successor_provenance_states_the_truth(run_dir, status)
+    assert {path.name for path in destination.iterdir()} == {
+        "resolved_config.yaml",
+        "metrics.json",
+        "provenance.json",
+        "ahmed_fig8cd_behavioral.png",
+        "ahmed_fig8cd_behavioral.pdf",
+        "bundle.json",
+    }
+    bundle = json.loads((destination / "bundle.json").read_text(encoding="utf-8"))
+    assert bundle["run_id"] == run_dir.name
+    for name, digest in bundle["files"].items():
+        assert digest == figure_script._sha256(run_dir / name)
+    latest = json.loads((canonical / "LATEST.json").read_text(encoding="utf-8"))
+    assert latest["bundle"] == run_dir.name
+    assert latest["bundle_manifest_sha256"] == figure_script._sha256(
+        destination / "bundle.json"
+    )
 
 
-def test_m1_execute_preserves_preexisting_historical_bundle_bytes(
+def test_failed_control_is_published_not_suppressed(
+    figure_script, tmp_path: Path, monkeypatch
+):
+    """A control that does not reproduce still gets an official successor bundle.
+
+    Promotion depends only on the reproducibility contract, never on the acceptance
+    outcome, so a negative result is published with its honest status-derived title
+    instead of being withheld (CLAUDE.md section 4).
+    """
+    run_dir, provenance, status, canonical = _run_with_provenance(
+        figure_script,
+        tmp_path,
+        monkeypatch,
+        tracked=_required_relpaths(figure_script, figure_script.DEFAULT_CONFIG),
+        porcelain="",
+    )
+    assert status["acceptance_passed"] is False
+    assert status["acceptance_status"] == "not_reproduced_under_declared_assumptions"
+    assert "NOT REPRODUCED UNDER DECLARED ASSUMPTIONS" in status["figure_title"]
+    assert provenance["canonical_promotion"]["eligible"] is True
+    assert status["canonical_promoted"] is True
+    assert (canonical / run_dir.name / "ahmed_fig8cd_behavioral.pdf").exists()
+
+
+def test_publishing_does_not_move_the_next_run_successor_provenance_bytes(
+    figure_script, tmp_path: Path, monkeypatch
+):
+    """Two identical runs must emit byte-identical successor provenance.
+
+    `figures/generated/**` is tracked, so a real canonical promotion leaves the
+    worktree dirty and makes the very next identical run ineligible for publication.
+    That is a repository-state change with identical scientific inputs, so the
+    byte-stable artifact must not move -- otherwise the `successor_provenance_sha256`
+    that provenance.json commits to could never be reproduced by re-running the frozen
+    command. The pinned `git status --porcelain` below reports the published bundle the
+    way the tracked real tree does, so the second run really does meet the hazard the
+    first run created.
+    """
+    tracked = _required_relpaths(figure_script, figure_script.DEFAULT_CONFIG)
+    canonical = tmp_path / "canonical"
+
+    def fake_git_text(*args: str) -> str:
+        if args == ("ls-files",):
+            return "\n".join(tracked)
+        if args == ("status", "--porcelain"):
+            if not canonical.exists():
+                return ""
+            return "\n".join(
+                f"?? figures/generated/m8_ahmed_fig8/{path.name}"
+                for path in sorted(canonical.iterdir())
+            )
+        if args == ("rev-parse", "HEAD"):
+            return "0" * 40
+        if args == ("branch", "--show-current"):
+            return "pinned-test-branch"
+        raise AssertionError(f"unexpected git invocation: {args!r}")
+
+    monkeypatch.setattr(figure_script, "_git_text", fake_git_text)
+    first_run = figure_script.execute(
+        figure_script.DEFAULT_CONFIG, tmp_path / "runs", canonical
+    )
+    second_run = figure_script.execute(
+        figure_script.DEFAULT_CONFIG, tmp_path / "runs", canonical
+    )
+    assert first_run != second_run
+
+    def read_json(run_dir: Path, name: str) -> dict:
+        return json.loads((run_dir / name).read_text(encoding="utf-8"))
+
+    first_status = read_json(first_run, "run_status.json")
+    second_status = read_json(second_run, "run_status.json")
+    # The hazard genuinely fires: run 1 publishes, run 2 is blocked by run 1's bytes.
+    assert first_status["canonical_promoted"] is True
+    assert second_status["canonical_promoted"] is False
+    assert second_status["official_successor_ineligibility_reasons"] == [
+        "git_tree_or_required_tracking_not_clean"
+    ]
+    assert (first_run / "successor_provenance.json").read_bytes() == (
+        second_run / "successor_provenance.json"
+    ).read_bytes()
+    assert (
+        read_json(first_run, "provenance.json")["hashes"][
+            "successor_provenance_sha256"
+        ]
+        == read_json(second_run, "provenance.json")["hashes"][
+            "successor_provenance_sha256"
+        ]
+    )
+
+
+def test_execute_preserves_preexisting_historical_bundle_bytes(
     figure_script, tmp_path: Path, monkeypatch
 ):
     canonical = tmp_path / "canonical"
@@ -1335,7 +1470,7 @@ def test_m1_execute_preserves_preexisting_historical_bundle_bytes(
     )
     before = {
         path.relative_to(canonical).as_posix(): path.read_bytes()
-        for path in canonical.rglob("*")
+        for path in historical.rglob("*")
         if path.is_file()
     }
     _pin_git_provenance(
@@ -1349,13 +1484,63 @@ def test_m1_execute_preserves_preexisting_historical_bundle_bytes(
     )
     after = {
         path.relative_to(canonical).as_posix(): path.read_bytes()
-        for path in canonical.rglob("*")
+        for path in historical.rglob("*")
         if path.is_file()
     }
     status = json.loads((run_dir / "run_status.json").read_text(encoding="utf-8"))
+    # A new successor gets its own bundle identity; the historical one is untouched.
     assert after == before
-    assert status["canonical_promoted"] is False
-    assert status["official_successor_status"] == "withheld_until_m5"
+    assert status["canonical_promoted"] is True
+    assert status["canonical_bundle"] == str((canonical / run_dir.name).resolve())
+    latest = json.loads((canonical / "LATEST.json").read_text(encoding="utf-8"))
+    assert latest["bundle"] == run_dir.name
+
+
+def test_execute_refuses_to_overwrite_an_existing_canonical_bundle(
+    figure_script, tmp_path: Path, monkeypatch
+):
+    """Re-publishing under an existing run_id must fail loudly, not overwrite.
+
+    Run IDs are timestamped and so never collide in practice; the run-directory
+    allocator is pinned here to force the collision the guard exists for.
+    """
+    tracked = _required_relpaths(figure_script, figure_script.DEFAULT_CONFIG)
+    canonical = tmp_path / "canonical"
+    _pin_git_provenance(
+        monkeypatch, figure_script, tracked=tracked, porcelain=""
+    )
+    first_run = figure_script.execute(
+        figure_script.DEFAULT_CONFIG, tmp_path / "first", canonical
+    )
+    run_id = first_run.name
+    published = {
+        path.relative_to(canonical).as_posix(): path.read_bytes()
+        for path in canonical.rglob("*")
+        if path.is_file()
+    }
+
+    def reuse_run_id(root: Path, _short_hash: str) -> Path:
+        run_dir = root / run_id
+        run_dir.mkdir(parents=True, exist_ok=False)
+        return run_dir
+
+    monkeypatch.setattr(figure_script, "_unique_run_dir", reuse_run_id)
+    with pytest.raises(FileExistsError, match=run_id):
+        figure_script.execute(
+            figure_script.DEFAULT_CONFIG, tmp_path / "second", canonical
+        )
+    still_published = {
+        path.relative_to(canonical).as_posix(): path.read_bytes()
+        for path in canonical.rglob("*")
+        if path.is_file()
+    }
+    assert still_published == published
+    status = json.loads(
+        (tmp_path / "second" / run_id / "run_status.json").read_text(encoding="utf-8")
+    )
+    assert status["status"] == "failed"
+    assert status["stage"] == "canonical_bundle"
+    assert status["exception_type"] == "FileExistsError"
 
 
 def test_provenance_dirty_tree_blocks_promotion(
@@ -1470,10 +1655,16 @@ def test_scientific_outputs_identical_across_provenance_states(
     )
 
     assert science(clean_dir, clean_prov) == science(dirty_dir, dirty_prov)
-    # M1 withholds both from publication; the captured Git state still differs.
+    _assert_successor_provenance_states_the_truth(clean_dir, clean_status)
+    _assert_successor_provenance_states_the_truth(dirty_dir, dirty_status)
+    # The successor provenance is byte-stable, so it does not move with the Git state.
+    assert (clean_dir / "successor_provenance.json").read_bytes() == (
+        dirty_dir / "successor_provenance.json"
+    ).read_bytes()
+    # Only publication differs between the two Git states; the science is identical.
     assert clean_prov["git"]["clean_and_required_tracked"] is True
     assert dirty_prov["git"]["clean_and_required_tracked"] is False
-    assert clean_status["canonical_promoted"] is False
+    assert clean_status["canonical_promoted"] is True
     assert dirty_status["canonical_promoted"] is False
     assert clean_status["acceptance_status"] == dirty_status["acceptance_status"]
 

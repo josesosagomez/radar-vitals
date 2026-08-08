@@ -486,11 +486,24 @@ def _successor_provenance_bytes(
     acceptance_status: str,
     scientific_input_hashes: Mapping[str, str],
 ) -> bytes:
-    """Serialize the successor's stable, machine-independent provenance core."""
+    """Serialize the successor's stable, machine-independent provenance core.
+
+    Byte-stability property: these bytes are a function of the declared scientific
+    inputs alone (acceptance outcome, profile register, source hashes). Two runs of
+    the same commit and config produce identical bytes, so `provenance.json` can
+    commit to their SHA-256 and anyone re-running the frozen command can reproduce it.
+
+    The artifact therefore deliberately carries no publication outcome. It is written
+    at decision time, and `figures/generated/**` is tracked, so publishing a bundle
+    dirties the worktree and would flip any repository-state-derived field on the very
+    next identical run. The publication outcome is recorded instead in artifacts that
+    are allowed to depend on repository state: `provenance.json["canonical_promotion"]`
+    and `run_status.json["official_successor_status"]`. The self-description defect
+    this field was once meant to fix is handled by `artifact_kind` below.
+    """
     payload = {
         "schema_version": 1,
-        "artifact_kind": "figure_8_successor_preparation",
-        "official_publication_status": "withheld_until_m5",
+        "artifact_kind": "figure_8_successor",
         "acceptance_status": acceptance_status,
         "figure_title": _status_derived_title(acceptance_status),
         "layer_a_profile_ids": [profile.profile_id for profile in LAYER_A_PROFILES],
@@ -881,31 +894,52 @@ def execute(
         provenance = _provenance(
             run_id, config_path, resolved_path, document, output_hashes
         )
+        # Publication is decided only by the reproducibility contract: the run must use
+        # the approved default experiment document and come from a clean tree in which
+        # every required source file is tracked. It is deliberately NOT gated on the
+        # acceptance outcome -- a control that does not reproduce is published with its
+        # honest, status-derived title (CLAUDE.md section 4: report what happened).
         contract_matches, contract_reasons = _canonical_contract_matches(
             config_path, document
         )
-        # M1 prepares successor behavior but cannot publish an official bundle.
-        # M5 performs review, final source authorization, execution, and hash reopen.
-        canonical_eligible = False
+        ineligibility_reasons = list(contract_reasons)
+        if not provenance["git"]["clean_and_required_tracked"]:
+            ineligibility_reasons.append("git_tree_or_required_tracking_not_clean")
+        canonical_eligible = not ineligibility_reasons
         provenance["canonical_promotion"] = {
             "eligible": canonical_eligible,
-            "policy": "official Figure 8 successor publication is withheld until M5",
-            "contract_matches": contract_matches,
-            "ineligibility_reasons": (
-                ["official_successor_withheld_until_m5"]
-                + contract_reasons
-                + (
-                    []
-                    if provenance["git"]["clean_and_required_tracked"]
-                    else ["git_tree_or_required_tracking_not_clean"]
-                )
+            "policy": (
+                "clean tree, all required source files tracked, and exact approved "
+                "default v1 experiment contract; the acceptance outcome never gates "
+                "publication"
             ),
-            "destination": None,
+            "contract_matches": contract_matches,
+            "ineligibility_reasons": ineligibility_reasons,
+            "destination": (
+                str((canonical_root / run_id).resolve())
+                if canonical_eligible
+                else None
+            ),
         }
         _write_json(provenance_path, provenance)
 
-        stage = "successor_prepared"
+        stage = "canonical_bundle"
         canonical_bundle = None
+        if canonical_eligible:
+            # The NPZ evidence stays in the run directory; the bundle carries its
+            # SHA-256 digests through `output_hashes` so it remains verifiable.
+            canonical_bundle = _promote_canonical(
+                canonical_root,
+                run_id,
+                {
+                    resolved_path: "resolved_config.yaml",
+                    metrics_path: "metrics.json",
+                    provenance_path: "provenance.json",
+                    figure_png: figure_png.name,
+                    figure_pdf: figure_pdf.name,
+                },
+                output_hashes,
+            )
 
         _write_json(
             status_path,
@@ -921,7 +955,10 @@ def execute(
                 "canonical_bundle": (
                     None if canonical_bundle is None else str(canonical_bundle.resolve())
                 ),
-                "official_successor_status": "withheld_until_m5",
+                "official_successor_status": (
+                    "promoted" if canonical_bundle is not None else "not_promoted"
+                ),
+                "official_successor_ineligibility_reasons": ineligibility_reasons,
                 "figure_title": _status_derived_title(
                     metrics["acceptance"]["status"]
                 ),

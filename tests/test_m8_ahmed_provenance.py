@@ -27,6 +27,7 @@ from src.m8.ahmed_provenance import (  # noqa: E402
     SourceManifest,
     build_source_manifest,
     build_test_attestation,
+    conda_explicit,
     load_source_manifest,
     scoped_paths,
     validate_test_attestation,
@@ -47,6 +48,7 @@ GATE_CRITICAL_TEST_PATHS = (
     "tests/test_m4_paired_runner.py",
     "tests/test_m4_preflight_strict.py",
     "tests/test_m4_registry_and_scoring.py",
+    "tests/test_m4_manifest.py",
     "tests/test_m8_ahmed_score.py",
     "tests/test_m8_ahmed_score_independent.py",
     "tests/test_respiration.py",
@@ -56,6 +58,10 @@ GATE_CRITICAL_TEST_PATHS = (
     # threshold, and the settle-skip window — as opposed to its identity and wiring.
     "tests/test_live_demo_warmup_helpers.py",
 )
+
+# Pytest imports this control file implicitly rather than collecting it as a test module.
+# Its bytes still govern which attested skips are possible and therefore must be bound.
+ATTESTATION_CONTROL_INPUT_PATHS = ("tests/conftest.py",)
 
 #: The nodes whose `optional_artifact_or_mode` skip the attestation may record, written out
 #: literally per file.  All six assert against sweep/scoring artifacts under the gitignored
@@ -494,7 +500,10 @@ def test_builder_emits_a_valid_attestation_bound_to_its_source_manifest(
     runner = FakePytestRunner(attested_node_ids)
 
     attestation = build_test_attestation(
-        fake_source_manifest, root=tmp_path, command_runner=runner
+        fake_source_manifest,
+        root=tmp_path,
+        command_runner=runner,
+        temporary_parent=tmp_path,
     )
 
     # Exactly four commands were issued, in the repository root, and nothing else ran.
@@ -511,7 +520,9 @@ def test_builder_emits_a_valid_attestation_bound_to_its_source_manifest(
         item for item in runner.calls[3]["argv"] if item.startswith("--junitxml=")
     ]
     assert len(report_options) == 1
-    assert REPO_ROOT not in Path(report_options[0].removeprefix("--junitxml=")).parents
+    report_path = Path(report_options[0].removeprefix("--junitxml="))
+    assert tmp_path in report_path.parents
+    assert REPO_ROOT not in report_path.parents
 
     assert attestation["schema_version"] == 2
     assert attestation["status"] == "passed"
@@ -546,6 +557,11 @@ def test_builder_emits_a_valid_attestation_bound_to_its_source_manifest(
         attested = _attested_files_in(command["argv"])
         assert not set(GATE_CRITICAL_TEST_PATHS) - set(attested)
     assert not set(GATE_CRITICAL_TEST_PATHS) - set(attestation["input_sha256"])
+    assert not set(ATTESTATION_CONTROL_INPUT_PATHS) - set(
+        attestation["input_sha256"]
+    )
+    for command in attestation["ordered_commands"]:
+        assert not set(ATTESTATION_CONTROL_INPUT_PATHS) & set(command["argv"])
     for path, digest in attestation["input_sha256"].items():
         assert digest == fake_input_digest(path)
 
@@ -1236,3 +1252,138 @@ def test_builder_rejects_a_non_manifest_argument(tmp_path, forbid_nested_pytest)
             root=tmp_path,
             command_runner=FakePytestRunner([]),
         )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Authoritative Conda environment lock.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _valid_conda_explicit_text() -> str:
+    return (
+        "# platform: win-64\n"
+        "@EXPLICIT\n"
+        "https://conda.anaconda.org/conda-forge/win-64/numpy-2.0.0-test.conda\n"
+    )
+
+
+def test_conda_explicit_uses_configured_executable_and_exact_environment(
+    tmp_path, monkeypatch
+):
+    configured_executable = tmp_path / "configured-conda.exe"
+    configured_executable.write_bytes(b"test executable identity only")
+    monkeypatch.setenv("CONDA_EXE", str(configured_executable))
+    calls = []
+
+    def _runner(argv, **kwargs):
+        calls.append((argv, kwargs))
+        return subprocess.CompletedProcess(
+            argv,
+            returncode=0,
+            stdout=_valid_conda_explicit_text(),
+            stderr="",
+        )
+
+    output = conda_explicit("research-environment", command_runner=_runner)
+
+    assert output == _valid_conda_explicit_text()
+    assert calls == [
+        (
+            [
+                str(configured_executable),
+                "list",
+                "--explicit",
+                "-n",
+                "research-environment",
+            ],
+            {"check": True, "capture_output": True, "text": True},
+        )
+    ]
+
+
+def test_conda_explicit_fails_closed_when_configured_executable_is_missing(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("CONDA_EXE", str(tmp_path / "missing-conda.exe"))
+
+    with pytest.raises(RuntimeError, match="CONDA_EXE does not name a file"):
+        conda_explicit(command_runner=lambda *_args, **_kwargs: None)
+
+
+def test_conda_explicit_uses_path_fallback_when_no_executable_is_configured(
+    tmp_path, monkeypatch
+):
+    discovered_executable = tmp_path / "path-conda.exe"
+    discovered_executable.write_bytes(b"test executable identity only")
+    monkeypatch.delenv("CONDA_EXE", raising=False)
+    monkeypatch.setattr(
+        "src.m8.ahmed_provenance.shutil.which",
+        lambda command: str(discovered_executable) if command == "conda" else None,
+    )
+    observed_argv = []
+
+    def _runner(argv, **_kwargs):
+        observed_argv.append(argv)
+        return subprocess.CompletedProcess(
+            argv, returncode=0, stdout=_valid_conda_explicit_text(), stderr=""
+        )
+
+    conda_explicit(command_runner=_runner)
+
+    assert observed_argv[0][0] == str(discovered_executable)
+
+
+def test_conda_explicit_fails_closed_when_command_fails(tmp_path, monkeypatch):
+    configured_executable = tmp_path / "configured-conda.exe"
+    configured_executable.write_bytes(b"test executable identity only")
+    monkeypatch.setenv("CONDA_EXE", str(configured_executable))
+
+    def _failing_runner(argv, **_kwargs):
+        raise subprocess.CalledProcessError(returncode=2, cmd=argv)
+
+    with pytest.raises(RuntimeError, match="cannot produce authoritative Conda lockfile"):
+        conda_explicit(command_runner=_failing_runner)
+
+
+def test_conda_explicit_rejects_a_nonzero_completed_process(tmp_path, monkeypatch):
+    """The injected runner contract must fail closed even if it ignores ``check=True``.
+
+    ``subprocess.run`` raises for this case, but a wrapper or test double can legally
+    return a ``CompletedProcess``.  The scientific contract is the exit status, not the
+    runner implementation detail.
+    """
+    configured_executable = tmp_path / "configured-conda.exe"
+    configured_executable.write_bytes(b"test executable identity only")
+    monkeypatch.setenv("CONDA_EXE", str(configured_executable))
+
+    def _nonzero_runner(argv, **_kwargs):
+        return subprocess.CompletedProcess(
+            argv,
+            returncode=9,
+            stdout=_valid_conda_explicit_text(),
+            stderr="environment export failed",
+        )
+
+    with pytest.raises(RuntimeError, match="cannot produce authoritative Conda lockfile"):
+        conda_explicit(command_runner=_nonzero_runner)
+
+
+@pytest.mark.parametrize(
+    "output",
+    [
+        "",
+        "# no explicit marker\nhttps://example.invalid/package.conda\n",
+        "@EXPLICIT\n",
+        "<unavailable: FileNotFoundError>\n@EXPLICIT\nhttps://example.invalid/x.conda\n",
+    ],
+)
+def test_conda_explicit_rejects_non_lockfile_output(tmp_path, monkeypatch, output):
+    configured_executable = tmp_path / "configured-conda.exe"
+    configured_executable.write_bytes(b"test executable identity only")
+    monkeypatch.setenv("CONDA_EXE", str(configured_executable))
+
+    def _runner(argv, **_kwargs):
+        return subprocess.CompletedProcess(argv, returncode=0, stdout=output, stderr="")
+
+    with pytest.raises(RuntimeError, match="conda list --explicit"):
+        conda_explicit(command_runner=_runner)

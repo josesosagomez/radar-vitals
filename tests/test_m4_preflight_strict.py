@@ -8,6 +8,8 @@ builder with a fake command runner — no pytest process is ever spawned.
 from __future__ import annotations
 
 import copy
+from dataclasses import replace
+import json
 import subprocess
 from pathlib import Path
 from typing import Mapping
@@ -73,6 +75,27 @@ def _source_manifest_document(source_manifest) -> dict:
     }
 
 
+def _source_manifest_with_synthetic_authority(source_manifest):
+    """Add the one authority input absent from the minimal attestation fixture."""
+    path = "plans/m8_step1a_ahmed_reproduction.md"
+    if any(entry["path"] == path for entry in source_manifest.entries):
+        return source_manifest
+    authority_entry = {
+        "path": path,
+        "size_bytes": 1,
+        "sha256": "2" * 64,
+        "source_commit": "a" * 40,
+        "tracked": True,
+        "dirty": False,
+        "untracked": False,
+        "status": "clean",
+    }
+    return replace(
+        source_manifest,
+        entries=(*source_manifest.entries, authority_entry),
+    )
+
+
 def _write_gate(
     tmp_path: Path,
     *,
@@ -82,6 +105,9 @@ def _write_gate(
     omit_payloads: tuple[str, ...] = (),
     manifest_attestation_sha256: str | None = None,
     provenance_attestation_sha256: str | None = None,
+    environment_conda_sha256: str | None = None,
+    provenance_conda_sha256: str | None = None,
+    provenance_environment_sha256: str | None = None,
     authority_overrides: Mapping[str, object] | None = None,
 ) -> Path:
     writer = BundleWriter(
@@ -95,6 +121,13 @@ def _write_gate(
         if test_attestation is None
         else sha256_bytes(strict_json_bytes(test_attestation))
     )
+    explicit_environment_lock = "# portable test\n@EXPLICIT\nhttps://example.invalid/x.conda\n"
+    conda_lock_sha256 = sha256_bytes(explicit_environment_lock.encode("utf-8"))
+    environment_document = {
+        "environment": "test",
+        "conda_explicit_sha256": environment_conda_sha256 or conda_lock_sha256,
+    }
+    environment_sha256 = sha256_bytes(strict_json_bytes(environment_document))
     if include_scientific_payloads:
         authority = {
             "lock_ids": list(LOCK_ESTIMANDS),
@@ -120,7 +153,7 @@ def _write_gate(
                 source_manifest_document or {"manifest_sha256": SOURCE_MANIFEST_SHA256}
             ),
             "test_attestation.json": test_attestation,
-            "environment_attestation.json": {"environment": "test"},
+            "environment_attestation.json": environment_document,
             "metrics.json": {"metric": 1.0},
         }
         for name, payload in payloads.items():
@@ -128,12 +161,19 @@ def _write_gate(
                 continue
             writer.add_json(name, payload)
         if "conda_explicit.txt" not in omit_payloads:
-            writer.add_text("conda_explicit.txt", "# portable test\n")
+            writer.add_text("conda_explicit.txt", explicit_environment_lock)
         if "resolved_config.yaml" not in omit_payloads:
             writer.add_text("resolved_config.yaml", "{}\n")
         if "evidence.npz" not in omit_payloads:
             writer.add_npz("evidence.npz", {"evidence": np.array([1.0])})
     provenance: dict[str, object] = {"source_manifest_sha256": SOURCE_MANIFEST_SHA256}
+    if include_scientific_payloads:
+        provenance["conda_explicit_sha256"] = (
+            provenance_conda_sha256 or conda_lock_sha256
+        )
+        provenance["environment_attestation_sha256"] = (
+            provenance_environment_sha256 or environment_sha256
+        )
     extra_manifest: dict[str, object] = {"gate_status": "passed"}
     if attestation_sha256 is not None:
         provenance["test_attestation_sha256"] = (
@@ -204,6 +244,133 @@ def test_complete_official_gate_payload_set_is_accepted(
     )
 
     assert manifest["gate_status"] == "passed"
+
+
+@pytest.mark.parametrize(
+    "binding, expected_message",
+    [
+        ("environment_to_conda", "environment attestation does not bind"),
+        ("provenance_to_conda", "provenance does not bind conda"),
+        ("provenance_to_environment", "provenance does not bind environment"),
+    ],
+)
+def test_official_gate_rejects_tampered_environment_cross_bindings(
+    tmp_path: Path,
+    valid_test_attestation,
+    fake_source_manifest,
+    binding: str,
+    expected_message: str,
+) -> None:
+    wrong_digest = "0" * 64
+    gate_dir = _write_gate(
+        tmp_path,
+        include_scientific_payloads=True,
+        test_attestation=valid_test_attestation,
+        source_manifest_document=_source_manifest_document(fake_source_manifest),
+        environment_conda_sha256=(
+            wrong_digest if binding == "environment_to_conda" else None
+        ),
+        provenance_conda_sha256=(
+            wrong_digest if binding == "provenance_to_conda" else None
+        ),
+        provenance_environment_sha256=(
+            wrong_digest if binding == "provenance_to_environment" else None
+        ),
+    )
+
+    with pytest.raises(PreflightError, match=expected_message):
+        verify_gate_bundle(
+            gate_dir,
+            expected_source_manifest_sha256=SOURCE_MANIFEST_SHA256,
+            require_scientific_payloads=True,
+        )
+
+
+def test_official_synthetic_runner_builds_a_strictly_valid_gate_nonrecursively(
+    tmp_path: Path,
+    monkeypatch,
+    valid_test_attestation,
+    fake_source_manifest,
+) -> None:
+    """Exercise official bundle construction without recursively spawning pytest."""
+    import scripts.m8_ahmed_transfer as cli
+
+    source_manifest = _source_manifest_with_synthetic_authority(fake_source_manifest)
+    explicit_environment_lock = (
+        "# platform: win-64\n"
+        "@EXPLICIT\n"
+        "https://conda.anaconda.org/conda-forge/win-64/numpy-test.conda\n"
+    )
+    monkeypatch.setattr(cli, "build_source_manifest", lambda: source_manifest)
+    monkeypatch.setattr(cli, "verify_source_manifest", lambda _source: None)
+    monkeypatch.setattr(cli, "conda_explicit", lambda: explicit_environment_lock)
+
+    attested_sources = []
+
+    def _prebuilt_attestation_builder(source):
+        attested_sources.append(source)
+        return valid_test_attestation
+
+    output_root = tmp_path / "official-synthetic"
+    exit_status = cli.run_synthetic(
+        output_root,
+        publish=False,
+        test_attestation_builder=_prebuilt_attestation_builder,
+    )
+
+    run_directories = [path for path in output_root.iterdir() if path.is_dir()]
+    assert exit_status == 0
+    assert attested_sources == [source_manifest]
+    assert len(run_directories) == 1
+    gate_dir = run_directories[0]
+    manifest = verify_gate_bundle(
+        gate_dir,
+        expected_source_manifest_sha256=source_manifest.manifest_sha256,
+        require_scientific_payloads=True,
+    )
+    assert manifest["gate_status"] == "passed"
+    assert (gate_dir / "conda_explicit.txt").read_text(
+        encoding="utf-8"
+    ) == explicit_environment_lock
+    provenance = json.loads((gate_dir / "provenance.json").read_text(encoding="utf-8"))
+    environment = json.loads(
+        (gate_dir / "environment_attestation.json").read_text(encoding="utf-8")
+    )
+    conda_lock_sha256 = sha256_bytes((gate_dir / "conda_explicit.txt").read_bytes())
+    environment_sha256 = manifest["payloads"]["environment_attestation.json"]["sha256"]
+    # Step 1b section 4.3 requires the environment document to identify the lock it
+    # describes, and the official provenance to bind both payload identities explicitly.
+    assert environment["conda_explicit_sha256"] == conda_lock_sha256
+    assert provenance["conda_explicit_sha256"] == conda_lock_sha256
+    assert provenance["environment_attestation_sha256"] == environment_sha256
+
+
+def test_official_synthetic_runner_persists_nothing_when_conda_lock_fails(
+    tmp_path: Path,
+    monkeypatch,
+    valid_test_attestation,
+    fake_source_manifest,
+) -> None:
+    import scripts.m8_ahmed_transfer as cli
+
+    source_manifest = _source_manifest_with_synthetic_authority(fake_source_manifest)
+    monkeypatch.setattr(cli, "build_source_manifest", lambda: source_manifest)
+    monkeypatch.setattr(cli, "verify_source_manifest", lambda _source: None)
+
+    def _lock_failure():
+        raise RuntimeError("cannot produce authoritative Conda lockfile")
+
+    monkeypatch.setattr(cli, "conda_explicit", _lock_failure)
+    output_root = tmp_path / "failed-official-synthetic"
+
+    with pytest.raises(RuntimeError, match="authoritative Conda lockfile"):
+        cli.run_synthetic(
+            output_root,
+            publish=False,
+            test_attestation_builder=lambda _source: valid_test_attestation,
+        )
+
+    assert not output_root.exists()
 
 
 def test_official_gate_rejects_a_bundle_with_no_test_attestation(

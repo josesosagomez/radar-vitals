@@ -24,6 +24,7 @@ from pathlib import Path
 import platform
 from pathlib import PurePosixPath
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -151,6 +152,7 @@ _ATTESTED_TEST_FILES = (
     "tests/test_m4_preflight_strict.py",
     "tests/test_m4_registry_and_scoring.py",
     "tests/test_m4_bundle.py",
+    "tests/test_m4_manifest.py",
     "tests/test_m4_window_grid.py",
     "tests/test_m4_outcome.py",
     "tests/test_masimo.py",
@@ -171,6 +173,10 @@ _ATTESTED_TEST_FILES = (
     "tests/test_live_demo_warmup_helpers.py",
 )
 _ATTESTATION_CONFIG_INPUTS = (
+    # Pytest loads this file implicitly.  It controls the only permitted skip classes,
+    # so its exact bytes are a scientific attestation input even though it must not be
+    # passed to pytest as a test module.
+    "tests/conftest.py",
     "experiments/m8_ahmed_fig8/config.yaml",
     "experiments/m8_ahmed_fig8/layer_a_profiles.yaml",
     "experiments/m8_ahmed_transfer/capture_registry.yaml",
@@ -899,6 +905,7 @@ def build_test_attestation(
     *,
     root: Path | None = None,
     command_runner=subprocess.run,
+    temporary_parent: Path | None = None,
 ) -> dict:
     """Execute and freeze the complete focused scientific test attestation.
 
@@ -929,7 +936,13 @@ def build_test_attestation(
     # The outcome report is a transient intermediate of this check, not an artifact of the
     # experiment, so it is written to a temporary directory and never into the repository
     # or ``results/``.
-    with tempfile.TemporaryDirectory(prefix="m8_test_attestation_") as report_directory:
+    # ``temporary_parent`` is operational plumbing for restricted or unusual platforms.
+    # It never enters the persisted scientific identity; the report itself is summarized
+    # by node IDs, counts, and command-output hashes and then deleted.
+    with tempfile.TemporaryDirectory(
+        prefix="m8_test_attestation_",
+        dir=None if temporary_parent is None else str(Path(temporary_parent).resolve()),
+    ) as report_directory:
         junit_xml_path = Path(report_directory) / "attested_pytest_report.xml"
         commands = _attestation_commands(sys.executable, str(junit_xml_path))
         for purpose, argv, allowed_statuses in zip(
@@ -1247,15 +1260,65 @@ def environment_attestation() -> dict:
     }
 
 
-def conda_explicit(env_name: str = "radar-vitals") -> str:
-    """Return ``conda list --explicit`` or a recorded failure message."""
+def _conda_executable() -> str:
+    """Resolve Conda from its configured executable, with a PATH fallback."""
+    configured = os.environ.get("CONDA_EXE", "").strip()
+    if configured:
+        configured_path = Path(configured).expanduser()
+        if not configured_path.is_file():
+            raise RuntimeError(f"CONDA_EXE does not name a file: {configured_path}")
+        return str(configured_path)
+
+    discovered = shutil.which("conda")
+    if discovered:
+        return discovered
+    raise RuntimeError(
+        "cannot locate Conda: CONDA_EXE is unset and 'conda' is not on PATH"
+    )
+
+
+def _validate_conda_explicit(text: str) -> None:
+    """Require the characteristic non-empty output of ``conda list --explicit``."""
+    if type(text) is not str or not text.strip():
+        raise RuntimeError("conda list --explicit produced empty output")
+    lines = [line.strip() for line in text.splitlines()]
+    if lines.count("@EXPLICIT") != 1:
+        raise RuntimeError("conda list --explicit output has no unique @EXPLICIT marker")
+    marker_index = lines.index("@EXPLICIT")
+    package_records = [
+        line for line in lines[marker_index + 1 :] if line and not line.startswith("#")
+    ]
+    if not package_records:
+        raise RuntimeError("conda list --explicit output contains no package records")
+    if any(line.startswith("<unavailable") for line in lines):
+        raise RuntimeError("conda list --explicit output contains an unavailable placeholder")
+
+
+def conda_explicit(
+    env_name: str = "radar-vitals",
+    *,
+    command_runner=subprocess.run,
+) -> str:
+    """Return a validated explicit Conda lockfile, failing closed on any error."""
+    executable = _conda_executable()
     try:
-        completed = subprocess.run(
-            ["conda", "list", "--explicit", "-n", env_name],
+        completed = command_runner(
+            [executable, "list", "--explicit", "-n", env_name],
             check=True,
             capture_output=True,
             text=True,
         )
-        return completed.stdout
     except (OSError, subprocess.CalledProcessError) as exc:
-        return f"<unavailable: {type(exc).__name__}: {exc}>\n"
+        raise RuntimeError(
+            f"cannot produce authoritative Conda lockfile for {env_name!r}"
+        ) from exc
+    # ``subprocess.run(check=True)`` raises here, but injected runners and wrappers may
+    # ignore that keyword.  The scientific contract is the observed process status.
+    if type(completed.returncode) is not int or completed.returncode != 0:
+        raise RuntimeError(
+            f"cannot produce authoritative Conda lockfile for {env_name!r}: "
+            f"process exit status {completed.returncode!r}"
+        )
+    output = completed.stdout
+    _validate_conda_explicit(output)
+    return output

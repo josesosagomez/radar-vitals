@@ -42,7 +42,7 @@ exist), not passes.
 | A | M3 BR comparator spec | closed, 48/48 findings |
 | A | M4 offline harness | built (`scripts/score_offline.py`), has run for real |
 | B | M5 pilot / M6 study | not started; no longer blocked by anything |
-| 0 | ~~M0 pre-registration~~ | **REMOVED 2026-08-03 by user decision** — §3 |
+| 0 | ~~M0 governance milestone~~ | **REMOVED 2026-08-03 by user decision** — §3 |
 | D | M12 paper / figures / chapter | not started; headline reworded — §3 |
 
 ### 2.1 The dataset — 8 captures, FOUR subjects
@@ -101,21 +101,31 @@ window (840 cells over the three 0%-coverage captures):
 
 ## 3. M0 removed — the standing vocabulary rule, and the headline
 
-**M0 (pre-registration freeze and deposit) was REMOVED 2026-08-03 by user decision**, along with
-its hard gate on study captures. M5/M6/M7 are no longer blocked by governance.
+**The M0 governance milestone was REMOVED 2026-08-03 by user decision**, along with its hard gate
+on study captures; what it would have contained is recorded in `HISTORY.md` 2026-08-03.
+M5/M6/M7 are no longer blocked by governance.
 
-**Nothing in this project is pre-registered.** Agreement results are exploratory/descriptive,
-never confirmatory. **Never reintroduce** "pre-registered", "pre-specified", "frozen before data",
-"registered \<date\>", "deposited" or "confirmatory" about this study's own specs or results, in
-any file, manuscript, title or talk. Full rule: `HISTORY.md` 2026-08-03 and CLAUDE.md §4. Say
-"declared in the committed script before the run". The purge is complete repo-wide — the last
-known leftover ("registered in" inside `notes/analysis_prespec.md`'s approximate-origin
-paragraph) was fixed by Amendment M9-1 (`b39888f`, 2026-08-06). **If you sweep again, classify
-every match by hand — `grep -v` filters hid real hits three times on 2026-08-04.**
+**What this project claims about its own specs is a TRANSPARENCY claim, never a TIMING claim:**
+the comparator and analysis specifications are written down in full and applied identically to
+every estimator compared. Nothing asserts that any of them predates the data, and all agreement
+results are exploratory/descriptive. **Never reintroduce** the banned strings — "pre-registered",
+"pre-specified", "frozen before data", "registered \<date\>", "deposited", "predeclared" or
+"confirmatory" — about this study's own specs or results, in any file, manuscript, title or talk.
+Full rule: `HISTORY.md` 2026-08-03 and CLAUDE.md §4. Say "written down in the committed script and
+applied identically to every estimator compared". **The purge is not complete.** The last known
+leftover of the original strings ("registered in" inside `notes/analysis_prespec.md`'s
+approximate-origin paragraph) was fixed by Amendment M9-1 (`b39888f`, 2026-08-06), but
+"predeclared" was added to the banned list only afterwards and has never been swept: verified
+2026-08-08 that it still describes this study's own specs at `notes/approach.md:318` and `:578`
+(that file carries no VOID banner), at `notes/analysis_prespec.md:451` (under that file's own
+banner), and at 12 sites across six `plans/` documents. `HISTORY.md` uses it too and is
+append-only, so those stay. `notes/` and `plans/` were deliberately left alone — the owner scoped
+the 2026-08-08 pass to this file. **If you sweep again, classify every match by hand — `grep -v`
+filters hid real hits three times on 2026-08-04.**
 
-**"Primary" is the project's word for the M6/M7 data role** (renamed from "confirmatory",
-2026-08-04, 41 sites). Watch the collision: `analysis_prespec.md` uses "primary" in three senses
-(endpoint, CI recipe, data role) — always attach a disambiguating noun.
+**"Primary" is the project's word for the M6/M7 data role** (renamed away from the banned
+"confirmatory" label, 2026-08-04, 41 sites). Watch the collision: `analysis_prespec.md` uses
+"primary" in three senses (endpoint, CI recipe, data role) — always attach a disambiguating noun.
 
 **Four decisions from 2026-08-04 that outlive the vocabulary work — do not unknowingly reverse:**
 
@@ -157,8 +167,9 @@ DOI 10.1109/TRS.2024.3352189) — a Capon-like joint two-frequency estimator on 
 slow-time × RX matrix at one range bin (not on extracted phase; M9 is the harness's first
 non-phase consumer). Ladder: control 1 (paper-faithful 20-RX reproduction, direct `Y_t`,
 synthetic) → control 2 (4-RX ablation, fixed endpoints) → transfer gate (synthetic vitals cube,
-predeclared P1–P6, frozen bundle) → radar-only all-bins sweep (3 arms) → production comparator
-regeneration → scoring + Stage-B decision. Stage B (DOA) is out of scope beyond a go/no-go note.
+P1–P6 written down in the plan, frozen bundle) → radar-only all-bins sweep (3 arms) → production
+comparator regeneration → scoring + Stage-B decision. Stage B (DOA) is out of scope beyond a
+go/no-go note.
 
 **The five user decisions (2026-08-05) — recorded, do not re-ask:**
 1. Step 1a reproduces Figs 5+7+8 with FFT+MUSIC; Fig 9 Monte Carlo and Yule-AR are descoped.

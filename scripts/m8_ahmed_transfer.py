@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 import sys
+from typing import Callable
 
 import numpy as np
 import yaml
@@ -47,6 +48,7 @@ from src.m4.estimator_scoring import (  # noqa: E402
 )
 from src.m8.ahmed_gate import evaluate_gate  # noqa: E402
 from src.m8.ahmed_provenance import (  # noqa: E402
+    SourceManifest,
     build_source_manifest,
     build_test_attestation,
     conda_explicit,
@@ -218,14 +220,34 @@ def _metrics_payload(report, realization) -> dict:
     }
 
 
-def run_synthetic(out_root: Path, *, publish: bool = True) -> int:
+def run_synthetic(
+    out_root: Path,
+    *,
+    publish: bool = True,
+    test_attestation_builder: Callable[[SourceManifest], dict] | None = None,
+) -> int:
+    """Build the official synthetic bundle from one verified scientific source state.
+
+    ``test_attestation_builder`` is a narrow nonrecursive testing seam.  Production calls
+    leave it unset and therefore execute the complete attested pytest set exactly once.
+    """
     source = build_source_manifest()
     # Rebuild immediately and compare the exact closure.  Later real-stage prerequisite
     # checks use the same helper with require_promotion_eligible=True.
     verify_source_manifest(source)
-    test_attestation = build_test_attestation(source)
+    attestation_builder = test_attestation_builder or build_test_attestation
+    test_attestation = attestation_builder(source)
     validate_test_attestation(test_attestation, source)
     test_attestation_sha256 = sha256_bytes(strict_json_bytes(test_attestation))
+    # An authoritative bundle must contain a real, recreatable environment lock.  Capture
+    # and validate it before constructing any bundle payload so failure leaves no result.
+    explicit_environment_lock = conda_explicit()
+    conda_explicit_sha256 = sha256_bytes(explicit_environment_lock.encode("utf-8"))
+    environment_document = environment_attestation()
+    environment_document["conda_explicit_sha256"] = conda_explicit_sha256
+    environment_attestation_sha256 = sha256_bytes(
+        strict_json_bytes(environment_document)
+    )
     config = SyntheticConfig()
     realization = generate(config)
     report = evaluate_gate(config)
@@ -237,8 +259,8 @@ def run_synthetic(out_root: Path, *, publish: bool = True) -> int:
     writer.add_json("metrics.json", _metrics_payload(report, realization))
     writer.add_json("source_manifest.json", source.to_dict())
     writer.add_json("test_attestation.json", test_attestation)
-    writer.add_json("environment_attestation.json", environment_attestation())
-    writer.add_text("conda_explicit.txt", conda_explicit())
+    writer.add_json("environment_attestation.json", environment_document)
+    writer.add_text("conda_explicit.txt", explicit_environment_lock)
     # Real YAML, as the plan's bundle layout specifies. sort_keys keeps it deterministic.
     writer.add_text(
         "resolved_config.yaml",
@@ -266,6 +288,8 @@ def run_synthetic(out_root: Path, *, publish: bool = True) -> int:
             "cube_hash": realization.cube_hash,
             "source_manifest_sha256": source.manifest_sha256,
             "test_attestation_sha256": test_attestation_sha256,
+            "conda_explicit_sha256": conda_explicit_sha256,
+            "environment_attestation_sha256": environment_attestation_sha256,
             "git_commit": source.git_commit,
             "git_branch": source.git_branch,
             "scoped_dirty": list(source.scoped_dirty),

@@ -313,6 +313,27 @@ def verify_gate_bundle(
         ):
             raise PreflightError("gate test attestation is not hash-bound by manifest/provenance")
 
+        conda_explicit_sha256 = manifest["payloads"]["conda_explicit.txt"]["sha256"]
+        environment_attestation_sha256 = manifest["payloads"][
+            "environment_attestation.json"
+        ]["sha256"]
+        environment_document = _load_strict_json_mapping(
+            gate_dir / "environment_attestation.json", "gate environment attestation"
+        )
+        if environment_document.get("conda_explicit_sha256") != conda_explicit_sha256:
+            raise PreflightError(
+                "gate environment attestation does not bind conda_explicit.txt"
+            )
+        if provenance.get("conda_explicit_sha256") != conda_explicit_sha256:
+            raise PreflightError("gate provenance does not bind conda_explicit.txt")
+        if (
+            provenance.get("environment_attestation_sha256")
+            != environment_attestation_sha256
+        ):
+            raise PreflightError(
+                "gate provenance does not bind environment_attestation.json"
+            )
+
         gate_document = _load_strict_json_mapping(gate_dir / "gate.json", "gate verdict")
         if gate_document.get("gate_status") != "passed":
             raise PreflightError("gate.json verdict is not passed")
