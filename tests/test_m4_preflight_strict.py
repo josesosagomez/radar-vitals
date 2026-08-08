@@ -18,7 +18,7 @@ import numpy as np
 import pytest
 import yaml
 
-from src.m4.bundle import BundleWriter, sha256_bytes, strict_json_bytes
+from src.m4.bundle import BundleWriter, sha256_bytes, sha256_path, strict_json_bytes
 from src.m4.estimator_runner import (
     Authorization,
     CANONICAL_ARM_IDS,
@@ -26,8 +26,10 @@ from src.m4.estimator_runner import (
     REAL_STAGES,
     PreflightError,
     verify_gate_bundle,
+    verify_preflight,
     verify_repository_authorization,
 )
+from src.m8.ahmed_provenance import build_source_manifest, verify_source_manifest
 from src.m8.ahmed_transfer import (
     APPROVED_ARM_IDS,
     FREQUENCY_MAPPING_ID,
@@ -109,6 +111,7 @@ def _write_gate(
     provenance_conda_sha256: str | None = None,
     provenance_environment_sha256: str | None = None,
     authority_overrides: Mapping[str, object] | None = None,
+    source_manifest_sha256: str = SOURCE_MANIFEST_SHA256,
 ) -> Path:
     writer = BundleWriter(
         stage_root=tmp_path / "synthetic",
@@ -166,7 +169,7 @@ def _write_gate(
             writer.add_text("resolved_config.yaml", "{}\n")
         if "evidence.npz" not in omit_payloads:
             writer.add_npz("evidence.npz", {"evidence": np.array([1.0])})
-    provenance: dict[str, object] = {"source_manifest_sha256": SOURCE_MANIFEST_SHA256}
+    provenance: dict[str, object] = {"source_manifest_sha256": source_manifest_sha256}
     if include_scientific_payloads:
         provenance["conda_explicit_sha256"] = (
             provenance_conda_sha256 or conda_lock_sha256
@@ -590,6 +593,87 @@ def test_repository_authorization_must_be_committed_and_clean(tmp_path: Path) ->
             _authorization(),
             repository_root=repository,
         )
+
+
+def test_real_shape_preflight_accepts_direct_authorization_only_commit(
+    tmp_path: Path,
+) -> None:
+    """Exercise the public source verifier and real preflight in one temporary repo."""
+    repository = tmp_path / "repository"
+    (repository / "src").mkdir(parents=True)
+    (repository / "src" / "__init__.py").write_text("", encoding="utf-8")
+    (repository / "src" / "dependency.py").write_text("VALUE = 1\n", encoding="utf-8")
+    (repository / "src" / "main.py").write_text(
+        "from src.dependency import VALUE\n", encoding="utf-8"
+    )
+    (repository / "CLAUDE.md").write_text("portable rules\n", encoding="utf-8")
+    _run_git(repository, "init", "-q")
+    _run_git(repository, "config", "user.name", "M3 portable test")
+    _run_git(repository, "config", "user.email", "m3-test@example.invalid")
+    _run_git(repository, "add", "-A")
+    _run_git(repository, "commit", "-q", "-m", "promotion-eligible gate source")
+    gate_source = build_source_manifest(repository)
+
+    gate_dir = _write_gate(
+        tmp_path / "gate-artifacts",
+        include_scientific_payloads=False,
+        source_manifest_sha256=gate_source.manifest_sha256,
+    )
+    gate_digest = sha256_path(gate_dir / "manifest.json")
+    authorization_path = (
+        repository
+        / "experiments"
+        / "m8_ahmed_transfer"
+        / "authorizations"
+        / "approved.yaml"
+    )
+    authorization_path.parent.mkdir(parents=True)
+    authorization_path.write_text(
+        yaml.safe_dump(
+            {
+                "authorization_id": "real_evaluation_v1",
+                "gate_manifest_sha256": gate_digest,
+                "source_manifest_sha256": gate_source.manifest_sha256,
+                "allowed_stages": list(REAL_STAGES),
+                "capture_ids": ["m1"],
+                "lock_estimands": list(LOCK_ESTIMANDS),
+                "arm_ids": list(CANONICAL_ARM_IDS),
+                "approved_by": "portable test",
+                "approved_on": "2026-08-08",
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    _run_git(
+        repository,
+        "add",
+        authorization_path.relative_to(repository).as_posix(),
+    )
+    _run_git(repository, "commit", "-q", "-m", "freeze real evaluation authorization")
+
+    current = build_source_manifest(repository)
+    assert current.manifest_sha256 == gate_source.manifest_sha256
+    assert current.git_branch == gate_source.git_branch
+    verify_source_manifest(
+        gate_source,
+        repository,
+        require_promotion_eligible=True,
+    )
+    result = verify_preflight(
+        stage="real-smoke",
+        gate_dir=gate_dir,
+        authorization_path=authorization_path,
+        source_manifest_sha256=gate_source.manifest_sha256,
+        authorization_validator=lambda path, authorization: verify_repository_authorization(
+            path,
+            authorization,
+            repository_root=repository,
+        ),
+    )
+
+    assert result.gate_manifest_sha256 == gate_digest
+    assert result.authorization.authorization_id == "real_evaluation_v1"
 
 
 def test_repository_authorization_rejects_wrong_path(tmp_path: Path) -> None:

@@ -212,6 +212,405 @@ def test_clean_manifest_is_deterministic_and_verifies(tmp_path):
     verify_source_manifest(first, repo, require_promotion_eligible=True)
 
 
+@pytest.mark.parametrize(
+    "approval_path",
+    [
+        "experiments/m8_ahmed_transfer/authorizations/approved.yaml",
+        "experiments/m8_ahmed_transfer/continuations/approved.yaml",
+    ],
+)
+def test_approval_only_commit_preserves_a_clean_byte_identical_gate_manifest(
+    tmp_path, approval_path
+):
+    repo = _small_repo(tmp_path)
+    gate_manifest = build_source_manifest(repo)
+    approval = repo / approval_path
+    approval.parent.mkdir(parents=True)
+    approval.write_text("approval_id: fixture\n", encoding="utf-8")
+    _git(repo, "add", approval_path)
+    _git(repo, "commit", "-q", "-m", "freeze post-gate approval")
+
+    current = build_source_manifest(repo)
+    assert current.git_commit != gate_manifest.git_commit
+    assert current.manifest_sha256 == gate_manifest.manifest_sha256
+    assert current.promotion_eligible is True
+    verify_source_manifest(
+        gate_manifest,
+        repo,
+        require_promotion_eligible=True,
+    )
+
+
+def test_multiple_linear_approval_only_commits_preserve_the_gate_manifest(tmp_path):
+    repo = _small_repo(tmp_path)
+    gate_manifest = build_source_manifest(repo)
+    for directory, name in (
+        ("continuations", "continued.yaml"),
+        ("authorizations", "authorized.yaml"),
+    ):
+        relative_path = f"experiments/m8_ahmed_transfer/{directory}/{name}"
+        document = repo / relative_path
+        document.parent.mkdir(parents=True, exist_ok=True)
+        document.write_text(f"approval_id: {name}\n", encoding="utf-8")
+        _git(repo, "add", relative_path)
+        _git(repo, "commit", "-q", "-m", f"freeze {name}")
+
+    verify_source_manifest(gate_manifest, repo, require_promotion_eligible=True)
+
+
+@pytest.mark.parametrize("terminal_change", ["empty", "deleted"])
+def test_approval_yaml_must_be_a_nonempty_blob_in_every_commit(
+    tmp_path, terminal_change
+):
+    repo = _small_repo(tmp_path)
+    gate_manifest = build_source_manifest(repo)
+    relative_path = "experiments/m8_ahmed_transfer/authorizations/approved.yaml"
+    approval = repo / relative_path
+    approval.parent.mkdir(parents=True)
+    approval.write_text("approval_id: fixture\n", encoding="utf-8")
+    _git(repo, "add", relative_path)
+    _git(repo, "commit", "-q", "-m", "freeze post-gate approval")
+
+    if terminal_change == "empty":
+        approval.write_bytes(b"")
+    else:
+        approval.unlink()
+    _git(repo, "add", relative_path)
+    _git(repo, "commit", "-q", "-m", f"make approval {terminal_change}")
+
+    with pytest.raises(ValueError, match="nonempty blob.*approved.yaml"):
+        verify_source_manifest(gate_manifest, repo, require_promotion_eligible=True)
+
+
+def test_merge_history_cannot_use_the_approval_only_exception(tmp_path):
+    repo = _small_repo(tmp_path)
+    gate_manifest = build_source_manifest(repo)
+    original_branch = subprocess.run(
+        ["git", "branch", "--show-current"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+    _git(repo, "checkout", "-q", "-b", "approval-side")
+    authorization_path = (
+        "experiments/m8_ahmed_transfer/authorizations/authorized.yaml"
+    )
+    authorization = repo / authorization_path
+    authorization.parent.mkdir(parents=True)
+    authorization.write_text("approval_id: authorized\n", encoding="utf-8")
+    _git(repo, "add", authorization_path)
+    _git(repo, "commit", "-q", "-m", "freeze authorization")
+
+    _git(repo, "checkout", "-q", original_branch)
+    continuation_path = (
+        "experiments/m8_ahmed_transfer/continuations/continued.yaml"
+    )
+    continuation = repo / continuation_path
+    continuation.parent.mkdir(parents=True)
+    continuation.write_text("approval_id: continued\n", encoding="utf-8")
+    _git(repo, "add", continuation_path)
+    _git(repo, "commit", "-q", "-m", "freeze continuation")
+    _git(repo, "merge", "-q", "--no-ff", "approval-side", "-m", "merge approvals")
+
+    with pytest.raises(ValueError, match="not a linear approval-only sequence"):
+        verify_source_manifest(gate_manifest, repo, require_promotion_eligible=True)
+
+
+def test_unrelated_post_gate_commit_is_not_the_approved_commit_exception(tmp_path):
+    repo = _small_repo(tmp_path)
+    gate_manifest = build_source_manifest(repo)
+    (repo / "README.md").write_text("unrelated documentation\n", encoding="utf-8")
+    _git(repo, "add", "README.md")
+    _git(repo, "commit", "-q", "-m", "unrelated post-gate commit")
+
+    current = build_source_manifest(repo)
+    assert current.manifest_sha256 == gate_manifest.manifest_sha256
+    assert current.promotion_eligible is True
+    with pytest.raises(ValueError, match="not approval-only.*README.md"):
+        verify_source_manifest(gate_manifest, repo, require_promotion_eligible=True)
+
+
+def test_intervening_unrelated_commit_before_approval_still_fails(tmp_path):
+    repo = _small_repo(tmp_path)
+    gate_manifest = build_source_manifest(repo)
+    (repo / "README.md").write_text("intervening documentation\n", encoding="utf-8")
+    _git(repo, "add", "README.md")
+    _git(repo, "commit", "-q", "-m", "intervening unrelated commit")
+
+    approval_path = "experiments/m8_ahmed_transfer/authorizations/approved.yaml"
+    approval = repo / approval_path
+    approval.parent.mkdir(parents=True)
+    approval.write_text("approval_id: fixture\n", encoding="utf-8")
+    _git(repo, "add", approval_path)
+    _git(repo, "commit", "-q", "-m", "freeze post-gate approval")
+
+    with pytest.raises(ValueError, match="not approval-only.*README.md"):
+        verify_source_manifest(gate_manifest, repo, require_promotion_eligible=True)
+
+
+def test_reverted_intervening_unrelated_commit_before_approval_still_fails(tmp_path):
+    """An unrelated commit is not erased from history by restoring the gate tree."""
+    repo = _small_repo(tmp_path)
+    gate_manifest = build_source_manifest(repo)
+    readme = repo / "README.md"
+    readme.write_text("intervening documentation\n", encoding="utf-8")
+    _git(repo, "add", "README.md")
+    _git(repo, "commit", "-q", "-m", "intervening unrelated commit")
+    readme.unlink()
+    _git(repo, "add", "README.md")
+    _git(repo, "commit", "-q", "-m", "revert unrelated content")
+
+    approval_path = "experiments/m8_ahmed_transfer/authorizations/approved.yaml"
+    approval = repo / approval_path
+    approval.parent.mkdir(parents=True)
+    approval.write_text("approval_id: fixture\n", encoding="utf-8")
+    _git(repo, "add", approval_path)
+    _git(repo, "commit", "-q", "-m", "freeze post-gate approval")
+
+    current = build_source_manifest(repo)
+    assert current.manifest_sha256 == gate_manifest.manifest_sha256
+    with pytest.raises(ValueError, match="not approval-only.*README.md"):
+        verify_source_manifest(gate_manifest, repo, require_promotion_eligible=True)
+
+
+def test_non_ancestor_current_head_cannot_use_the_approval_exception(tmp_path):
+    repo = _small_repo(tmp_path)
+    _git(repo, "commit", "-q", "--allow-empty", "-m", "gate checkpoint")
+    gate_manifest = build_source_manifest(repo)
+
+    _git(repo, "checkout", "-q", "--detach", "HEAD^")
+    approval_path = "experiments/m8_ahmed_transfer/authorizations/approved.yaml"
+    approval = repo / approval_path
+    approval.parent.mkdir(parents=True)
+    approval.write_text("approval_id: fixture\n", encoding="utf-8")
+    _git(repo, "add", approval_path)
+    _git(repo, "commit", "-q", "-m", "sibling approval commit")
+
+    current = build_source_manifest(repo)
+    assert current.manifest_sha256 == gate_manifest.manifest_sha256
+    with pytest.raises(ValueError, match="gate commit is not an ancestor"):
+        verify_source_manifest(gate_manifest, repo, require_promotion_eligible=True)
+
+
+@pytest.mark.parametrize(
+    "disallowed_path",
+    [
+        "experiments/m8_ahmed_transfer/approved.yaml",
+        "experiments/m8_ahmed_transfer/authorizations/nested/approved.yaml",
+        "experiments/m8_ahmed_transfer/authorizations/approved.yml",
+        "experiments/m8_ahmed_transfer/continuations/approved.YAML",
+    ],
+)
+def test_approval_exception_path_scope_is_exact(tmp_path, disallowed_path):
+    repo = _small_repo(tmp_path)
+    gate_manifest = build_source_manifest(repo)
+    disallowed = repo / disallowed_path
+    disallowed.parent.mkdir(parents=True)
+    disallowed.write_text("approval_id: fixture\n", encoding="utf-8")
+    _git(repo, "add", disallowed_path)
+    _git(repo, "commit", "-q", "-m", "wrong approval path")
+
+    with pytest.raises(ValueError, match="not approval-only"):
+        verify_source_manifest(gate_manifest, repo, require_promotion_eligible=True)
+
+
+def test_approval_commit_cannot_include_any_other_file(tmp_path):
+    repo = _small_repo(tmp_path)
+    gate_manifest = build_source_manifest(repo)
+    approval_path = "experiments/m8_ahmed_transfer/authorizations/approved.yaml"
+    approval = repo / approval_path
+    approval.parent.mkdir(parents=True)
+    approval.write_text("approval_id: fixture\n", encoding="utf-8")
+    (repo / "README.md").write_text("bundled unrelated file\n", encoding="utf-8")
+    _git(repo, "add", approval_path, "README.md")
+    _git(repo, "commit", "-q", "-m", "mixed approval commit")
+
+    with pytest.raises(ValueError, match="not approval-only.*README.md"):
+        verify_source_manifest(gate_manifest, repo, require_promotion_eligible=True)
+
+
+def test_deleted_authorization_yaml_in_post_gate_history_fails(tmp_path):
+    """Every intervening commit must add/modify usable approval evidence, not delete it."""
+    repo = _small_repo(tmp_path)
+    gate_manifest = build_source_manifest(repo)
+    approval_path = "experiments/m8_ahmed_transfer/authorizations/approved.yaml"
+    approval = repo / approval_path
+    approval.parent.mkdir(parents=True)
+    approval.write_text("approval_id: fixture\n", encoding="utf-8")
+    _git(repo, "add", approval_path)
+    _git(repo, "commit", "-q", "-m", "freeze post-gate approval")
+    approval.unlink()
+    _git(repo, "add", approval_path)
+    _git(repo, "commit", "-q", "-m", "delete post-gate approval")
+
+    with pytest.raises(ValueError, match="not approval-only|delet|empty|zero"):
+        verify_source_manifest(gate_manifest, repo, require_promotion_eligible=True)
+
+
+def test_transient_zero_byte_authorization_yaml_in_post_gate_history_fails(tmp_path):
+    """A later valid edit cannot sanitize an earlier zero-byte authorization commit."""
+    repo = _small_repo(tmp_path)
+    gate_manifest = build_source_manifest(repo)
+    approval_path = "experiments/m8_ahmed_transfer/authorizations/approved.yaml"
+    approval = repo / approval_path
+    approval.parent.mkdir(parents=True)
+    approval.write_bytes(b"")
+    _git(repo, "add", approval_path)
+    _git(repo, "commit", "-q", "-m", "commit empty authorization")
+    approval.write_text("approval_id: fixture\n", encoding="utf-8")
+    _git(repo, "add", approval_path)
+    _git(repo, "commit", "-q", "-m", "populate authorization")
+
+    with pytest.raises(ValueError, match="not approval-only|empty|zero"):
+        verify_source_manifest(gate_manifest, repo, require_promotion_eligible=True)
+
+
+def test_multiple_linear_approval_only_commits_are_accepted(tmp_path):
+    repo = _small_repo(tmp_path)
+    gate_manifest = build_source_manifest(repo)
+    continuation_path = "experiments/m8_ahmed_transfer/continuations/continued.yaml"
+    continuation = repo / continuation_path
+    continuation.parent.mkdir(parents=True)
+    continuation.write_text("continuation_id: fixture\n", encoding="utf-8")
+    _git(repo, "add", continuation_path)
+    _git(repo, "commit", "-q", "-m", "freeze continuation")
+    authorization_path = "experiments/m8_ahmed_transfer/authorizations/approved.yaml"
+    authorization = repo / authorization_path
+    authorization.parent.mkdir(parents=True)
+    authorization.write_text("approval_id: fixture\n", encoding="utf-8")
+    _git(repo, "add", authorization_path)
+    _git(repo, "commit", "-q", "-m", "freeze authorization")
+
+    current = build_source_manifest(repo)
+    assert current.manifest_sha256 == gate_manifest.manifest_sha256
+    verify_source_manifest(gate_manifest, repo, require_promotion_eligible=True)
+
+
+def test_merge_in_post_gate_approval_history_is_rejected(tmp_path):
+    repo = _small_repo(tmp_path)
+    gate_manifest = build_source_manifest(repo)
+    gate_branch = subprocess.run(
+        ["git", "branch", "--show-current"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    _git(repo, "branch", "approval-side")
+
+    authorization_path = "experiments/m8_ahmed_transfer/authorizations/approved.yaml"
+    authorization = repo / authorization_path
+    authorization.parent.mkdir(parents=True)
+    authorization.write_text("approval_id: fixture\n", encoding="utf-8")
+    _git(repo, "add", authorization_path)
+    _git(repo, "commit", "-q", "-m", "freeze authorization")
+
+    _git(repo, "checkout", "-q", "approval-side")
+    continuation_path = "experiments/m8_ahmed_transfer/continuations/continued.yaml"
+    continuation = repo / continuation_path
+    continuation.parent.mkdir(parents=True)
+    continuation.write_text("continuation_id: fixture\n", encoding="utf-8")
+    _git(repo, "add", continuation_path)
+    _git(repo, "commit", "-q", "-m", "freeze continuation")
+    _git(repo, "checkout", "-q", gate_branch)
+    _git(repo, "merge", "-q", "--no-ff", "approval-side", "-m", "merge approvals")
+
+    with pytest.raises(ValueError, match="not a linear approval-only sequence"):
+        verify_source_manifest(gate_manifest, repo, require_promotion_eligible=True)
+
+
+@pytest.mark.parametrize("closure_change", ["omitted", "extra"])
+def test_approval_exception_does_not_hide_closure_mismatch(tmp_path, closure_change):
+    repo = _small_repo(tmp_path)
+    gate_manifest = build_source_manifest(repo)
+    approval_path = "experiments/m8_ahmed_transfer/continuations/approved.yaml"
+    approval = repo / approval_path
+    approval.parent.mkdir(parents=True)
+    approval.write_text("approval_id: fixture\n", encoding="utf-8")
+    _git(repo, "add", approval_path)
+    _git(repo, "commit", "-q", "-m", "freeze post-gate continuation")
+
+    if closure_change == "omitted":
+        changed_entries = tuple(
+            entry
+            for entry in gate_manifest.entries
+            if entry["path"] != "src/dependency.py"
+        )
+    else:
+        extra_entry = {
+            **gate_manifest.entries[-1],
+            "path": "src/not_in_scientific_closure.py",
+        }
+        changed_entries = (*gate_manifest.entries, extra_entry)
+    malformed_gate = replace(gate_manifest, entries=changed_entries)
+
+    with pytest.raises(ValueError, match="scientific dependency closure mismatch"):
+        verify_source_manifest(malformed_gate, repo, require_promotion_eligible=True)
+
+
+def test_scoped_source_commit_after_gate_still_fails(tmp_path):
+    repo = _small_repo(tmp_path)
+    gate_manifest = build_source_manifest(repo)
+    (repo / "src" / "dependency.py").write_text(
+        "VALUE = 999  # changed science\n", encoding="utf-8"
+    )
+    _git(repo, "add", "src/dependency.py")
+    _git(repo, "commit", "-q", "-m", "change scoped science")
+
+    with pytest.raises(ValueError, match="not approval-only|content or Git status changed"):
+        verify_source_manifest(gate_manifest, repo, require_promotion_eligible=True)
+
+
+@pytest.mark.parametrize("working_tree_change", ["dirty", "untracked"])
+def test_dirty_or_untracked_scoped_change_after_approval_commit_fails(
+    tmp_path, working_tree_change
+):
+    repo = _small_repo(tmp_path)
+    gate_manifest = build_source_manifest(repo)
+    approval_path = "experiments/m8_ahmed_transfer/authorizations/approved.yaml"
+    approval = repo / approval_path
+    approval.parent.mkdir(parents=True)
+    approval.write_text("approval_id: fixture\n", encoding="utf-8")
+    _git(repo, "add", approval_path)
+    _git(repo, "commit", "-q", "-m", "freeze post-gate approval")
+
+    if working_tree_change == "dirty":
+        (repo / "src" / "dependency.py").write_text(
+            "VALUE = 2  # dirty\n", encoding="utf-8"
+        )
+    else:
+        (repo / "src" / "new_science.py").write_text("FACTOR = 60\n", encoding="utf-8")
+        (repo / "src" / "main.py").write_text(
+            "from src.dependency import VALUE\nfrom src.new_science import FACTOR\n",
+            encoding="utf-8",
+        )
+
+    expected_error = (
+        "content or Git status changed"
+        if working_tree_change == "dirty"
+        else "scientific dependency closure mismatch"
+    )
+    with pytest.raises(ValueError, match=expected_error):
+        verify_source_manifest(gate_manifest, repo, require_promotion_eligible=True)
+
+
+def test_branch_change_is_not_hidden_by_the_approval_commit_exception(tmp_path):
+    repo = _small_repo(tmp_path)
+    gate_manifest = build_source_manifest(repo)
+    approval_path = "experiments/m8_ahmed_transfer/authorizations/approved.yaml"
+    approval = repo / approval_path
+    approval.parent.mkdir(parents=True)
+    approval.write_text("approval_id: fixture\n", encoding="utf-8")
+    _git(repo, "add", approval_path)
+    _git(repo, "commit", "-q", "-m", "freeze post-gate approval")
+    _git(repo, "branch", "-m", "different-branch")
+
+    with pytest.raises(ValueError, match="source branch mismatch"):
+        verify_source_manifest(gate_manifest, repo, require_promotion_eligible=True)
+
+
 def test_ast_closure_resolves_absolute_relative_and_from_package_aliases(tmp_path):
     repo = _small_repo(tmp_path)
     (repo / "src" / "package").mkdir()

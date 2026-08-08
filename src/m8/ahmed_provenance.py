@@ -699,6 +699,159 @@ def build_source_manifest(
     )
 
 
+_POST_GATE_APPROVAL_DIRECTORIES = (
+    PurePosixPath("experiments/m8_ahmed_transfer/authorizations"),
+    PurePosixPath("experiments/m8_ahmed_transfer/continuations"),
+)
+
+
+def _require_nonempty_git_blob(root: Path, commit: str, path: str) -> None:
+    """Require an approval path to exist as a nonempty regular Git blob at a commit."""
+    object_spec = f"{commit}:{path}"
+    try:
+        object_type = subprocess.run(
+            ["git", "cat-file", "-t", object_spec],
+            cwd=str(root),
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        size_text = subprocess.run(
+            ["git", "cat-file", "-s", object_spec],
+            cwd=str(root),
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        size_bytes = int(size_text)
+    except (OSError, subprocess.CalledProcessError, ValueError) as exc:
+        raise ValueError(
+            "source commit mismatch: approval YAML must exist as a nonempty blob; "
+            f"commit={commit}; path={path}"
+        ) from exc
+    if object_type != "blob" or size_bytes <= 0:
+        raise ValueError(
+            "source commit mismatch: approval YAML must exist as a nonempty blob; "
+            f"commit={commit}; path={path}"
+        )
+
+
+def _approval_only_commit_paths(
+    root: Path,
+    gate_commit: str,
+    current_commit: str,
+) -> tuple[str, ...]:
+    """Return paths only when every post-gate commit contains approval YAMLs alone."""
+    try:
+        ancestor = subprocess.run(
+            ["git", "merge-base", "--is-ancestor", gate_commit, current_commit],
+            cwd=str(root),
+            capture_output=True,
+            text=True,
+        )
+    except OSError as exc:
+        raise ValueError("cannot verify the post-gate approval-only commit") from exc
+    if ancestor.returncode != 0:
+        raise ValueError(
+            "source commit mismatch: gate commit is not an ancestor of current HEAD"
+        )
+    try:
+        commits_result = subprocess.run(
+            ["git", "rev-list", "--reverse", f"{gate_commit}..{current_commit}"],
+            cwd=str(root),
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise ValueError("cannot verify the post-gate approval-only commit") from exc
+
+    commits = tuple(commit for commit in commits_result.stdout.splitlines() if commit)
+    if not commits:
+        raise ValueError("source commit mismatch: HEAD changed without an approval commit")
+
+    approval_paths: list[str] = []
+    expected_parent = gate_commit
+    for commit in commits:
+        try:
+            parents_result = subprocess.run(
+                ["git", "rev-list", "--parents", "-n", "1", commit],
+                cwd=str(root),
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            commit_and_parents = parents_result.stdout.split()
+            if len(commit_and_parents) != 2 or commit_and_parents[1] != expected_parent:
+                raise ValueError(
+                    "source commit mismatch: post-gate history is not a linear "
+                    "approval-only sequence"
+                )
+            changed_result = subprocess.run(
+                [
+                    "git",
+                    "diff-tree",
+                    "--no-commit-id",
+                    "--name-only",
+                    "--no-renames",
+                    "-r",
+                    "-z",
+                    expected_parent,
+                    commit,
+                ],
+                cwd=str(root),
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except (OSError, subprocess.CalledProcessError) as exc:
+            raise ValueError("cannot verify the post-gate approval-only commit") from exc
+
+        commit_paths = tuple(
+            path.replace("\\", "/")
+            for path in changed_result.stdout.split("\0")
+            if path
+        )
+        disallowed = [
+            path
+            for path in commit_paths
+            if not (
+                PurePosixPath(path).suffix == ".yaml"
+                and PurePosixPath(path).parent in _POST_GATE_APPROVAL_DIRECTORIES
+            )
+        ]
+        if not commit_paths or disallowed:
+            details = (
+                f"disallowed paths={sorted(disallowed)}"
+                if disallowed
+                else "commit changed no approval YAML"
+            )
+            raise ValueError(
+                "source commit mismatch: post-gate commit is not approval-only; "
+                f"commit={commit}; {details}"
+            )
+        for path in commit_paths:
+            _require_nonempty_git_blob(root, commit, path)
+        approval_paths.extend(commit_paths)
+        expected_parent = commit
+
+    if expected_parent != current_commit:
+        raise ValueError(
+            "source commit mismatch: post-gate history does not end at current HEAD"
+        )
+    return tuple(approval_paths)
+
+
+def _entries_without_source_commit(
+    entries: Sequence[Mapping[str, object]],
+) -> tuple[dict[str, object], ...]:
+    """Remove only the commit provenance field; retain bytes and every status flag."""
+    return tuple(
+        {key: value for key, value in entry.items() if key != "source_commit"}
+        for entry in entries
+    )
+
+
 def verify_source_manifest(
     manifest: SourceManifest | Mapping[str, object],
     root: Path | None = None,
@@ -721,14 +874,34 @@ def verify_source_manifest(
     extra = sorted(path for path in supplied_paths - expected_paths if isinstance(path, str))
     if missing or extra:
         raise ValueError(f"scientific dependency closure mismatch: missing={missing}, extra={extra}")
-    if manifest.entries != observed.entries:
+    commit_changed = manifest.git_commit != observed.git_commit
+    if commit_changed:
+        entries_match = _entries_without_source_commit(
+            manifest.entries
+        ) == _entries_without_source_commit(observed.entries)
+        references_match = _entries_without_source_commit(
+            manifest.reference_entries
+        ) == _entries_without_source_commit(observed.reference_entries)
+    else:
+        entries_match = manifest.entries == observed.entries
+        references_match = manifest.reference_entries == observed.reference_entries
+    if not entries_match:
         raise ValueError("scientific dependency content or Git status changed")
-    if manifest.reference_entries != observed.reference_entries:
+    if not references_match:
         raise ValueError("external reference content or status changed")
     if manifest.manifest_sha256 != observed.manifest_sha256:
         raise ValueError("source manifest digest mismatch")
-    if manifest.git_commit != observed.git_commit:
-        raise ValueError("source commit mismatch")
+    if commit_changed:
+        if not manifest.promotion_eligible or not observed.promotion_eligible:
+            raise ValueError(
+                "source commit mismatch: approval-only exception requires clean, "
+                "promotion-eligible gate and current manifests"
+            )
+        _approval_only_commit_paths(
+            Path(root or REPO_ROOT).resolve(),
+            manifest.git_commit,
+            observed.git_commit,
+        )
     if manifest.git_branch != observed.git_branch:
         raise ValueError("source branch mismatch")
     if manifest.scoped_dirty != observed.scoped_dirty or manifest.scoped_untracked != observed.scoped_untracked:
