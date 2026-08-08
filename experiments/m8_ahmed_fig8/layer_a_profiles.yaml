@@ -1,0 +1,24 @@
+schema_version: 1
+status: approved_immutable_layer_a_register
+science:
+  spectral_candidate_q: q = 2f
+  physiological_rate: bpm = 30q
+  score: A(q) = sum_h |S(hq)| / eta(q)
+  fixed_support: Hq < f_Nyquist
+profiles:
+  # Nine approved template rows expand to these fifteen concrete identities.
+  - {profile_id: a_fixed_h3_matrix_eta_magnitude_unsuppressed_v1, row_support: fixed_h, harmonics: 3, normalization: matrix_eta, suppression: figure_visible_unsuppressed}
+  - {profile_id: a_fixed_h5_matrix_eta_magnitude_unsuppressed_v1, row_support: fixed_h, harmonics: 5, normalization: matrix_eta, suppression: figure_visible_unsuppressed}
+  - {profile_id: a_fixed_h3_matrix_eta_magnitude_eq26_v1, row_support: fixed_h, harmonics: 3, normalization: matrix_eta, suppression: eq26_multiples_suppressed}
+  - {profile_id: a_fixed_h5_matrix_eta_magnitude_eq26_v1, row_support: fixed_h, harmonics: 5, normalization: matrix_eta, suppression: eq26_multiples_suppressed}
+  - {profile_id: a_fixed_h3_matrix_eta_magnitude_prose_v1, row_support: fixed_h, harmonics: 3, normalization: matrix_eta, suppression: prose_low_or_equal_suppressed}
+  - {profile_id: a_fixed_h5_matrix_eta_magnitude_prose_v1, row_support: fixed_h, harmonics: 5, normalization: matrix_eta, suppression: prose_low_or_equal_suppressed}
+  - {profile_id: a_fixed_h3_non_dc_mean_magnitude_unsuppressed_v1, row_support: fixed_h, harmonics: 3, normalization: non_dc_mean, suppression: figure_visible_unsuppressed}
+  - {profile_id: a_fixed_h5_non_dc_mean_magnitude_unsuppressed_v1, row_support: fixed_h, harmonics: 5, normalization: non_dc_mean, suppression: figure_visible_unsuppressed}
+  - {profile_id: a_fixed_h3_non_dc_mean_magnitude_eq26_v1, row_support: fixed_h, harmonics: 3, normalization: non_dc_mean, suppression: eq26_multiples_suppressed}
+  - {profile_id: a_fixed_h5_non_dc_mean_magnitude_eq26_v1, row_support: fixed_h, harmonics: 5, normalization: non_dc_mean, suppression: eq26_multiples_suppressed}
+  - {profile_id: a_fixed_h3_non_dc_mean_magnitude_prose_v1, row_support: fixed_h, harmonics: 3, normalization: non_dc_mean, suppression: prose_low_or_equal_suppressed}
+  - {profile_id: a_fixed_h5_non_dc_mean_magnitude_prose_v1, row_support: fixed_h, harmonics: 5, normalization: non_dc_mean, suppression: prose_low_or_equal_suppressed}
+  - {profile_id: a_candidate_row_matrix_eta_magnitude_unsuppressed_v1, row_support: candidate_row, harmonics: null, normalization: matrix_eta, suppression: figure_visible_unsuppressed}
+  - {profile_id: a_candidate_row_matrix_eta_magnitude_eq26_v1, row_support: candidate_row, harmonics: null, normalization: matrix_eta, suppression: eq26_multiples_suppressed}
+  - {profile_id: a_candidate_row_matrix_eta_magnitude_prose_v1, row_support: candidate_row, harmonics: null, normalization: matrix_eta, suppression: prose_low_or_equal_suppressed}

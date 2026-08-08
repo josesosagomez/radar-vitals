@@ -13,16 +13,24 @@ import sys
 
 import numpy as np
 import pytest
+import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
 from src.m4.estimator_suite import SuiteWindowResult  # noqa: E402
 from src.m8.ahmed_transfer import (  # noqa: E402
+    APPROVED_ARM_IDS,
+    APPROVED_HARMONIC_COUNTS,
     COLLISION_DOMAIN_FROM_FB,
     ESTIMATOR_ID,
+    FREQUENCY_MAPPING_ID,
+    LAYER_B_NORMALIZATION,
+    RATE_MAPPING_ID,
     REAL_REPRESENTATIVE_DOMAIN,
     AhmedPhaseConfig,
+    AhmedPhaseEstimatorSuite,
+    _support_masks,
     arm_id_for,
     estimate_phase_ha,
     phase_signal_hash,
@@ -149,16 +157,43 @@ def test_p3_non_divisor_candidate_scores_at_round_off_only(oracle, harmonics):
 
 # ── Frequency convention, support, and suppression ───────────────────────────
 
-def test_bpm_conversion_is_60q_not_30q():
-    """A pure 1.0 Hz tone must read 60 bpm, proving no residual Step 1a 30*q path."""
+@pytest.mark.parametrize("harmonics", APPROVED_HARMONIC_COUNTS)
+def test_phase_frequency_sinusoid_maps_q_equal_f_and_bpm_equal_60q(harmonics):
+    """An on-grid 1.1 Hz phase tone is 66 bpm, independently of Step 1a's mapping."""
     fs, n = 20.0, 600
     t = np.arange(n) / fs
-    phase = np.sin(2 * np.pi * 1.0 * t)
-    config = AhmedPhaseConfig(domain=REAL_REPRESENTATIVE_DOMAIN, harmonic_counts=(3,))
+    phase_frequency_hz = 1.1
+    phase = np.sin(2 * np.pi * phase_frequency_hz * t)
+    config = AhmedPhaseConfig(
+        domain=REAL_REPRESENTATIVE_DOMAIN, harmonic_counts=(harmonics,)
+    )
     record = estimate_phase_ha(phase, fs, config).arm_native_results[
-        arm_id_for(3, UNSUPPRESSED)
+        arm_id_for(harmonics, UNSUPPRESSED)
     ]
-    assert record["hr_raw"] == pytest.approx(60.0, abs=1e-9)
+    selected_hz = record["heart_evidence"]["selected_hz"]
+    assert selected_hz == pytest.approx(phase_frequency_hz, abs=1e-12)
+    assert record["hr_raw"] == pytest.approx(60.0 * phase_frequency_hz, abs=1e-9)
+    assert record["hr_raw"] != pytest.approx(30.0 * phase_frequency_hz, abs=1e-9)
+
+
+def test_every_approved_arm_records_q_equal_f_and_bpm_equal_60q():
+    fs, n = 20.0, 600
+    rng = np.random.Generator(np.random.PCG64(20260807))
+    result = estimate_phase_ha(
+        rng.standard_normal(n), fs, AhmedPhaseConfig(domain=REAL_REPRESENTATIVE_DOMAIN)
+    )
+    assert tuple(result.arm_native_results) == APPROVED_ARM_IDS
+    for arm_id, record in result.arm_native_results.items():
+        assert record["frequency_mapping_id"] == FREQUENCY_MAPPING_ID, arm_id
+        assert record["rate_mapping_id"] == RATE_MAPPING_ID, arm_id
+        assert record["normalization"] == LAYER_B_NORMALIZATION, arm_id
+        assert record["br_bpm"] == pytest.approx(
+            60.0 * record["breath_evidence"]["selected_hz"]
+        )
+        if record["heart_evidence"] is not None and record["heart_evidence"]["selected_hz"] is not None:
+            expected_bpm = 60.0 * record["heart_evidence"]["selected_hz"]
+            if record["hr_valid"]:
+                assert record["hr_raw"] == pytest.approx(expected_bpm)
 
 
 @pytest.mark.parametrize(
@@ -196,6 +231,17 @@ def test_nyquist_equality_is_recorded_as_degenerate_not_merely_unsupported():
         for b, m in zip(heart["candidate_bins"], heart["nyquist_degenerate_mask"])
     }
     assert degenerate[60] is True  # 5 * 60 == 300 == n_fft/2 exactly
+
+
+def test_strict_nyquist_support_is_below_only_not_equal_or_above():
+    supported, degenerate = _support_masks(
+        np.array([59, 60, 61], dtype=np.int64),
+        harmonics=5,
+        n_fft=600,
+        spectrum_size=301,
+    )
+    assert supported.tolist() == [True, False, False]
+    assert degenerate.tolist() == [False, True, False]
 
 
 def test_denominator_stays_h_when_candidates_are_masked():
@@ -270,6 +316,88 @@ def test_returns_exactly_the_six_declared_arms():
     expected = {arm_id_for(h, p) for h in (3, 5) for p in SUPPRESSION_PROFILES}
     assert set(result.arm_native_results) == expected
     assert len(expected) == 6
+    assert tuple(result.arm_native_results) == APPROVED_ARM_IDS
+
+
+def test_layer_b_register_matches_code_and_excludes_layer_a_audits():
+    path = REPO_ROOT / "experiments" / "m8_ahmed_transfer" / "layer_b_profiles.yaml"
+    register = yaml.safe_load(path.read_text(encoding="utf-8"))
+    assert tuple(row["arm_id"] for row in register["ahmed_arms"]) == APPROVED_ARM_IDS
+    assert {row["harmonics"] for row in register["ahmed_arms"]} == {3, 5}
+    assert {row["suppression"] for row in register["ahmed_arms"]} == set(SUPPRESSION_PROFILES)
+    assert all("non_dc_mean" in row["layer_a_profile_id"] for row in register["ahmed_arms"])
+    assert register["excluded_layer_a_identities"] == ["matrix_eta", "candidate_row"]
+    assert register["signal"]["candidate_frequency"] == "q = f"
+    assert register["signal"]["physiological_rate"] == "bpm = 60q"
+
+
+def test_every_arm_emits_its_complete_fixed_scientific_identity():
+    fs, n = 20.0, 600
+    rng = np.random.Generator(np.random.PCG64(20260807))
+    result = estimate_phase_ha(
+        rng.standard_normal(n), fs, AhmedPhaseConfig(domain=REAL_REPRESENTATIVE_DOMAIN)
+    )
+    expected = {
+        arm_id_for(harmonics, profile): (harmonics, profile, layer_a_profile_id)
+        for harmonics in APPROVED_HARMONIC_COUNTS
+        for profile, layer_a_profile_id in zip(
+            SUPPRESSION_PROFILES,
+            (
+                f"a_fixed_h{harmonics}_non_dc_mean_magnitude_unsuppressed_v1",
+                f"a_fixed_h{harmonics}_non_dc_mean_magnitude_eq26_v1",
+                f"a_fixed_h{harmonics}_non_dc_mean_magnitude_prose_v1",
+            ),
+        )
+    }
+    assert tuple(result.arm_native_results) == APPROVED_ARM_IDS
+    for arm_id, record in result.arm_native_results.items():
+        harmonics, profile, layer_a_profile_id = expected[arm_id]
+        assert record["harmonic_count"] == harmonics
+        assert record["suppression_profile"] == profile
+        assert record["layer_a_profile_id"] == layer_a_profile_id
+        assert record["phase_representation"] == "native_unwrapped_phase"
+        assert record["spectrum_functional"] == "rfft_magnitude"
+        assert record["score_functional"] == "sum_of_spectral_magnitudes"
+        assert record["score_formula_id"] == "sum_h_abs_s_hq_divided_by_h"
+        assert record["normalization"] == "non_dc_mean"
+        assert record["support_rule"] == "strict_h_q_lt_nyquist"
+
+
+def test_prose_arms_carry_the_required_dependent_duplicate_label():
+    label = "dependent_duplicate_by_disjoint_domains"
+    register_path = REPO_ROOT / "experiments" / "m8_ahmed_transfer" / "layer_b_profiles.yaml"
+    register = yaml.safe_load(register_path.read_text(encoding="utf-8"))
+    prose_rows = [
+        row for row in register["ahmed_arms"]
+        if row["suppression"] == "prose_low_or_equal_suppressed"
+    ]
+    assert len(prose_rows) == 2
+    assert all(label in row.values() for row in prose_rows)
+
+    fs, n = 20.0, 600
+    rng = np.random.Generator(np.random.PCG64(13))
+    records = estimate_phase_ha(
+        rng.standard_normal(n), fs, AhmedPhaseConfig(domain=REAL_REPRESENTATIVE_DOMAIN)
+    ).arm_native_results
+    prose_records = [
+        record for record in records.values()
+        if record["suppression_profile"] == "prose_low_or_equal_suppressed"
+    ]
+    assert len(prose_records) == 2
+    assert all(label in record.values() for record in prose_records)
+
+
+def test_real_layer_b_suite_rejects_partial_or_layer_a_profile_sets():
+    with pytest.raises(ValueError, match="exactly H"):
+        AhmedPhaseEstimatorSuite(
+            AhmedPhaseConfig(
+                domain=REAL_REPRESENTATIVE_DOMAIN, harmonic_counts=(3,)
+            )
+        )
+    with pytest.raises(ValueError, match="matrix_eta belongs only"):
+        AhmedPhaseConfig(
+            domain=REAL_REPRESENTATIVE_DOMAIN, normalization="matrix_eta"
+        )
 
 
 def test_native_result_field_contract():

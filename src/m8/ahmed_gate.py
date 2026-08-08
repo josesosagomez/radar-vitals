@@ -3,7 +3,7 @@
 Two verdicts, deliberately separated:
 
 * **Gate verdict** — the sole control on real-data eligibility. Passes only when the
-  implementation reproduces the predeclared predictions P1-P4 across **both** candidate
+  implementation reproduces the plan-declared predictions P1-P4 across **both** candidate
   domains. Because P1-P4 include the predicted *failures*, the gate cannot be made to pass
   by choosing a favourable candidate band: a gate that tests whether the method *works*
   can be gamed by narrowing the domain; one that tests whether the code matches the

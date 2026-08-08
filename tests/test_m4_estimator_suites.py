@@ -14,6 +14,7 @@ All fixtures are synthetic. Nothing here opens a real capture or Masimo file.
 from __future__ import annotations
 
 import copy
+from collections import deque
 from pathlib import Path
 import sys
 
@@ -29,6 +30,7 @@ from src.m4.production_suite import (  # noqa: E402
     OUTCOME_CLASSIFIER_ID,
     PRODUCTION_ARM_ID,
     PRODUCTION_ESTIMATOR_ID,
+    STRICT_GATE_MODE,
     EcaBindriftOutcomeClassifier,
     ProductionEstimatorSuite,
 )
@@ -45,6 +47,29 @@ from src.window_pipeline import run_window_dsp  # noqa: E402
 FS = 20.0
 N_FRAMES = 600
 LOCKED_BIN = 25
+
+
+def _assert_nested_exact(a, b, path="root"):
+    """Exact recursive equality without normalizing the native scientific payload."""
+    assert type(a) is type(b), f"{path}: {type(a)} vs {type(b)}"
+    if isinstance(a, dict):
+        assert a.keys() == b.keys(), f"{path}: key mismatch"
+        for key in a:
+            _assert_nested_exact(a[key], b[key], f"{path}.{key}")
+    elif isinstance(a, (list, tuple)):
+        assert len(a) == len(b), f"{path}: length mismatch"
+        for i, (x, y) in enumerate(zip(a, b)):
+            _assert_nested_exact(x, y, f"{path}[{i}]")
+    elif isinstance(a, np.ndarray):
+        assert a.dtype == b.dtype, f"{path}: dtype"
+        if np.issubdtype(a.dtype, np.inexact):
+            assert np.array_equal(a, b, equal_nan=True), f"{path}: values"
+        else:
+            assert np.array_equal(a, b), f"{path}: values"
+    elif isinstance(a, float):
+        assert (np.isnan(a) and np.isnan(b)) or a == b, f"{path}: {a} vs {b}"
+    else:
+        assert a == b, f"{path}: {a!r} vs {b!r}"
 
 
 @pytest.fixture(scope="module")
@@ -76,28 +101,15 @@ def test_production_native_payload_equals_a_direct_call(production_config, cube)
     via_suite = suite(cube, LOCKED_BIN, FS).arm_native_results[PRODUCTION_ARM_ID]
     direct = run_window_dsp(cube, LOCKED_BIN, FS, copy.deepcopy(production_config))
 
-    def assert_equal(a, b, path="root"):
-        assert type(a) is type(b), f"{path}: {type(a)} vs {type(b)}"
-        if isinstance(a, dict):
-            assert a.keys() == b.keys(), f"{path}: key mismatch"
-            for key in a:
-                assert_equal(a[key], b[key], f"{path}.{key}")
-        elif isinstance(a, (list, tuple)):
-            assert len(a) == len(b), f"{path}: length mismatch"
-            for i, (x, y) in enumerate(zip(a, b)):
-                assert_equal(x, y, f"{path}[{i}]")
-        elif isinstance(a, np.ndarray):
-            assert a.dtype == b.dtype, f"{path}: dtype"
-            if np.issubdtype(a.dtype, np.inexact):
-                assert np.array_equal(a, b, equal_nan=True), f"{path}: values"
-            else:
-                assert np.array_equal(a, b), f"{path}: values"
-        elif isinstance(a, float):
-            assert (np.isnan(a) and np.isnan(b)) or a == b, f"{path}: {a} vs {b}"
-        else:
-            assert a == b, f"{path}: {a!r} vs {b!r}"
+    _assert_nested_exact(via_suite, direct)
 
-    assert_equal(via_suite, direct)
+
+def test_production_suite_ndarray_and_deque_payloads_are_exact(production_config, cube):
+    """The two public frame-container paths remain bit-for-bit interchangeable."""
+    suite = ProductionEstimatorSuite(production_config)
+    from_array = suite(cube, LOCKED_BIN, FS).arm_native_results[PRODUCTION_ARM_ID]
+    from_deque = suite(deque(cube), LOCKED_BIN, FS).arm_native_results[PRODUCTION_ARM_ID]
+    _assert_nested_exact(from_array, from_deque)
 
 
 def test_production_suite_declares_exactly_one_arm(production_config):
@@ -139,9 +151,20 @@ def test_config_snapshot_is_a_fresh_copy(production_config):
 
 
 def test_outcome_classifier_is_declared_and_keyed_by_arm_id(production_config, cube):
+    """The outcome classifier exists only in the ``strict_v1`` gate mode, which is frozen on.
+
+    ``scripts/live_demo_config.yaml`` is a tracked, hash-bound attestation input, so the
+    gate mode is identical on every clone: this node executes everywhere and is NOT an
+    optional-mode skip.  A config flip is asserted against rather than skipped over,
+    because a silent flip would drop the production outcome classifier — whose label is
+    written into the radar rows M4 scoring consumes — out of the gate's executed coverage.
+    """
     suite = ProductionEstimatorSuite(production_config)
-    if suite.arm_specs[0].outcome_classifier_id is None:
-        pytest.skip("live config is not in strict_v1 gate mode")
+    assert production_config["heart"]["ahet_gate_mode"] == STRICT_GATE_MODE, (
+        "the frozen live config left strict_v1 gate mode, so the production outcome "
+        "classifier is no longer declared; this is a scientific change, not a skip"
+    )
+    assert suite.arm_specs[0].outcome_classifier_id == OUTCOME_CLASSIFIER_ID
     assert set(suite.outcome_classifiers) == {PRODUCTION_ARM_ID}
     assert suite.outcome_classifiers[PRODUCTION_ARM_ID].classifier_id == OUTCOME_CLASSIFIER_ID
     result = suite(cube, LOCKED_BIN, FS)

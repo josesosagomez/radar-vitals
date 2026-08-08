@@ -10,8 +10,9 @@ This is a claim about how a candidate MOVES. It is indifferent to whether high-o
 are coherent, to f_r precision, and to whether ECA works at all.
 
 =============================================================================================
-PRE-SPECIFICATION — written and committed BEFORE looking at any result (review comment 1B.4).
-Nothing below this block was tuned after seeing an outcome.
+SPECIFICATION — fixed in this docstring and applied unchanged to every run (review comment
+1B.4).  This is a transparency statement about what the rule IS, written out in full so a
+reader can apply it; it is not a claim about when it was written (CLAUDE.md section 4).
 =============================================================================================
 
 S1 (PRIMARY statistic) — harmonic-tracking residual, in bpm:

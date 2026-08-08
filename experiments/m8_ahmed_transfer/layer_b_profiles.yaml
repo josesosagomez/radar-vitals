@@ -1,0 +1,53 @@
+schema_version: 1
+status: approved_layer_b_profile_register
+authority: plans/m8_ahmed_correction_plan.md
+signal:
+  representation: unwrapped_phase
+  extraction: delta_before_mean
+  candidate_frequency: q = f
+  physiological_rate: bpm = 60q
+  spectrum: rFFT magnitude
+  score: sum_h |S(hq)| / H
+  score_functional: sum_of_spectral_magnitudes
+  score_formula_id: sum_h_abs_s_hq_divided_by_h
+  normalization: non_dc_mean
+  support: Hq < f_Nyquist
+locks:
+  - recorded_lock_as_captured
+  - current_production_rerun_lock
+production_arm: production_eca_ahet_v1
+ahmed_arms:
+  - arm_id: ahmed_phase_h3_figure_visible_unsuppressed
+    layer_a_profile_id: a_fixed_h3_non_dc_mean_magnitude_unsuppressed_v1
+    harmonics: 3
+    suppression: figure_visible_unsuppressed
+    profile_dependency: distinct_profile_identity
+  - arm_id: ahmed_phase_h3_eq26_multiples_suppressed
+    layer_a_profile_id: a_fixed_h3_non_dc_mean_magnitude_eq26_v1
+    harmonics: 3
+    suppression: eq26_multiples_suppressed
+    profile_dependency: distinct_profile_identity
+  - arm_id: ahmed_phase_h3_prose_low_or_equal_suppressed
+    layer_a_profile_id: a_fixed_h3_non_dc_mean_magnitude_prose_v1
+    harmonics: 3
+    suppression: prose_low_or_equal_suppressed
+    profile_dependency: dependent_duplicate_by_disjoint_domains
+  - arm_id: ahmed_phase_h5_figure_visible_unsuppressed
+    layer_a_profile_id: a_fixed_h5_non_dc_mean_magnitude_unsuppressed_v1
+    harmonics: 5
+    suppression: figure_visible_unsuppressed
+    profile_dependency: distinct_profile_identity
+  - arm_id: ahmed_phase_h5_eq26_multiples_suppressed
+    layer_a_profile_id: a_fixed_h5_non_dc_mean_magnitude_eq26_v1
+    harmonics: 5
+    suppression: eq26_multiples_suppressed
+    profile_dependency: distinct_profile_identity
+  - arm_id: ahmed_phase_h5_prose_low_or_equal_suppressed
+    layer_a_profile_id: a_fixed_h5_non_dc_mean_magnitude_prose_v1
+    harmonics: 5
+    suppression: prose_low_or_equal_suppressed
+    profile_dependency: dependent_duplicate_by_disjoint_domains
+excluded_layer_a_identities:
+  - matrix_eta
+  - candidate_row
+note: Layer A audit identities do not create Layer B estimator arms.

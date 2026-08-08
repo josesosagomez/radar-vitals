@@ -196,8 +196,12 @@ class TestHaEstimateRr:
 
         # Find the winning candidate (closest to rr_bpm)
         ha_hz  = result["ha_peak_hz"]
-        if not np.isfinite(ha_hz):
-            pytest.skip("HA produced NaN — signal may be too weak for this window length")
+        # `_pure_phase` is deterministic (seed 0), so a NaN here is a phase-extraction
+        # regression, not a weak-signal accident. Asserting keeps it a FAILURE: a skip
+        # would silently remove the harmonic-model check below from coverage.
+        assert np.isfinite(ha_hz), (
+            f"HA produced a non-finite peak ({ha_hz}) on the deterministic {rr} bpm tone"
+        )
 
         cand_freqs = result["ha_candidate_freqs_hz"]
         cand_scores = result["ha_candidate_scores"]
@@ -232,8 +236,12 @@ class TestHaEstimateRr:
                  + 0.05 * rng.standard_normal(len(t)))
 
         result = ha_estimate_rr(phase, FS, BAND, max_harmonics=3)
-        if not np.isfinite(result["ha_rr_bpm"]):
-            pytest.skip("HA returned NaN — fundamental too weak for fundamental-support check")
+        # Deterministic input (default_rng(7)), so returning NaN would itself be the
+        # regression this test exists to catch — it must fail, not skip.
+        assert np.isfinite(result["ha_rr_bpm"]), (
+            "HA returned NaN on the deterministic dominant-2nd-harmonic signal, so the "
+            "fundamental-support check rejected a fundamental that is genuinely present"
+        )
         assert abs(result["ha_rr_bpm"] - rr) <= 3.0, (
             f"HA returned {result['ha_rr_bpm']:.1f} bpm, expected ~{rr} bpm "
             "even though 2nd harmonic had 4× more power and falls above the band"
@@ -250,13 +258,15 @@ class TestHaEstimateRr:
         phase  = _pure_phase(rr, dur_s=30.0)
         result = ha_estimate_rr(phase, FS, BAND, max_harmonics=3)
 
-        if not np.isfinite(result["ha_rr_bpm"]):
-            pytest.skip("HA returned NaN")
+        # Both preconditions are deterministic properties of `_pure_phase(24 bpm)`; losing
+        # either one would remove the above-band harmonic check without any signal.
+        assert np.isfinite(result["ha_rr_bpm"]), (
+            f"HA returned NaN on the deterministic {rr} bpm tone"
+        )
 
         cand_freqs  = result["ha_candidate_freqs_hz"]
         cand_scores = result["ha_candidate_scores"]
-        if len(cand_freqs) == 0:
-            pytest.skip("No candidates found")
+        assert len(cand_freqs) > 0, "HA proposed no candidate in the respiration band"
 
         best_idx = int(np.argmax(np.where(np.isfinite(cand_scores), cand_scores, -np.inf)))
         hf_row   = result["ha_harmonic_freqs_hz"][best_idx]

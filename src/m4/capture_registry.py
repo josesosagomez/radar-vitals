@@ -33,7 +33,33 @@ __all__ = [
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_REGISTRY = REPO_ROOT / "experiments" / "m8_ahmed_transfer" / "capture_registry.yaml"
 
-MASIMO_KEYS = ("masimo_sha256",)
+MASIMO_KEYS = ("masimo_csv", "masimo_sha256")
+
+EXPECTED_PROTOCOLS = {
+    "m1": "natural",
+    "m2": "paced_16_bpm",
+    "sweep": "paced_schedule_target_unavailable",
+    "m3": "unknown_protocol_development",
+    "m4": "unknown_protocol_development",
+    "m5": "unknown_protocol_development",
+    "m6": "unknown_protocol_development",
+    "m7": "unknown_protocol_development",
+}
+EXPECTED_STRATA = {
+    "natural": ("m1",),
+    "paced": ("m2", "sweep"),
+    "unknown": ("m3", "m4", "m5", "m6", "m7"),
+}
+EXPECTED_REFERENCE_PATHS = {
+    "m1": "20260713_172042_live_demo_massimo1/demo_massimo1.csv",
+    "m2": "20260713_182002_live_demo_massimo2/demo_massimo2.csv",
+    "sweep": "20260714_180523_live_demo_sweep/demo_sweep.csv",
+    "m3": "20260728_224902_live_demo_massimo3/demo_massimo3.csv",
+    "m4": "20260728_230903_live_demo_massimo4/demo_massimo4.csv",
+    "m5": "20260728_232415_live_demo_massimo5/demo_massimo5.csv",
+    "m6": "20260729_002158_live_demo_massimo6/demo_massimo6.csv",
+    "m7": "20260729_004815_live_demo_massimo7/demo_massimo7.csv",
+}
 
 
 @dataclass(frozen=True)
@@ -55,6 +81,9 @@ class RadarCapture:
 
     def metadata_path(self, root: Path) -> Path:
         return Path(root) / self.directory / "run_metadata.json"
+
+    def warmup_path(self, root: Path) -> Path:
+        return Path(root) / self.directory / "warmup_bin_selection.json"
 
 
 @dataclass(frozen=True)
@@ -84,6 +113,7 @@ class ReferenceScope:
     """Everything the scoring stage may see. Contains no raw ADC path."""
 
     root: Path
+    masimo_csv: Mapping[str, str]
     masimo_sha256: Mapping[str, str]
     protocol: Mapping[str, str]
     strata: Mapping[str, tuple[str, ...]]
@@ -92,6 +122,16 @@ class ReferenceScope:
         if capture_id not in self.masimo_sha256:
             raise KeyError(f"unknown capture {capture_id!r}")
         return self.masimo_sha256[capture_id]
+
+    def csv_path(self, capture_id: str) -> Path:
+        """Return the one explicit reference path declared for ``capture_id``.
+
+        This method only constructs a path. It never stats or opens it; scorer preflight
+        must finish before the caller invokes it.
+        """
+        if capture_id not in self.masimo_csv:
+            raise KeyError(f"unknown capture {capture_id!r}")
+        return self.root / self.masimo_csv[capture_id]
 
     def stratum_of(self, capture_id: str) -> str:
         for name, members in self.strata.items():
@@ -126,6 +166,21 @@ def _require(mapping: Mapping, key: str, context: str):
     return mapping[key]
 
 
+def _require_mapping(value, context: str) -> Mapping:
+    """A registry section that is later iterated as a mapping must actually be one.
+
+    YAML parses happily into the wrong shape — ``radar:`` written as a list, or a capture
+    entry written as a bare string — and such a value would reach ``.items()`` or ``dict()``
+    and raise AttributeError/TypeError. The scorer's gate only converts ValueError (and
+    OSError/yaml.YAMLError) into ``ScoreContractError``, so a structurally malformed
+    registry would otherwise escape as an unrelated exception type. Every structural
+    problem must surface here as a ValueError naming the offending section.
+    """
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{context}: expected a mapping, got {type(value).__name__}")
+    return value
+
+
 def load_registry(path: Path | None = None, *, root: Path | None = None) -> CaptureRegistry:
     """Parse and validate the registry. Structural problems are fatal, never warnings."""
     path = Path(path or DEFAULT_REGISTRY)
@@ -136,9 +191,16 @@ def load_registry(path: Path | None = None, *, root: Path | None = None) -> Capt
     resolved_root = Path(root) if root is not None else REPO_ROOT / _require(
         document, "root", str(path)
     )
-    radar_raw = _require(document, "radar", str(path))
-    reference_raw = _require(document, "reference", str(path))
-    grid = _require(document, "window_grid", str(path))
+    radar_raw = _require_mapping(_require(document, "radar", str(path)), f"{path}: radar")
+    reference_raw = _require_mapping(
+        _require(document, "reference", str(path)), f"{path}: reference"
+    )
+    grid = _require_mapping(
+        _require(document, "window_grid", str(path)), f"{path}: window_grid"
+    )
+    geometry = _require_mapping(
+        _require(document, "geometry", str(path)), f"{path}: geometry"
+    )
 
     if set(radar_raw) != set(reference_raw):
         raise ValueError(
@@ -148,6 +210,7 @@ def load_registry(path: Path | None = None, *, root: Path | None = None) -> Capt
 
     captures: dict[str, RadarCapture] = {}
     for capture_id, entry in radar_raw.items():
+        entry = _require_mapping(entry, f"{path}: radar entry {capture_id!r}")
         # A stray reference key inside the radar section would defeat the separation.
         leaked = [k for k in entry if k in MASIMO_KEYS or "masimo" in k.lower()]
         if leaked:
@@ -193,15 +256,60 @@ def load_registry(path: Path | None = None, *, root: Path | None = None) -> Capt
             f"{len(captures)} captures leaves {actual_total - len(captures)}"
         )
 
-    strata = {
-        name: tuple(members)
-        for name, members in (document.get("strata") or {}).items()
-    }
-    covered = {c for members in strata.values() for c in members}
+    strata_raw = document.get("strata") or {}
+    if not isinstance(strata_raw, Mapping):
+        raise ValueError(f"{path}: strata must be a mapping")
+    strata: dict[str, tuple[str, ...]] = {}
+    flattened_members: list[str] = []
+    for name, members in strata_raw.items():
+        if type(name) is not str or type(members) is not list or any(
+            type(member) is not str for member in members
+        ):
+            raise ValueError(f"{path}: stratum {name!r} must be a list of capture IDs")
+        if len(set(members)) != len(members):
+            raise ValueError(f"{path}: stratum {name!r} contains duplicate captures")
+        strata[name] = tuple(members)
+        flattened_members.extend(members)
+    if len(flattened_members) != len(set(flattened_members)):
+        raise ValueError(f"{path}: a capture belongs to more than one protocol stratum")
+    covered = set(flattened_members)
     if covered != set(captures):
         raise ValueError(
             f"{path}: strata cover {sorted(covered)}, captures are {sorted(captures)}"
         )
+    if strata != EXPECTED_STRATA:
+        raise ValueError(f"{path}: protocol strata differ from the approved identities")
+
+    protocol = document.get("protocol") or {}
+    if not isinstance(protocol, Mapping) or dict(protocol) != EXPECTED_PROTOCOLS:
+        raise ValueError(f"{path}: protocol identities differ from the approved registry")
+    roles = document.get("roles") or {}
+    if roles != {"data_role": "development_apparent_single_subject", "holdout": "none"}:
+        raise ValueError(f"{path}: development/holdout roles differ from the approved registry")
+
+    masimo_paths: dict[str, str] = {}
+    masimo_digests: dict[str, str] = {}
+    for capture_id, entry in reference_raw.items():
+        entry = _require_mapping(entry, f"{path}: reference entry {capture_id!r}")
+        allowed_reference_keys = {"masimo_csv", "masimo_sha256"}
+        if set(entry) != allowed_reference_keys:
+            raise ValueError(
+                f"{path}: reference entry {capture_id!r} must contain exactly "
+                f"{sorted(allowed_reference_keys)}"
+            )
+        relative_text = str(_require(entry, "masimo_csv", capture_id))
+        relative_path = Path(relative_text)
+        if relative_path.is_absolute() or ".." in relative_path.parts:
+            raise ValueError(f"{capture_id}: masimo_csv must be a safe relative path")
+        if relative_path.name.lower().endswith(".csv") is False:
+            raise ValueError(f"{capture_id}: masimo_csv must name a CSV file")
+        digest = str(_require(entry, "masimo_sha256", capture_id))
+        if len(digest) != 64 or any(char not in "0123456789abcdef" for char in digest):
+            raise ValueError(f"{capture_id}: masimo_sha256 must be a lowercase SHA-256")
+        masimo_paths[capture_id] = relative_path.as_posix()
+        masimo_digests[capture_id] = digest
+    if masimo_paths != EXPECTED_REFERENCE_PATHS:
+        raise ValueError(f"{path}: reference CSV paths differ from the approved registry")
 
     return CaptureRegistry(
         registry_id=str(_require(document, "registry_id", str(path))),
@@ -209,16 +317,14 @@ def load_registry(path: Path | None = None, *, root: Path | None = None) -> Capt
         _radar=RadarScope(
             root=resolved_root,
             captures=captures,
-            geometry=dict(_require(document, "geometry", str(path))),
+            geometry=dict(geometry),
             window_grid={k: int(v) for k, v in grid.items()},
         ),
         _reference=ReferenceScope(
             root=resolved_root,
-            masimo_sha256={
-                cid: str(_require(entry, "masimo_sha256", cid))
-                for cid, entry in reference_raw.items()
-            },
-            protocol=dict(document.get("protocol") or {}),
+            masimo_csv=masimo_paths,
+            masimo_sha256=masimo_digests,
+            protocol=dict(protocol),
             strata=strata,
         ),
     )

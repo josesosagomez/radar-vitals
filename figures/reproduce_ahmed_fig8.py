@@ -30,6 +30,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from src.m8.ahmed_fig8 import (  # noqa: E402
+    LAYER_A_PROFILES,
     SUPPRESSION_PROFILES,
     AhmedConfig,
     AhmedSignal,
@@ -47,6 +48,10 @@ DEFAULT_CONFIG = REPO_ROOT / "experiments" / "m8_ahmed_fig8" / "config.yaml"
 DEFAULT_OUT = REPO_ROOT / "results" / "m8_ahmed_fig8"
 DEFAULT_CANONICAL = REPO_ROOT / "figures" / "generated" / "m8_ahmed_fig8"
 PLAN_PATH = REPO_ROOT / "plans" / "m8_step1a_ahmed_reproduction.md"
+CORRECTION_PLAN_PATH = REPO_ROOT / "plans" / "m8_ahmed_correction_plan.md"
+PROFILE_REGISTER_PATH = (
+    REPO_ROOT / "experiments" / "m8_ahmed_fig8" / "layer_a_profiles.yaml"
+)
 IMPLEMENTATION_PATH = REPO_ROOT / "src" / "m8" / "ahmed_fig8.py"
 TEST_PATH = REPO_ROOT / "tests" / "test_m8_ahmed_fig8.py"
 PAPER_PATH = (
@@ -271,10 +276,13 @@ def _result_arrays(prefix: str, result: HAScoreResult) -> dict[str, np.ndarray]:
         f"{prefix}__frequencies_hz": result.frequencies_hz,
         f"{prefix}__candidate_bins": result.candidate_bins,
         f"{prefix}__harmonic_bins": result.harmonic_bins,
+        f"{prefix}__harmonic_support": result.harmonic_support,
         f"{prefix}__spectrum_frequencies_hz": result.spectrum_frequencies_hz,
         f"{prefix}__spectrum_magnitude": result.spectrum_magnitude,
         f"{prefix}__scores_before_exclusion": result.scores_before_exclusion,
         f"{prefix}__scores": result.scores,
+        f"{prefix}__support_eligible": result.support_eligible,
+        f"{prefix}__suppression_eligible": result.suppression_eligible,
         f"{prefix}__eligible": result.eligible,
     }
 
@@ -302,6 +310,8 @@ def _result_metric(result: HAScoreResult, config: AhmedConfig) -> dict[str, Any]
     )
     return {
         "vital": result.vital,
+        "profile_id": result.profile_id,
+        "row_support": result.row_support,
         "harmonics": result.harmonics,
         "suppression_profile": result.suppression_profile,
         "normalization": result.normalization,
@@ -391,6 +401,7 @@ def _render_figure(
     path_pdf: Path,
     config: AhmedConfig,
     results: Mapping[int, tuple[HAScoreResult, HAScoreResult]],
+    acceptance_status: str,
 ) -> None:
     fig, axes = plt.subplots(1, 2, figsize=(11.5, 4.6), constrained_layout=True)
     colors = {3: "#0067B1", 5: "#D55E00"}
@@ -432,8 +443,9 @@ def _render_figure(
         axis.legend(loc="upper right")
     axes[0].set_xlim(0.0, 2.0 * config.breath_max_bpm / 60.0)
     axes[1].set_xlim(2.0 * config.breath_hz, 2.0 * config.heart_max_bpm / 60.0)
+    title = _status_derived_title(acceptance_status)
     fig.suptitle(
-        "Ahmed et al. Fig. 8(c)-(d) behavioral reproduction\n"
+        f"{title}\n"
         "single TX/RX equation-(14) model, 10 dB SNR, five breaths",
         fontsize=11,
     )
@@ -442,12 +454,52 @@ def _render_figure(
         path_pdf,
         bbox_inches="tight",
         metadata={
-            "Title": "Ahmed Fig. 8(c)-(d) behavioral reproduction",
+            "Title": title,
             "Author": "radar-vitals reproducible simulation",
-            "Subject": "M8 Step 1a",
+            "Subject": f"M8 Figure 8 successor; {acceptance_status}",
+            # Matplotlib otherwise inserts wall-clock time, which makes equal
+            # scientific inputs produce different PDF bytes.
+            "CreationDate": datetime(2024, 1, 1, tzinfo=timezone.utc),
+            "ModDate": datetime(2024, 1, 1, tzinfo=timezone.utc),
         },
     )
     plt.close(fig)
+
+
+def _status_derived_title(acceptance_status: str) -> str:
+    labels = {
+        "behaviorally_reproduced": "BEHAVIORALLY REPRODUCED",
+        "not_reproduced_under_declared_assumptions": (
+            "NOT REPRODUCED UNDER DECLARED ASSUMPTIONS"
+        ),
+    }
+    try:
+        status_label = labels[acceptance_status]
+    except KeyError as exc:
+        raise ValueError(
+            f"unsupported Figure 8 acceptance status {acceptance_status!r}"
+        ) from exc
+    return f"Ahmed et al. Fig. 8(c)-(d) successor — {status_label}"
+
+
+def _successor_provenance_bytes(
+    acceptance_status: str,
+    scientific_input_hashes: Mapping[str, str],
+) -> bytes:
+    """Serialize the successor's stable, machine-independent provenance core."""
+    payload = {
+        "schema_version": 1,
+        "artifact_kind": "figure_8_successor_preparation",
+        "official_publication_status": "withheld_until_m5",
+        "acceptance_status": acceptance_status,
+        "figure_title": _status_derived_title(acceptance_status),
+        "layer_a_profile_ids": [profile.profile_id for profile in LAYER_A_PROFILES],
+        "scientific_input_hashes": dict(scientific_input_hashes),
+    }
+    return (
+        json.dumps(payload, allow_nan=False, separators=(",", ":"), sort_keys=True)
+        + "\n"
+    ).encode("utf-8")
 
 
 def _git_text(*args: str) -> str:
@@ -479,6 +531,8 @@ def _provenance(
 ) -> dict[str, Any]:
     required = [
         PLAN_PATH,
+        CORRECTION_PLAN_PATH,
+        PROFILE_REGISTER_PATH,
         IMPLEMENTATION_PATH,
         Path(__file__).resolve(),
         TEST_PATH,
@@ -528,6 +582,8 @@ def _provenance(
             "source_config_sha256": _sha256(config_path),
             "resolved_config_sha256": _sha256(resolved_path),
             "plan_sha256": _sha256(PLAN_PATH),
+            "correction_plan_sha256": _sha256(CORRECTION_PLAN_PATH),
+            "layer_a_profile_register_sha256": _sha256(PROFILE_REGISTER_PATH),
             "implementation_module_sha256": _sha256(IMPLEMENTATION_PATH),
             "runner_script_sha256": _sha256(Path(__file__).resolve()),
             "test_file_sha256": _sha256(TEST_PATH),
@@ -537,6 +593,8 @@ def _provenance(
         "source_paths": {
             "config": str(config_path.resolve()),
             "plan": str(PLAN_PATH.resolve()),
+            "correction_plan": str(CORRECTION_PLAN_PATH.resolve()),
+            "layer_a_profile_register": str(PROFILE_REGISTER_PATH.resolve()),
             "paper_pdf": str(PAPER_PATH.resolve()),
         },
         "runtime": {
@@ -782,7 +840,30 @@ def execute(
         stage = "rendering"
         figure_png = run_dir / "ahmed_fig8cd_behavioral.png"
         figure_pdf = run_dir / "ahmed_fig8cd_behavioral.pdf"
-        _render_figure(figure_png, figure_pdf, primary, figure_results)
+        _render_figure(
+            figure_png,
+            figure_pdf,
+            primary,
+            figure_results,
+            metrics["acceptance"]["status"],
+        )
+
+        stage = "successor_provenance"
+        stable_provenance_path = run_dir / "successor_provenance.json"
+        stable_provenance_path.write_bytes(
+            _successor_provenance_bytes(
+                metrics["acceptance"]["status"],
+                {
+                    "source_config_sha256": _sha256(config_path),
+                    "correction_plan_sha256": _sha256(CORRECTION_PLAN_PATH),
+                    "step1a_plan_sha256": _sha256(PLAN_PATH),
+                    "implementation_sha256": _sha256(IMPLEMENTATION_PATH),
+                    "runner_sha256": _sha256(Path(__file__).resolve()),
+                    "profile_register_sha256": _sha256(PROFILE_REGISTER_PATH),
+                    "paper_pdf_sha256": _sha256(PAPER_PATH),
+                },
+            )
+        )
 
         stage = "provenance"
         output_hashes = {
@@ -793,6 +874,7 @@ def execute(
                 "metrics_sha256": _sha256(metrics_path),
                 "figure_png_sha256": _sha256(figure_png),
                 "figure_pdf_sha256": _sha256(figure_pdf),
+                "successor_provenance_sha256": _sha256(stable_provenance_path),
             }
         )
         provenance_path = run_dir / "provenance.json"
@@ -802,48 +884,28 @@ def execute(
         contract_matches, contract_reasons = _canonical_contract_matches(
             config_path, document
         )
-        canonical_eligible = bool(
-            provenance["git"]["clean_and_required_tracked"]
-            and contract_matches
-        )
+        # M1 prepares successor behavior but cannot publish an official bundle.
+        # M5 performs review, final source authorization, execution, and hash reopen.
+        canonical_eligible = False
         provenance["canonical_promotion"] = {
             "eligible": canonical_eligible,
-            "policy": (
-                "clean tree, all required source files tracked, and exact approved "
-                "default v1 experiment contract"
-            ),
+            "policy": "official Figure 8 successor publication is withheld until M5",
             "contract_matches": contract_matches,
             "ineligibility_reasons": (
-                contract_reasons
+                ["official_successor_withheld_until_m5"]
+                + contract_reasons
                 + (
                     []
                     if provenance["git"]["clean_and_required_tracked"]
                     else ["git_tree_or_required_tracking_not_clean"]
                 )
             ),
-            "destination": (
-                str((canonical_root / run_id).resolve())
-                if canonical_eligible
-                else None
-            ),
+            "destination": None,
         }
         _write_json(provenance_path, provenance)
 
-        stage = "canonical_bundle"
+        stage = "successor_prepared"
         canonical_bundle = None
-        if canonical_eligible:
-            canonical_bundle = _promote_canonical(
-                canonical_root,
-                run_id,
-                {
-                    resolved_path: "resolved_config.yaml",
-                    metrics_path: "metrics.json",
-                    provenance_path: "provenance.json",
-                    figure_png: figure_png.name,
-                    figure_pdf: figure_pdf.name,
-                },
-                output_hashes,
-            )
 
         _write_json(
             status_path,
@@ -858,6 +920,10 @@ def execute(
                 "canonical_promoted": canonical_bundle is not None,
                 "canonical_bundle": (
                     None if canonical_bundle is None else str(canonical_bundle.resolve())
+                ),
+                "official_successor_status": "withheld_until_m5",
+                "figure_title": _status_derived_title(
+                    metrics["acceptance"]["status"]
                 ),
             },
         )

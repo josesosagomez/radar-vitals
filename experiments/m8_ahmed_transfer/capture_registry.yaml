@@ -129,20 +129,28 @@ radar:
 
 reference:
   m1:
+    masimo_csv: 20260713_172042_live_demo_massimo1/demo_massimo1.csv
     masimo_sha256: 960af7f5038a8fe9233b38dfcb583872f3dba8c89082c72cf8e05ed371732bf9
   m2:
+    masimo_csv: 20260713_182002_live_demo_massimo2/demo_massimo2.csv
     masimo_sha256: d1cb91a43691cb10907425b15c2f0f1d02da09d12825d399225c8b16e89d32ff
   sweep:
+    masimo_csv: 20260714_180523_live_demo_sweep/demo_sweep.csv
     masimo_sha256: 5974a9f303f79729c254fb4dc904d1c85c4bea006fafc202d12e0267de93de04
   m3:
+    masimo_csv: 20260728_224902_live_demo_massimo3/demo_massimo3.csv
     masimo_sha256: 92054b471a04eefdbe4de45988846bab503cf61a0e5c619e5d8f545ef0a965cb
   m4:
+    masimo_csv: 20260728_230903_live_demo_massimo4/demo_massimo4.csv
     masimo_sha256: 286b6e3fe085acbef15a85448f383e95945cd3ef23bf309c0159d0dc3dc6dfe5
   m5:
+    masimo_csv: 20260728_232415_live_demo_massimo5/demo_massimo5.csv
     masimo_sha256: 6e0de2788f3b1162bce1782b70a8a7a2d5a752fdc52b3ca12029119368aa8498
   m6:
+    masimo_csv: 20260729_002158_live_demo_massimo6/demo_massimo6.csv
     masimo_sha256: 119b740e801a410be2af4ce8962b2defb2a95a9aaf2b2f9b7494d097a7143178
   m7:
+    masimo_csv: 20260729_004815_live_demo_massimo7/demo_massimo7.csv
     masimo_sha256: 778cbbc8f4c2618294c6a29e2ba29c2022504bb4bdd2fe437637cf57ef4b0684
 
 # All eight are single-subject development/apparent data. None is a holdout, and none

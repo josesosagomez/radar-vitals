@@ -374,8 +374,13 @@ class TestLocalMaxPolicy:
                  + 0.02 * rng.standard_normal(len(T)))
         r = ha_estimate_rr(phase, FS, BAND, max_harmonics=3)
         cand_16 = int(np.argmin(np.abs(r["ha_candidate_freqs_hz"] - 16.0 / 60.0)))
-        if r["ha_fund_is_local_max"][cand_16]:
-            pytest.skip("noise made the empty 16 bpm bin a local max — seed-specific")
+        # The seed is fixed (default_rng(12)) and the 16 bpm line is genuinely absent, so
+        # the non-line flag is a deterministic property of this input. Asserting it keeps
+        # the sub-harmonic exclusion below in coverage instead of skipping past it.
+        assert not r["ha_fund_is_local_max"][cand_16], (
+            "the empty 16 bpm bin was flagged a local max, so the non-line guard no "
+            "longer excludes an absent fundamental on this deterministic input"
+        )
         if np.isfinite(r["ha_rr_bpm"]):
             assert abs(r["ha_rr_bpm"] - 16.0) > 2.0, (
                 "HA selected the sub-harmonic despite an absent fundamental line"

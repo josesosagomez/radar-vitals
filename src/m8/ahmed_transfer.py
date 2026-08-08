@@ -53,12 +53,21 @@ from src.respiration import extract_chest_phase
 from src.window_pipeline import run_config_hash
 
 __all__ = [
+    "APPROVED_ARM_IDS",
+    "APPROVED_HARMONIC_COUNTS",
+    "APPROVED_LAYER_A_PROFILE_IDS",
     "AhmedPhaseConfig",
     "AhmedPhaseEstimatorSuite",
     "CandidateDomain",
     "COLLISION_DOMAIN_FROM_FB",
     "ESTIMATOR_ID",
+    "FREQUENCY_MAPPING_ID",
+    "LAYER_B_NORMALIZATION",
     "PHASE_EXTRACTION_METHOD",
+    "RATE_MAPPING_ID",
+    "SCORE_FORMULA_ID",
+    "SCORE_FUNCTIONAL",
+    "SUPPORT_RULE_ID",
     "REAL_REPRESENTATIVE_DOMAIN",
     "arm_id_for",
     "estimate_phase_ha",
@@ -66,6 +75,13 @@ __all__ = [
 ]
 
 ESTIMATOR_ID = "ahmed_fixed_h_phase_v1"
+FREQUENCY_MAPPING_ID = "q_equals_phase_frequency_f"
+RATE_MAPPING_ID = "bpm_equals_60_times_q"
+SCORE_FUNCTIONAL = "sum_of_spectral_magnitudes"
+SCORE_FORMULA_ID = "sum_h_abs_s_hq_divided_by_h"
+SUPPORT_RULE_ID = "strict_h_q_lt_nyquist"
+LAYER_B_NORMALIZATION = "non_dc_mean"
+APPROVED_HARMONIC_COUNTS = (3, 5)
 
 #: The only real mapping (base plan section 3.1). Not configurable: an alternative method
 #: would be a different experiment, not a different setting.
@@ -76,6 +92,27 @@ Vital = Literal["breath", "heart"]
 #: Synthetic breathing fundamental used as the collision domain's heart floor, in Hz.
 #: This is the declared synthetic truth (20 bpm), not anything measured.
 _SYNTHETIC_FB_HZ = 20.0 / 60.0
+
+
+def _layer_a_profile_id(harmonics: int, profile: SuppressionProfile) -> str:
+    profile_suffix = {
+        "figure_visible_unsuppressed": "unsuppressed",
+        "eq26_multiples_suppressed": "eq26",
+        "prose_low_or_equal_suppressed": "prose",
+    }[profile]
+    return f"a_fixed_h{harmonics}_non_dc_mean_magnitude_{profile_suffix}_v1"
+
+
+APPROVED_ARM_IDS = tuple(
+    f"ahmed_phase_h{harmonics}_{profile}"
+    for harmonics in APPROVED_HARMONIC_COUNTS
+    for profile in SUPPRESSION_PROFILES
+)
+APPROVED_LAYER_A_PROFILE_IDS = tuple(
+    _layer_a_profile_id(harmonics, profile)
+    for harmonics in APPROVED_HARMONIC_COUNTS
+    for profile in SUPPRESSION_PROFILES
+)
 
 
 @dataclass(frozen=True)
@@ -133,9 +170,9 @@ class AhmedPhaseConfig:
     """Resolved, hashable configuration for one invocation of the core."""
 
     domain: CandidateDomain
-    harmonic_counts: tuple[int, ...] = (3, 5)
+    harmonic_counts: tuple[int, ...] = APPROVED_HARMONIC_COUNTS
     suppression_profiles: tuple[SuppressionProfile, ...] = SUPPRESSION_PROFILES
-    normalization: str = "non_dc_mean"
+    normalization: str = LAYER_B_NORMALIZATION
     #: None means the native transform length, len(phase) (addendum section A2).
     n_fft: int | None = None
 
@@ -149,8 +186,11 @@ class AhmedPhaseConfig:
         unknown = set(self.suppression_profiles) - set(SUPPRESSION_PROFILES)
         if unknown:
             raise ValueError(f"unsupported suppression profiles {sorted(unknown)}")
-        if self.normalization not in ("non_dc_mean", "matrix_eta"):
-            raise ValueError(f"unsupported normalization {self.normalization!r}")
+        if self.normalization != LAYER_B_NORMALIZATION:
+            raise ValueError(
+                "Layer B normalization is fixed to non_dc_mean; matrix_eta belongs "
+                "only to the Layer A ambiguity audit"
+            )
         if self.n_fft is not None and (type(self.n_fft) is not int or self.n_fft <= 0):
             raise ValueError("n_fft must be a positive exact int or None")
 
@@ -167,8 +207,14 @@ class AhmedPhaseConfig:
                 "suppression_profiles": list(self.suppression_profiles),
                 "normalization": self.normalization,
                 "n_fft": self.n_fft,
-                "frequency_convention": "q_equals_f_bpm_equals_60q",
-                "support_rule": "strict_h_q_lt_nyquist",
+                "frequency_mapping_id": FREQUENCY_MAPPING_ID,
+                "rate_mapping_id": RATE_MAPPING_ID,
+                "phase_representation": "native_unwrapped_phase",
+                "phase_extraction_method": PHASE_EXTRACTION_METHOD,
+                "spectrum_functional": "rfft_magnitude",
+                "score_functional": SCORE_FUNCTIONAL,
+                "score_formula_id": SCORE_FORMULA_ID,
+                "support_rule": SUPPORT_RULE_ID,
                 "estimator_id": ESTIMATOR_ID,
             }
         )
@@ -181,10 +227,15 @@ class AhmedPhaseConfig:
         payload = dict(self.to_dict())
         payload["harmonic_count"] = harmonics
         payload["suppression_profile"] = profile
+        payload["layer_a_profile_id"] = _layer_a_profile_id(harmonics, profile)
         return run_config_hash(canonical_plain(payload))
 
 
 def arm_id_for(harmonics: int, profile: SuppressionProfile) -> str:
+    if harmonics not in APPROVED_HARMONIC_COUNTS:
+        raise ValueError(f"Layer B supports only H=3 and H=5, got H={harmonics}")
+    if profile not in SUPPRESSION_PROFILES:
+        raise ValueError(f"unsupported Layer B suppression profile {profile!r}")
     return f"ahmed_phase_h{harmonics}_{profile}"
 
 
@@ -249,10 +300,23 @@ def _score_vital(
     """Accumulate, mask, select. Returns a plain evidence dict for one (vital, arm)."""
     supported, degenerate = _support_masks(bins, harmonics, n_fft, spectrum.size)
     supported_bins = bins[supported]
+    # Keep a candidate-aligned matrix even for invalid rows.  Evidence consumers can
+    # reconstruct every score and use ``supported_mask`` to distinguish real cells from
+    # unsupported harmonic indices; no sentinel value carries scientific meaning.
+    harmonic_bins_all = bins[:, None] * np.arange(1, harmonics + 1, dtype=np.int64)[None, :]
+    suppression = (
+        np.ones(bins.size, dtype=bool)
+        if suppress_mask is None
+        else np.asarray(suppress_mask, dtype=bool)
+    )
+    if suppression.shape != bins.shape:
+        raise ValueError("suppression mask must align with candidate bins")
     result: dict = {
         "candidate_bins": bins,
+        "harmonic_bins": harmonic_bins_all,
         "supported_mask": supported,
         "nyquist_degenerate_mask": degenerate,
+        "suppression_mask": suppression,
         "n_candidates": int(bins.size),
         "n_supported": int(supported_bins.size),
     }
@@ -265,6 +329,7 @@ def _score_vital(
             selected_hz=None,
             selected_score=None,
             runner_up_bin=None,
+            runner_up_hz=None,
             runner_up_score=None,
             margin=None,
             unique_maximum=False,
@@ -272,15 +337,16 @@ def _score_vital(
         )
         return result
 
-    harmonic_bins, supported_scores = accumulate_harmonics(
+    supported_harmonic_bins, supported_scores = accumulate_harmonics(
         spectrum, supported_bins, harmonics, normalization
     )
+    if not np.array_equal(supported_harmonic_bins, harmonic_bins_all[supported]):
+        raise RuntimeError("harmonic accumulation returned a misaligned bin matrix")
     scores_pre = np.full(bins.size, np.nan)
     scores_pre[supported] = supported_scores
 
     eligible = supported.copy()
-    if suppress_mask is not None:
-        eligible &= suppress_mask
+    eligible &= suppression
     scores = np.where(eligible, scores_pre, np.nan)
 
     index, selected_bin, runner_bin, runner_score, unique = _select_scores(scores, bins)
@@ -298,7 +364,9 @@ def _score_vital(
         reason = ""
 
     result.update(
-        harmonic_bins=harmonic_bins,
+        # Persist the full candidate-aligned matrix. Unsupported candidates remain
+        # present and are interpreted only through ``supported_mask``.
+        harmonic_bins=harmonic_bins_all,
         scores=scores,
         scores_pre_exclusion=scores_pre,
         eligible_mask=eligible,
@@ -306,6 +374,7 @@ def _score_vital(
         selected_hz=None if selected_bin is None else float(freqs[selected_bin]),
         selected_score=selected_score,
         runner_up_bin=runner_bin,
+        runner_up_hz=None if runner_bin is None else float(freqs[runner_bin]),
         runner_up_score=runner_score,
         margin=margin,
         unique_maximum=bool(unique),
@@ -436,7 +505,22 @@ def _base_record(
         "run_config_hash": config.arm_config_hash(harmonics, profile),
         "harmonic_count": harmonics,
         "suppression_profile": profile,
+        "layer_a_profile_id": _layer_a_profile_id(harmonics, profile),
         "domain_id": config.domain.domain_id,
+        "frequency_mapping_id": FREQUENCY_MAPPING_ID,
+        "rate_mapping_id": RATE_MAPPING_ID,
+        "phase_representation": "native_unwrapped_phase",
+        "phase_extraction_method": PHASE_EXTRACTION_METHOD,
+        "spectrum_functional": "rfft_magnitude",
+        "score_functional": SCORE_FUNCTIONAL,
+        "score_formula_id": SCORE_FORMULA_ID,
+        "normalization": LAYER_B_NORMALIZATION,
+        "support_rule": SUPPORT_RULE_ID,
+        "profile_dependency": (
+            "dependent_duplicate_by_disjoint_domains"
+            if profile == "prose_low_or_equal_suppressed"
+            else "distinct_profile_identity"
+        ),
         "shared_signal_hash": shared_signal_hash or "",
     }
 
@@ -484,6 +568,18 @@ class AhmedPhaseEstimatorSuite:
     def __init__(self, config: AhmedPhaseConfig) -> None:
         if not isinstance(config, AhmedPhaseConfig):
             raise TypeError("config must be an AhmedPhaseConfig")
+        if config.domain != REAL_REPRESENTATIVE_DOMAIN:
+            raise ValueError("the real Layer B suite requires real_representative_domain")
+        if config.harmonic_counts != APPROVED_HARMONIC_COUNTS:
+            raise ValueError("the real Layer B suite requires exactly H=(3, 5)")
+        if config.suppression_profiles != SUPPRESSION_PROFILES:
+            raise ValueError(
+                "the real Layer B suite requires exactly the three accepted suppression profiles"
+            )
+        if config.normalization != LAYER_B_NORMALIZATION:
+            raise ValueError("the real Layer B suite requires non_dc_mean")
+        if config.n_fft is not None:
+            raise ValueError("the real Layer B suite requires the native transform length")
         self._config = config  # frozen dataclass; nothing to copy
         self.suite_config_hash = config.config_hash()
         self.arm_specs = tuple(

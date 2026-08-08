@@ -2055,16 +2055,21 @@ def test_a_retry_pointing_at_a_session_that_never_names_it_back(tmp_path):
 
 @pytest.mark.parametrize(
     "field, value",
-    [("subject_id", "S99"), ("data_role", "collision"), ("posture", "seated"),
+    [("subject_id", "S99"), ("data_role", "collision"),
      ("intended_duration_s", 300.0)],
 )
 def test_a_replacement_must_share_the_protocol_identity(tmp_path, field, value):
     """§6's Replacement policy permits re-capture only for the "same subject, same protocol".
     Without this, a different subject or arm could silently absorb a failed session's slot and
-    distort the realized allocation and the evidence-floor accounting."""
+    distort the realized allocation and the evidence-floor accounting.
+
+    `posture` is also a protocol-identity field but is deliberately not parametrised here:
+    the schema pins every scoring session to the canonical "seated"
+    (`test_posture_must_equal_the_canonical_seated`), so a pair that differs on posture is
+    rejected at parse time and can never reach the replacement-edge check. A vacuous case
+    that always skipped was asserting nothing."""
     prior, later = _pair(tmp_path)
-    if later.get(field) == value:
-        pytest.skip("fixture already matches; nothing to differ")
+    assert later.get(field) != value, "the fixture must genuinely differ for this case"
     later[field] = value
     with pytest.raises(ManifestError, match="SAME SUBJECT and SAME PROTOCOL"):
         _load(tmp_path, prior, later)

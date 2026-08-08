@@ -55,8 +55,13 @@ def test_sweep_never_opens_a_masimo_file():
         assert col not in src, f"the sweep names the reference column {col}"
 
 
+@pytest.mark.optional_artifact_or_mode
 def test_sweep_declares_masimo_unopened_in_its_metadata():
-    """The claim is recorded in the artifact, not only in the docstring."""
+    """The claim is recorded in the artifact, not only in the docstring.
+
+    The sweep output lives under the gitignored ``results/`` tree, so this node is a
+    declared optional-artifact skip: on a clean clone there is nothing to inspect.
+    """
     runs = sorted((REPO_ROOT / "results" / "m8" / "ahmed_all_bins").glob("*/run_meta.json"))
     if not runs:
         pytest.skip("no all-bins run on disk")
@@ -83,6 +88,7 @@ def test_only_the_real_domain_is_eligible_for_real_data():
 # ── 2. every cell must be swept ──────────────────────────────────────────────
 
 
+@pytest.mark.optional_artifact_or_mode
 def test_row_count_is_windows_times_bins_times_arms():
     runs = sorted((REPO_ROOT / "results" / "m8" / "ahmed_all_bins").glob("*/run_meta.json"))
     if not runs:
@@ -99,6 +105,7 @@ def test_row_count_is_windows_times_bins_times_arms():
             assert len(bg) == 6, f"{cid} k={k} bin={b} has {len(bg)} arms"
 
 
+@pytest.mark.optional_artifact_or_mode
 def test_all_bins_of_a_window_share_one_decoded_frame_span():
     """The cube is decoded once per window and reused; the span must therefore match."""
     runs = sorted((REPO_ROOT / "results" / "m8" / "ahmed_all_bins").glob("*/windows.csv"))
@@ -110,6 +117,7 @@ def test_all_bins_of_a_window_share_one_decoded_frame_span():
         assert int(g["frame_end"].iloc[0]) - int(g["frame_start"].iloc[0]) == 600
 
 
+@pytest.mark.optional_artifact_or_mode
 def test_all_arms_of_a_cell_share_one_extracted_phase():
     """`extract_chest_phase` is called once per cell; all six arms hash to the same signal."""
     runs = sorted((REPO_ROOT / "results" / "m8" / "ahmed_all_bins").glob("*/windows.csv"))
@@ -180,6 +188,7 @@ def test_ceiling_condition_is_named_so_it_cannot_be_quoted_as_a_result():
     assert "CEILING, not a result" in src or "CEILING, NOT A RESULT" in src
 
 
+@pytest.mark.optional_artifact_or_mode
 def test_ceiling_is_never_worse_than_the_production_lock():
     """It selects the best bin using the reference, so by construction it bounds the rest."""
     runs = sorted((REPO_ROOT / "results" / "m8" / "ahmed_score").glob("*/scores.csv"))
@@ -193,6 +202,7 @@ def test_ceiling_is_never_worse_than_the_production_lock():
             assert ceil.iloc[0] <= lock.iloc[0] + 1e-9, f"{cid} {vital} {method}"
 
 
+@pytest.mark.optional_artifact_or_mode
 def test_scoring_run_records_the_hr_interpretation_limit():
     """The §2.2 limit must travel with the numbers, not live only in a chat message."""
     runs = sorted((REPO_ROOT / "results" / "m8" / "ahmed_score").glob("*/run_meta.json"))

@@ -22,6 +22,7 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
+from src.m4.estimator_runner import _REQUIRED_GATE_PREDICTION_IDS  # noqa: E402
 from src.m8.ahmed_gate import (  # noqa: E402
     DEGENERACY_REL_TOL,
     GATE_DOMAINS,
@@ -59,6 +60,20 @@ def test_gate_evaluates_both_domains_and_both_harmonic_counts(report):
     for domain in GATE_DOMAINS:
         assert domain.domain_id in ids
     assert "h3" in ids and "h5" in ids
+
+
+def test_gate_emits_exactly_the_ordered_checks_the_preflight_demands(report):
+    """Bind the emitted check order to the preflight's frozen expectation.
+
+    ``src/m4/estimator_runner.py::verify_gate_bundle`` compares the persisted gate's
+    prediction IDs against ``_REQUIRED_GATE_PREDICTION_IDS`` for exact ordered equality,
+    but that constant is an independent literal.  Reordering, renaming, adding, or
+    dropping a check here would otherwise first surface when the authoritative gate is
+    executed at M5 step 5 — after the gate is frozen — rather than in the test suite.
+    """
+    emitted = tuple(check.prediction_id for check in report.checks)
+
+    assert emitted == _REQUIRED_GATE_PREDICTION_IDS
 
 
 def test_gate_reports_the_predicted_transfer_verdicts(report):

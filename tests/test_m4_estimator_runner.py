@@ -120,6 +120,28 @@ def test_a_missing_gate_is_refused(tmp_path):
         verify_gate_bundle(tmp_path / "nonexistent")
 
 
+def test_gate_source_identity_must_match_the_authorized_source(tmp_path):
+    """Gate provenance, embedded source manifest, and authorization form one chain."""
+    writer = BundleWriter(
+        stage_root=tmp_path / "synthetic", stage="synthetic", run_id=new_run_id("e" * 12)
+    )
+    writer.add_json("gate.json", {"gate_status": "passed"})
+    gate = writer.finalize(
+        status="complete",
+        provenance={"source_manifest_sha256": "a" * 64},
+        promotion_eligible=True,
+        extra_manifest={"gate_status": "passed"},
+    )
+    auth = _write_authorization(tmp_path / "auth.yaml", gate.root)
+    with pytest.raises(PreflightError, match="source|provenance|gate"):
+        verify_preflight(
+            stage="real-smoke",
+            gate_dir=gate.root,
+            authorization_path=auth,
+            source_manifest_sha256=SOURCE_DIGEST,
+        )
+
+
 # ── Authorization scope ──────────────────────────────────────────────────────
 
 def test_preflight_accepts_an_authorized_stage(gate_and_auth):
