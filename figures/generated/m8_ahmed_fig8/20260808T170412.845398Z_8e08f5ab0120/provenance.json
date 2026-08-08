@@ -1,0 +1,100 @@
+{
+  "canonical_promotion": {
+    "contract_matches": true,
+    "destination": "C:\\Users\\josemsosag\\Desktop\\vitals_radar_3\\figures\\generated\\m8_ahmed_fig8\\20260808T170412.845398Z_8e08f5ab0120",
+    "eligible": true,
+    "ineligibility_reasons": [],
+    "policy": "clean tree, all required source files tracked, and exact approved default v1 experiment contract; the acceptance outcome never gates publication"
+  },
+  "citation": {
+    "authors": "Ahmed et al.",
+    "doi": "10.1109/TRS.2024.3412915",
+    "figure": "8(c)-(d)",
+    "title": "Discovering the Unseen: Radar-Based Estimation of Heartbeat, Breathing Rate, and Underlying Muscle Expansion Without Probes",
+    "url": "https://repository.kaust.edu.sa/handle/10754/698235"
+  },
+  "claim": "behavioral reproduction under declared assumptions",
+  "command": [
+    "figures/reproduce_ahmed_fig8.py"
+  ],
+  "experiment_id": "m8_ahmed_fig8_behavioral_reproduction_v1",
+  "generated_at_utc": "2026-08-08T17:04:14.971543+00:00",
+  "git": {
+    "branch": "vital_signs_ahmed_v11",
+    "clean_and_required_tracked": true,
+    "commit": "a503421863665593b6ce3a13aed2e88a59497269",
+    "required_files_tracked": {
+      "experiments/m8_ahmed_fig8/config.yaml": true,
+      "experiments/m8_ahmed_fig8/layer_a_profiles.yaml": true,
+      "figures/reproduce_ahmed_fig8.py": true,
+      "plans/m8_ahmed_correction_plan.md": true,
+      "plans/m8_step1a_ahmed_reproduction.md": true,
+      "src/m8/ahmed_fig8.py": true,
+      "tests/test_m8_ahmed_fig8.py": true
+    },
+    "status_porcelain": ""
+  },
+  "hashes": {
+    "correction_plan_sha256": "b12e86c0e149dd84e8ae7b5be239eb71b5724164afdac35346bfb7f5881057a1",
+    "evidence_audit_amplitude_ratio_h_to_b-0p5_sha256": "d60db35f749f996e9368ba2f1d568771f7b7339d310541458aff7740e6e92306",
+    "evidence_audit_amplitude_ratio_h_to_b-2_sha256": "e092ce677d77b4dd9435e77059f251dea90f5125e6dcafea6617b9471a4fc278",
+    "evidence_audit_n_fft-2048_sha256": "db8b9ec3aa4e42b1a61912808ff648a83e260cb3efbfddb04125c4c207906805",
+    "evidence_audit_n_fft-8192_sha256": "d36261860be1963347acd98ca050546de8ea8c87b17195305be1a268b3cd254d",
+    "evidence_audit_normalization-matrix_eta_sha256": "a54e390725ddc1da9e250fb2516fafd0d888344a3bfc6643c7ddc6dfddac15fe",
+    "evidence_audit_sample_count_rule-ceil_sha256": "017146bbe2654b4b84adc81b70f5095b0cdbe62fec4e4c72a38eb8b22c9a1708",
+    "evidence_audit_sample_count_rule-floor_sha256": "ce01a62d666830f39c9a44a392cf5b4e194e96a1e1b86a235c7b81605c2fa55d",
+    "evidence_audit_snr_power_mode-centered_sha256": "054b1f0c83a323fdfa3139f9feab14cbac81a10c186fd0ccc75fe359b1d092d4",
+    "evidence_audit_theta0_rad-0p785398163397_sha256": "c69cabd4045cfd05deb2d148c06dd80fb438ddd0ca41d6c14717fa0e653c71e6",
+    "evidence_audit_theta0_rad-1p57079632679_sha256": "1d1f8ee945fabba36d273718ad4c15003de365e1177fc0aa2ee40b074c8cac13",
+    "evidence_primary_eq26_multiples_suppressed_sha256": "b9c88618edfa4fb53fb7c79bab9572405f2e23fdc96dc2ee444ccf0ba0bbee54",
+    "evidence_primary_figure_visible_unsuppressed_sha256": "def8fc8607251aa4986b724ed53f993576aaf6f03bac75d5400d55ee933885a1",
+    "evidence_primary_prose_low_or_equal_suppressed_sha256": "fcc11a03426945b6e0ab280431037d96cfef307b99d61b7cc59bc48d39d0d5f2",
+    "figure_pdf_sha256": "c0b787f6a77239bf80fd90c5fa914ecd1fbf059dc3040c5c635a9ccb7476f18c",
+    "figure_png_sha256": "ab1fff20339369d241ebb201cf67fa059b1a726e87f5b52e5c16113e99c0541a",
+    "implementation_module_sha256": "dda5d6770dcd734887c19eff70ac4316ed84734af21d421b6318e631f237188e",
+    "layer_a_profile_register_sha256": "020eaa257877b27df9d135a79d6c2fda17e35953c98fa237427b382d42f2aecd",
+    "metrics_sha256": "2927b5eef51bce0aa588cc9a7cdb7504db3c1f6c86e28157250f8d4606f9b752",
+    "paper_pdf_sha256": "2d13bca3fdfcbf249a500622dac0be9ad37e35a6aa880c440ff0c12eb4f8689f",
+    "plan_sha256": "3cfe18129708735ac31b1f56408a48934b9e2f57676f1f644b084e13c3700478",
+    "resolved_config_sha256": "2133320d26b58943e8da2f7b5ba42cfb673be030817095d023e21f453078f99c",
+    "runner_script_sha256": "f8b31f1653c27457a6a28fd1360a0a81b3996c9d64442c3ce3b09c42ee3d3050",
+    "source_config_sha256": "47ae39d87966adbb0beb496371a78a3e1f828c116cfc965b2f940207b18180a8",
+    "successor_provenance_sha256": "71022d352fd5fae9a60eaecabe05d115c926752099fd4f511f13b4ff8a9e4ecd",
+    "test_file_sha256": "49376ff51f255116d282b45bc78e578dff7b60b739ff2741a054616556079df5"
+  },
+  "plan_review": {
+    "reviewed_commit": null,
+    "reviewed_commit_reason": "the approved plan was conversational and had not yet been saved at a commit",
+    "reviewed_source": "conversation plan later saved at the hashed plan path",
+    "roles": {
+      "adversarial": "reject_then_addressed_in_revised_plan",
+      "architecture": "reject_then_addressed_in_revised_plan",
+      "correctness_and_edge_cases": "reject_then_addressed_in_revised_plan",
+      "python_implementation": "reject_then_addressed_in_revised_plan",
+      "testing_and_validation": "reject_then_addressed_in_revised_plan"
+    }
+  },
+  "run_id": "20260808T170412.845398Z_8e08f5ab0120",
+  "runtime": {
+    "backend": "agg",
+    "matplotlib": "3.8.4",
+    "numpy": "1.26.4",
+    "os": "Windows-10-10.0.26200-SP0",
+    "pytest": "8.4.2",
+    "python": "3.11.15 | packaged by conda-forge | (main, Mar  5 2026, 16:36:00) [MSC v.1944 64 bit (AMD64)]",
+    "pyyaml": "6.0.3",
+    "scipy": "1.13.1"
+  },
+  "seed_policy": {
+    "different_length": "SHA256-derived seed from base seed and variant ID",
+    "primary_seed": 42,
+    "same_length": "reuse primary standard-normal realization"
+  },
+  "source_paths": {
+    "config": "C:\\Users\\josemsosag\\Desktop\\vitals_radar_3\\experiments\\m8_ahmed_fig8\\config.yaml",
+    "correction_plan": "C:\\Users\\josemsosag\\Desktop\\vitals_radar_3\\plans\\m8_ahmed_correction_plan.md",
+    "layer_a_profile_register": "C:\\Users\\josemsosag\\Desktop\\vitals_radar_3\\experiments\\m8_ahmed_fig8\\layer_a_profiles.yaml",
+    "paper_pdf": "C:\\Users\\josemsosag\\Desktop\\vitals_radar_3\\literature\\ref_papers\\discovering_the_unseen_radar_vitals\\Discovering_the_Unseen_Radar-Based_Estimation_of_Heartbeat_Breathing_Rate_and_Underlying_Muscle_Expansion_Without_Probes.pdf",
+    "plan": "C:\\Users\\josemsosag\\Desktop\\vitals_radar_3\\plans\\m8_step1a_ahmed_reproduction.md"
+  }
+}
