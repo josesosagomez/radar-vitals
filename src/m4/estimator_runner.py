@@ -47,6 +47,12 @@ from src.m4.evidence_serialization import (
     pack_shared_evidence,
     serialize_native_tree,
 )
+from src.m4.outcome import (
+    AHET_MAX_CANDIDATES,
+    REJECTION_CODE_NOT_ATTEMPTED,
+    RESP_GATE_HI_HZ,
+    RESP_GATE_LO_HZ,
+)
 from src.m4.production_suite import PRODUCTION_ARM_ID
 from src.m4.window_grid import FRAME_RATE_HZ, FRAMES_PER_WINDOW, window_frame_span
 from src.m8.ahmed_transfer import (
@@ -819,7 +825,46 @@ def _validate_native_result(spec: EstimatorArmSpec, native: Mapping[str, object]
             )
 
 
-def _vital_validity_reasons(native: Mapping[str, object]) -> tuple[str, str]:
+def _production_no_gate_reason(native: Mapping[str, object]) -> str:
+    """Map the production producer's exact no-AHET state to its documented reason.
+
+    ``run_window_dsp`` historically leaves ``rej_reason`` empty when respiration does
+    not admit an AHET run.  The unchanged native evidence still identifies that state
+    exactly: rank -1, all three rejection slots -1, and no in-gate respiration rate.
+    This is evidence normalization only; it does not alter the estimator payload or
+    infer a reason from a reference value or observed accuracy.
+    """
+    hr_result = native.get("hr_result")
+    if not isinstance(hr_result, Mapping):
+        return ""
+    accepted_rank = hr_result.get("accepted_candidate_rank")
+    rejection_codes = hr_result.get("candidate_rejection_code")
+    if (
+        type(accepted_rank) is not int
+        or accepted_rank != -1
+        or type(rejection_codes) is not np.ndarray
+        or rejection_codes.shape != (AHET_MAX_CANDIDATES,)
+        or not np.issubdtype(rejection_codes.dtype, np.signedinteger)
+        or not np.all(rejection_codes == REJECTION_CODE_NOT_ATTEMPTED)
+    ):
+        return ""
+    respiration_hz = native.get("f_r_hz")
+    if respiration_hz is not None and (
+        type(respiration_hz) not in (int, float)
+        or not math.isfinite(float(respiration_hz))
+    ):
+        return ""
+    respiration_is_in_gate = (
+        respiration_hz is not None
+        and RESP_GATE_LO_HZ <= respiration_hz <= RESP_GATE_HI_HZ
+    )
+    return "" if respiration_is_in_gate else "gate_not_run"
+
+
+def _vital_validity_reasons(
+    spec: EstimatorArmSpec,
+    native: Mapping[str, object],
+) -> tuple[str, str]:
     """Return independent HR and BR validity reasons already present in native evidence.
 
     The legacy ``rej_reason`` belongs to the production/Ahmed heart decision.  Reusing it
@@ -828,6 +873,8 @@ def _vital_validity_reasons(native: Mapping[str, object]) -> tuple[str, str]:
     respiration-confidence state; no new validity rule is introduced here.
     """
     hr_reason = "ok" if native["hr_valid"] else str(native["rej_reason"] or "")
+    if not hr_reason and spec.arm_id == PRODUCTION_ARM_ID:
+        hr_reason = _production_no_gate_reason(native)
     if not hr_reason:
         raise RunnerContractError("invalid HR estimate is missing its native rejection reason")
 
@@ -1194,7 +1241,9 @@ def execute_paired_runner(
                     for arm_id, native in result.arm_native_results.items():
                         spec = specs[arm_id]
                         _validate_native_result(spec, native)
-                        hr_validity_reason, br_validity_reason = _vital_validity_reasons(native)
+                        hr_validity_reason, br_validity_reason = _vital_validity_reasons(
+                            spec, native
+                        )
                         row = {
                             "schema_version": 2,
                             "run_id": run_id,

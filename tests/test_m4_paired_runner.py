@@ -21,7 +21,8 @@ from src.m4.estimator_runner import (
 )
 from src.m4.estimator_suite import EstimatorArmSpec, SuiteWindowResult, freeze_array
 from src.m4.production_suite import PRODUCTION_ARM_ID
-from src.m4.evidence_serialization import pack_ahmed_evidence
+from src.m4.evidence_serialization import pack_ahmed_evidence, serialize_native_tree
+from src.m4.estimator_scoring import validate_radar_rows
 from src.m8.ahmed_transfer import (
     APPROVED_ARM_IDS,
     REAL_REPRESENTATIVE_DOMAIN,
@@ -454,6 +455,271 @@ def _run_with(tmp_path, *, decode=None, selector=None, production=None):
         decode_fn=decode or (lambda path, chirp: cube),
         selector_fn=selector or default_selector,
     )
+
+
+class ProductionNoGateInvalid(FakeProduction):
+    """Faithful extracted native contract observed for m1/rerun-lock/bin27/k1."""
+
+    def __init__(
+        self,
+        explicit_hr_reason="",
+        respiration_hz=None,
+        *,
+        hr_result_update=None,
+        remove_hr_result=False,
+    ):
+        super().__init__([])
+        self.explicit_hr_reason = explicit_hr_reason
+        self.respiration_hz = respiration_hz
+        self.hr_result_update = hr_result_update
+        self.remove_hr_result = remove_hr_result
+        self.serialized_before_return = []
+
+    def __call__(self, frames, locked_bin, fs):
+        result = super().__call__(frames, locked_bin, fs)
+        native = dict(result.arm_native_results[PRODUCTION_ARM_ID])
+        native.update(
+            hr_valid=False,
+            hr_raw=np.nan,
+            rej_reason=self.explicit_hr_reason,
+            f_r_hz=self.respiration_hz,
+            hr_result={
+                "accepted_candidate_rank": -1,
+                "candidate_rejection_code": np.array([-1, -1, -1], dtype=np.int64),
+            },
+            br_valid=False,
+            br_bpm=np.nan,
+            br_confidence="low",
+            br_result={"resp_edge_veto_reason": "band_edge_bin"},
+        )
+        if self.hr_result_update is not None:
+            native["hr_result"] = self.hr_result_update
+        if self.remove_hr_result:
+            native.pop("hr_result")
+        # The production payload has no Ahmed-style breath_evidence mapping.
+        native.pop("breath_evidence", None)
+        snapshot = serialize_native_tree(native)
+        self.serialized_before_return.append(
+            (
+                snapshot.index,
+                {key: value.copy() for key, value in snapshot.arrays.items()},
+            )
+        )
+        return SuiteWindowResult(
+            result.shared_evidence,
+            {PRODUCTION_ARM_ID: native},
+            {PRODUCTION_ARM_ID: "gate_not_run"},
+        )
+
+
+@pytest.mark.parametrize("respiration_hz", [None, 0.1168, 0.61])
+def test_production_no_gate_native_invalidity_retains_separate_reasons(
+    tmp_path, respiration_hz
+):
+    production = ProductionNoGateInvalid(respiration_hz=respiration_hz)
+    result = _run_with(tmp_path, production=production)
+    production_rows = [
+        row for row in result.rows if row["arm_id"] == PRODUCTION_ARM_ID
+    ]
+
+    assert len(production_rows) == 2
+    assert {row["hr_validity_reason"] for row in production_rows} == {
+        "gate_not_run"
+    }
+    assert {row["br_validity_reason"] for row in production_rows} == {
+        "band_edge_bin"
+    }
+    assert all(row["validity_reason"] == "gate_not_run" for row in production_rows)
+    assert {row["outcome"] for row in production_rows} == {"gate_not_run"}
+
+    # Normalization and serialization must not rewrite the production-native payload.
+    assert len(production.serialized_before_return) == len(result.production_native) == 2
+    for before, record in zip(
+        production.serialized_before_return, result.production_native, strict=True
+    ):
+        after = serialize_native_tree(record["native"])
+        before_index, before_arrays = before
+        assert after.index == before_index
+        assert set(after.arrays) == set(before_arrays)
+        for key, before_array in before_arrays.items():
+            assert after.arrays[key].dtype == before_array.dtype
+            assert after.arrays[key].shape == before_array.shape
+            assert np.array_equal(after.arrays[key], before_array, equal_nan=True)
+        assert record["native"]["rej_reason"] == ""
+        assert np.isnan(record["native"]["hr_raw"])
+
+
+def test_explicit_native_hr_reason_precedes_no_gate_normalization(tmp_path):
+    result = _run_with(
+        tmp_path,
+        production=ProductionNoGateInvalid("producer_specific_rejection"),
+    )
+    production_rows = [
+        row for row in result.rows if row["arm_id"] == PRODUCTION_ARM_ID
+    ]
+
+    assert {row["hr_validity_reason"] for row in production_rows} == {
+        "producer_specific_rejection"
+    }
+    assert {row["br_validity_reason"] for row in production_rows} == {
+        "band_edge_bin"
+    }
+
+
+@pytest.mark.parametrize("respiration_hz", [0.15, 0.25, 0.60])
+def test_no_gate_reason_is_not_applied_to_contradictory_in_gate_evidence(
+    tmp_path, respiration_hz
+):
+    with pytest.raises(
+        RunnerContractError,
+        match="invalid HR estimate is missing its native rejection reason",
+    ):
+        _run_with(
+            tmp_path,
+            production=ProductionNoGateInvalid(respiration_hz=respiration_hz),
+        )
+
+
+@pytest.mark.parametrize(
+    "hr_result",
+    [
+        {"accepted_candidate_rank": 0,
+         "candidate_rejection_code": np.array([-1, -1, -1], dtype=np.int64)},
+        {"accepted_candidate_rank": -2,
+         "candidate_rejection_code": np.array([-1, -1, -1], dtype=np.int64)},
+        {"accepted_candidate_rank": np.int64(-1),
+         "candidate_rejection_code": np.array([-1, -1, -1], dtype=np.int64)},
+        {"accepted_candidate_rank": -1,
+         "candidate_rejection_code": np.array([-1, -1], dtype=np.int64)},
+        {"accepted_candidate_rank": -1,
+         "candidate_rejection_code": np.array([-1, -1, -1], dtype=np.float64)},
+        {"accepted_candidate_rank": -1,
+         "candidate_rejection_code": np.array([-1, -1, -1], dtype=np.bool_)},
+        {"accepted_candidate_rank": -1,
+         "candidate_rejection_code": np.array([-1, 2, -1], dtype=np.int64)},
+        {"accepted_candidate_rank": -1,
+         "candidate_rejection_code": [-1, -1, -1]},
+        {"accepted_candidate_rank": -1,
+         "candidate_rejection_code": [[-1], [-1, -1]]},
+        {},
+        {"accepted_candidate_rank": -1},
+        {"candidate_rejection_code": np.array([-1, -1, -1], dtype=np.int64)},
+        [],
+        "not-a-mapping",
+    ],
+    ids=[
+        "accepted-rank",
+        "rank-out-of-domain",
+        "numpy-rank",
+        "wrong-shape",
+        "float-dtype",
+        "bool-dtype",
+        "mixed-codes",
+        "list-not-native-array",
+        "ragged-codes",
+        "missing-both-fields",
+        "missing-codes",
+        "missing-rank",
+        "list-hr-result",
+        "string-hr-result",
+    ],
+)
+def test_no_gate_reason_rejects_nonproducer_hr_result_states(tmp_path, hr_result):
+    with pytest.raises(
+        RunnerContractError,
+        match="invalid HR estimate is missing its native rejection reason",
+    ):
+        _run_with(
+            tmp_path,
+            production=ProductionNoGateInvalid(hr_result_update=hr_result),
+        )
+
+
+def test_no_gate_reason_rejects_missing_hr_result(tmp_path):
+    with pytest.raises(
+        RunnerContractError,
+        match="invalid HR estimate is missing its native rejection reason",
+    ):
+        _run_with(
+            tmp_path,
+            production=ProductionNoGateInvalid(remove_hr_result=True),
+        )
+
+
+@pytest.mark.parametrize(
+    "respiration_hz",
+    [float("nan"), float("inf"), float("-inf"), "0.1168", np.float64(0.1168), True],
+    ids=["nan", "positive-inf", "negative-inf", "string", "numpy-scalar", "bool"],
+)
+def test_no_gate_reason_does_not_coerce_malformed_respiration_values(
+    tmp_path, respiration_hz
+):
+    with pytest.raises(RunnerContractError, match="f_r_hz must be finite or null"):
+        _run_with(
+            tmp_path,
+            production=ProductionNoGateInvalid(respiration_hz=respiration_hz),
+        )
+
+
+def test_ahmed_invalidity_cannot_borrow_the_production_no_gate_reason(tmp_path):
+    class AhmedWithProductionShapedInvalidity(FakeAhmed):
+        def __call__(self, frames, locked_bin, fs):
+            result = super().__call__(frames, locked_bin, fs)
+            native = {
+                arm_id: dict(payload)
+                for arm_id, payload in result.arm_native_results.items()
+            }
+            native[APPROVED_ARM_IDS[0]].update(
+                hr_valid=False,
+                hr_raw=None,
+                rej_reason="",
+                f_r_hz=None,
+                hr_result={
+                    "accepted_candidate_rank": -1,
+                    "candidate_rejection_code": np.array(
+                        [-1, -1, -1], dtype=np.int64
+                    ),
+                },
+            )
+            return SuiteWindowResult(result.shared_evidence, native)
+
+    radar = _fixture(tmp_path)
+    cube = np.zeros((600, 1, 1, 4), dtype=np.complex64)
+    with pytest.raises(
+        RunnerContractError,
+        match="invalid HR estimate is missing its native rejection reason",
+    ):
+        execute_paired_runner(
+            radar=radar,
+            capture_ids=["m1"],
+            suites=[ProductionNoGateInvalid(), AhmedWithProductionShapedInvalidity([])],
+            run_id="ahmed-no-fallback",
+            source_hash="s" * 64,
+            decode_fn=lambda path, chirp: cube,
+            selector_fn=lambda *args: (
+                1,
+                None,
+                {"candidates": [{"bin": 1, "failed": False}], "fallback_used": False},
+            ),
+        )
+
+
+def test_scoring_contract_accepts_reconciled_no_gate_label(tmp_path):
+    result = _run_with(tmp_path, production=ProductionNoGateInvalid())
+    rows = [dict(row) for row in result.rows]
+    expected_locks = dict(zip(LOCK_ESTIMANDS, (23, 27), strict=True))
+    for row in rows:
+        row["locked_bin"] = expected_locks[row["lock_estimand_id"]]
+        row["source_hash"] = "a" * 64
+        if row["arm_id"] == PRODUCTION_ARM_ID:
+            row["suite_config_hash"] = "b" * 64
+            row["arm_config_hash"] = "b" * 64
+
+    identity = validate_radar_rows(rows, expected_capture_windows={"m1": 1})
+
+    assert identity["estimator_row_count"] == 14
+    production_rows = [row for row in rows if row["arm_id"] == PRODUCTION_ARM_ID]
+    assert {row["hr_validity_reason"] for row in production_rows} == {"gate_not_run"}
 
 
 def test_selector_fallback_and_candidate_failure_are_fatal(tmp_path):
