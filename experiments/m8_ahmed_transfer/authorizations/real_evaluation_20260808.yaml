@@ -1,0 +1,29 @@
+authorization_id: m8_ahmed_real_evaluation_20260808_gate_c5bace93
+gate_manifest_sha256: c5bace93a3b2c1c851cdb332e88457f9c3569056da462822f59915b1b50ac73c
+source_manifest_sha256: 80827aea546b1bf782077fe5606b00bd1c256979dfdb7be9acb6837a86d10fc2
+allowed_stages:
+  - real-smoke
+  - real-radar
+  - score
+capture_ids:
+  - m1
+  - m2
+  - sweep
+  - m3
+  - m4
+  - m5
+  - m6
+  - m7
+lock_estimands:
+  - recorded_lock_as_captured
+  - current_production_rerun_lock
+arm_ids:
+  - production_eca_ahet_v1
+  - ahmed_phase_h3_figure_visible_unsuppressed
+  - ahmed_phase_h3_eq26_multiples_suppressed
+  - ahmed_phase_h3_prose_low_or_equal_suppressed
+  - ahmed_phase_h5_figure_visible_unsuppressed
+  - ahmed_phase_h5_eq26_multiples_suppressed
+  - ahmed_phase_h5_prose_low_or_equal_suppressed
+approved_by: research_owner_explicit_m5_implementation_request
+approved_on: "2026-08-08"
