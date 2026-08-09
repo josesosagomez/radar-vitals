@@ -10979,3 +10979,97 @@ formatting. Those implicit float assumptions are removed.
 
 **Next:** final independent retest/review of M1. If accepted, commit only with explicit
 authorization and follow the clean canonical regeneration steps already recorded. Do not begin M2.
+
+## 2026-08-09 - M1 canonical post-gate authorization transition repair
+
+**Set out to do:** resolve the confirmed cycle in which a fresh gate had to precede its exact
+authorization, but canonical scoring incorrectly required the gate source commit and authorization
+commit to be the same HEAD.
+
+**Worked (with evidence):** the canonical contract now uses the established approval-only source
+verification and adds a stricter production transition proof. The current repository must be wholly
+clean and its HEAD must be a direct, single-parent child of the gate source commit. The sole commit
+between them must change exactly the authorization YAML passed to preflight; multiple approval
+commits, continuation plus authorization sequences, merges, empty commits, extra paths, wrong
+authorization paths, source changes and reuse without a new authorization transaction all fail.
+
+The transition verifier uses Git's path-aware filtered blob hash so a clean CRLF checkout is matched
+to its LF-normalized committed blob correctly, while the exact working-file SHA-256 remains the
+authorization identity stored by the scientific artifacts. Existing repository authorization
+validation independently requires that path to be the sole canonical authorization YAML and to be
+committed and clean. Existing preflight independently requires its parsed fields to bind the exact
+gate and source hashes.
+
+Both production real-radar commands now require this transition before capture access. Canonical
+scoring rebuilds the exact transitive source manifest, derives raw/config identity internally, and
+records distinct `gate_source_commit` and `authorization_commit` fields plus relationship, exact
+authorization path/SHA-256/Git blob, changed path and whole-tree-clean evidence. It no longer
+mislabels the two legitimate commits as one exact-head source commit.
+
+Deterministic temporary-Git tests cover the positive two-commit gate-to-authorization flow and
+negative extra-file, extra-commit, wrong-authorization, dirty-tree, source-drift and reuse cases.
+The targeted transition selection completed with `8 passed`; M1/scorer/preflight/runner suites
+completed with `112 passed`; and the full provenance suite completed with `101 passed` using its
+required system-temporary basetemp outside the repository.
+
+**Failed / did not work, and why:** the first positive transition test compared raw committed and
+working bytes and rejected Windows CRLF checkout conversion even though Git reported the file clean.
+The corrected test uses Git's own path-aware clean filter/blob identity and retains a separate exact
+working SHA-256, matching repository semantics without weakening content binding.
+
+**Retired / no longer used:** exact equality between gate source commit and post-gate authorization
+HEAD; broad multi-approval history as sufficient canonical production authority; and raw
+working-byte versus normalized-Git-blob comparison on filtered text files.
+
+**Next:** independent verifier and code review. If accepted, commit this repair, run the synthetic
+gate from that clean commit, update the sole canonical authorization to bind the exact new gate and
+source, commit that one-file transaction, then run smoke/radar/scoring at the authorization commit.
+Do not begin M2.
+
+### Verification note
+
+After adding a CLI regression proving the clean authorization HEAD may differ from the gate source
+commit, the final focused M1/scorer/preflight/runner count is `113 passed`. The scorer/registry
+compatibility selection additionally completed with `142 passed, 1 skipped`.
+
+## 2026-08-09 - M1 promotion-eligible radar parent boundary correction
+
+**Set out to do:** repair the review finding that the public radar runner could label a
+transition-unverified artifact promotion-eligible and that canonical scoring did not require the
+radar parent to carry the scorer's independently verified gate-to-authorization transition.
+
+**Worked (with evidence):** radar-stage promotion eligibility is now derived from successful exact
+authorization-transition verification. A portable or non-strict runner invocation remains useful
+test/draft evidence but is always persisted with `promotion_eligible=false` and without transition
+evidence, regardless of caller intent. A strict full-radar run also requires its promotion-eligible
+smoke parent to contain exactly the same independently reconstructed transition.
+
+Every promotion-eligible radar parent accepted by scoring must now contain a complete, strictly
+typed transition record: distinct 40-hex gate and authorization commits, the direct-single-
+authorization relationship, exact relative authorization YAML path, working-file SHA-256, Git blob,
+sole changed path and actual whole-tree-clean attestation. Canonical `run_score_stage` reconstructs
+that transition from Git and the current checkout before validating the radar parent and requires
+exact equality. Missing, incomplete, dirty, fabricated or mismatched parent evidence therefore
+fails before any reference path is built, hashed or opened.
+
+Regressions prove the public non-strict runner writes only a noncanonical bundle, a complete strict
+fixture is accepted, missing transition evidence is rejected before reference access, and commit,
+path, blob and clean-tree mismatches are rejected. The focused M1/scorer/preflight/runner and
+compatibility selection completed with `262 passed, 1 skipped`; the dedicated provenance suite
+completed with `101 passed` using
+`$env:TEMP/m1_writer_parent_boundary/pytest` outside the repository.
+
+**Failed / did not work, and why:** the preceding review verdict was correctly **FAIL** because a
+promotion Boolean without the transition record allowed a weak radar artifact to cross the parent
+boundary. Structural authorization fields alone were also insufficient for canonical scoring;
+their complete values must equal the scorer's independently derived current Git transaction.
+
+**Retired / no longer used:** unconditional `promotion_eligible=true` in `run_radar_stage`; accepting
+a promotion-eligible radar parent without exact authorization-transition evidence; and treating a
+non-strict portable radar artifact as canonical.
+
+**Next:** independently retest and review this parent-boundary correction. The reviewed M1 base is
+committed at `9b01d936db35b8427ee3b36579bd62a828a05926`; only the later authorization-transition and
+parent-boundary corrections are currently uncommitted. If accepted and explicitly authorized,
+commit the correction before regenerating the clean gate/authorization/radar/scoring chain. Do not
+begin M2.

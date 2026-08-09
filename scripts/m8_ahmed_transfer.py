@@ -391,6 +391,7 @@ def run_real_stage(
         parent_dir=parent,
         authorization_validator=verify_repository_authorization,
         require_scientific_gate=True,
+        require_exact_authorization_transition=True,
     )
     print(f"stage        : {bundle.stage}")
     print(f"run_id       : {bundle.run_id}")

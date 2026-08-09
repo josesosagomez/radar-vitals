@@ -66,7 +66,11 @@ from src.m8.ahmed_transfer import (
     SUPPORT_RULE_ID,
     phase_signal_hash,
 )
-from src.m8.ahmed_provenance import validate_test_attestation
+from src.m8.ahmed_provenance import (
+    load_source_manifest,
+    validate_test_attestation,
+    verify_exact_authorization_transition,
+)
 from src.radar_io import ChirpConfig, read_adc_bin
 from src.warmup_select import derive_candidate_bins, run_warmup_selection
 from src.window_pipeline import run_config_hash
@@ -1422,6 +1426,7 @@ def run_radar_stage(
     selector_config: Mapping[str, object] | None = None,
     authorization_validator: Callable[[Path, Authorization], None] | None = None,
     require_scientific_gate: bool = False,
+    require_exact_authorization_transition: bool = False,
 ) -> PairedRadarRun | StageBundle:
     """Authorized M3 entry point. Preflight is complete before capture stat/open."""
     preflight = verify_preflight(
@@ -1434,6 +1439,28 @@ def run_radar_stage(
         require_scientific_gate=require_scientific_gate,
     )
     authorization = preflight.authorization
+    authorization_transition = None
+    if require_exact_authorization_transition:
+        if not require_scientific_gate:
+            raise PreflightError(
+                "exact authorization transition requires the complete scientific gate"
+            )
+        try:
+            gate_source = load_source_manifest(Path(gate_dir) / "source_manifest.json")
+            authorization_transition = verify_exact_authorization_transition(
+                gate_source,
+                authorization_path,
+                Path(__file__).resolve().parents[2],
+            )
+        except (OSError, RuntimeError, ValueError) as exc:
+            raise PreflightError(
+                "canonical gate-to-authorization transition is invalid"
+            ) from exc
+        if (
+            authorization_transition["authorization_sha256"]
+            != sha256_path(authorization_path)
+        ):
+            raise PreflightError("authorization transition hash disagrees with preflight")
     if authorization.lock_estimands != LOCK_ESTIMANDS:
         raise PreflightError("authorization does not bind the exact two canonical locks")
     if authorization.arm_ids != CANONICAL_ARM_IDS:
@@ -1447,6 +1474,21 @@ def run_radar_stage(
         parent_manifest = verify_bundle(Path(parent_dir))
         if parent_manifest.get("stage") != "smoke":
             raise PreflightError("real-radar parent must be the completed smoke stage")
+        if authorization_transition is not None:
+            if parent_manifest.get("promotion_eligible") is not True:
+                raise PreflightError(
+                    "canonical real-radar requires a promotion-eligible smoke parent"
+                )
+            parent_provenance = _load_strict_json_mapping(
+                Path(parent_dir) / "provenance.json", "smoke provenance"
+            )
+            if parent_provenance.get("authorization_transition") != dict(
+                authorization_transition
+            ):
+                raise PreflightError(
+                    "canonical smoke parent authorization transition differs from "
+                    "the independently verified current transition"
+                )
     capture_ids = ("m1",) if stage == "real-smoke" else all_capture_ids
     run = execute_paired_runner(
         radar=radar,
@@ -1474,7 +1516,15 @@ def run_radar_stage(
             "source_manifest_sha256": source_manifest_sha256,
             "authorization_id": authorization.authorization_id,
             "authorization_sha256": sha256_path(authorization_path),
+            **(
+                {"authorization_transition": dict(authorization_transition)}
+                if authorization_transition is not None
+                else {}
+            ),
         },
         parents=parents,
-        promotion_eligible=True,
+        # A portable/non-strict run is useful test or draft evidence, but only an
+        # independently verified clean Git gate-to-authorization transaction may
+        # become a canonical parent.
+        promotion_eligible=authorization_transition is not None,
     )

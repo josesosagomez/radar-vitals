@@ -46,6 +46,7 @@ from src.m8.ahmed_provenance import (
     SourceManifest,
     build_source_manifest,
     load_source_manifest,
+    verify_exact_authorization_transition,
     verify_source_manifest,
 )
 
@@ -1025,6 +1026,7 @@ def validate_radar_parent(
     expected_source_manifest_sha256: str,
     expected_authorization_id: str,
     expected_authorization_sha256: str,
+    expected_authorization_transition: Mapping[str, object] | None = None,
 ) -> tuple[dict, str, list[dict]]:
     """Validate the exact complete M3 parent without touching any reference path."""
     radar_dir = Path(radar_dir)
@@ -1060,6 +1062,22 @@ def validate_radar_parent(
         raise ScoreContractError("radar parent authorization ID differs from current chain")
     if provenance.get("authorization_sha256") != expected_authorization_sha256:
         raise ScoreContractError("radar parent authorization hash differs from current chain")
+    parent_transition = _validate_authorization_transition(
+        provenance.get("authorization_transition"),
+        expected_authorization_sha256=expected_authorization_sha256,
+        label="radar parent authorization transition",
+    )
+    if expected_authorization_transition is not None:
+        expected_transition = _validate_authorization_transition(
+            expected_authorization_transition,
+            expected_authorization_sha256=expected_authorization_sha256,
+            label="independently verified authorization transition",
+        )
+        if parent_transition != expected_transition:
+            raise ScoreContractError(
+                "radar parent authorization transition differs from the "
+                "independently verified current transition"
+            )
 
     resolved = yaml.safe_load((radar_dir / "resolved_config.yaml").read_text(encoding="utf-8"))
     if not isinstance(resolved, Mapping):
@@ -1083,6 +1101,72 @@ def validate_radar_parent(
         raise ScoreContractError("radar rows source hash differs from frozen source")
     _validate_evidence_keys(radar_dir, rows)
     return manifest, manifest_sha256, rows
+
+
+def _validate_authorization_transition(
+    value: object,
+    *,
+    expected_authorization_sha256: str,
+    label: str,
+) -> dict[str, object]:
+    """Validate the complete, immutable gate-to-authorization Git transaction."""
+    expected_fields = {
+        "relationship",
+        "gate_source_commit",
+        "authorization_commit",
+        "authorization_path",
+        "authorization_sha256",
+        "authorization_git_blob",
+        "changed_paths",
+        "whole_tree_clean",
+    }
+    if not isinstance(value, Mapping) or set(value) != expected_fields:
+        raise ScoreContractError(f"{label} is missing, incomplete, or has extra fields")
+
+    def require_hex(field: str, length: int) -> str:
+        item = value.get(field)
+        if (
+            type(item) is not str
+            or len(item) != length
+            or item != item.lower()
+            or any(character not in "0123456789abcdef" for character in item)
+        ):
+            raise ScoreContractError(f"{label} {field} is not a lowercase {length}-hex digest")
+        return item
+
+    gate_source_commit = require_hex("gate_source_commit", 40)
+    authorization_commit = require_hex("authorization_commit", 40)
+    authorization_sha256 = require_hex("authorization_sha256", 64)
+    authorization_git_blob = require_hex("authorization_git_blob", 40)
+    authorization_path = value.get("authorization_path")
+    if (
+        type(authorization_path) is not str
+        or not authorization_path
+        or authorization_path.startswith(("/", "\\"))
+        or "\\" in authorization_path
+        or Path(authorization_path).suffix.lower() not in {".yaml", ".yml"}
+    ):
+        raise ScoreContractError(f"{label} authorization_path is not a relative YAML path")
+    if value.get("relationship") != "direct_single_authorization_commit":
+        raise ScoreContractError(f"{label} relationship is not the canonical direct transition")
+    if gate_source_commit == authorization_commit:
+        raise ScoreContractError(f"{label} reuses the gate source commit")
+    if authorization_sha256 != expected_authorization_sha256:
+        raise ScoreContractError(f"{label} authorization hash differs from current chain")
+    if value.get("changed_paths") != [authorization_path]:
+        raise ScoreContractError(f"{label} changed paths are not exactly the authorization")
+    if value.get("whole_tree_clean") is not True:
+        raise ScoreContractError(f"{label} does not attest the actual clean whole tree")
+    return {
+        "relationship": "direct_single_authorization_commit",
+        "gate_source_commit": gate_source_commit,
+        "authorization_commit": authorization_commit,
+        "authorization_path": authorization_path,
+        "authorization_sha256": authorization_sha256,
+        "authorization_git_blob": authorization_git_blob,
+        "changed_paths": [authorization_path],
+        "whole_tree_clean": True,
+    }
 
 
 def _reference_reason(vital: Vital, result: Mapping[str, object]) -> str:
@@ -1248,10 +1332,11 @@ def _verify_current_source_checkout(
     source_manifest_sha256: str,
     repository_root: Path,
     git_head: str,
+    authorization_path: Path,
     entry_points: Sequence[str] | None = None,
     required_artifacts: Sequence[str] | None = None,
-) -> SourceManifest:
-    """Rebuild the checkout manifest and require exact gate/source/HEAD identity."""
+) -> tuple[SourceManifest, Mapping[str, object]]:
+    """Rebuild exact source bytes and prove the direct authorization transition."""
     try:
         gate_source = load_source_manifest(Path(gate_dir) / "source_manifest.json")
         verify_source_manifest(
@@ -1262,6 +1347,13 @@ def _verify_current_source_checkout(
             require_promotion_eligible=True,
         )
         current_source = build_source_manifest(
+            repository_root,
+            entry_points=entry_points,
+            required_artifacts=required_artifacts,
+        )
+        transition = verify_exact_authorization_transition(
+            gate_source,
+            authorization_path,
             repository_root,
             entry_points=entry_points,
             required_artifacts=required_artifacts,
@@ -1277,13 +1369,18 @@ def _verify_current_source_checkout(
         raise ScoreContractError(
             "rebuilt scientific source identity differs from the scoring chain"
         )
-    if gate_source.git_commit != git_head or current_source.git_commit != git_head:
+    if current_source.git_commit != git_head:
         raise ScoreContractError(
-            "verified source manifest commit does not equal actual clean Git HEAD"
+            "rebuilt source commit does not equal actual clean authorization HEAD"
         )
     if not current_source.promotion_eligible:
         raise ScoreContractError("rebuilt scientific source manifest is not promotion-eligible")
-    return current_source
+    if (
+        transition.get("gate_source_commit") != gate_source.git_commit
+        or transition.get("authorization_commit") != git_head
+    ):
+        raise ScoreContractError("authorization transition commit evidence is inconsistent")
+    return gate_source, transition
 
 
 def _derive_production_input_identity(
@@ -1351,7 +1448,7 @@ def _derive_production_input_identity(
             "radar-parent configuration hashes differ from the source-manifest-bound registry"
         )
     return {
-        "git_commit": source_manifest.git_commit,
+        "gate_source_commit": source_manifest.git_commit,
         "git_tree_clean": True,
         "source_manifest_sha256": source_manifest.manifest_sha256,
         "raw_adc_sha256_by_capture": authoritative_raw_digests,
@@ -1921,28 +2018,46 @@ def run_score_stage(
     if tuple(sorted(authorization.capture_ids)) != tuple(sorted(EXPECTED_CAPTURE_WINDOWS)):
         raise PreflightError("score authorization does not bind all eight captures")
     authorization_sha256 = sha256_path(authorization_path)
+
+    gate_source = None
+    authorization_transition = None
+    if require_production_provenance:
+        assert canonical_git_head is not None
+        gate_source, authorization_transition = _verify_current_source_checkout(
+            gate_dir=gate_dir,
+            source_manifest_sha256=source_manifest_sha256,
+            repository_root=repository_root,
+            git_head=canonical_git_head,
+            authorization_path=authorization_path,
+        )
+        if authorization_transition["authorization_sha256"] != authorization_sha256:
+            raise ScoreContractError(
+                "authorization transition hash differs from the preflight authorization"
+            )
+
     _manifest, radar_manifest_sha256, radar_rows = validate_radar_parent(
         radar_dir,
         expected_gate_manifest_sha256=preflight.gate_manifest_sha256,
         expected_source_manifest_sha256=source_manifest_sha256,
         expected_authorization_id=authorization.authorization_id,
         expected_authorization_sha256=authorization_sha256,
+        expected_authorization_transition=authorization_transition,
     )
 
     canonical_input_identity = None
     if require_production_provenance:
-        assert canonical_git_head is not None
-        current_source = _verify_current_source_checkout(
-            gate_dir=gate_dir,
-            source_manifest_sha256=source_manifest_sha256,
-            repository_root=repository_root,
-            git_head=canonical_git_head,
-        )
+        assert canonical_git_head is not None and gate_source is not None
+        assert authorization_transition is not None
         canonical_input_identity = _derive_production_input_identity(
-            current_source,
+            gate_source,
             repository_root=repository_root,
             radar_rows=radar_rows,
         )
+        canonical_input_identity = {
+            **canonical_input_identity,
+            "authorization_commit": canonical_git_head,
+            "authorization_transition": dict(authorization_transition),
+        }
 
     # This is intentionally the first point at which a reference path may be built,
     # hashed, or opened. Every gate/authorization/parent/schema check above is complete.

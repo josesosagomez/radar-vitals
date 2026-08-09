@@ -12,28 +12,36 @@ dynamic range, and remain development-only/exploratory.
 
 ## 2. Current state
 
-Active branch: **`vital_signs_own_v13`**. Verified starting commit for M1:
-**`416c9453ffe05f93bbafde40d9bb355f18df8fda`**.
+Active branch: **`vital_signs_own_v13`**. The reviewed M1 implementation was committed at
+**`9b01d936db35b8427ee3b36579bd62a828a05926`**; only the later authorization-transition and
+radar-parent-boundary corrections described below are currently uncommitted on top of it.
 
 M0 is ready. The reviewed natural/paced/recovery analysis contract and owner-attested authorization
 metadata remain binding in `notes/analysis_prespec.md` and `notes/protocol.md`.
 
-M1 implementation is present but **uncommitted**. It does not change the estimator. The M4 scorer
+The reviewed M1 implementation is committed. The current uncommitted provenance correction does
+not change the estimator. The M4 scorer
 now emits a canonical production rollup keyed by `(capture_id, k)` for
 `production_eca_ahet_v1` under `current_production_rerun_lock`. It reports all complete windows,
 separate `k=0`, and persisted-lock `k>=1`; reconstructs every denominator from per-capture rows; and
 retains zero-output captures in capture-macro coverage. `scripts/score_production.py` is the
 clean-tree-only entry point and `production_summary.json` is part of the immutable scored bundle.
 
-Independent test and code review found two iterations of provenance defects, now repaired.
+Independent test and code review found multiple provenance defects, now repaired.
 Canonical scoring no longer accepts caller identity as authority: `run_score_stage` itself invokes
 Git on the repository containing the running scorer, requires the whole tree clean, resolves actual
-HEAD, rebuilds the transitive scientific source manifest, and requires exact gate/source/HEAD
-agreement. It then derives the exact eight-capture raw/config maps from the source-bound registry and
-cross-checks configuration hashes against validated radar-parent rows. There is no constructible
-module token or callable module-level canonical writer. Canonical status/artifact writing is
-lexically contained in that verified run branch; public persistence is always non-canonical and
-rejects identity maps.
+HEAD, and rebuilds the transitive scientific source manifest. Gate source bytes/hash must remain
+exact, but HEAD may be the direct one-commit child of the gate source commit when that commit changes
+exactly the sole canonical authorization YAML passed to preflight. The authorization must bind the
+exact gate/source and its filtered Git blob plus working SHA-256 are recorded. It then derives the
+exact eight-capture raw/config maps from the source-bound registry and cross-checks configuration
+hashes against validated radar-parent rows. There is no constructible module token or callable
+module-level canonical writer. Canonical status/artifact writing is lexically contained in that
+verified run branch; public persistence is always non-canonical and rejects identity maps.
+Radar-stage promotion eligibility is now derived from that exact transition proof: non-strict
+portable runs are explicitly noncanonical, and canonical scoring requires the promotion-eligible
+radar parent to contain an exact transition record equal to the scorer's independently reconstructed
+current Git transaction before reference access.
 
 Development verification against the existing hash-verified M4 radar parent reproduced the parent
 radar rows exactly and yielded:
@@ -53,12 +61,13 @@ headline. Its pooled CSV retains the all-zero row.
 
 ## 3. Active task / next steps
 
-1. Independently retest and review the corrected M1 provenance and all-zero legacy boundary. The
-   prior code-review verdict was FAIL before the checkout/token repair and is not a current verdict.
-2. If accepted, commit only with explicit user authorization. Do not claim canonical provenance
-   before that commit exists.
-3. From the clean commit, regenerate the clean source/gate/authorization chain and the M4 radar
-   parent from the hash-bound raw ADC/config inputs.
+1. Independently retest and review the authorization-transition and radar-parent-boundary
+   corrections.
+2. If accepted, commit the repair only with explicit user authorization and generate the synthetic
+   gate from that clean gate-source commit.
+3. Update only the sole canonical authorization YAML to bind that exact gate/source, commit that
+   one-file direct-child transaction, then run smoke and the full M4 radar parent from the bound raw
+   ADC/config inputs without further commits.
 4. Run `scripts/score_production.py`; verify its bundle, exact denominators and production estimate
    identity against the development value above.
 5. Stop after M1. M2 is not authorized by this work.
@@ -76,6 +85,9 @@ headline. Its pooled CSV retains the all-zero row.
 - Caller claims are not evidence. Canonical status requires the scorer's own actual-clean-tree and
   HEAD check, an exact rebuilt source manifest, the source-bound registry, and the validated
   radar-parent configuration map. Public persistence cannot emit canonical status.
+- Gate and authorization commits are distinct by design. Canonical use permits exactly one direct
+  post-gate commit changing exactly the authorization passed; every other intervening history or
+  working-tree change fails.
 - Production intermediates remain the complete bounded M4 native tree: one typed, non-object,
   pickle-free record for every production cell, estimate and abstention.
 - Existing A–D data remain approximate-origin development evidence. Correct arithmetic does not
@@ -83,18 +95,18 @@ headline. Its pooled CSV retains the all-zero row.
 
 ## 5. Gotchas / landmines
 
-- The official CLI currently **must fail** because the M1 tree is uncommitted. That refusal is the
-  provenance contract working, not a reason to bypass it.
-- The repaired focused suite completed with `31 passed`; the M4 registry/bundle/evidence plus
-  independent scorer compatibility suite completed with `202 passed, 1 skipped`. These are dirty
-  development-tree test results, not a canonical artifact attestation.
+- The official CLI currently **must fail** because the post-`9b01d936` provenance corrections are
+  uncommitted. The reviewed M1 base itself is committed; the current refusal is the clean-tree
+  contract working, not a reason to bypass it.
+- The latest focused M1/scorer/preflight/runner and compatibility selection completed with
+  `262 passed, 1 skipped`. These are dirty development-tree tests, not a canonical artifact.
 - The full provenance suite completed with `101 passed` when its basetemp was placed under the
   system temporary root, as required by its outside-repository attestation-path assertion.
 - The clean source manifest includes `scripts/score_production.py` and
   `tests/test_m1_production_scoring.py`; an old gate cannot authorize the changed scorer.
 - Use `C:/Users/josemsosag/.conda/envs/radar-vitals/python.exe`; the shell's MSYS Python lacks
-  pytest. In this sandbox, pass a project-local `--basetemp` because AppData temp access is denied,
-  then remove the temporary directory.
+  pytest. Provenance tests require `--basetemp` outside the repository; the latest run used a
+  uniquely named directory under the system temporary root and removed it afterward.
 - The eight old frame origins use `start_wall_utc` and remain approximate by 5–15 seconds. Do not
   promote their agreement metrics or call them final evidence.
 - Do not edit `data/raw/`, manually select rows, omit abstentions, or revive the 30.08% summary.
@@ -108,7 +120,7 @@ headline. Its pooled CSV retains the all-zero row.
 | `src/m4/estimator_scoring.py` | M4 scorer plus M1 exact production rollup and provenance gate |
 | `scripts/score_production.py` | canonical clean-tree production-scoring entry point |
 | `tests/test_m1_production_scoring.py` | denominator, zero-output, k=0, legacy and clean-tree regressions |
-| `src/m4/estimator_runner.py` | unchanged complete M4 production-row/native-evidence producer |
+| `src/m4/estimator_runner.py` | complete M4 evidence producer plus pre-data authorization transition gate |
 | `src/m4/evidence_serialization.py` | typed, non-object, pickle-free production evidence tree |
 | `scripts/m8_ahmed_score.py` | legacy descriptive M8 scorer; production headline explicitly blocked |
 | `experiments/m8_ahmed_transfer/capture_registry.yaml` | raw/config/reference hashes and fixed 128-window inventory |

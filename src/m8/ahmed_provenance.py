@@ -48,6 +48,7 @@ __all__ = [
     "scoped_paths",
     "verify_source_manifest",
     "validate_test_attestation",
+    "verify_exact_authorization_transition",
 ]
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -853,6 +854,117 @@ def _entries_without_source_commit(
         {key: value for key, value in entry.items() if key != "source_commit"}
         for entry in entries
     )
+
+
+def verify_exact_authorization_transition(
+    gate_source_manifest: SourceManifest | Mapping[str, object],
+    authorization_path: Path,
+    root: Path | None = None,
+    *,
+    entry_points: Sequence[str] | None = None,
+    required_artifacts: Sequence[str] | None = None,
+) -> dict[str, object]:
+    """Prove one clean direct gate-to-authorization commit transition.
+
+    The general source verifier supports the plan's broader approval-only history for
+    continuation workflows.  Canonical production scoring is narrower: its current HEAD
+    must be the direct child of the gate source commit, and that one commit must change
+    exactly the authorization YAML passed to the real-data preflight.
+    """
+    if isinstance(gate_source_manifest, Mapping):
+        gate_source_manifest = SourceManifest.from_dict(gate_source_manifest)
+    if not isinstance(gate_source_manifest, SourceManifest):
+        raise TypeError("gate_source_manifest must be a SourceManifest or mapping")
+
+    repository = Path(root or REPO_ROOT).resolve()
+    authorization = Path(authorization_path).resolve()
+    try:
+        relative_authorization = authorization.relative_to(repository).as_posix()
+    except ValueError as exc:
+        raise ValueError("authorization path is outside the canonical repository") from exc
+
+    try:
+        status = subprocess.run(
+            ["git", "status", "--porcelain", "--untracked-files=all", "-z"],
+            cwd=str(repository),
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        current_head = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=str(repository),
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise ValueError("cannot verify the canonical authorization Git transition") from exc
+    if status.stdout:
+        raise ValueError("canonical authorization transition requires a clean whole Git tree")
+    if not _GIT_COMMIT_PATTERN.fullmatch(current_head):
+        raise ValueError("canonical authorization transition has a malformed current HEAD")
+
+    verify_source_manifest(
+        gate_source_manifest,
+        repository,
+        entry_points=entry_points,
+        required_artifacts=required_artifacts,
+        require_promotion_eligible=True,
+    )
+    if current_head == gate_source_manifest.git_commit:
+        raise ValueError(
+            "canonical authorization was reused without a post-gate authorization commit"
+        )
+    changed_paths = _approval_only_commit_paths(
+        repository, gate_source_manifest.git_commit, current_head
+    )
+    if changed_paths != (relative_authorization,):
+        raise ValueError(
+            "canonical post-gate transition must change exactly the authorization passed; "
+            f"expected={(relative_authorization,)}, observed={changed_paths}"
+        )
+
+    try:
+        committed_blob = subprocess.run(
+            ["git", "rev-parse", f"{current_head}:{relative_authorization}"],
+            cwd=str(repository),
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        filtered_working_blob = subprocess.run(
+            [
+                "git",
+                "hash-object",
+                f"--path={relative_authorization}",
+                str(authorization),
+            ],
+            cwd=str(repository),
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        working_bytes = authorization.read_bytes()
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise ValueError(
+            "cannot read the committed canonical authorization bytes"
+        ) from exc
+    if not working_bytes or committed_blob != filtered_working_blob:
+        raise ValueError(
+            "canonical authorization content differs from the exact current-HEAD Git blob"
+        )
+
+    return {
+        "relationship": "direct_single_authorization_commit",
+        "gate_source_commit": gate_source_manifest.git_commit,
+        "authorization_commit": current_head,
+        "authorization_path": relative_authorization,
+        "authorization_sha256": sha256_path(authorization),
+        "authorization_git_blob": committed_blob,
+        "changed_paths": [relative_authorization],
+        "whole_tree_clean": True,
+    }
 
 
 def verify_source_manifest(

@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 import yaml
 
-from src.m4.bundle import BundleWriter, read_manifest, sha256_path
+from src.m4.bundle import BundleWriter, read_manifest, sha256_path, verify_bundle
 from src.m4.capture_registry import RadarCapture, RadarScope
 from src.m4.estimator_runner import (
     CANONICAL_ARM_IDS,
@@ -967,3 +967,61 @@ def test_real_radar_rejects_smoke_parent_not_bound_to_the_authorized_gate(tmp_pa
                 AssertionError("capture decode must not run")
             ),
         )
+
+
+def test_public_non_strict_radar_runner_can_only_write_noncanonical_bundle(tmp_path):
+    """A caller flag cannot promote a radar bundle without the exact Git transition."""
+    radar = _fixture(tmp_path / "capture-root")
+    source_hash = "s" * 64
+    gate_writer = BundleWriter(
+        stage_root=tmp_path / "synthetic", stage="synthetic", run_id="gate"
+    )
+    gate_writer.add_json("gate.json", {"gate_status": "passed"})
+    gate = gate_writer.finalize(
+        status="complete",
+        provenance={"source_manifest_sha256": source_hash},
+        promotion_eligible=True,
+        extra_manifest={"gate_status": "passed"},
+    )
+    _manifest, gate_digest = read_manifest(gate.root)
+    authorization_path = tmp_path / "authorization.yaml"
+    authorization_path.write_text(
+        yaml.safe_dump(
+            {
+                "authorization_id": "portable-chain",
+                "gate_manifest_sha256": gate_digest,
+                "source_manifest_sha256": source_hash,
+                "allowed_stages": ["real-smoke", "real-radar", "score"],
+                "capture_ids": ["m1"],
+                "lock_estimands": list(LOCK_ESTIMANDS),
+                "arm_ids": list(CANONICAL_ARM_IDS),
+                "approved_by": "test",
+                "approved_on": "2026-01-01",
+            }
+        ),
+        encoding="utf-8",
+    )
+    cube = np.zeros((600, 1, 1, 4), dtype=np.complex64)
+
+    bundle = run_radar_stage(
+        stage="real-smoke",
+        gate_dir=gate.root,
+        authorization_path=authorization_path,
+        source_manifest_sha256=source_hash,
+        radar=radar,
+        suites=[FakeProduction([]), FakeAhmed([])],
+        run_id="portable-smoke",
+        out_root=tmp_path / "out",
+        decode_fn=lambda path, chirp: cube,
+        selector_fn=lambda *args: (
+            1,
+            None,
+            {"candidates": [{"bin": 1, "failed": False}], "fallback_used": False},
+        ),
+        require_exact_authorization_transition=False,
+    )
+
+    manifest = verify_bundle(bundle.root)
+    provenance = json.loads((bundle.root / "provenance.json").read_text(encoding="utf-8"))
+    assert manifest["promotion_eligible"] is False
+    assert "authorization_transition" not in provenance

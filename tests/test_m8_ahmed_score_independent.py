@@ -1340,6 +1340,19 @@ _PARENT_GATE_SHA = "3" * 64
 _PARENT_SOURCE_SHA = "2" * 64
 _PARENT_AUTHORIZATION_ID = "m4-audit-authorization"
 _PARENT_AUTHORIZATION_SHA = "4" * 64
+_PARENT_AUTHORIZATION_PATH = (
+    "experiments/m8_ahmed_transfer/authorizations/m4-audit-authorization.yaml"
+)
+_PARENT_AUTHORIZATION_TRANSITION = {
+    "relationship": "direct_single_authorization_commit",
+    "gate_source_commit": "6" * 40,
+    "authorization_commit": "7" * 40,
+    "authorization_path": _PARENT_AUTHORIZATION_PATH,
+    "authorization_sha256": _PARENT_AUTHORIZATION_SHA,
+    "authorization_git_blob": "8" * 40,
+    "changed_paths": [_PARENT_AUTHORIZATION_PATH],
+    "whole_tree_clean": True,
+}
 
 
 def _write_radar_parent(
@@ -1352,6 +1365,7 @@ def _write_radar_parent(
     parents: dict | None = None,
     manifest_overrides: dict | None = None,
     provenance_overrides: dict | None = None,
+    include_authorization_transition: bool = True,
     resolved_overrides: dict | None = None,
     extra_payloads: dict | None = None,
     rows_document_overrides: dict | None = None,
@@ -1383,6 +1397,12 @@ def _write_radar_parent(
     )
     for name, payload in (extra_payloads or {}).items():
         writer.add_json(name, payload)
+    parent_authorization_transition = {
+        **_PARENT_AUTHORIZATION_TRANSITION,
+        "authorization_sha256": (provenance_overrides or {}).get(
+            "authorization_sha256", _PARENT_AUTHORIZATION_SHA
+        ),
+    }
     return writer.finalize(
         status=status,
         promotion_eligible=promotion_eligible,
@@ -1391,6 +1411,13 @@ def _write_radar_parent(
             "source_manifest_sha256": _PARENT_SOURCE_SHA,
             "authorization_id": _PARENT_AUTHORIZATION_ID,
             "authorization_sha256": _PARENT_AUTHORIZATION_SHA,
+            **(
+                {
+                    "authorization_transition": parent_authorization_transition
+                }
+                if include_authorization_transition
+                else {}
+            ),
             **(provenance_overrides or {}),
         },
         extra_manifest={
@@ -1412,6 +1439,7 @@ def _validate_parent(bundle_root: Path):
         expected_source_manifest_sha256=_PARENT_SOURCE_SHA,
         expected_authorization_id=_PARENT_AUTHORIZATION_ID,
         expected_authorization_sha256=_PARENT_AUTHORIZATION_SHA,
+        expected_authorization_transition=_PARENT_AUTHORIZATION_TRANSITION,
     )
 
 
@@ -1484,6 +1512,45 @@ def test_a_radar_parent_with_a_missing_estimator_row_is_refused(tmp_path):
     rows = _canonical_rows()
     bundle = _write_radar_parent(tmp_path / "radar", rows=rows[:-1])
     with pytest.raises(scoring.ScoreContractError, match="incomplete or contain extras"):
+        _validate_parent(bundle.root)
+
+
+def test_a_promotion_eligible_radar_parent_requires_authorization_transition(tmp_path):
+    bundle = _write_radar_parent(
+        tmp_path / "radar", include_authorization_transition=False
+    )
+
+    with pytest.raises(scoring.ScoreContractError, match="transition is missing"):
+        _validate_parent(bundle.root)
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("authorization_commit", "9" * 40),
+        ("authorization_path", "experiments/m8_ahmed_transfer/authorizations/other.yaml"),
+        ("authorization_git_blob", "a" * 40),
+        ("whole_tree_clean", False),
+    ],
+)
+def test_a_radar_parent_transition_must_match_independent_scorer_evidence(
+    tmp_path, field, value
+):
+    transition = dict(_PARENT_AUTHORIZATION_TRANSITION)
+    transition[field] = value
+    if field == "authorization_path":
+        transition["changed_paths"] = [value]
+    bundle = _write_radar_parent(
+        tmp_path / "radar",
+        provenance_overrides={"authorization_transition": transition},
+    )
+
+    expected = (
+        "does not attest the actual clean whole tree"
+        if field == "whole_tree_clean"
+        else "differs from the independently verified current transition"
+    )
+    with pytest.raises(scoring.ScoreContractError, match=expected):
         _validate_parent(bundle.root)
 
 
@@ -1609,6 +1676,44 @@ def test_run_score_stage_scores_one_real_chain_and_persists_a_linked_bundle(tmp_
         "evaluation_k_ge_1_estimator_rows_per_vital": 1680,
         "total_scored_rows_both_vitals": 3584,
     }
+
+
+def test_missing_parent_transition_stops_before_reference_access(tmp_path):
+    gate, gate_digest, authorization_path, authorization_sha = _write_gate_and_authorization(
+        tmp_path
+    )
+    parent = _write_radar_parent(
+        tmp_path / "radar",
+        parents={"synthetic": gate_digest},
+        provenance_overrides={"authorization_sha256": authorization_sha},
+        include_authorization_transition=False,
+    )
+
+    class BombReference:
+        protocol = PROTOCOLS
+        strata = STRATA
+
+        def csv_path(self, _capture_id):
+            raise AssertionError("reference path was built for an invalid radar parent")
+
+        def digest(self, _capture_id):
+            raise AssertionError("reference digest was read for an invalid radar parent")
+
+    with pytest.raises(scoring.ScoreContractError, match="transition is missing"):
+        scoring.run_score_stage(
+            gate_dir=gate.root,
+            authorization_path=authorization_path,
+            source_manifest_sha256=_PARENT_SOURCE_SHA,
+            radar_dir=parent.root,
+            reference=BombReference(),
+            run_id="invalid-parent",
+            file_hash=lambda _path: (_ for _ in ()).throw(
+                AssertionError("reference file was hashed for an invalid radar parent")
+            ),
+            masimo_loader=lambda _path: (_ for _ in ()).throw(
+                AssertionError("reference parser ran for an invalid radar parent")
+            ),
+        )
 
 
 def test_a_rejected_real_parent_stops_before_any_reference_path_is_built(tmp_path):

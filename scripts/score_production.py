@@ -110,10 +110,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     verify_gate_bundle(gate)
     source = load_source_manifest(gate / "source_manifest.json")
     verify_source_manifest(source, require_promotion_eligible=True)
-    if source.git_commit != git_commit:
-        raise RuntimeError(
-            f"source manifest commit {source.git_commit} does not equal clean HEAD {git_commit}"
-        )
+    # The clean HEAD is the one direct authorization commit after the gate source
+    # commit. ``run_score_stage`` proves that exact transition and records both commits.
 
     registry = load_registry()
     run_id = new_run_id(source.manifest_sha256)

@@ -4,11 +4,13 @@ from __future__ import annotations
 from dataclasses import replace
 import json
 import subprocess
+from types import SimpleNamespace
 
 import pandas as pd
 import pytest
 
 import src.m4.estimator_scoring as scoring
+import scripts.score_production as production_cli
 from src.m4.bundle import sha256_path
 from src.m4.capture_registry import DEFAULT_REGISTRY, load_registry
 from src.m4.estimator_scoring import (
@@ -26,7 +28,11 @@ from src.m4.estimator_scoring import (
     production_audit_summary,
     run_score_stage,
 )
-from src.m8.ahmed_provenance import SourceManifest, build_source_manifest
+from src.m8.ahmed_provenance import (
+    SourceManifest,
+    build_source_manifest,
+    verify_exact_authorization_transition,
+)
 from src.m4.production_suite import PRODUCTION_ARM_ID
 from scripts.score_production import require_clean_tree_commit
 from scripts.m8_ahmed_score import pool_score_rows, write_and_display_pooled
@@ -194,6 +200,88 @@ def test_canonical_cli_clean_tree_gate_returns_exact_head(tmp_path):
     assert observed == commit
 
 
+def test_canonical_cli_accepts_the_verified_direct_authorization_commit(
+    tmp_path, monkeypatch
+):
+    gate_source_commit = "a" * 40
+    authorization_commit = "b" * 40
+    source_manifest_sha256 = "c" * 64
+    summary_root = tmp_path / "scored-bundle"
+    summary_root.mkdir()
+    (summary_root / "production_summary.json").write_text(
+        json.dumps(
+            {
+                "production_audit": {
+                    "universes": {
+                        PRODUCTION_ALL_WINDOWS_UNIVERSE: {
+                            "micro": {
+                                "n_radar_valid": 14,
+                                "n_source": 128,
+                                "radar_coverage": 14 / 128,
+                                "n_joint": 9,
+                                "n_reference_admitted": 67,
+                                "joint_given_reference": 9 / 67,
+                            }
+                        },
+                        PRODUCTION_PERSISTED_LOCK_UNIVERSE: {
+                            "micro": {
+                                "n_radar_valid": 11,
+                                "n_source": 120,
+                                "radar_coverage": 11 / 120,
+                            }
+                        },
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    observed = {}
+    monkeypatch.setattr(
+        production_cli, "require_clean_tree_commit", lambda: authorization_commit
+    )
+    monkeypatch.setattr(production_cli, "verify_gate_bundle", lambda _gate: None)
+    monkeypatch.setattr(
+        production_cli,
+        "load_source_manifest",
+        lambda _path: SimpleNamespace(
+            manifest_sha256=source_manifest_sha256,
+            git_commit=gate_source_commit,
+        ),
+    )
+    monkeypatch.setattr(
+        production_cli, "verify_source_manifest", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr(
+        production_cli,
+        "load_registry",
+        lambda: SimpleNamespace(reference_scope=lambda: object()),
+    )
+    monkeypatch.setattr(production_cli, "new_run_id", lambda _source: "canonical-run")
+
+    def fake_run_score_stage(**kwargs):
+        observed.update(kwargs)
+        return SimpleNamespace(
+            root=summary_root,
+            run_id="canonical-run",
+            manifest_sha256="d" * 64,
+        )
+
+    monkeypatch.setattr(production_cli, "run_score_stage", fake_run_score_stage)
+
+    assert production_cli.main(
+        [
+            "--gate", str(tmp_path / "gate"),
+            "--authorization", str(tmp_path / "authorization.yaml"),
+            "--radar-parent", str(tmp_path / "radar"),
+            "--out", str(tmp_path / "out"),
+        ]
+    ) == 0
+    assert gate_source_commit != authorization_commit
+    assert observed["require_production_provenance"] is True
+    assert observed["require_scientific_gate"] is True
+
+
 def _git(repo, *arguments):
     return subprocess.run(
         ["git", *arguments],
@@ -245,25 +333,41 @@ def test_current_source_manifest_is_rebuilt_and_source_drift_fails_closed(
     (gate_dir / "source_manifest.json").write_text(
         json.dumps(source.to_dict()), encoding="utf-8"
     )
+    authorization_path = (
+        repo
+        / "experiments"
+        / "m8_ahmed_transfer"
+        / "authorizations"
+        / "approved.yaml"
+    )
+    authorization_path.parent.mkdir(parents=True)
+    authorization_path.write_text("authorization_id: fixture\n", encoding="utf-8")
+    _git(repo, "add", authorization_path.relative_to(repo).as_posix())
+    _git(repo, "commit", "-m", "bind exact gate authorization")
     head = _git(repo, "rev-parse", "HEAD")
 
-    rebuilt = _verify_current_source_checkout(
+    rebuilt, transition = _verify_current_source_checkout(
         gate_dir=gate_dir,
         source_manifest_sha256=source.manifest_sha256,
         repository_root=repo,
         git_head=head,
+        authorization_path=authorization_path,
         entry_points=entry_points,
         required_artifacts=(),
     )
     assert rebuilt.manifest_sha256 == source.manifest_sha256
-    assert rebuilt.git_commit == head
+    assert rebuilt.git_commit == source.git_commit
+    assert transition["gate_source_commit"] == source.git_commit
+    assert transition["authorization_commit"] == head
+    assert transition["relationship"] == "direct_single_authorization_commit"
 
-    with pytest.raises(ScoreContractError, match="actual clean Git HEAD"):
+    with pytest.raises(ScoreContractError, match="actual clean authorization HEAD"):
         _verify_current_source_checkout(
             gate_dir=gate_dir,
             source_manifest_sha256=source.manifest_sha256,
             repository_root=repo,
             git_head="f" * 40,
+            authorization_path=authorization_path,
             entry_points=entry_points,
             required_artifacts=(),
         )
@@ -275,7 +379,102 @@ def test_current_source_manifest_is_rebuilt_and_source_drift_fails_closed(
             source_manifest_sha256=source.manifest_sha256,
             repository_root=repo,
             git_head=head,
+            authorization_path=authorization_path,
             entry_points=entry_points,
+            required_artifacts=(),
+        )
+
+
+def _transition_fixture(tmp_path, mutation):
+    repo = tmp_path / "repository"
+    repo.mkdir()
+    _git(repo, "init")
+    _git(repo, "config", "user.email", "m1-test@example.invalid")
+    _git(repo, "config", "user.name", "M1 Test")
+    (repo / "src").mkdir()
+    scientific_file = repo / "src" / "scientific.py"
+    scientific_file.write_text("VALUE = 1\n", encoding="utf-8")
+    authorization_path = (
+        repo
+        / "experiments"
+        / "m8_ahmed_transfer"
+        / "authorizations"
+        / "approved.yaml"
+    )
+    if mutation == "reuse":
+        authorization_path.parent.mkdir(parents=True)
+        authorization_path.write_text("authorization_id: stale\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-m", "gate source")
+    gate_source = build_source_manifest(
+        repo, entry_points=("src/scientific.py",), required_artifacts=()
+    )
+
+    if mutation != "reuse":
+        authorization_path.parent.mkdir(parents=True)
+        authorization_path.write_text("authorization_id: exact\n", encoding="utf-8")
+        if mutation == "extra_file":
+            (repo / "README.md").write_text("not authorization\n", encoding="utf-8")
+        if mutation == "source_drift":
+            scientific_file.write_text("VALUE = 2\n", encoding="utf-8")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-m", "authorization transaction")
+    if mutation == "extra_commit":
+        _git(repo, "commit", "--allow-empty", "-m", "extra transaction")
+    if mutation == "dirty":
+        authorization_path.write_text("authorization_id: dirty\n", encoding="utf-8")
+
+    passed_authorization = authorization_path
+    if mutation == "wrong_auth":
+        passed_authorization = authorization_path.with_name("wrong.yaml")
+    return repo, gate_source, authorization_path, passed_authorization
+
+
+def test_exact_gate_to_authorization_transition_accepts_one_direct_commit(tmp_path):
+    repo, gate_source, authorization_path, _passed = _transition_fixture(
+        tmp_path, "valid"
+    )
+
+    transition = verify_exact_authorization_transition(
+        gate_source,
+        authorization_path,
+        repo,
+        entry_points=("src/scientific.py",),
+        required_artifacts=(),
+    )
+
+    assert transition["gate_source_commit"] == gate_source.git_commit
+    assert transition["authorization_commit"] == _git(repo, "rev-parse", "HEAD")
+    assert transition["changed_paths"] == [
+        "experiments/m8_ahmed_transfer/authorizations/approved.yaml"
+    ]
+    assert transition["authorization_sha256"] == sha256_path(authorization_path)
+
+
+@pytest.mark.parametrize(
+    ("mutation", "error_match"),
+    [
+        ("extra_file", "not approval-only"),
+        ("extra_commit", "changed no approval YAML"),
+        ("wrong_auth", "exactly the authorization passed"),
+        ("dirty", "clean whole Git tree"),
+        ("source_drift", "scientific dependency content"),
+        ("reuse", "reused without a post-gate"),
+    ],
+)
+def test_exact_gate_to_authorization_transition_rejects_invalid_history(
+    tmp_path, mutation, error_match
+):
+    repo, gate_source, _authorization_path, passed_authorization = _transition_fixture(
+        tmp_path, mutation
+    )
+
+    with pytest.raises(ValueError, match=error_match):
+        verify_exact_authorization_transition(
+            gate_source,
+            passed_authorization,
+            repo,
+            entry_points=("src/scientific.py",),
             required_artifacts=(),
         )
 
