@@ -1,101 +1,102 @@
-# Handoff — resume here
+# Handoff — M1 complete
 
 > Read this and `CLAUDE.md` before doing anything. **State verified 2026-08-10.**
 > `HISTORY.md` is append-only; this file is the current resume point.
 
-## 1. Project snapshot
+## 1. Current state
 
-This project estimates HR/BR from a TI IWR1642BOOST + DCA1000 radar for a seated subject at
-0.8–1.4 m. Masimo `Beats / min`, aligned by integer Unix `Timestamp`, is the HR reference. The
-existing eight captures span subjects A–D, have approximate frame origins and insufficient HR
-dynamic range, and remain development-only evidence.
+Active branch: **`vital_signs_own_v13`**. M1 implementation, canonical execution and independent
+artifact verification are **PASS**. There is no active M1 code or artifact work.
 
-## 2. Current state
+The scientific gate-source commit is
+**`0dc0698f5f208077744c6b90561645ddc0eea024`**. The clean sole authorization-only child used for
+all real-data stages is **`a47182677d808911c551fae8585e02a23532b74f`**. This HANDOFF/HISTORY
+refresh may appear in a later documentation-only commit; such a descendant does not change the
+scientific source, authorization transition or artifact identities below.
 
-Active branch: **`vital_signs_own_v13`**. The reviewed cumulative M1 implementation, including the
-Windows-safe v3 test-attestation transport and exact ordered JUnit identity binding, is committed at
-**`15134e260905af8640c2720bb99c6927164bb56e`**. The only current uncommitted implementation repair
-replaces v3's raw namespace regex with namespace-aware parser events in
-`src/m8/ahmed_provenance.py`; its deterministic tests and current logs are also uncommitted. It does
-not change ECA, AHET, thresholds, range-bin selection, signal representation or estimator behavior.
+M1 did not change ECA, AHET, thresholds, range-bin selection, signal representation or estimator
+scientific behavior, and it was not tuned to Masimo. It corrected the scoring/provenance contract:
+the complete `k>=0` ledger, separate `k=0`, persisted-lock `k>=1`, exact denominator reconstruction,
+zero-output macro inclusion, typed bounded evidence and fail-closed source/data/config/reference
+identity are now canonical.
 
-M1 scoring reports the complete `k>=0` ledger, separate `k=0`, and persisted-lock `k>=1`;
-reconstructs exact denominators; retains zero-output captures in capture-macro coverage; and binds
-source, raw ADC, config, registry, environment, gate, radar parent, reference and score outputs. The
-development audit values remain `14/128` all-window coverage, `9/67` joint-given-reference and
-`11/120` `k>=1`, with radar estimate identity SHA-256
-`0ced713d76e2ac5d29a26d15a4b8a81f5e83f84d81e5bf156885d9d53ce17906`. The historical 30.08%
-coverage is retired.
+## 2. Canonical artifact chain
 
-Two clean Phase A attempts at `15134e2...` failed closed before gate publication. The first used a
-long external visualization TEMP path: the attested run reported `25 failed, 1344 passed, 1 skipped`
-because temporary Git repositories exceeded Windows path limits. The second used short external
-`C:\tmp\m1g15134`: all attested tests passed (`1369 passed, 1 skipped`), but the strict JUnit parser
-mistook escaped `xmlns:evil=` text in a parametrized testcase name for a real namespace declaration.
-No canonical gate, authorization edit, smoke artifact, radar parent or score artifact was created.
+| Stage | Artifact | Manifest SHA-256 |
+|---|---|---|
+| Gate | `results/m8_ahmed_transfer/synthetic/20260809T212052.240643Z_779928f3a61c` | `db941e47ac424af67fa57fe256b2bec7f115d2e4ab0a50155e10b519ab9d7991` |
+| Smoke | `results/m8_ahmed_transfer/smoke_m1_a4718267/20260809T212711.258830Z_1a9372ff2b33` | `74c39a9b07c16c29881a239e44b8cdc4d05c9a1db2b77235503111ac6c18d641` |
+| Radar | `results/m8_ahmed_transfer/radar_m1_a4718267/20260809T212904.045947Z_1a9372ff2b33` | `1530fbf6942c21e32a9b889a2c73bd1f988fa2038bac23760bb22fd31eb06f50` |
+| Score | `results/production_eca_ahet/scored/20260809T220332.406724Z_1a9372ff2b33` | `c359fa71191e1271ee17fe61e74731b1622d4a2c05a70668c378d48b5f53f9d7` |
 
-The uncommitted correction now detects actual namespace bindings via ElementTree `start-ns` events
-over bounded exact XML bytes. Escaped namespace-like testcase/output text is accepted as data;
-default, prefixed, used and unused declarations remain rejected. DTD/entity, BOM, PI, unknown XML
-grammar, count/duration, and exact ordered node-identity protections remain unchanged and tested.
+The score's `production_summary.json` SHA-256 is
+`6bf50705df8d720615d5d2b0e64fa07175904673c79afccb99bfa46d04ba0d94`. Its canonical provenance
+status is `complete_clean_tree_hash_bound`; source-chain verification is true. The authorization
+SHA-256 is `e4f187ac7f19e4281a983cea6e1e3061188a662c11ae571c88a687c1f36944fb`, source-manifest identity
+is `1a9372ff2b33cc7589e93cbb7a9565f07ad957d515cd5402db1ff9eefae15079`, reference identity is
+`d79a907e68ddbf3970ebaebc428f6fe90490d967414d771627f09fdc18673e87`, environment identity is
+`be1d5b17caa15772263be0deeb859b81f0e8b89ecbad1b0bd3e07d32bd874b5f`, and Conda explicit identity
+is `0fb28a7698955668a26a552347239cd703a9aac08ead973ca14e2d3c47a0b050`.
 
-## 3. Active task / next steps
+The gate attestation recorded 1,373 collected tests: `1372 passed, 1 skipped, 0 failed/errors`.
+Smoke cardinalities are 1 source/2 shared/14 estimator/12 Ahmed/2 production. Radar cardinalities
+are 128 source/256 shared/1,792 estimator/1,536 Ahmed/256 production. All manifest and payload
+hashes, parents, exact Cartesian row identities, authorization transition, source reconstruction,
+raw/config/reference maps and bounded typed NPZ/index evidence passed verification; NPZ evidence is
+pickle-free.
 
-1. Independently test and code-review the uncommitted namespace-event correction.
-2. If accepted, commit only with explicit user authorization. The new clean commit becomes the
-   gate-source identity; do not reuse `15134e2...` after this source/test change.
-3. Use full Conda activation and a unique short external TEMP root. Run unchanged
-   `scripts/m8_ahmed_transfer.py synthetic --out results/m8_ahmed_transfer/synthetic`, then verify
-   gate, source, test, environment and Conda identities completely.
-4. Update only
-   `experiments/m8_ahmed_transfer/authorizations/real_evaluation_20260808.yaml` to bind that gate and
-   source, review it, and commit it as the sole direct authorization-only child.
-5. Only then run smoke, the eight-capture radar parent and `scripts/score_production.py`; verify
-   bundle integrity, exact denominators and estimate invariance. Stop after M1; do not begin M2.
+## 3. Canonical M1 result
 
-## 4. Recent decisions that matter
+- All-window radar coverage: **`14/128 = 0.109375`**.
+- Joint given reference: **`9/67 = 0.13432835820895522`**.
+- Persisted-lock `k>=1` radar coverage: **`11/120 = 0.09166666666666666`**.
+- Separate `k=0`: 8 source, 3 radar-valid, 1 reference-admitted, 0 joint.
+- All-window MAE/RMSE/bias: `2.7655614552159387 / 5.275212052978818 /
+  -2.385366027726006` bpm.
+- All-window capture-macro radar coverage: `0.19427083333333334`; zero-radar m3/m5,
+  zero-joint m3/m5/m7.
+- `k>=1` capture-macro radar coverage: `0.16973684210526316`; zero-radar and zero-joint
+  m3/m5/m7.
+- All eight captures remain in coverage macros even when accuracy is undefined.
 
-- Final attested pytest inherits ordinary handles for Windows native-library compatibility; exact
-  argv/cwd/return status and bounded exact xUnit2 bytes/counts/skips/ordered node IDs remain required.
-- The first three collection commands remain captured because their stdout defines the exact
-  ordered collection and declared-skip identities.
-- Namespace declarations are identified by XML parser namespace events, not raw regex text. The
-  closed tree grammar still rejects expanded namespace tags and attributes.
-- Entity-bearing XML is rejected before either iterative or tree parsing. Unknown declarations,
-  processing instructions, BOMs and malformed/oversized/tampered JUnit fail closed.
-- Canonical scoring requires actual clean Git state, exact source reconstruction, the sole direct
-  authorization-only transition, internally derived registry hashes and matching promotion-eligible
-  radar-parent transition evidence.
-- Full `k>=0` is the all-window denominator; `k=0` stays in the ledger and is reported separately.
-  Undefined accuracy never removes a zero-output capture from coverage.
+All 128 fresh production HR values, validity decisions and reasons exactly equal the audited parent
+and have identity SHA-256
+`0ced713d76e2ac5d29a26d15a4b8a81f5e83f84d81e5bf156885d9d53ce17906`.
 
-## 5. Verification and landmines
+## 4. Interpretation and landmines
 
-- Targeted namespace/strict parser: `24 passed, 123 deselected, 12 warnings`.
-- Full provenance: `147 passed, 15 warnings` in 30.89 s.
-- Transfer/bundle/strict-preflight: `105 passed, 12 warnings` in 6.02 s.
-- Standalone inherited Agg regression: `1 passed, 12 warnings` in 3.27 s; its real Fig8 child passed
-  in 2.44 s.
-- These are dirty development-tree tests, not a canonical gate. Do not run a canonical builder until
-  the repair is reviewed, committed and the worktree is clean.
-- Use full activation via
-  `C:/ProgramData/anaconda3/Scripts/conda.exe run -n radar-vitals --no-capture-output ...` and a short
-  external TEMP/TMP. Never use a repo-local pytest/JUnit temp root for canonical work.
-- Do not edit `data/raw/`, manually handle score rows, weaken provenance gates, revive the 30.08%
-  summary, tune to Masimo, or begin M2.
+- The historical **30.08%** survivor-biased coverage is retired. Do not revive or cite it.
+- `k=0` remains in the complete ledger and is reported separately; never silently drop it.
+- The score manifest's `promotion_eligible: false` expresses claim status for exploratory,
+  approximate-origin, single-subject development data. It is **not** a provenance failure; canonical
+  provenance is `complete_clean_tree_hash_bound`.
+- Existing captures have approximate frame origins (roughly 5–15 s uncertainty), insufficient HR
+  dynamic range and no population-validation role. Correct arithmetic does not make them final
+  agreement evidence.
+- Canonical Windows execution requires full
+  `C:/ProgramData/anaconda3/Scripts/conda.exe run -n radar-vitals --no-capture-output`, a unique short
+  external `TEMP`/`TMP` under `C:\tmp`, and inherited handles for the final attested pytest child.
+  Deep temp paths can break temporary Git repositories; captured/redirected final Matplotlib handles
+  can fail native DLL execution.
+- Do not edit `data/raw/`, manually handle score rows, weaken clean-tree/hash gates, tune to Masimo,
+  or rerun/replace the canonical chain without explicit authorization.
 
-## 6. Pointers
+## 5. Next step
+
+M1 is complete. M2 is the next milestone only if the user separately authorizes it and its accepted
+plan is reviewed before implementation. Do not infer M2 authorization from M1 completion.
+
+## 6. Key files
 
 | File | Purpose |
 |---|---|
-| `plans/plan_codex_milestones.md` | authoritative milestone boundaries and audit quantities |
-| `src/m8/ahmed_provenance.py` | source closure, transition and v2/v3 test attestation |
-| `tests/test_m8_ahmed_provenance.py` | provenance, XML, transition and Windows regressions |
-| `tests/conftest.py` | deterministic v3 fake pytest/JUnit runner |
-| `src/m4/estimator_scoring.py` | canonical M1 rollup and scorer-side provenance gate |
-| `src/m4/estimator_runner.py` | bounded evidence producer and radar-parent transition gate |
-| `scripts/score_production.py` | canonical clean-tree production-scoring CLI |
-| `experiments/m8_ahmed_transfer/capture_registry.yaml` | bound capture/config/reference identities |
-| `notes/analysis_prespec.md` | estimands, roles, ledger and zero-output rules |
-| `notes/protocol.md` | fixed capture procedure and recovery authorization status |
-| `HISTORY.md` | append-only evidence, failures, retirements and next actions |
+| `plans/plan_codex_milestones.md` | milestone boundaries and acceptance criteria |
+| `src/m4/estimator_scoring.py` | canonical M1 rollup and scorer provenance contract |
+| `src/m4/estimator_runner.py` | bounded evidence producer and radar transition gate |
+| `src/m8/ahmed_provenance.py` | source, authorization and test-attestation contracts |
+| `scripts/score_production.py` | canonical M1 scoring CLI |
+| `experiments/m8_ahmed_transfer/capture_registry.yaml` | bound capture/config/reference inventory |
+| `experiments/m8_ahmed_transfer/authorizations/real_evaluation_20260808.yaml` | canonical authorization |
+| `notes/analysis_prespec.md` | estimands, ledgers and zero-output rules |
+| `notes/protocol.md` | capture protocol and timing limitations |
+| `HISTORY.md` | append-only implementation and evidence record |

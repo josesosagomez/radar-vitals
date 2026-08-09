@@ -11282,3 +11282,104 @@ If accepted, commit only with explicit authorization; the resulting clean commit
 gate-source identity. Regenerate Phase A with a short external TEMP root, verify the complete gate,
 then update only the canonical authorization YAML. Do not access raw/reference data or begin M2
 before that reviewed chain exists.
+
+## 2026-08-10 - M1 canonical production artifact completed and independently verified
+
+**Set out to do:** execute the reviewed M1 chain from a clean, hash-bound source and sole committed
+authorization transition; regenerate the eight-capture production radar estimates without manual
+row handling; score them through the M4 contract; and independently verify provenance, evidence,
+denominators, corrected coverage and estimate invariance. No M2 or estimator/DSP change was in
+scope.
+
+**Authority and exact commands:** reviewed gate-source commit
+`0dc0698f5f208077744c6b90561645ddc0eea024` produced the gate. Its sole direct authorization-only
+child is `a47182677d808911c551fae8585e02a23532b74f`; Git recorded exactly
+`experiments/m8_ahmed_transfer/authorizations/real_evaluation_20260808.yaml`, blob
+`08c6a27e619200b5e48a85314d780cb7b01b3e95`, SHA-256
+`e4f187ac7f19e4281a983cea6e1e3061188a662c11ae571c88a687c1f36944fb`. The whole tree was clean
+when the transition, repository authorization and pre-data preflight passed. The canonical commands,
+all run through `C:\ProgramData\anaconda3\Scripts\conda.exe run -n radar-vitals
+--no-capture-output`, were:
+
+```text
+python scripts/m8_ahmed_transfer.py synthetic --out results/m8_ahmed_transfer/synthetic
+python scripts/m8_ahmed_transfer.py real-smoke --gate results/m8_ahmed_transfer/synthetic/20260809T212052.240643Z_779928f3a61c --authorization experiments/m8_ahmed_transfer/authorizations/real_evaluation_20260808.yaml --out results/m8_ahmed_transfer/smoke_m1_a4718267
+python scripts/m8_ahmed_transfer.py real-radar --gate results/m8_ahmed_transfer/synthetic/20260809T212052.240643Z_779928f3a61c --authorization experiments/m8_ahmed_transfer/authorizations/real_evaluation_20260808.yaml --parent results/m8_ahmed_transfer/smoke_m1_a4718267/20260809T212711.258830Z_1a9372ff2b33 --out results/m8_ahmed_transfer/radar_m1_a4718267
+python scripts/score_production.py --gate results/m8_ahmed_transfer/synthetic/20260809T212052.240643Z_779928f3a61c --authorization experiments/m8_ahmed_transfer/authorizations/real_evaluation_20260808.yaml --radar-parent results/m8_ahmed_transfer/radar_m1_a4718267/20260809T212904.045947Z_1a9372ff2b33 --out results/production_eca_ahet/scored
+```
+
+**Worked (with evidence):** the promotion-eligible gate is
+`results/m8_ahmed_transfer/synthetic/20260809T212052.240643Z_779928f3a61c`, manifest SHA-256
+`db941e47ac424af67fa57fe256b2bec7f115d2e4ab0a50155e10b519ab9d7991`. Its exact v3 attestation
+collected 1,373 nodes and recorded `1372 passed, 1 skipped, 0 failed/errors` in 119.60 s. The source
+identity is `1a9372ff2b33cc7589e93cbb7a9565f07ad957d515cd5402db1ff9eefae15079` (source-manifest file
+SHA-256 `08477bb4fd48ef3b6f2f3b13a42afc5b7e6b1ce981870066ce206afca92ad2d7`), test-attestation
+SHA-256 `bd49207090d2be18a4a1707295e71ed59e21fd357280891ff48c3056904cfb04`, exact JUnit SHA-256
+`09c4bf6c582f975c7dcbaf810cde546926fbbafcefe1582699b5cdb3bb12f7ab`, environment SHA-256
+`be1d5b17caa15772263be0deeb859b81f0e8b89ecbad1b0bd3e07d32bd874b5f`, and Conda explicit
+SHA-256 `0fb28a7698955668a26a552347239cd703a9aac08ead973ca14e2d3c47a0b050`. Bundle verification,
+current source reconstruction and live environment/Conda replay all matched these frozen bytes.
+
+The verified smoke bundle is
+`results/m8_ahmed_transfer/smoke_m1_a4718267/20260809T212711.258830Z_1a9372ff2b33`, manifest
+`74c39a9b07c16c29881a239e44b8cdc4d05c9a1db2b77235503111ac6c18d641`: 1 source span, 2 shared
+rows, 14 estimator rows, 12 Ahmed evidence rows and 2 production evidence rows. The verified,
+promotion-eligible radar parent is
+`results/m8_ahmed_transfer/radar_m1_a4718267/20260809T212904.045947Z_1a9372ff2b33`, manifest
+`1530fbf6942c21e32a9b889a2c73bd1f988fa2038bac23760bb22fd31eb06f50`: the exact Cartesian 128
+source spans, 256 shared rows, 1,792 estimator rows, 1,536 Ahmed evidence rows and 256 production
+evidence rows. Every manifest/payload hash, parent, source, authorization and transition identity
+validated; all bounded typed NPZ/index evidence opened under the `allow_pickle=False` contract.
+
+The canonical score is
+`results/production_eca_ahet/scored/20260809T220332.406724Z_1a9372ff2b33`, manifest
+`c359fa71191e1271ee17fe61e74731b1622d4a2c05a70668c378d48b5f53f9d7`, production-summary
+SHA-256 `6bf50705df8d720615d5d2b0e64fa07175904673c79afccb99bfa46d04ba0d94`, with 3,584 scored rows
+and canonical provenance status `complete_clean_tree_hash_bound`. Its reference identity is
+`d79a907e68ddbf3970ebaebc428f6fe90490d967414d771627f09fdc18673e87`. The raw ADC map is bound
+as `m1=dc2be2d0...03f18`, `m2=112a64bf...f88bf`, `m3=cca0cdcb...7b00`,
+`m4=2edc2c6d...3968`, `m5=a55a0e42...bb5b`, `m6=b81ff843...9103`,
+`m7=782166e0...53c5`, `sweep=91bc422d...a96d`; the full 64-character values are persisted in
+`production_summary.json`. Capture-config identities are `c38ae7ae...3d71` for m1/m2,
+`60bf8666...36c6` for m3-m7, and `e171e13c...431f` for sweep, likewise persisted in full. These
+maps were independently derived from the committed registry and checked against the radar parent;
+no caller-supplied digest claim was trusted.
+
+**Corrected production result:** the complete `k>=0` ledger reports radar coverage
+`14/128 = 0.109375`, joint-given-reference `9/67 = 0.13432835820895522`, MAE
+`2.7655614552159387` bpm, RMSE `5.275212052978818` bpm and bias `-2.385366027726006` bpm. The
+separate persisted-lock `k>=1` universe reports `11/120 = 0.09166666666666666` radar coverage and
+`9/66 = 0.13636363636363635` joint-given-reference. The separate `k=0` ledger contains 8 source
+windows, 3 radar-valid, 1 reference-admitted and 0 joint. All-window capture-macro radar coverage is
+`0.19427083333333334`; `k>=1` capture-macro radar coverage is `0.16973684210526316`; all eight
+captures contribute to coverage means. All-window zero-radar-output captures are m3/m5 and
+zero-joint-output captures are m3/m5/m7. For `k>=1`, both zero-radar and zero-joint capture sets are
+m3/m5/m7. Undefined accuracy never removes those captures from macro coverage.
+
+All 128 ordered production HR `(capture_id, k, value, validity, reason)` records are exactly equal
+between the fresh score, fresh radar parent and audited parent
+`results/m8_ahmed_transfer/radar/20260808T183600.392760Z_bc3ccf4635c5`; identity SHA-256 is exactly
+`0ced713d76e2ac5d29a26d15a4b8a81f5e83f84d81e5bf156885d9d53ce17906`. Thus the corrected
+metrics/provenance did not change a radar estimate, validity decision or reason.
+
+**Failed attempts and resolved operational causes:** Windows native Matplotlib could stall/fatal
+when the final attested pytest child used captured pipes or redirected files; v3 therefore keeps
+the parsed collection commands captured but runs the final execute child with inherited console
+handles and binds its exact bounded JUnit bytes. Direct executable/DLL-path attempts were not an
+equivalent environment; full `conda run -n radar-vitals --no-capture-output` activation resolved
+that environment boundary. A deep visualization TEMP root later caused 25 temporary-Git
+filename-too-long failures (`1344 passed, 1 skipped`); a unique short external `C:\tmp` root removed
+that path-length failure. The subsequent short-root suite passed but an over-broad raw namespace
+regex rejected escaped `xmlns` text in its own testcase name; namespace-event parsing fixed that
+implementation defect before the successful clean gate at `0dc0698f...`. Failed attempts emitted
+no canonical gate or authorization reuse.
+
+**Review outcome and scope:** the implementation repairs and canonical artifacts passed independent
+review and independent artifact verification. M1 is complete. ECA, AHET, thresholds, range-bin
+selection, signal representation and estimator scientific behavior were not changed or tuned to
+Masimo. The historical 30.08% survivor-biased coverage remains retired. Existing captures retain
+approximate time origins and development-only/single-subject claim status. No M2 work was started.
+
+**Next:** no active M1 code or artifact work remains. Begin M2 only under a separate explicit
+authorization and its accepted milestone plan; do not reinterpret these exploratory artifacts as
+population validation or final agreement evidence.
