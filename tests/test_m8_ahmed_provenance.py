@@ -1376,6 +1376,26 @@ def _minimal_strict_junit_xml(testcase_xml: str) -> bytes:
             _minimal_strict_junit_xml(
                 '<testcase classname="tests.test_m8_ahmed_provenance" '
                 'name="test_x" time="0.010"/>'
+            ).replace(
+                b'<testsuites name=',
+                b'<testsuites xmlns="urn:evil" name=',
+            ),
+            "namespaces are forbidden",
+        ),
+        (
+            _minimal_strict_junit_xml(
+                '<testcase classname="tests.test_m8_ahmed_provenance" '
+                'name="test_x" time="0.010"/>'
+            ).replace(
+                b'<testsuites name=',
+                b'<evil:testsuites xmlns:evil="urn:evil" name=',
+            ).replace(b'</testsuites>', b'</evil:testsuites>'),
+            "namespaces are forbidden",
+        ),
+        (
+            _minimal_strict_junit_xml(
+                '<testcase classname="tests.test_m8_ahmed_provenance" '
+                'name="test_x" time="0.010"/>'
             ).replace(b'<testsuites', b'<?unexpected value?><testsuites'),
             "processing instructions are forbidden",
         ),
@@ -1471,9 +1491,36 @@ def test_nested_entity_amplification_is_rejected_before_parsing(monkeypatch):
     def _parsing_must_not_start(_xml_bytes):
         raise AssertionError("ElementTree parsed entity-bearing XML")
 
+    def _iterative_parsing_must_not_start(*_args, **_kwargs):
+        raise AssertionError("ElementTree iterparsed entity-bearing XML")
+
+    monkeypatch.setattr(
+        provenance.ElementTree, "iterparse", _iterative_parsing_must_not_start
+    )
     monkeypatch.setattr(provenance.ElementTree, "fromstring", _parsing_must_not_start)
     with pytest.raises(ValueError, match="declarations are forbidden"):
         provenance._junit_evidence_from_bytes(xml_bytes)
+
+
+def test_strict_junit_accepts_escaped_xmlns_literals_as_test_data():
+    import src.m8.ahmed_provenance as provenance
+
+    testcase_name = 'test_literal[<testsuites xmlns:evil="urn:evil">]'
+    testcase_xml = (
+        '<testcase classname="tests.test_m8_ahmed_provenance" '
+        'name="test_literal[&lt;testsuites xmlns:evil=&quot;urn:evil&quot;&gt;]" '
+        'time="0.010"><system-out>'
+        'literal &lt;testsuites xmlns=&quot;urn:text&quot;&gt; output'
+        '</system-out></testcase>'
+    )
+    xml_bytes = _minimal_strict_junit_xml(testcase_xml)
+
+    evidence, skipped_node_ids = provenance._junit_evidence_from_bytes(xml_bytes)
+
+    assert evidence["ordered_pytest_node_ids"] == [
+        f"tests/test_m8_ahmed_provenance.py::{testcase_name}"
+    ]
+    assert skipped_node_ids == []
 
 
 def test_strict_junit_accepts_pytest_fixed_decimal_duration_boundaries():

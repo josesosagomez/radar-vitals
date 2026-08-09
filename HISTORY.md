@@ -11241,3 +11241,44 @@ separate skipped-only node-ID reconstruction logic.
 **Next:** independent verification/review of the cumulative uncommitted v3 repair. If accepted,
 commit only with explicit authorization and restart the clean canonical gate chain from the new
 commit. Do not access raw/reference data or begin M2.
+
+## 2026-08-10 - M1 strict JUnit namespace-event correction
+
+**Set out to do:** repair the operational v3 false positive that rejected pytest's real canonical
+JUnit after every attested test passed, while preserving fail-closed rejection of actual XML
+namespace declarations and all existing DTD/entity protections.
+
+**Worked (with evidence):** namespace detection now consumes ElementTree `start-ns` events over the
+already bounded exact XML bytes instead of searching raw start-tag text. Any real default or
+prefixed namespace binding is rejected before the parsed tree is trusted; the later closed grammar
+still rejects expanded namespace tags and attributes. Escaped namespace-like literals in testcase
+names and `system-out` are ordinary test data and no longer trigger a false positive. The nested
+entity-amplification regression now proves that neither iterative parsing nor tree parsing begins
+before declaration rejection.
+
+Regressions cover escaped `<testsuites xmlns:evil=...` text in a parametrized testcase identity,
+escaped `xmlns=` output text, default namespace declarations, unused prefixed declarations and a
+prefix-used root. The targeted parser set completed with `24 passed, 123 deselected, 12 warnings`;
+full provenance completed with `147 passed, 15 warnings` in 30.89 s; transfer/bundle/strict-preflight
+compatibility completed with `105 passed, 12 warnings` in 6.02 s; and the standalone inherited Agg
+regression completed with `1 passed, 12 warnings` in 3.27 s, with its real Fig8 child passing in
+2.44 s.
+
+**Failed / did not work, and why:** the first clean canonical attempt at gate-source commit
+`15134e260905af8640c2720bb99c6927164bb56e` used the long writable visualization TEMP root and
+failed 25 temporary-Git tests with Windows filename-too-long errors. A retry with the exact short
+external root `C:\tmp\m1g15134` eliminated that environmental failure and the attested suite itself
+completed with `1369 passed, 1 skipped, 1780 warnings` in 119.38 s. The builder then failed closed
+because the raw namespace regex matched `xmlns:evil=` inside the XML-escaped parameter value of the
+namespace mutation test's testcase `name` attribute. No canonical gate was finalized in either
+attempt, and the authorization YAML was not edited.
+
+**Retired / no longer used:** regex namespace detection over raw XML tag bytes, which cannot
+distinguish actual namespace declaration attributes from escaped test data inside quoted attribute
+values.
+
+**Next:** independent verification and code review of this uncommitted namespace-event correction.
+If accepted, commit only with explicit authorization; the resulting clean commit becomes the new
+gate-source identity. Regenerate Phase A with a short external TEMP root, verify the complete gate,
+then update only the canonical authorization YAML. Do not access raw/reference data or begin M2
+before that reviewed chain exists.

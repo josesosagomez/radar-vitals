@@ -1407,8 +1407,14 @@ def _strict_junit_root(xml_bytes: bytes) -> ElementTree.Element:
         raise ValueError("executed test JUnit XML declarations are forbidden")
     if "<?" in body:
         raise ValueError("executed test JUnit XML processing instructions are forbidden")
-    if re.search(r"<[^>]*\sxmlns(?::[A-Za-z_][\w.-]*)?\s*=", body):
-        raise ValueError("executed test JUnit XML namespaces are forbidden")
+    try:
+        namespace_events = ElementTree.iterparse(
+            io.BytesIO(xml_bytes), events=("start-ns",)
+        )
+        for _event, _namespace_binding in namespace_events:
+            raise ValueError("executed test JUnit XML namespaces are forbidden")
+    except ElementTree.ParseError as exc:
+        raise ValueError("executed test JUnit XML is malformed") from exc
 
     try:
         root = ElementTree.fromstring(xml_bytes)
