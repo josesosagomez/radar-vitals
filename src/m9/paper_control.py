@@ -1,6 +1,6 @@
-"""M9 controls 1 + 2: paper-faithful Kotte reproduction and the 4-RX ablation.
+"""M9.1 direct-``Y_t`` Kotte equation controls and the declared 4-RX ablation.
 
-Control 1 (Step 1a) reproduces Figs 5 + 7(row 2) + 8 of Kotte et al. (IEEE T-RS 2024,
+Control 1 evaluates Figs 5 + 7(row 2) + 8 of Kotte et al. (IEEE T-RS 2024,
 DOI 10.1109/TRS.2024.3352189) with direct ``Y_t`` generation (theta0 known; range/DOA
 descoped), the pinned FFT + MUSIC comparators, and the verdict truth table. Control 2
 is the fixed-endpoint 20->4 RX ablation on the same generated realizations.
@@ -9,7 +9,7 @@ Every parameter comes from ``experiments/m9_kotte/config.yaml``'s ``controls`` s
 nothing numerical is hardcoded here. Official runs require a clean git tree; ``--smoke``
 runs are labelled non-gating scratch and write to ``*_smoke/`` directories.
 
-Verdict truth table (plan section "Step 1a"): primary = Algorithm 1's selection line
+Verdict truth table (canonical plan M9.1): primary = Algorithm 1's selection line
 (``1^T H^-1 1`` on the sample covariance, unloaded, 20 RX); secondary = eq-26
 ``|beta_hat|^2`` at known theta0; each judged against truth within one grid step with
 the symmetric swap allowed. Audits vary ONE field each and can never upgrade a verdict.
@@ -31,6 +31,7 @@ from src.m8.ahmed_provenance import environment_attestation, git_status_paths, g
 from src.m9.kotte_core import (
     AllMaskedError,
     CaponContext,
+    CovarianceFailure,
     argmax_masked,
     beta_surface,
     canonical_hash,
@@ -46,6 +47,7 @@ __all__ = [
     "CaseResult",
     "ControlsConfig",
     "assemble_run_meta",
+    "alternate_range_fft_gain_snr_db",
     "case_seed",
     "classify_case",
     "combine_verdicts",
@@ -118,27 +120,33 @@ def case_seed(root_seed: int, case_id: str) -> int:
 
 
 def effective_snr_db(controls: Mapping) -> float:
-    """Resolve the declared SNR reference to the effective Y_t-domain SNR.
+    """Resolve the *primary* direct-``Y_t`` SNR declared by the canonical plan.
 
-    Amendment 2026-08-06 (option B of plans/m9_step1a_snr_finding.md): the paper's SNR
-    is fast-time-referred, so the range FFT's processing gain
-    ``10*log10(n_s_fast_time)`` is folded in before ``Y_t`` is formed. The literal
-    Y_t-domain reading survives as the ``snr_reference_literal`` audit. Fail-closed:
-    an absent or unknown ``snr_reference`` is an error, never a silent default.
+    M9.1's primary is the literal post-range/``Y_t`` reading (0 dB in the paper
+    controls).  The range-FFT-gain interpretation is exposed only by
+    :func:`alternate_range_fft_gain_snr_db`; it must never silently become primary.
     """
     reference = controls.get("snr_reference")
     base = float(controls["snr_db"])
-    if reference == "fast_time_with_range_fft_gain":
-        n_s = int(controls["n_s_fast_time"])
-        if n_s < 2:
-            raise ValueError(f"n_s_fast_time must be >= 2, got {n_s}")
-        return base + 10.0 * float(np.log10(n_s))
     if reference == "yt_domain_literal":
         return base
     raise ValueError(
-        f"unknown snr_reference {reference!r}; declare "
-        "'fast_time_with_range_fft_gain' or 'yt_domain_literal'"
+        f"primary snr_reference must be 'yt_domain_literal', got {reference!r}; "
+        "use alternate_range_fft_gain_snr_db only for the labelled sensitivity"
     )
+
+
+def alternate_range_fft_gain_snr_db(controls: Mapping) -> float:
+    """The separately labelled ``+10 log10(N_s)`` interpretive sensitivity.
+
+    Section IV, PDF p. 118, gives ``N_s=128`` but does not state whether ``sigma^2``
+    in its SNR definition is before or after the range FFT.  This function records
+    that alternate assumption; it is not a paper fact or a real-data rule.
+    """
+    n_s = int(controls["n_s_fast_time"])
+    if n_s < 2:
+        raise ValueError(f"n_s_fast_time must be >= 2, got {n_s}")
+    return float(controls["snr_db"]) + 10.0 * float(np.log10(n_s))
 
 
 def _beta(entry: Mapping[str, float]) -> complex:
@@ -359,7 +367,17 @@ def evaluate_proposed(
     mask_threshold = float(controls["condition_mask_threshold"])
     rank_rtol = 1e-9
 
-    data = remove_per_rx_mean(y_t) if mean_removal_on else y_t
+    direct_y_t = np.asarray(y_t)
+    if direct_y_t.ndim != 2 or direct_y_t.shape[0] != n_c:
+        raise ValueError(
+            f"direct Y_t must have shape (N_c, n_R)=({n_c}, n_R), "
+            f"got {direct_y_t.shape}"
+        )
+    if not np.issubdtype(direct_y_t.dtype, np.complexfloating):
+        raise ValueError("direct Y_t must have a complex floating-point dtype")
+    if not np.all(np.isfinite(direct_y_t)):
+        raise ValueError("direct Y_t must contain only finite complex samples")
+    data = remove_per_rx_mean(direct_y_t) if mean_removal_on else direct_y_t
     covariance = (
         covariance_override if covariance_override is not None else sample_covariance(data)
     )
@@ -397,13 +415,21 @@ def evaluate_proposed(
             dsp_failure=None,
         )
         evidence = {
-            "objective": surface.objective,
-            "beta_sq": bsurf,
-            "masked": surface.masked,
-            "grid_hz": np.asarray(grid_hz),
+            "y_t": np.asarray(data),
+            "covariance_slow_time": np.asarray(covariance),
+            "algorithm1_power": surface.objective,
+            "eq26_beta_power": bsurf,
+            "algorithm1_invalid_mask": surface.masked,
+            "eq26_invalid_mask": ~np.isfinite(bsurf),
+            "constraint_rcond": surface.rcond,
+            "f1_grid_hz": np.asarray(grid_hz),
+            "f2_grid_hz": np.asarray(grid_hz),
         }
         return result, evidence
-    except (AllMaskedError, np.linalg.LinAlgError) as exc:
+    except (AllMaskedError, CovarianceFailure, np.linalg.LinAlgError) as exc:
+        failure_reason = (
+            exc.reason if isinstance(exc, CovarianceFailure) else type(exc).__name__
+        )
         result = CaseResult(
             case_id=case_id,
             seed=seed,
@@ -413,9 +439,14 @@ def evaluate_proposed(
             secondary_selected_hz=None,
             secondary_hit=False,
             masked_fraction=1.0,
-            dsp_failure=type(exc).__name__,
+            dsp_failure=failure_reason,
         )
-        return result, {"grid_hz": np.asarray(grid_hz)}
+        return result, {
+            "y_t": np.asarray(data),
+            "covariance_slow_time": np.asarray(covariance),
+            "f1_grid_hz": np.asarray(grid_hz),
+            "f2_grid_hz": np.asarray(grid_hz),
+        }
 
 
 def classify_case(primary_hit: bool, secondary_hit: bool) -> str:
@@ -452,6 +483,20 @@ def _grid_from_controls(controls: Mapping, step_override: float | None = None) -
         float(grid_cfg["stop_hz"]),
         float(step_override if step_override is not None else grid_cfg["step_hz"]),
     )
+
+
+def _snr_assumption_label(snr_override_db: float | None) -> dict[str, str]:
+    if snr_override_db is None:
+        return {
+            "snr_assumption_id": "literal_post_range_yt",
+            "snr_assumption_role": "primary_literal_interpretation",
+            "snr_assumption_status": "declared_assumption_not_unambiguous_paper_fact",
+        }
+    return {
+        "snr_assumption_id": "explicit_yt_snr_override",
+        "snr_assumption_role": "diagnostic_only",
+        "snr_assumption_status": "not_a_real_data_rule",
+    }
 
 
 def run_r1(config: ControlsConfig, *, snr_override_db: float | None = None) -> dict:
@@ -534,6 +579,7 @@ def run_r1(config: ControlsConfig, *, snr_override_db: float | None = None) -> d
     return {
         "section": "r1_fig8",
         "snr_db": snr_db,
+        **_snr_assumption_label(snr_override_db),
         "verdict": verdict,
         # The VERDICT comes from the truth table alone (plan, Step 1a). The comparator
         # matrix is evaluated alongside it: agreeing cells corroborate, differing cells
@@ -587,6 +633,7 @@ def run_r2(config: ControlsConfig, *, snr_override_db: float | None = None) -> d
     return {
         "section": "r2_fig5",
         "snr_db": snr_db,
+        **_snr_assumption_label(snr_override_db),
         "verdict": combine_verdicts(case_verdicts),
         "cases": [c.to_dict() for c in cases],
         "case_verdicts": case_verdicts,
@@ -639,6 +686,7 @@ def run_r3(config: ControlsConfig, *, snr_override_db: float | None = None) -> d
     return {
         "section": "r3_fig7_row2",
         "snr_db": snr_db,
+        **_snr_assumption_label(snr_override_db),
         "verdict": classify_case(result.primary_hit, result.secondary_hit),
         "expected": dict(expected),
         "observed": observed,
@@ -732,27 +780,42 @@ def run_audits(config: ControlsConfig) -> dict:
             rows.append(result.to_dict())
         audits["ensemble_covariance"] = rows
 
-    # Literal Y_t-domain SNR reading — the assumption the config's `snr_reference`
-    # amendment replaced (option B, plans/m9_step1a_snr_finding.md). Retained so the
-    # non-reproduction of the LITERAL reading stays on the record as a measured fact,
-    # under the same declared seeds. It is an audit: it cannot change any verdict.
-    if audits_cfg.get("snr_reference_literal"):
-        literal_snr_db = float(controls["snr_db"])
-        rows = []
-        for ratio in ratios:
-            row = eval_r1_variant(
-                f"audit:snr_literal:ratio={ratio}", ratio, snr_db=literal_snr_db
+    # Canonical plan §14: 0 dB in post-range Y_t is primary.  Adding the 128-sample
+    # range-FFT gain is a separate interpretive sensitivity because PDF p. 118 does
+    # not identify the domain of sigma^2.  Run all selected paper controls so the
+    # earlier positive behavior is preserved without promoting it to a paper fact.
+    evidence_case_map: dict[str, dict] = {}
+    if audits_cfg.get("alternate_range_fft_gain_sensitivity"):
+        alternate_snr_db = alternate_range_fft_gain_snr_db(controls)
+        alternate_sections: dict[str, dict] = {}
+        for section_name, runner in (
+            ("fig8", run_r1),
+            ("fig5", run_r2),
+            ("fig7_row2", run_r3),
+        ):
+            section_result = runner(config, snr_override_db=alternate_snr_db)
+            section_case_map = section_result.pop("_case_map")
+            section_result.update(
+                {
+                    "snr_assumption_id": "alternate_range_fft_gain",
+                    "snr_assumption_role": "interpretive_sensitivity_nonprimary",
+                    "snr_assumption_status": "not_a_paper_fact_or_real_data_rule",
+                }
             )
-            row["snr_db_effective"] = literal_snr_db
-            rows.append(row)
-        audits["snr_reference_literal"] = {
-            "snr_db_effective": literal_snr_db,
-            "primary_snr_db_effective": effective_snr_db(controls),
-            "cases": rows,
+            alternate_sections[section_name] = section_result
+            for case_id, payload in section_case_map.items():
+                evidence_case_map[f"alternate_range_fft_gain:{case_id}"] = payload
+        audits["alternate_range_fft_gain_sensitivity"] = {
+            "base_literal_yt_snr_db": effective_snr_db(controls),
+            "n_s_fast_time": int(controls["n_s_fast_time"]),
+            "added_gain_db": alternate_snr_db - effective_snr_db(controls),
+            "effective_yt_snr_db": alternate_snr_db,
+            "role": "DIAGNOSTIC_NONPRIMARY_INTERPRETIVE_SENSITIVITY",
             "note": (
-                "the literal Y_t-domain reading; recorded as a measured non-reproduction "
-                "(plans/m9_step1a_snr_finding.md §2) and NEVER as a verdict"
+                "Assumes +10log10(N_s=128) before Y_t; the paper does not resolve "
+                "this SNR domain, and this sensitivity sets no real-data rule."
             ),
+            "sections": alternate_sections,
         }
 
     for step in audits_cfg.get("grid_step_hz", []):
@@ -780,11 +843,40 @@ def run_audits(config: ControlsConfig) -> dict:
 
     cancellation = audits_cfg.get("cancellation_ratio")
     if cancellation is not None:
-        audits["cancellation_predicted_failure"] = [
-            eval_r1_variant(
-                f"audit:cancellation:ratio={cancellation}", float(cancellation)
-            )
-        ]
+        cancellation_ratio = float(cancellation)
+        case_id = f"audit:cancellation:ratio={cancellation_ratio}"
+        seed = case_seed(root_seed, case_id)
+        y_t, _sigma2 = generate_case_yt(
+            beta1=beta1,
+            beta2=cancellation_ratio * beta1,
+            f1_hz=truth[0],
+            f2_hz=truth[1],
+            theta0_deg=float(r1["theta0_deg"]),
+            n_c=int(controls["n_c"]),
+            n_r=int(controls["n_r"]),
+            t_pri_s=float(controls["t_pri_s"]),
+            snr_db=effective_snr_db(controls),
+            seed=seed,
+        )
+        result, evidence = evaluate_proposed(
+            y_t,
+            case_id=case_id,
+            seed=seed,
+            truth_pair_hz=truth,
+            theta0_deg=float(r1["theta0_deg"]),
+            controls=controls,
+            grid_hz=grid,
+        )
+        audits["cancellation_predicted_failure"] = {
+            "role": "expected_paper_limitation",
+            "paper_location": "PDF printed p. 117, text below Eq. (29)",
+            "cases": [result.to_dict()],
+        }
+        evidence_case_map[case_id] = {
+            "evidence": evidence,
+            "result": result,
+            "case_role": "expected_paper_limitation",
+        }
 
     # Comparator-rule audits (merge radius, MUSIC order) on the primary R1 data.
     comparator_audits = []
@@ -824,6 +916,7 @@ def run_audits(config: ControlsConfig) -> dict:
         }
 
     audits["note"] = "audits vary one field each and cannot upgrade any verdict"
+    audits["_case_map"] = evidence_case_map
     return audits
 
 
@@ -953,6 +1046,10 @@ def run_ablation(config: ControlsConfig) -> dict:
 
     return {
         "section": "ablation_4rx",
+        "snr_db": effective_snr_db(controls),
+        "snr_assumption_id": "literal_post_range_yt",
+        "snr_assumption_role": "primary_literal_interpretation",
+        "method_role": "declared_loaded_4rx_adaptation_not_literal_kotte",
         "endpoints": endpoints,
         "loading_deltas": deltas,
         "subset_rule": ablation["subset_rule"],
@@ -964,9 +1061,7 @@ def run_ablation(config: ControlsConfig) -> dict:
         "notes": [
             "slow-time = chirp index; mean removal off",
             "pooling is impossible here: one CPI exists, so there is nothing to pool",
-            "role fixed in advance: arms cannot be relabelled; equal-amplitude failure "
-            "is carried as expected-negative; COMPLETION (not outcome) gates the "
-            "transfer bundle",
+            "the result is reported without changing loading, grid, or SNR assumptions",
             "the unloaded inverse is never formed at the 4-RX endpoint",
         ],
     }
@@ -977,15 +1072,25 @@ def run_ablation(config: ControlsConfig) -> dict:
 # ---------------------------------------------------------------------------------------
 
 
-def require_clean_tree(*, smoke: bool) -> list[str]:
-    """Official runs refuse a dirty tree; smoke runs record it. Returns dirty paths."""
+def require_clean_tree(
+    *, smoke: bool = False, implementation_validation: bool = False
+) -> list[str]:
+    """Refuse dirty thesis runs while allowing explicitly non-thesis validation.
+
+    ``implementation_validation`` is sufficient only for the M9.1 implementation
+    gate because all active sources/config are hashed.  It is never thesis-grade
+    empirical evidence. ``smoke`` remains scratch-only.
+    """
+    if smoke and implementation_validation:
+        raise ValueError("smoke and implementation_validation are mutually exclusive")
     dirty = sorted(git_status_paths(cwd=REPO_ROOT))
-    if dirty and not smoke:
+    if dirty and not (smoke or implementation_validation):
         raise RuntimeError(
-            "official control runs require a clean git tree; found changed/untracked: "
+            "thesis-grade control runs require a clean git tree; found changed/untracked: "
             + ", ".join(dirty[:10])
             + (" ..." if len(dirty) > 10 else "")
-            + " — commit first, or use --smoke for non-gating scratch"
+            + " — commit first, or use --implementation-validation for source-hashed "
+            "non-thesis implementation validation"
         )
     return dirty
 
@@ -994,22 +1099,37 @@ def assemble_run_meta(
     config: ControlsConfig,
     *,
     subcommand: str,
-    smoke: bool,
+    run_classification: str,
+    exact_invocation: str,
     dirty_paths: list[str],
     case_seed_map: Mapping[str, Mapping[str, object]],
     output_hashes: Mapping[str, str],
     extra: Mapping[str, object] | None = None,
 ) -> dict:
+    allowed_classifications = {
+        "official_clean_tree",
+        "implementation_validation_non_thesis",
+        "smoke_scratch",
+    }
+    if run_classification not in allowed_classifications:
+        raise ValueError(f"unknown run_classification {run_classification!r}")
+    if run_classification == "official_clean_tree" and dirty_paths:
+        raise RuntimeError("official_clean_tree metadata cannot contain dirty paths")
     runtime_hashes = {}
     for rel in RUNTIME_RELPATHS:
         path = REPO_ROOT / rel
         runtime_hashes[rel] = sha256_path(path) if path.is_file() else None
     pdf_path = REPO_ROOT / PDF_RELPATH
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "stage": f"m9_kotte_controls:{subcommand}",
-        "smoke": bool(smoke),
-        "non_gating": bool(smoke),
+        "run_classification": run_classification,
+        "exact_invocation": exact_invocation,
+        "implementation_gate_eligible": run_classification in {
+            "official_clean_tree", "implementation_validation_non_thesis"
+        },
+        "thesis_evidence_eligible": run_classification == "official_clean_tree",
+        "empirical_outcome_decision_eligible": False,
         "generated_utc": datetime.now(timezone.utc).isoformat(),
         "git_commit": git_text("rev-parse", "HEAD", cwd=REPO_ROOT),
         "git_branch": git_text("branch", "--show-current", cwd=REPO_ROOT),
@@ -1051,7 +1171,7 @@ def run_paper_controls(
     if "r3" in sections:
         results["r3"] = harvest(run_r3(config))
     if "audits" in sections:
-        results["audits"] = run_audits(config)
+        results["audits"] = harvest(run_audits(config))
     return results, case_seed_map
 
 
