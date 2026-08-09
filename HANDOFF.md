@@ -6,83 +6,112 @@
 ## 1. Project snapshot
 
 This project estimates HR/BR from a TI IWR1642BOOST + DCA1000 radar for a seated subject at
-0.8–1.4 m. Masimo `Beats / min` aligned by integer Unix `Timestamp` is HR reference. The existing
-eight captures span four subjects A–D, have approximate frame origin and insufficient HR dynamic
-range, and remain development-only/exploratory.
+0.8–1.4 m. Masimo `Beats / min`, aligned by integer Unix `Timestamp`, is the HR reference. The
+existing eight captures span four subjects A–D, have approximate frame origins and insufficient HR
+dynamic range, and remain development-only/exploratory.
 
 ## 2. Current state
 
-Active branch: **`vital_signs_own_v13`**. Verified base commit: **`409ec05`**.
+Active branch: **`vital_signs_own_v13`**. Verified starting commit for M1:
+**`416c9453ffe05f93bbafde40d9bb355f18df8fda`**.
 
-M0 of `plans/plan_codex_milestones.md` is **READY**.
-The recovery contract received the required `task_breakdown` check and two independent
-`plan_reviewer` design passes; the substantive verdict was **READY WITH MINOR CHANGES** and all
-minor changes were incorporated. The owner removed the model-family-specific requirement from
-`CLAUDE.md` §6; independent review remains required and is complete. Owner attestation records
-recovery approval on 2026-08-03 under `24IBEC051`, covering exactly 15 new prospective participants
-in addition to A–D. No estimator, DSP, config, data, test, capture, scoring run or experiment was
-changed or executed.
+M0 is ready. The reviewed natural/paced/recovery analysis contract and owner-attested authorization
+metadata remain binding in `notes/analysis_prespec.md` and `notes/protocol.md`.
 
-The documentation changes are uncommitted. `plans/plan_codex_milestones.md` is an owner-provided
-untracked authority file; preserve it. Do not stage or commit without explicit authorization.
+M1 implementation is present but **uncommitted**. It does not change the estimator. The M4 scorer
+now emits a canonical production rollup keyed by `(capture_id, k)` for
+`production_eca_ahet_v1` under `current_production_rerun_lock`. It reports all complete windows,
+separate `k=0`, and persisted-lock `k>=1`; reconstructs every denominator from per-capture rows; and
+retains zero-output captures in capture-macro coverage. `scripts/score_production.py` is the
+clean-tree-only entry point and `production_summary.json` is part of the immutable scored bundle.
+
+Independent test and code review found two iterations of provenance defects, now repaired.
+Canonical scoring no longer accepts caller identity as authority: `run_score_stage` itself invokes
+Git on the repository containing the running scorer, requires the whole tree clean, resolves actual
+HEAD, rebuilds the transitive scientific source manifest, and requires exact gate/source/HEAD
+agreement. It then derives the exact eight-capture raw/config maps from the source-bound registry and
+cross-checks configuration hashes against validated radar-parent rows. There is no constructible
+module token or callable module-level canonical writer. Canonical status/artifact writing is
+lexically contained in that verified run branch; public persistence is always non-canonical and
+rejects identity maps.
+
+Development verification against the existing hash-verified M4 radar parent reproduced the parent
+radar rows exactly and yielded:
+
+- `14/128` all-window radar coverage (`10.9375%`);
+- `9/67` joint-given-reference (`13.4328%`);
+- `11/120` `k>=1` radar coverage (`9.1667%`);
+- capture macro `19.4271%` for all windows and `16.9737%` for `k>=1`, with zero-output captures
+  retained;
+- estimate identity SHA-256
+  `0ced713d76e2ac5d29a26d15a4b8a81f5e83f84d81e5bf156885d9d53ce17906`.
+
+The historical 30.08% coverage is retired. The legacy M8 scorer remains descriptive-only, now uses
+separate coverage/accuracy capture sets, retains even an all-zero estimator with zero coverage and
+undefined accuracy, prints undefined MAE/hit metrics as `n/a`, and explicitly blocks a production
+headline. Its pooled CSV retains the all-zero row.
 
 ## 3. Active task / next steps
 
-M0 has no unresolved analysis-contract or authorization-metadata decision. The determination is
-confidential and researcher/PI-held; consent/PIS records are private researcher–participant records
-and are intentionally not stored in the repo.
+1. Independently retest and review the corrected M1 provenance and all-zero legacy boundary. The
+   prior code-review verdict was FAIL before the checkout/token repair and is not a current verdict.
+2. If accepted, commit only with explicit user authorization. Do not claim canonical provenance
+   before that commit exists.
+3. From the clean commit, regenerate the clean source/gate/authorization chain and the M4 radar
+   parent from the hash-bound raw ADC/config inputs.
+4. Run `scripts/score_production.py`; verify its bundle, exact denominators and production estimate
+   identity against the development value above.
+5. Stop after M1. M2 is not authorized by this work.
 
-The next milestone is M1, but **do not start it without an explicit user request**. M0 itself
-authorizes no capture, estimator or DSP work.
+## 4. Recent decisions that matter
 
-## 4. Decisions that must not drift
-
-- HR has separate natural, paced and recovery estimands/LoA. Never pool a three-arm headline.
-- HR paced inference uses 12/15 bpm only; 18 bpm remains descriptive for HR and included for BR.
-- Natural+paced floor stays separate: ≥1 jointly evaluable window/session, ≥4 across those two
-  sessions/subject, ≥8/10 final subjects, plus the existing arm precision disposition. Recovery
-  cannot rescue it.
-- Recovery Stage 1 is reference-only: ≥10 reference-admitted windows, ≥20 bpm range across
-  window `median_pr_bpm`, and a full-precision session-median constant predictor hitting strictly
-  <50% at absolute error ≤5 bpm.
-- Recovery Stage 2 requires ≥4 jointly evaluable windows and reuses the same Stage-1 constant at
-  strictly <50%. It controls headline eligibility only; it never filters accuracy rows.
-- Recovery headline requires ≥8/10 fixed final subjects passing both stages plus existing
-  estimability/bootstrap/precision rules.
-- Existing A–D are `development`. First five eligible prospective slots are
-  `representation_validation`; next ten are `final_evaluation`. Every session from a subject has
-  one immutable role; no correlated sessions cross roles.
-- Validation paced allocation is 2/2/1; final is 4/3/3. The approved 15-person prospective ceiling
-  is fully allocated, so a withdrawal leaves a missing slot; no additional participant replacement
-  is assumed.
-- No recapture for recovery inadequacy, low radar yield/coverage, agreement, or low warmup
-  confidence. Only objective technical admission failures may permit recapture before scoring.
-- Every complete source window and expected estimator/vital/config key gets a ledger row. Missing,
-  exceptional or invalid estimator output becomes radar-NaN.
+- M1 changes evaluation and provenance only. ECA, AHET, thresholds, range-bin selection, signal
+  representation and all estimator scientific behavior are frozen.
+- The full `k>=0` ledger is the honest all-window coverage denominator. `k=0` is also reported
+  separately as lock-selection-in-sample; `k>=1` is the persisted-lock comparison subset.
+- Accuracy and coverage have different capture sets. Undefined accuracy never removes a capture
+  from coverage; a zero-output capture contributes zero coverage.
+- Canonical production scoring requires the whole Git tree to be clean, not merely a scoped subset.
+  Raw ADC, capture config, code/source manifest, radar parent and reference files are SHA-256-bound.
+- Caller claims are not evidence. Canonical status requires the scorer's own actual-clean-tree and
+  HEAD check, an exact rebuilt source manifest, the source-bound registry, and the validated
+  radar-parent configuration map. Public persistence cannot emit canonical status.
+- Production intermediates remain the complete bounded M4 native tree: one typed, non-object,
+  pickle-free record for every production cell, estimate and abstention.
+- Existing A–D data remain approximate-origin development evidence. Correct arithmetic does not
+  turn them into validation or demonstrate HR tracking.
 
 ## 5. Gotchas / landmines
 
-- The recovery determination and consent/PIS records are intentionally private. Do not request that
-  participant-level consent records be committed or exposed; cite the owner attestation and parent
-  reference `24IBEC051` in internal provenance.
-- The current scorer/manifest still encodes the old two-arm roles. Its M4 plan is now explicitly
-  superseded; updating code is later work and was not authorized by M0.
-- Five validation subjects are a feasibility floor, not powered population validation. State the
-  small-cluster limitation.
-- Final Stage 1 and scoring are one fail-closed M5 transaction; Stage-1 values are not exposed to the
-  estimator team before final artifacts are sealed.
-- The fixed grid, Masimo comparator, `Beats / min` reference, integer `Timestamp`, PI gate and raw
-  intermediate-evidence requirements remain unchanged.
+- The official CLI currently **must fail** because the M1 tree is uncommitted. That refusal is the
+  provenance contract working, not a reason to bypass it.
+- The repaired focused suite completed with `31 passed`; the M4 registry/bundle/evidence plus
+  independent scorer compatibility suite completed with `202 passed, 1 skipped`. These are dirty
+  development-tree test results, not a canonical artifact attestation.
+- The full provenance suite completed with `101 passed` when its basetemp was placed under the
+  system temporary root, as required by its outside-repository attestation-path assertion.
+- The clean source manifest includes `scripts/score_production.py` and
+  `tests/test_m1_production_scoring.py`; an old gate cannot authorize the changed scorer.
+- Use `C:/Users/josemsosag/.conda/envs/radar-vitals/python.exe`; the shell's MSYS Python lacks
+  pytest. In this sandbox, pass a project-local `--basetemp` because AppData temp access is denied,
+  then remove the temporary directory.
+- The eight old frame origins use `start_wall_utc` and remain approximate by 5–15 seconds. Do not
+  promote their agreement metrics or call them final evidence.
+- Do not edit `data/raw/`, manually select rows, omit abstentions, or revive the 30.08% summary.
+- Recovery and role/firewall rules from M0 remain unchanged; do not proceed to M2 or capture work.
 
 ## 6. Pointers
 
 | File | Purpose |
 |---|---|
-| `plans/plan_codex_milestones.md` | owner-designated authoritative recovery plan |
-| `plans/m0_recovery_contract_cross_review.md` | task-breakdown and independent plan-review record |
-| `notes/analysis_prespec.md` | binding three-arm estimands, floors, roles and ledger contract |
-| `notes/protocol.md` | capture procedure, cohort slots and authorization gate |
-| `notes/capture_inventory.md` | A–D development inventory and E/F/G validation-role reconciliation |
-| `notes/comparator_prespec.md` | unchanged HR reference/admissibility rules |
-| `plans/m4_offline_harness.md` | historical scorer plan with mandatory M0 supersession notice |
-| `HISTORY.md` | durable session record and M0 review outcome |
+| `plans/plan_codex_milestones.md` | authoritative milestone boundaries and audit quantities |
+| `src/m4/estimator_scoring.py` | M4 scorer plus M1 exact production rollup and provenance gate |
+| `scripts/score_production.py` | canonical clean-tree production-scoring entry point |
+| `tests/test_m1_production_scoring.py` | denominator, zero-output, k=0, legacy and clean-tree regressions |
+| `src/m4/estimator_runner.py` | unchanged complete M4 production-row/native-evidence producer |
+| `src/m4/evidence_serialization.py` | typed, non-object, pickle-free production evidence tree |
+| `scripts/m8_ahmed_score.py` | legacy descriptive M8 scorer; production headline explicitly blocked |
+| `experiments/m8_ahmed_transfer/capture_registry.yaml` | raw/config/reference hashes and fixed 128-window inventory |
+| `notes/analysis_prespec.md` | binding estimands, roles, ledger and zero-output rules |
+| `notes/protocol.md` | fixed capture procedure and recovery authorization status |
+| `HISTORY.md` | append-only M1 evidence, failures, retirement and next action |

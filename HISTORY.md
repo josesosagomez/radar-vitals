@@ -10784,3 +10784,198 @@ determination or consent/PIS documents; participant replacements beyond the appr
 
 **Next:** overall verdict **M0 READY**. Do not proceed to M1, capture, estimator or DSP work without
 an explicit user request.
+
+## 2026-08-09 - M1 production scoring and provenance repair
+
+**Set out to do:** route the unchanged `production_eca_ahet_v1` estimator through the existing M4
+scoring/bundle contract, retire the survivor-biased 30.08% coverage calculation, preserve complete
+abstention evidence, and make canonical scoring fail closed on provenance.
+
+**Worked (with evidence):** `src/m4/estimator_scoring.py` now constructs one exact production-HR
+row per `(capture_id, k)` under `current_production_rerun_lock`, hard-fails on missing, duplicate or
+mislabelled keys, and persists `production_summary.json` in the immutable scored bundle. The summary
+reports the full `k>=0` ledger, separate `k=0` lock-selection-in-sample diagnostics, and the persisted
+lock `k>=1` subset. Each universe carries micro totals, all eight per-capture denominators, an
+equal-capture macro that retains zero-output captures, and an explicit reconstruction of the micro
+counts from those captures. The production estimate values/validity/reasons are hashed separately so
+reruns can prove row-level invariance.
+
+Fresh in-memory reference scoring from the hash-verified immutable M4 radar parent
+`results/m8_ahmed_transfer/radar/20260808T183600.392760Z_bc3ccf4635c5/` reproduced:
+
+- all-window radar coverage `14/128 = 10.9375%`;
+- joint-given-reference coverage `9/67 = 13.4328%`;
+- persisted-lock (`k>=1`) radar coverage `11/120 = 9.1667%`;
+- all-window capture macro `19.4271%`, with `m3` and `m5` retained at zero;
+- `k>=1` capture macro `16.9737%`, with `m3`, `m5` and `m7` retained at zero;
+- conditional MAE `2.7656 bpm`, RMSE `5.2752 bpm`, bias `-2.3854 bpm` on the same nine joint rows.
+
+The freshly materialized scoring rows matched all 128 parent radar values, validity flags and exact
+reasons. The production estimate identity is
+`0ced713d76e2ac5d29a26d15a4b8a81f5e83f84d81e5bf156885d9d53ce17906`; the verified radar-parent
+manifest identity is `51b68e937c6bb15f08c6e6a81072ca5a01d8602b89e046f1273c551427a15532`.
+The parent validator also reopened the bounded production native tree and all NPZ arrays with
+`allow_pickle=False`, requiring one complete native-evidence record per production cell, including
+abstentions.
+
+`scripts/score_production.py` is the canonical entry point. Before reference access it requires a
+whole-tree-clean 40-character Git commit, a clean promotion-eligible source manifest, the exact M4
+gate/authorization/radar parent, and exact raw-ADC/config hashes for all eight captures. The scored
+bundle additionally binds all reference hashes and the radar-parent manifest. The source-closure and
+test-attestation lists now include this command and its M1 regression suite.
+
+The legacy `scripts/m8_ahmed_score.py` remains available for its M8 comparison diagnostics, but its
+coverage and accuracy capture sets are now separate: a zero-output capture contributes zero coverage
+even though its MAE is undefined. Its output explicitly says it is not canonical production scoring
+and blocks a production headline. The historical 30.08% production coverage is retired.
+
+Focused regression evidence included `20 passed` for the M1 plus legacy-scorer suites and `87 passed,
+1 skipped` for M1 plus the existing M4 registry/scorer and M8 scorer suites. A broader M4/M8 run was
+also exercised, but its interactive tool session ended before pytest printed a final summary; it is
+therefore not claimed as a completed validation run here.
+
+**Failed / did not work, and why:** the first test invocation used the shell's MSYS Python, which has
+no pytest. The project environment is at
+`C:/Users/josemsosag/.conda/envs/radar-vitals/python.exe`. Pytest's default AppData temporary root is
+also sandbox-inaccessible; subsequent commands used a project-local `--basetemp`. The official
+production command correctly refused the current run before reference access because the M1 changes
+are uncommitted and the tree is dirty. No canonical scored artifact was written.
+
+**Retired / no longer used:** 30.08% production coverage; any macro coverage computed only after
+filtering to captures with defined MAE; treating `k=0` as silently discarded; object/pickle evidence
+for canonical production scoring; and any official result produced from an uncommitted or dirty tree.
+
+**Next:** independently review the M1 diff. If accepted, commit it explicitly, build a new clean
+source/gate/authorization chain, rerun the M4 radar parent from the hash-bound ADC/config inputs, and
+run `scripts/score_production.py` to create the canonical fresh bundle. Compare its production
+estimate identity with the value above. Do not begin M2 or alter ECA, AHET, thresholds, range-bin
+selection, representation or estimator behavior.
+
+## 2026-08-09 - M1 corrective provenance binding after independent review
+
+**Set out to do:** repair the independent test-engineer finding that a direct scorer API caller
+could supply arbitrary syntactically valid 64-character raw/config digest maps and cause
+`complete_clean_tree_hash_bound` to be written without authoritative digest verification.
+
+**Worked (with evidence):** canonical token issuance now occurs only inside `run_score_stage`, after
+the scientific gate and radar parent have passed their existing verification. The scorer requires
+the gate's embedded `source_manifest.json` to bind exactly one canonical capture-registry entry,
+requires the current registry bytes to match that entry, derives the exact eight-capture raw-ADC and
+configuration maps from that registry, and requires the independently validated radar-parent rows
+to carry the same per-capture configuration hashes. The caller's commit must equal the verified
+source-manifest commit, and its raw/config maps must equal the authoritative maps exactly; missing,
+extra, mismatched and fabricated entries fail closed before any reference access. The verified maps
+are copied into a private token before persistence so later caller mutation cannot alter them.
+
+The public `persist_score_artifacts` compatibility path still writes legitimate legacy/non-canonical
+M4 artifacts when no production identity is supplied, but now rejects every caller-supplied identity
+map instead of self-attesting it. A direct regression using the formerly accepted fabricated maps
+now hard-fails before creating an output directory. A positive clean-path fixture verifies that the
+source-manifest-bound registry plus matching radar-parent configuration map issues the internal
+token. Deterministic cases cover fabricated raw and config digests plus missing and extra capture
+identities.
+
+Focused M1/scorer tests completed with `26 passed`; the M4 registry/bundle/evidence and independent
+scorer compatibility set completed with `202 passed, 1 skipped`. `compileall` on the repaired source
+and tests and `git diff --check` both completed successfully.
+
+**Failed / did not work, and why:** no new execution failure occurred. The independent review's
+original verdict was correctly **FAIL** because syntactic digest validation was not provenance
+validation; that path is now retired. The tree remains intentionally dirty/uncommitted during
+development, so no new canonical scored artifact or clean-commit attestation is claimed.
+
+**Retired / no longer used:** canonical status derived directly from caller-provided digest maps;
+syntax-only raw/config identity validation; and direct canonical persistence outside the verified
+gate/registry/radar-parent path.
+
+**Next:** independent test and code review of this corrective diff. If accepted, commit only with
+explicit authorization, regenerate the clean source/gate/authorization and M4 radar chain, then run
+the canonical production CLI and compare its production estimate identity with the verified
+development value. Do not begin M2.
+
+## 2026-08-09 - M1 corrective checkout authority and all-zero legacy boundary
+
+**Set out to do:** repair the code-review finding that the canonical scorer still trusted a caller's
+clean-tree flag and exposed a constructible module-level authority token/writer, and repair the
+legacy pooling boundary that dropped an estimator when every capture had zero output.
+
+**Worked (with evidence):** canonical `run_score_stage` no longer accepts caller identity as
+authority. It independently invokes Git against the repository containing the running scorer,
+requires the entire tree (including untracked files) to be clean, resolves actual HEAD, reloads the
+gate source manifest, rebuilds the current transitive scientific source manifest, and requires both
+manifest identity and commit to equal the verified scoring chain and actual HEAD. It then derives
+the exact raw-ADC/config maps internally from the source-bound canonical registry and requires the
+validated radar-parent configuration map to agree exactly.
+
+The module-level `_VerifiedProductionInputIdentity` and `_persist_score_artifacts` authority path
+were removed. Canonical status and artifact writing are lexically contained in the already-verified
+`run_score_stage` branch. Public `persist_score_artifacts` is legacy-only: any supplied identity is
+rejected, and a bundle written through that API verifies with
+`legacy_api_no_m1_clean_tree_attestation`, never canonical status. The production CLI no longer
+constructs or passes raw/config identity claims.
+
+Real-subprocess regressions create an isolated Git repository, prove that the clean helper returns
+actual HEAD, and prove that a tracked edit fails. A source fixture proves exact rebuilt-manifest
+acceptance and rejects source drift and a false HEAD. Further regressions reject the old caller
+`git_tree_clean=True` lie before preflight, confirm the old token/writer symbols are absent, exercise
+radar-parent config mismatch/missing/extra cases, reject direct fabricated persistence, and reopen
+the resulting legitimate legacy bundle with `verify_bundle`.
+
+The legacy M8 pool now retains an all-zero-output estimator: coverage is zero over every capture,
+`accuracy_capture_count=0`, `n_scored=0`, and accuracy/hit metrics are `None`. It remains explicitly
+ineligible as a production headline.
+
+Focused M1/scorer tests completed with `29 passed`; the M4 registry/bundle/evidence and independent
+scorer compatibility suite completed with `202 passed, 1 skipped`.
+
+**Failed / did not work, and why:** the preceding code-review verdict was correctly **FAIL** because
+underscore naming and a frozen dataclass did not create an authority boundary, and a caller Boolean
+did not prove Git state. The current working tree is intentionally dirty while these fixes are
+uncommitted, so the real canonical path must fail and no new canonical artifact is claimed.
+
+**Retired / no longer used:** caller-supplied production identity claims; module-level constructible
+canonical tokens; module-level callable canonical persistence; and dropping an all-zero estimator
+from legacy coverage output.
+
+**Next:** independently retest and review this correction. If accepted, commit only with explicit
+authorization, regenerate the clean source/gate/authorization and radar parent, and then run the
+canonical CLI. Do not begin M2.
+
+### Verification note
+
+An additional full `tests/test_m8_ahmed_provenance.py` invocation completed with `100 passed, 1
+failed`. The failing attestation-builder test requires its temporary JUnit report to be outside the
+repository, while this sandbox requires pytest's `--basetemp` to be project-local; it therefore
+rejected the test runner's project-local temporary path. This environmental-path failure is not
+claimed as a passing suite and did not exercise a different M1 scientific result.
+
+A rerun with the exact external temporary root
+`$env:TEMP/m1_writer_provenance_20260809` satisfied that test's path contract and completed with
+`101 passed`. The uniquely named temporary directory was removed after the run.
+
+## 2026-08-09 - M1 legacy all-zero display correction
+
+**Set out to do:** repair the final review finding that the legacy M8 pool correctly retained an
+all-zero estimator but its CLI display still compared and formatted undefined MAE as a float.
+
+**Worked (with evidence):** pooled CSV writing and terminal display now share one tested function.
+Rows are sorted by condition, an explicit defined/undefined-accuracy sentinel, numeric MAE when
+defined, and method as a stable tie-breaker. Undefined MAE and hit metrics print as `n/a`; defined
+coverage, MAE and hit output retains the previous numeric representation. The persisted row remains
+unchanged, with zero coverage, `accuracy_capture_count=0`, `n_scored=0`, and empty/undefined
+accuracy cells.
+
+A parameterized end-to-end pooling/write/display regression covers both a lone all-zero method and
+a mixed all-zero plus defined method. It asserts successful completion, `n/a` display, the existing
+`1.250` defined-MAE formatting, and retention of the all-zero row in `pooled.csv`. The targeted
+boundary tests completed with `3 passed`; the full M1 plus portable scorer suites completed with
+`31 passed`.
+
+**Failed / did not work, and why:** the pre-fix display used `(condition, mae_bpm)` sorting and
+`:7.3f` formatting. Mixed `None`/float rows failed in sorting, while a lone undefined row failed in
+formatting. Those implicit float assumptions are removed.
+
+**Retired / no longer used:** direct ordering or float formatting of an optional accuracy metric.
+
+**Next:** final independent retest/review of M1. If accepted, commit only with explicit
+authorization and follow the clean canonical regeneration steps already recorded. Do not begin M2.

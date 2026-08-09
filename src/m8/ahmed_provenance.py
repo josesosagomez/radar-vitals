@@ -84,6 +84,7 @@ _SCIENTIFIC_ENTRY_POINTS = (
     "scripts/m8_ahmed_transfer.py",
     "scripts/m8_ahmed_all_bins.py",
     "scripts/m8_ahmed_score.py",
+    "scripts/score_production.py",
 )
 
 # Non-Python inputs that fix the experimental identity.  Unlike the previous manifest,
@@ -134,6 +135,7 @@ _REQUIRED_ARTIFACTS = (
     "tests/test_m8_ahmed_all_bins.py",
     "tests/test_m8_ahmed_score.py",
     "tests/test_m8_ahmed_score_independent.py",
+    "tests/test_m1_production_scoring.py",
 )
 
 _ATTESTED_TEST_FILES = (
@@ -145,6 +147,7 @@ _ATTESTED_TEST_FILES = (
     "tests/test_m8_ahmed_all_bins.py",
     "tests/test_m8_ahmed_score.py",
     "tests/test_m8_ahmed_score_independent.py",
+    "tests/test_m1_production_scoring.py",
     "tests/test_m4_estimator_runner.py",
     "tests/test_m4_estimator_suites.py",
     "tests/test_m4_evidence_serialization.py",

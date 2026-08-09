@@ -255,12 +255,75 @@ def test_scored_bundle_is_immutable_and_claim_ineligible(tmp_path):
     assert manifest["claim_status"] == CLAIM_STATUS
     assert manifest["source_chain_verified"] is True
     assert manifest["scored_row_count"] == 3584
+    assert manifest["production_provenance_status"] == (
+        "legacy_api_no_m1_clean_tree_attestation"
+    )
     assert set(manifest["reference_sha256_by_capture"]) == set(CAPTURES)
-    for name in ("rows.json", "metrics.json", "partitions.json", "provenance.json"):
+    for name in (
+        "rows.json",
+        "metrics.json",
+        "partitions.json",
+        "production_summary.json",
+        "provenance.json",
+    ):
         document = json.loads((bundle.root / name).read_text(encoding="utf-8"))
         assert document["claim_status"] == CLAIM_STATUS
+    production = json.loads(
+        (bundle.root / "production_summary.json").read_text(encoding="utf-8")
+    )["production_audit"]
+    assert production["universe_partition"]["all_complete_windows"] == 128
+    assert production["canonical_provenance_status"] == (
+        "legacy_api_no_m1_clean_tree_attestation"
+    )
     resolved = yaml.safe_load((bundle.root / "resolved_config.yaml").read_text(encoding="utf-8"))
     assert resolved["claim_status"] == CLAIM_STATUS
+
+
+def test_direct_persistence_rejects_unverified_production_digest_maps(tmp_path):
+    """Regression: syntactically valid caller hashes must never become canonical."""
+    result = execute_score(
+        radar_rows=_minimal_radar_rows(),
+        reference=_reference_scope(tmp_path),
+        file_hash=lambda path: "a" * 64,
+        masimo_loader=lambda path: _masimo_frame(),
+    )
+    authorization = Authorization(
+        authorization_id="portable",
+        gate_manifest_sha256="g" * 64,
+        source_manifest_sha256="s" * 64,
+        allowed_stages=("real-smoke", "real-radar", "score"),
+        capture_ids=CAPTURES,
+        lock_estimands=LOCK_ESTIMANDS,
+        arm_ids=CANONICAL_ARM_IDS,
+        approved_by="test",
+        approved_on="2026-08-08",
+    )
+    fabricated_identity = {
+        "git_commit": "f" * 40,
+        "git_tree_clean": True,
+        "source_manifest_sha256": "s" * 64,
+        "raw_adc_sha256_by_capture": {
+            capture_id: "1" * 64 for capture_id in CAPTURES
+        },
+        "capture_config_sha256_by_capture": {
+            capture_id: "2" * 64 for capture_id in CAPTURES
+        },
+    }
+
+    with pytest.raises(ScoreContractError, match="unverified production input identity"):
+        persist_score_artifacts(
+            result,
+            out_root=tmp_path / "scored",
+            run_id="must-not-persist",
+            source_manifest_sha256="s" * 64,
+            authorization=authorization,
+            authorization_sha256="a" * 64,
+            gate_manifest_sha256="g" * 64,
+            radar_manifest_sha256="r" * 64,
+            production_input_identity=fabricated_identity,
+        )
+
+    assert not (tmp_path / "scored").exists()
 
 
 def _canonical_row(capture_id: str, lock_id: str, arm_id: str) -> dict:
@@ -380,7 +443,7 @@ def test_scored_artifacts_carry_the_documented_numeric_origin_uncertainty(tmp_pa
         gate_manifest_sha256="g" * 64,
         radar_manifest_sha256="r" * 64,
     )
-    for name in ("rows.json", "metrics.json", "partitions.json"):
+    for name in ("rows.json", "metrics.json", "partitions.json", "production_summary.json"):
         document = json.loads((bundle.root / name).read_text(encoding="utf-8"))
         assert document["origin_uncertainty_seconds_range"] == [5, 15]
 

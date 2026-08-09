@@ -117,6 +117,89 @@ def score_condition(cells: pd.DataFrame, vital: str, hit_bands) -> dict:
     return _score(np.abs(est[scored] - ref[scored]), len(cells), int(emitted.sum()), hit_bands)
 
 
+def pool_score_rows(scores: pd.DataFrame) -> list[dict]:
+    """Legacy M8 pooling with independent coverage and accuracy capture sets.
+
+    This remains descriptive M8 output, not a production headline.  Keeping the helper
+    testable prevents a future refactor from restoring the retired behavior in which
+    zero-output captures disappeared before macro coverage was computed.
+    """
+    pooled = []
+    for (vital, method, condition), coverage_rows in scores.groupby(
+        ["vital", "method", "condition"]
+    ):
+        accuracy_rows = coverage_rows[coverage_rows["mae_bpm"].notna()]
+        accuracy_weight = int(accuracy_rows["n_scored"].sum())
+        has_accuracy = len(accuracy_rows) > 0 and accuracy_weight > 0
+        pooled.append({
+            "vital": vital, "method": method, "condition": condition,
+            # Coverage and accuracy have different capture sets.  In particular a
+            # zero-output production capture has undefined MAE but defined zero coverage;
+            # filtering it before this mean produced the retired 30.08% summary.
+            "n_captures": int(coverage_rows["capture_id"].nunique()),
+            "coverage_capture_count": int(coverage_rows["capture_id"].nunique()),
+            "accuracy_capture_count": int(accuracy_rows["capture_id"].nunique()),
+            "n_scored": accuracy_weight,
+            "mean_coverage": round(float(coverage_rows["coverage"].mean()), 4),
+            "mae_bpm": (
+                round(float(np.average(
+                    accuracy_rows["mae_bpm"], weights=accuracy_rows["n_scored"]
+                )), 4)
+                if has_accuracy else None
+            ),
+            "hit_5bpm": (round(float(np.average(
+                accuracy_rows["hit_5bpm"], weights=accuracy_rows["n_scored"]
+            )), 4)
+                         if vital == "hr" and has_accuracy else None),
+            "hit_3bpm": (round(float(np.average(
+                accuracy_rows["hit_3bpm"], weights=accuracy_rows["n_scored"]
+            )), 4)
+                         if vital == "br" and has_accuracy else None),
+            "production_headline_eligible": False,
+            "status": "legacy_m8_descriptive_only_not_canonical_production_scoring",
+        })
+    # `fixed_bin` rows are per-bin and would double-count if pooled with the rest.
+    return [record for record in pooled if record["condition"] != "fixed_bin"]
+
+
+_POOLED_COLUMNS = [
+    "vital", "method", "condition", "n_captures", "coverage_capture_count",
+    "accuracy_capture_count", "n_scored", "mean_coverage", "mae_bpm",
+    "hit_5bpm", "hit_3bpm", "production_headline_eligible", "status",
+]
+
+
+def write_and_display_pooled(pooled: list[dict], out_dir: Path) -> None:
+    """Persist and print pooled legacy rows, including undefined-accuracy rows."""
+    write_csv(out_dir / "pooled.csv", _POOLED_COLUMNS, pooled)
+
+    for vital in ("hr", "br"):
+        print(f"\n=== {vital.upper()} — pooled, weighted by scored windows ===")
+        sub = sorted(
+            [record for record in pooled if record["vital"] == vital],
+            key=lambda record: (
+                record["condition"],
+                record["mae_bpm"] is None,
+                float(record["mae_bpm"]) if record["mae_bpm"] is not None else 0.0,
+                record["method"],
+            ),
+        )
+        print(f"{'method':<46} {'condition':<19} {'cov':>6} {'MAE':>7} {'hit':>6} {'n':>5}")
+        for record in sub:
+            hit = record["hit_5bpm"] if vital == "hr" else record["hit_3bpm"]
+            mae_text = (
+                f"{record['mae_bpm']:7.3f}"
+                if record["mae_bpm"] is not None
+                else f"{'n/a':>7}"
+            )
+            hit_text = str(hit) if hit is not None else "n/a"
+            print(
+                f"{record['method']:<46} {record['condition']:<19} "
+                f"{record['mean_coverage']:>6.3f} {mae_text} "
+                f"{hit_text:>6} {record['n_scored']:>5}"
+            )
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--ahmed-run", type=Path, required=True)
@@ -218,27 +301,7 @@ def main(argv: list[str] | None = None) -> int:
     write_csv(out_dir / "scores.csv", cols, rows)
 
     df = pd.DataFrame(rows)
-    pooled = []
-    for (vital, method, condition), g in df.groupby(["vital", "method", "condition"]):
-        g = g[g["mae_bpm"].notna()]
-        if not len(g):
-            continue
-        pooled.append({
-            "vital": vital, "method": method, "condition": condition,
-            "n_captures": int(g["capture_id"].nunique()),
-            "n_scored": int(g["n_scored"].sum()),
-            "mean_coverage": round(float(g["coverage"].mean()), 4),
-            "mae_bpm": round(float(np.average(g["mae_bpm"], weights=g["n_scored"])), 4),
-            "hit_5bpm": (round(float(np.average(g["hit_5bpm"], weights=g["n_scored"])), 4)
-                         if vital == "hr" else None),
-            "hit_3bpm": (round(float(np.average(g["hit_3bpm"], weights=g["n_scored"])), 4)
-                         if vital == "br" else None),
-        })
-    # `fixed_bin` rows are per-bin and would double-count if pooled with the rest.
-    pooled = [p for p in pooled if p["condition"] != "fixed_bin"]
-    write_csv(out_dir / "pooled.csv",
-              ["vital", "method", "condition", "n_captures", "n_scored", "mean_coverage",
-               "mae_bpm", "hit_5bpm", "hit_3bpm"], pooled)
+    pooled = pool_score_rows(df)
 
     meta = {
         "generated_utc": datetime.now(timezone.utc).isoformat(),
@@ -268,21 +331,19 @@ def main(argv: list[str] | None = None) -> int:
         "coverage_note": (
             "Ahmed has no verification stage and emits an argmax for every cell, so its coverage "
             "is 100% by construction. Production's HR coverage is low because AHET refuses to "
-            "guess. These coverages are not comparable quantities."
+            "guess. These coverages are not comparable quantities. Zero-output captures are "
+            "retained in coverage even though their accuracy is undefined."
+        ),
+        "production_headline_status": (
+            "BLOCKED: this legacy M8 exploratory report is not a canonical production scorer. "
+            "Use scripts/score_production.py and src/m4/estimator_scoring.py. The historical "
+            "30.08% survivor-biased production coverage is retired."
         ),
     }
     (out_dir / "run_meta.json").write_text(json.dumps(meta, indent=2, default=str),
                                            encoding="utf-8", newline="\n")
 
-    for vital in ("hr", "br"):
-        print(f"\n=== {vital.upper()} — pooled, weighted by scored windows ===")
-        sub = sorted([p for p in pooled if p["vital"] == vital],
-                     key=lambda p: (p["condition"], p["mae_bpm"]))
-        print(f"{'method':<46} {'condition':<19} {'cov':>6} {'MAE':>7} {'hit':>6} {'n':>5}")
-        for p in sub:
-            hit = p["hit_5bpm"] if vital == "hr" else p["hit_3bpm"]
-            print(f"{p['method']:<46} {p['condition']:<19} {p['mean_coverage']:>6.3f} "
-                  f"{p['mae_bpm']:>7.3f} {str(hit):>6} {p['n_scored']:>5}")
+    write_and_display_pooled(pooled, out_dir)
     return 0
 
 

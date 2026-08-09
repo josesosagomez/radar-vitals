@@ -15,6 +15,7 @@ from dataclasses import dataclass
 import json
 import math
 from pathlib import Path
+import subprocess
 from typing import Callable, Iterable, Literal, Mapping, Sequence
 
 import numpy as np
@@ -31,7 +32,7 @@ from src.m4.bundle import (
     strict_json_bytes,
     verify_bundle,
 )
-from src.m4.capture_registry import ReferenceScope, load_registry
+from src.m4.capture_registry import DEFAULT_REGISTRY, ReferenceScope, load_registry
 from src.m4.estimator_runner import (
     CANONICAL_ARM_IDS,
     LOCK_ESTIMANDS,
@@ -41,6 +42,12 @@ from src.m4.estimator_runner import (
 )
 from src.m4.evidence_serialization import deserialize_native_tree
 from src.m4.production_suite import PRODUCTION_ARM_ID
+from src.m8.ahmed_provenance import (
+    SourceManifest,
+    build_source_manifest,
+    load_source_manifest,
+    verify_source_manifest,
+)
 
 __all__ = [
     "COMPARATIVE_UNIVERSE",
@@ -52,6 +59,7 @@ __all__ = [
     "execute_score",
     "paired_partitions",
     "percentiles",
+    "production_audit_summary",
     "persist_score_artifacts",
     "run_score_stage",
     "validate_radar_parent",
@@ -146,6 +154,15 @@ EXPECTED_RADAR_PAYLOADS = {
     "resolved_config.yaml",
     "provenance.json",
 }
+
+# M1 evaluates the deployed production lock.  The recorded historical lock remains in
+# the M4 ledger and paired M8 artifacts, but it is not the lock selected by the current
+# production code.  Keeping this identity explicit prevents an apparently innocuous
+# aggregation from silently mixing the two estimands.
+PRODUCTION_LOCK_ESTIMAND_ID = "current_production_rerun_lock"
+PRODUCTION_ALL_WINDOWS_UNIVERSE = "all_complete_windows_k_ge_0"
+PRODUCTION_PERSISTED_LOCK_UNIVERSE = "persisted_lock_windows_k_ge_1"
+PRODUCTION_K0_UNIVERSE = "lock_selection_in_sample_k0"
 
 
 class ScoreContractError(RuntimeError):
@@ -344,6 +361,184 @@ def coverage_and_metrics(rows: Iterable[ScoredRow]) -> MetricSummary:
         reference_exclusions=dict(sorted(reference_exclusions.items())),
         radar_exclusions=dict(sorted(radar_exclusions.items())),
     )
+
+
+def _capture_macro_summary(
+    per_capture: Sequence[Mapping[str, object]],
+) -> dict[str, object]:
+    """Equal-capture coverage with zero-output captures retained.
+
+    Accuracy is intentionally absent.  A capture with no joint rows has undefined
+    accuracy but has a perfectly well-defined zero coverage, and dropping that capture
+    is the survivor-bias defect M1 retires.
+    """
+    coverage_fields = (
+        "reference_coverage",
+        "radar_coverage",
+        "joint_coverage",
+        "joint_given_reference",
+    )
+    metric_means: dict[str, float | None] = {}
+    contributing_counts: dict[str, int] = {}
+    for field in coverage_fields:
+        values = [
+            float(record["metrics"][field])
+            for record in per_capture
+            if record["metrics"][field] is not None
+        ]
+        metric_means[field] = float(np.mean(values)) if values else None
+        contributing_counts[field] = len(values)
+    return {
+        "metric_means": metric_means,
+        "contributing_capture_count_by_metric": contributing_counts,
+        "coverage_capture_count": len(per_capture),
+        "zero_radar_output_capture_ids": sorted(
+            str(record["capture_id"])
+            for record in per_capture
+            if record["metrics"]["n_radar_valid"] == 0
+        ),
+        "zero_joint_output_capture_ids": sorted(
+            str(record["capture_id"])
+            for record in per_capture
+            if record["metrics"]["n_joint"] == 0
+        ),
+        "zero_output_policy": (
+            "coverage is defined as zero and retained; undefined accuracy never removes "
+            "a capture from a coverage mean"
+        ),
+    }
+
+
+def production_audit_summary(
+    rows: Iterable[ScoredRow],
+    *,
+    expected_capture_windows: Mapping[str, int] = EXPECTED_CAPTURE_WINDOWS,
+) -> dict[str, object]:
+    """Reconstruct M1 production denominators from exact M4 scoring-row identities.
+
+    Input may contain every M4 arm, lock and vital.  The function selects exactly one HR
+    row for each ``(capture_id, k)`` under the current production lock and fails closed on
+    a duplicate, missing or extra key.  The full ``k >= 0`` result remains primary for
+    honest all-window coverage; ``k == 0`` and the persisted-lock ``k >= 1`` subset are
+    also reported separately without removing ``k == 0`` from the ledger.
+    """
+    selected: dict[tuple[str, int], ScoredRow] = {}
+    for row in rows:
+        if (
+            row.arm_id != PRODUCTION_ARM_ID
+            or row.lock_estimand_id != PRODUCTION_LOCK_ESTIMAND_ID
+            or row.vital != "hr"
+        ):
+            continue
+        key = (row.capture_id, row.k)
+        if key in selected:
+            raise ScoreContractError(f"duplicate production audit key {key}")
+        selected[key] = row
+
+    expected_keys = {
+        (capture_id, k)
+        for capture_id, window_count in expected_capture_windows.items()
+        for k in range(window_count)
+    }
+    if set(selected) != expected_keys:
+        difference = sorted(set(selected) ^ expected_keys)
+        raise ScoreContractError(
+            "production audit rows are incomplete or contain extras: "
+            f"{difference[:5]}"
+        )
+
+    ordered_rows = [selected[key] for key in sorted(selected)]
+    for row in ordered_rows:
+        expected_universe = DIAGNOSTIC_UNIVERSE if row.k == 0 else COMPARATIVE_UNIVERSE
+        if row.window_universe != expected_universe:
+            raise ScoreContractError(
+                f"production audit key {(row.capture_id, row.k)} has "
+                f"window_universe={row.window_universe!r}, expected {expected_universe!r}"
+            )
+
+    universe_rows = {
+        PRODUCTION_ALL_WINDOWS_UNIVERSE: ordered_rows,
+        PRODUCTION_PERSISTED_LOCK_UNIVERSE: [row for row in ordered_rows if row.k >= 1],
+        PRODUCTION_K0_UNIVERSE: [row for row in ordered_rows if row.k == 0],
+    }
+    universes: dict[str, object] = {}
+    for universe_name, subset in universe_rows.items():
+        per_capture = []
+        for capture_id in sorted(expected_capture_windows):
+            capture_rows = [row for row in subset if row.capture_id == capture_id]
+            per_capture.append(
+                {
+                    "capture_id": capture_id,
+                    "metrics": coverage_and_metrics(capture_rows).to_dict(),
+                }
+            )
+        micro = coverage_and_metrics(subset).to_dict()
+        reconstructed_source = sum(
+            int(record["metrics"]["n_source"]) for record in per_capture
+        )
+        reconstructed_reference = sum(
+            int(record["metrics"]["n_reference_admitted"]) for record in per_capture
+        )
+        reconstructed_radar = sum(
+            int(record["metrics"]["n_radar_valid"]) for record in per_capture
+        )
+        reconstructed_joint = sum(
+            int(record["metrics"]["n_joint"]) for record in per_capture
+        )
+        reconstructed = {
+            "n_source": reconstructed_source,
+            "n_reference_admitted": reconstructed_reference,
+            "n_radar_valid": reconstructed_radar,
+            "n_joint": reconstructed_joint,
+        }
+        if any(micro[name] != value for name, value in reconstructed.items()):
+            raise ScoreContractError(
+                f"{universe_name}: per-capture denominators do not reconstruct micro totals"
+            )
+        universes[universe_name] = {
+            "includes_k0": universe_name != PRODUCTION_PERSISTED_LOCK_UNIVERSE,
+            "comparative_eligible": universe_name == PRODUCTION_PERSISTED_LOCK_UNIVERSE,
+            "micro": micro,
+            "capture_macro": _capture_macro_summary(per_capture),
+            "per_capture": per_capture,
+            "denominator_reconstruction": {
+                "sum_of_per_capture_counts": reconstructed,
+                "reconciles_to_micro": True,
+            },
+        }
+
+    all_count = int(universes[PRODUCTION_ALL_WINDOWS_UNIVERSE]["micro"]["n_source"])
+    persisted_count = int(
+        universes[PRODUCTION_PERSISTED_LOCK_UNIVERSE]["micro"]["n_source"]
+    )
+    k0_count = int(universes[PRODUCTION_K0_UNIVERSE]["micro"]["n_source"])
+    if all_count != persisted_count + k0_count:
+        raise ScoreContractError("production k>=0 denominator does not partition into k0 + k>=1")
+
+    return {
+        "schema_version": 1,
+        "estimator_id": "eca_ahet_v1",
+        "arm_id": PRODUCTION_ARM_ID,
+        "vital": "hr",
+        "lock_estimand_id": PRODUCTION_LOCK_ESTIMAND_ID,
+        "source_key": ["capture_id", "k"],
+        "capture_window_counts": {
+            capture_id: int(count)
+            for capture_id, count in sorted(expected_capture_windows.items())
+        },
+        "universe_partition": {
+            "all_complete_windows": all_count,
+            "lock_selection_in_sample_k0": k0_count,
+            "persisted_lock_windows_k_ge_1": persisted_count,
+            "identity": "all_complete_windows = k0 + k_ge_1",
+            "reconciles": True,
+        },
+        "universes": universes,
+        "legacy_coverage_status": (
+            "retired: the 30.08% survivor-biased production coverage is not a valid "
+            "M4 scoring output"
+        ),
+    }
 
 
 def _unique_by_key(rows: Sequence[ScoredRow], label: str) -> dict[tuple[str, str, int], ScoredRow]:
@@ -1011,7 +1206,157 @@ class ScoreResult:
     scored_rows: tuple[dict, ...]
     metrics: Mapping[str, object]
     partitions: Mapping[str, object]
+    production_audit: Mapping[str, object]
     reference_files: Mapping[str, Mapping[str, str]]
+
+
+def _require_clean_repository_checkout(root: Path) -> str:
+    """Return actual HEAD only when the whole checkout is clean.
+
+    This function deliberately invokes Git itself.  A Boolean supplied by a caller is
+    not evidence of repository state.
+    """
+    try:
+        status = subprocess.run(
+            ["git", "status", "--porcelain", "--untracked-files=all", "-z"],
+            cwd=str(root),
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        head = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=str(root),
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise ScoreContractError("cannot verify canonical production Git checkout") from exc
+    if status.stdout:
+        raise ScoreContractError(
+            "canonical production scoring requires an actually clean whole Git tree"
+        )
+    if len(head) != 40 or any(character not in "0123456789abcdef" for character in head):
+        raise ScoreContractError("canonical production Git HEAD is malformed")
+    return head
+
+
+def _verify_current_source_checkout(
+    *,
+    gate_dir: Path,
+    source_manifest_sha256: str,
+    repository_root: Path,
+    git_head: str,
+    entry_points: Sequence[str] | None = None,
+    required_artifacts: Sequence[str] | None = None,
+) -> SourceManifest:
+    """Rebuild the checkout manifest and require exact gate/source/HEAD identity."""
+    try:
+        gate_source = load_source_manifest(Path(gate_dir) / "source_manifest.json")
+        verify_source_manifest(
+            gate_source,
+            root=repository_root,
+            entry_points=entry_points,
+            required_artifacts=required_artifacts,
+            require_promotion_eligible=True,
+        )
+        current_source = build_source_manifest(
+            repository_root,
+            entry_points=entry_points,
+            required_artifacts=required_artifacts,
+        )
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise ScoreContractError(
+            "current scientific source checkout differs from the verified gate"
+        ) from exc
+    if (
+        gate_source.manifest_sha256 != source_manifest_sha256
+        or current_source.manifest_sha256 != source_manifest_sha256
+    ):
+        raise ScoreContractError(
+            "rebuilt scientific source identity differs from the scoring chain"
+        )
+    if gate_source.git_commit != git_head or current_source.git_commit != git_head:
+        raise ScoreContractError(
+            "verified source manifest commit does not equal actual clean Git HEAD"
+        )
+    if not current_source.promotion_eligible:
+        raise ScoreContractError("rebuilt scientific source manifest is not promotion-eligible")
+    return current_source
+
+
+def _derive_production_input_identity(
+    source_manifest: SourceManifest,
+    *,
+    repository_root: Path,
+    radar_rows: Sequence[Mapping[str, object]],
+) -> dict[str, object]:
+    """Derive raw/config identity internally from verified source and radar parents.
+
+    The source manifest binds the exact registry file.  That
+    registry supplies the raw-ADC and capture-configuration digests.  The independently
+    validated radar parent supplies a second configuration binding.  No caller digest
+    claim, ADC file, or reference file participates here.
+    """
+    registry_relative_path = "experiments/m8_ahmed_transfer/capture_registry.yaml"
+    registry_entries = [
+        entry
+        for entry in source_manifest.entries
+        if entry.get("path") == registry_relative_path
+    ]
+    if len(registry_entries) != 1:
+        raise ScoreContractError(
+            "gate source manifest must bind exactly one canonical capture registry"
+        )
+    registry_path = Path(repository_root) / registry_relative_path
+    if registry_path.resolve() != DEFAULT_REGISTRY.resolve():
+        raise ScoreContractError("canonical scoring repository has an unexpected registry path")
+    if registry_entries[0].get("sha256") != sha256_path(registry_path):
+        raise ScoreContractError(
+            "current capture registry differs from the verified gate source manifest"
+        )
+
+    try:
+        radar_scope = load_registry(registry_path).radar_scope()
+    except (OSError, ValueError, yaml.YAMLError) as exc:
+        raise ScoreContractError("canonical capture registry is malformed") from exc
+    expected_capture_ids = set(EXPECTED_CAPTURE_WINDOWS)
+    if set(radar_scope.captures) != expected_capture_ids:
+        raise ScoreContractError("canonical capture registry does not bind the exact capture set")
+
+    authoritative_raw_digests = {
+        capture_id: radar_scope.captures[capture_id].adc_stream_sha256
+        for capture_id in sorted(expected_capture_ids)
+    }
+    authoritative_config_digests = {
+        capture_id: radar_scope.captures[capture_id].capture_config_sha256
+        for capture_id in sorted(expected_capture_ids)
+    }
+    parent_config_digests: dict[str, str] = {}
+    for row in radar_rows:
+        capture_id = str(row["capture_id"])
+        digest = str(row["capture_config_hash"])
+        previous = parent_config_digests.setdefault(capture_id, digest)
+        if previous != digest:
+            raise ScoreContractError(
+                f"{capture_id}: radar-parent capture configuration hash is inconsistent"
+            )
+    if set(parent_config_digests) != expected_capture_ids:
+        raise ScoreContractError(
+            "radar parent configuration identity does not bind the exact capture set"
+        )
+    if parent_config_digests != authoritative_config_digests:
+        raise ScoreContractError(
+            "radar-parent configuration hashes differ from the source-manifest-bound registry"
+        )
+    return {
+        "git_commit": source_manifest.git_commit,
+        "git_tree_clean": True,
+        "source_manifest_sha256": source_manifest.manifest_sha256,
+        "raw_adc_sha256_by_capture": authoritative_raw_digests,
+        "capture_config_sha256_by_capture": authoritative_config_digests,
+    }
 
 
 def execute_score(
@@ -1386,10 +1731,40 @@ def execute_score(
         "production_vs_ahmed": partition_groups,
         "protocol_summaries": protocol_partition_summaries,
     }
+    production_audit = production_audit_summary(scored_objects)
+    production_estimate_rows = [
+        {
+            "capture_id": row["capture_id"],
+            "k": row["k"],
+            "radar_valid": row["radar_valid"],
+            "radar_validity_reason": row["radar_validity_reason"],
+            "radar_value_bpm": row["radar_value_bpm"],
+        }
+        for row in scored_payload
+        if row["arm_id"] == PRODUCTION_ARM_ID
+        and row["lock_estimand_id"] == PRODUCTION_LOCK_ESTIMAND_ID
+        and row["vital"] == "hr"
+    ]
+    production_estimate_rows.sort(key=lambda row: (row["capture_id"], row["k"]))
+    production_audit = {
+        **production_audit,
+        "radar_estimate_identity_sha256": sha256_bytes(
+            strict_json_bytes({"rows": production_estimate_rows})
+        ),
+        "radar_estimate_identity_row_count": len(production_estimate_rows),
+        "radar_estimate_identity_fields": [
+            "capture_id",
+            "k",
+            "radar_valid",
+            "radar_validity_reason",
+            "radar_value_bpm",
+        ],
+    }
     return ScoreResult(
         scored_rows=tuple(scored_payload),
         metrics=metrics,
         partitions=partitions,
+        production_audit=production_audit,
         reference_files=reference_files,
     )
 
@@ -1404,8 +1779,19 @@ def persist_score_artifacts(
     authorization_sha256: str,
     gate_manifest_sha256: str,
     radar_manifest_sha256: str,
+    production_input_identity: Mapping[str, object] | None = None,
 ) -> StageBundle:
-    """Write one immutable, parent-linked scored bundle."""
+    """Write a legacy/non-canonical immutable, parent-linked scored bundle.
+
+    Canonical identity is derived internally by :func:`run_score_stage` from the actual
+    checkout, gate-bound registry and radar parent.  Accepting an ordinary digest mapping
+    here would let a direct API caller self-attest fabricated hashes.
+    """
+    if production_input_identity is not None:
+        raise ScoreContractError(
+            "unverified production input identity cannot be persisted; "
+            "use run_score_stage for canonical scoring"
+        )
     reference_identity_sha256 = sha256_bytes(strict_json_bytes(result.reference_files))
     common = {
         "schema_version": 1,
@@ -1423,10 +1809,19 @@ def persist_score_artifacts(
         "reference_identity_sha256": reference_identity_sha256,
         "reference_files": dict(result.reference_files),
     }
+    production_audit = {
+        **dict(result.production_audit),
+        "canonical_provenance_status": "legacy_api_no_m1_clean_tree_attestation",
+        "input_identity": None,
+    }
     writer = BundleWriter(stage_root=out_root, stage="scored", run_id=run_id)
     writer.add_json("rows.json", {**common, "rows": list(result.scored_rows)})
     writer.add_json("metrics.json", {**common, **dict(result.metrics)})
     writer.add_json("partitions.json", {**common, **dict(result.partitions)})
+    writer.add_json(
+        "production_summary.json",
+        {**common, "production_audit": production_audit},
+    )
     writer.add_text(
         "resolved_config.yaml",
         yaml.safe_dump(
@@ -1465,6 +1860,9 @@ def persist_score_artifacts(
                 capture_id: record["sha256"]
                 for capture_id, record in sorted(result.reference_files.items())
             },
+            "production_provenance_status": production_audit[
+                "canonical_provenance_status"
+            ],
             "scored_row_count": len(result.scored_rows),
             "score_status": "canonical_scoring_complete",
         },
@@ -1484,8 +1882,28 @@ def run_score_stage(
     require_scientific_gate: bool = False,
     file_hash: Callable[[Path], str] = sha256_path,
     masimo_loader: Callable[[Path], object] = load_masimo,
+    production_input_identity: Mapping[str, object] | None = None,
+    require_production_provenance: bool = False,
 ) -> ScoreResult | StageBundle:
     """Fail-closed official scoring entry point; reference access is last in preflight."""
+    if production_input_identity is not None:
+        raise ScoreContractError(
+            "caller-supplied production identity is forbidden; canonical scoring "
+            "derives repository/raw/config identity internally"
+        )
+    if require_production_provenance and not require_scientific_gate:
+        raise ScoreContractError(
+            "canonical production scoring requires the complete scientific gate"
+        )
+
+    # Canonical execution proves the real process checkout before trusting any parent.
+    # Compute the root from this file each time so a caller cannot nominate an unrelated
+    # clean repository as its authority.
+    repository_root = Path(__file__).resolve().parents[2]
+    canonical_git_head = None
+    if require_production_provenance:
+        canonical_git_head = _require_clean_repository_checkout(repository_root)
+
     preflight = verify_preflight(
         stage="score",
         gate_dir=gate_dir,
@@ -1511,6 +1929,21 @@ def run_score_stage(
         expected_authorization_sha256=authorization_sha256,
     )
 
+    canonical_input_identity = None
+    if require_production_provenance:
+        assert canonical_git_head is not None
+        current_source = _verify_current_source_checkout(
+            gate_dir=gate_dir,
+            source_manifest_sha256=source_manifest_sha256,
+            repository_root=repository_root,
+            git_head=canonical_git_head,
+        )
+        canonical_input_identity = _derive_production_input_identity(
+            current_source,
+            repository_root=repository_root,
+            radar_rows=radar_rows,
+        )
+
     # This is intentionally the first point at which a reference path may be built,
     # hashed, or opened. Every gate/authorization/parent/schema check above is complete.
     result = execute_score(
@@ -1521,13 +1954,93 @@ def run_score_stage(
     )
     if out_root is None:
         return result
-    return persist_score_artifacts(
-        result,
-        out_root=out_root,
-        run_id=run_id,
-        source_manifest_sha256=source_manifest_sha256,
-        authorization=authorization,
-        authorization_sha256=authorization_sha256,
-        gate_manifest_sha256=preflight.gate_manifest_sha256,
-        radar_manifest_sha256=radar_manifest_sha256,
+    if not require_production_provenance:
+        return persist_score_artifacts(
+            result,
+            out_root=out_root,
+            run_id=run_id,
+            source_manifest_sha256=source_manifest_sha256,
+            authorization=authorization,
+            authorization_sha256=authorization_sha256,
+            gate_manifest_sha256=preflight.gate_manifest_sha256,
+            radar_manifest_sha256=radar_manifest_sha256,
+        )
+
+    # Canonical authority is lexical: there is no module-level token or canonical writer
+    # for a direct caller to construct or invoke.  This branch is reachable only after
+    # the real checkout, rebuilt source manifest, registry and radar parent all agree.
+    assert canonical_input_identity is not None
+    reference_identity_sha256 = sha256_bytes(strict_json_bytes(result.reference_files))
+    common = {
+        "schema_version": 1,
+        "evaluation_status": EVALUATION_STATUS,
+        "time_origin_id": TIME_ORIGIN_ID,
+        "origin_is_approximate": True,
+        "origin_uncertainty_seconds_range": list(ORIGIN_UNCERTAINTY_SECONDS_RANGE),
+        "claim_status": CLAIM_STATUS,
+        "data_role": DATA_ROLE,
+        "population_limitation": "single_subject_development_captures_no_population_claim",
+        "source_manifest_sha256": source_manifest_sha256,
+        "authorization_id": authorization.authorization_id,
+        "authorization_sha256": authorization_sha256,
+        "radar_parent_manifest_sha256": radar_manifest_sha256,
+        "reference_identity_sha256": reference_identity_sha256,
+        "reference_files": dict(result.reference_files),
+    }
+    production_audit = {
+        **dict(result.production_audit),
+        "canonical_provenance_status": "complete_clean_tree_hash_bound",
+        "input_identity": canonical_input_identity,
+    }
+    writer = BundleWriter(stage_root=out_root, stage="scored", run_id=run_id)
+    writer.add_json("rows.json", {**common, "rows": list(result.scored_rows)})
+    writer.add_json("metrics.json", {**common, **dict(result.metrics)})
+    writer.add_json("partitions.json", {**common, **dict(result.partitions)})
+    writer.add_json(
+        "production_summary.json",
+        {**common, "production_audit": production_audit},
+    )
+    writer.add_text(
+        "resolved_config.yaml",
+        yaml.safe_dump(
+            {
+                **common,
+                "experiment_id": "m8_canonical_two_lock_seven_arm_score_v1",
+                "lock_estimands": list(LOCK_ESTIMANDS),
+                "arm_ids": list(CANONICAL_ARM_IDS),
+                "window_universes": [DIAGNOSTIC_UNIVERSE, COMPARATIVE_UNIVERSE],
+                "comparative_universe": COMPARATIVE_UNIVERSE,
+                "score_status": "canonical_scoring_complete",
+            },
+            sort_keys=True,
+        ),
+    )
+    return writer.finalize(
+        status="complete",
+        promotion_eligible=False,
+        provenance=common,
+        parents={
+            "synthetic": preflight.gate_manifest_sha256,
+            "radar": radar_manifest_sha256,
+        },
+        extra_manifest={
+            "evaluation_status": EVALUATION_STATUS,
+            "time_origin_id": TIME_ORIGIN_ID,
+            "origin_is_approximate": True,
+            "origin_uncertainty_seconds_range": list(ORIGIN_UNCERTAINTY_SECONDS_RANGE),
+            "claim_status": CLAIM_STATUS,
+            "source_chain_verified": True,
+            "data_role": DATA_ROLE,
+            "source_manifest_sha256": source_manifest_sha256,
+            "authorization_sha256": authorization_sha256,
+            "radar_parent_manifest_sha256": radar_manifest_sha256,
+            "reference_identity_sha256": reference_identity_sha256,
+            "reference_sha256_by_capture": {
+                capture_id: record["sha256"]
+                for capture_id, record in sorted(result.reference_files.items())
+            },
+            "production_provenance_status": "complete_clean_tree_hash_bound",
+            "scored_row_count": len(result.scored_rows),
+            "score_status": "canonical_scoring_complete",
+        },
     )
