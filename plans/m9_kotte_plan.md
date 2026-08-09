@@ -1,544 +1,763 @@
-# M9 — Kotte joint-Doppler: first real-data evaluation — plan
+# M9 — Kotte Joint Doppler Heart-Rate Estimation
 
-> Status: revised after nine review passes (all 2026-08-05, `plans/m9_comments_plan.md`). Every
-> comment in every pass was verified against the paper and the code before acting; all verified
-> items are applied. One fifth-pass nitpick was rebutted against the paper's page render. Four
-> items were decided by the user (2026-08-05): the reference-alignment amendment, the
-> subject-weighted Stage-B rule and its exact natural-only formula, and the headline rewording.
-> Elaborates `plans/implementation_plan.md:468-509` (M9).
+> **Canonical M9 plan.** Consolidated and reviewed 2026-08-08 from the former
+> `m9_comments_plan`, `m9_step1a_snr_finding`, `m9_step1b_oracle_finding`, and the
+> previous version of this file. Those three companion documents are superseded.
+> The original Kotte PDF is the scientific authority. Existing M9 Python and config
+> are partial work and are not automatically plan-conformant.
 
-## Context
+## 1. Objective
 
-The paper's headline — **reworded by user decision 2026-08-05 (pass 9)** — is *first real-data
-**evaluation** of two simulation-only published methods under one common comparator, with
-coverage reported* ("validation" is reserved for exact-origin data; `JOURNAL_PAPER.md` /
-`THIRD_CHAPTER.md` are reworded at session close). M8 (Ahmed) is done: negative at every bin,
-mechanism identified. M9 is the other half: **Kotte, Ahmed, Alouini, Al-Naffouri, "Joint
-Estimation of Single Target's High Amplitude Difference Doppler Frequencies in FMCW Radar",
-IEEE T-RS vol. 2, 2024, DOI 10.1109/TRS.2024.3352189**. Zero M9 code exists (verified).
-Equation extraction:
-`literature/ref_papers/joint_estimation_high_amplitude_doppler/joint_estimation_high_amplitude_doppler.md`
-(§III :622-1310, Algorithm 1 :1251-1303, §IV :1316-1541).
+Establish, reproducibly, whether the two-frequency estimator published by Kotte et al.
+can first be reproduced on its stated synthetic signal model and then evaluated on this
+project's FMCW chest-radar captures as a clearly labelled adaptation.
 
-Ladder (`plans/implementation_plan.md:468-509`): **control 1** (paper-faithful 20-RX
-reproduction, synthetic) → **control 2** (4-RX ablation, declared before the run) → **Stage A**
-(joint f_breath/f_heart on range bins, NO DOA, 8 captures) → **Stage B** (DOA — go/no-go note
-only).
+M9 is a research implementation, not production software. Scientific correctness,
+faithfulness to the paper, readable Python, complete evidence, and an honest negative
+result take priority over Masimo agreement or estimator coverage.
 
-**User decisions 2026-08-05:**
-1. Step 1a reproduces **Figs 5 + 7 + 8** with FFT + MUSIC; Fig 9 Monte Carlo and Yule-AR are
-   declared descopes.
-2. **Reference-alignment authorization:** `notes/analysis_prespec.md` is amended
-   **prospectively, before any M9 scoring run** (§6 cross-reviewed), extending the identical
-   approximate-origin `exploratory_non_frozen` treatment to M9 (the existing exception at
-   :559-565 names M8 only — verified; the 8 captures have no persisted `frame0_epoch`). Every
-   M9 scored row, table, metric, and decision carries the approximate-origin +
-   no-promotion/no-final-agreement-claim taint; the captures stay exploratory, never headline
-   evidence. The amendment also fixes the "registered in" vocabulary leftover in that
-   paragraph. **The scorer enforces this** (preflight below); radar-only work does not wait on
-   it.
-3. **Stage-B aggregation: subject-weighted, natural-only, pooled within subject** (exact
-   formula in Stage A below).
-4. **Headline wording:** "first real-data **evaluation**" (drop "validation").
+## 2. Scope
 
-**Review decisions (nine passes, verified, applied)** — the load-bearing deltas:
-- Range/DOA OUT of M9; direct `Y_t` in all controls (fast-time setup internally inconsistent,
-  :1336-1338; Fig 4 not reproduced).
-- Gate primary objective = **Algorithm 1's literal selection line**; eq-26 surface (θ known) is
-  the analysis-consistency check; the **truth table** in Step 1a governs verdicts.
-- Stage-A primary = closest Kotte-form 4-RX adaptation per CPI, **2D-medoid**-reported; pooled
-  and mean-surface are labelled variants of ours; **three real-data arms**, two gate-only
-  diagnostics with a declared promotion rule.
-- ONE Stage-A objective: **`loaded_capon_power` = `1ᵀH_loaded⁻¹1` = `wᴴR_loaded w`**.
-- Signed grid; alias collapse with a deterministic representative; one defined diagnostic
-  **`pair_margin_db`**.
-- Noise/channel: signal + noise first, per-RX gain/phase on the **whole column**; configured
-  transfer SNR = **`snr_z_dynamic_db`** on the mean-removed dynamic component.
-- **`gate_status == "passed"` required for publication** and verified by sweep and scorer.
-- The transfer bundle **links both controls**; both control subcommands and every
-  evidence-producing run **require a clean tree** (pass 9): dirty-tree runs are permitted only
-  as explicitly labelled non-gating smoke whose outputs can never gate, score, or decide.
-- **Gate manifest = runtime sources + external config inputs**; tests and this plan are
-  non-gating declaration hashes. **Config freshness is section-scoped** (pass 9): control runs
-  persist the whole-config hash for reproduction AND the resolved `controls`-section hash; the
-  transfer command requires the **current `controls` section hash** to match each accepted
-  control run (the oracle later edits `transfer.gate_criteria` in the same file, which must not
-  stale the controls).
-- **One owner for the production comparator + lock map** (pass 9): a single command,
-  `scripts/m9_production_comparator.py`, produces from one clean commit/config both the
-  production all-bins table and the **sole** `current_production_rerun_lock` map artifact
-  (`results/m9/production_comparator/<stamp>/`, with an output-hash map). The M9 sweep does
-  **not** derive locks (it evaluates every bin and does not need them); the scorer requires the
-  comparator's run ID, commit, table hash, and lock-map hash, verified against its output-hash
-  map. (The prior production run `20260804T131040Z` records `git_tree_clean: false`,
-  `config_hash: null` — verified — and is ineligible.)
-- **The capture cohort is runner input, not estimator config** (pass 9): `KotteJointDopplerConfig`
-  is DSP-only; the YAML capture manifest is parsed by the sweep/scorer runners and hashed as a
-  separate `input_manifest_hash`, excluded from `suite_config_hash` and per-arm
-  `run_config_hash` — the identical algorithm never changes identity because a capture or
-  filename changed. Runners open **only** the listed paths; "reject unlisted" means rejecting a
-  CLI request outside the manifest, not scanning `results/live_demo/`.
-- The scorer is **radar-free**, **enforces the amendment** (preflight: committed amendment
-  marker/version present in a clean-tree `notes/analysis_prespec.md`, file recorded + hashed;
-  refusal otherwise — tested), and persists per capture the numeric epoch used,
-  `origin_source="start_wall_utc"`, the timezone-normalized value, and
-  `origin_is_approximate=true`. Reference fields remain the integer `Timestamp` and
-  `Beats / min` (CLAUDE.md §9).
-- **Paired wrapper hardened** (dup-key and mismatched-reference rejection — the helper's dict
-  build silently overwrites and mixes reference sources, verified); paired universe =
-  `(capture_id, lock_estimand_id, k)`, **k ≥ 1**.
-- **Numerical rank**: `rank = #{λ_i > rank_rtol·λ_max}`; finite `λ_max ≤ 0` → rank 0 →
-  covariance failure path; nonfinite rejected; scale-change test.
-- **FFT/MUSIC comparators pinned as declared reproduction assumptions** (pass 9; the paper is
-  qualitative): specification in Step 1a.
-- Dependency claims scoped (DSP/core numpy-only; scorer uses pandas/PyYAML/Masimo parser;
-  oracle uses `scipy.special.jv`). Live-demo raw mirrors are referenced **in place** as
-  noncanonical regression fixtures — hashed, never edited, never implied promoted into
-  `data/raw/`.
+### Included
 
-## The method, pinned to the paper
+- A direct-`Y_t` synthetic reproduction of the paper's Section III-C joint Doppler
+  estimator, including Algorithm 1's selection objective and Eq. (26) as a diagnostic.
+- A fixed 20-RX to 4-RX ablation that separates the paper geometry from this hardware.
+- A synthetic chest-displacement transfer study that exposes the two-line model's limits.
+- A simple adapter from the preserved raw FMCW cube to the matrix required by Kotte.
+- Radar-only estimates on a fixed capture cohort, followed by separate reference scoring.
+- Coverage, failure causes, agreement metrics, and enough evidence to explain each estimate.
 
-- Eq (23): `Y_t(κ) ∈ C^(N_c×n_R)` — rows = slow-time samples, columns = RX channels. Steering
-  `a(f)_n = exp(j2πf·n·T_PRI)`.
-- Eq (24): `min_w wᴴR_t w  s.t.  wᴴ[a(f1) a(f2)] = [1 1]`. Eq (25): `w = R_t⁻¹A₂H⁻¹[1;1]`,
-  `H = A₂ᴴR_t⁻¹A₂`.
-- **Algorithm 1's selection line** (:1267-1303): `f̂_d = argmax wᴴE{Y_tY_tᴴ}w` — the gate's
-  primary objective (sample covariance, unloaded, 20 RX).
-- Eq (26): `β̂` estimates the **joint** amplitude β = β1+β2; Cases 1–4: `β̂ ≈ β1+β2` iff both
-  swept frequencies are true — analysis, not the selection line.
-- **Identities (review-verified):** `wᴴR w = 1ᵀH⁻¹1`; unloaded additionally
-  `‖wᴴY‖²/M = 1ᵀH⁻¹1`; loaded: `1ᵀH_loaded⁻¹1 = wᴴR_sample w + δ̄‖w‖²`. Corollaries:
-  (i) `R → cR` argmax-invariant under trace-relative loading (divisor via direct unit test);
-  (ii) exact invariance under whole-column per-RX diagonal unitaries; (iii) under stated
-  assumptions, whole-column gain imbalance is in expectation a pure scalar (finite-sample
-  sensitivity = the **algebraic non-invariance counterexample** unit test).
-- **The method's own failure mode:** β2 ≈ −β1 collapses the true peak — P5 + control-1 audit;
-  the multi-CPI discrimination table pins how the estimator forms differ.
-- §III-B (:809-816): per-row mean removal is in the paper, but exact per-channel removal makes
-  the sample covariance **exactly singular** (`R_t·1 = 0`).
-- §IV: 24 GHz, 1 TX / **20 RX** λ/2 ULA, **T_PRI = 50 ms**, **N_c = 16**, SNR 0 dB (two-line
-  signal-to-noise power ratio). Fig 8: target **3 m**/−30° (caption and prose agree —
-  verified against the page-09 render), (2, 1) Hz, β2 ∈ {β1, β1/2, β1/10}. Fig 7 row 2:
-  (1.5, 1) Hz, Δ=0.5 < 1/CPI=1.25 Hz. Disambiguation prior licenses **ordering**, not sign.
-  > **AMENDED 2026-08-06 (user decision, option B of `plans/m9_step1a_snr_finding.md`).**
-  > The paper's 0 dB is read as **fast-time-referred**: the range FFT's processing gain
-  > `10·log10(N_s = 128)` is folded in before `Y_t(κ)` is formed, so the **effective
-  > Y_t-domain SNR is ≈ 21.07 dB**. The literal Y_t-domain reading was measured and
-  > **cannot** reproduce Fig 8 for a structural reason (the selection objective is a
-  > constrained *minimum*, bounded at truth below the inter-truth ridge — proven on the
-  > exact ensemble covariance, so it is not a sampling artifact), and the paper's own
-  > colorbars (~90/70/50, separation-independent) confirm the published surface is not
-  > that bounded quantity. The literal reading survives as the `snr_reference_literal`
-  > audit. **`weak_tolerance_hz` 0.25 → 0.625** (= half mainlobe `1/(2·N_c·T_PRI)`), since
-  > interacting Dirichlet mainlobes displace each other's maxima by a measured 0.27–0.46 Hz
-  > and the paper's "detects both" is qualitative two-peak visibility. §6 cross-review of
-  > this amendment is pending; the memo is the authority for the details.
+### Excluded
 
-## Established mechanics (verified 2026-08-05)
+- Changes to Ahmed/M8 or any Ahmed artifact, result, or implementation.
+- Changes to the project's own estimator or range-selection algorithm.
+- Production architecture, services, concurrency, caching, deployment, or elaborate bundles.
+- A four-line or multi-line extension of Kotte; that would be a new method.
+- Kotte Fig. 9 Monte Carlo and the Yule-AR comparator.
+- A claim that Kotte et al. validated heart rate on humans; the paper uses simulations only.
+- DOA or localization claims from this project unless separately authorized after M9.
+- Choosing any estimator setting, bin, or arm from Masimo performance.
 
-- **Hardware match:** `scripts/live_demo_config.yaml` — 77.0 GHz start, 70.006 MHz/µs, ADC
-  start 5 µs, 256 samples at 5.209 Msps → **effective carrier ≈ 79.07 GHz, λ_eff ≈ 3.79 mm**
-  (config-derived; hash + resolved values in the gate bundle). Frame period 50 ms = the paper's
-  T_PRI; 32 chirps/frame; 4 RX. Slow time = frame axis; chirps coherently averaged per
-  (frame, RX); RX kept separate.
-- **Reference-alignment authorization:** the amendment (user decision 2) is a **blocking
-  prerequisite for scoring**, enforced by the scorer's preflight. Radar-only stages are
-  independent of it.
-- **The rank landmine:** at n_R=4, rank(R_t) ≤ 4 < N_c=16. Primary response: RX-only snapshots
-  + trace-relative loading per CPI. Pooling = full rank but a different (incoherent) model —
-  ours. **Rank rule:** `rank = #{λ_i > rank_rtol·λ_max}` (`rank_rtol` in config); finite
-  `λ_max ≤ 0` → rank 0 → covariance failure path; nonfinite rejected; eigenvalues + rank
-  persisted; identical rule everywhere; scale-change test.
-- **CPI tail + detrend order (pinned):** `extract 600 → retain first n_cpis·N_c (592 at
-  N_c=16) → subtract the per-RX mean over the retained support → split into CPIs`
-  (`mean_removal_scope: "retained_support"`); a test asserts the discarded tail cannot affect
-  any result; `frame_start_used`/`frame_end_used` (half-open) persisted.
-- **Partial-CPI semantics:** `min_valid_cpi_fraction` validated **exactly 1.0**; any invalid
-  CPI → `dsp_failed`/`invalid_cpi`; per-CPI validity/cause arrays (integer codebook,
-  `allow_pickle=False`) + failing CPI index + partial diagnostics persisted.
-- **Transfer physics:** `exp(j(4π/λ)d(t))`; breathing index ≈6.6 rad → **two-sided Bessel
-  comb** through the heart band. Transfer question: f_h or a breathing harmonic? Band-edge
-  saturation instrumented.
-- **Suite contract** (`src/m4/estimator_suite.py:90-163`): optional M8 fields None;
-  `__call__(frames, locked_bin, fs)`; `validate_returned_arms`; `validate_arm_specs` rejects
-  duplicate `(estimator_id, run_config_hash)` → per-arm hashes.
-- **Front end:** `extract_rx_slow_time` mirrors `extract_chest_phase`
-  (`src/respiration.py:104-168`), averaging only chirps → `Z ∈ C^(N_frames×4)`.
-- **Numerics:** `solve` on the loaded matrix only; `rcond(H)` mask below
-  `condition_mask_threshold`; masked fraction persisted; all-masked → `dsp_failed`; control
-  truth pairs stay admissible (tested); paper-control grid **half-open** `[−10, 10)` Hz.
-- **Bands:** in the config (0.10–0.50 / 0.80–2.00 Hz); tests pin equality with M8's domain and
-  `live_demo_config.yaml`.
-- **Dependencies (scoped):** DSP/core numerics numpy-only; oracle `scipy.special.jv`;
-  sweep/scorer pandas + PyYAML + the existing Masimo parser.
-- **Capture cohort = runner input:** `stage_a.captures` YAML table — exact directory name,
-  subject ID (A–D per `notes/capture_inventory.md`), Masimo CSV filename, **protocol role**
-  (natural / paced / stepped), data role. Parsed by the runners (never by the suite); resolved
-  list hashed as `input_manifest_hash` (outside all estimator hashes); runners open only listed
-  paths; missing/duplicate entries and out-of-manifest CLI requests rejected. The live-demo raw
-  mirrors are referenced in place as noncanonical fixtures — hashed, never edited, not promoted.
-- **Clean-tree rule (evidence vs smoke):** official control verdicts, the transfer gate, the
-  full sweep, the production-comparator run, and the scorer **all refuse a dirty tree**.
-  Dirty-tree execution is allowed only via an explicit `--smoke` mode whose outputs are written
-  under `*_smoke/`, labelled non-gating, and unusable as evidence, parent, comparator, or
-  decision input.
-- **Provenance (CLAUDE.md §3.1):**
-  - *Controls:* clean tree required; run_meta = resolved config + **whole-file hash AND
-    `controls`-section hash**, git commit, hashes of the short runtime list
-    (`paper_control.py`, controls CLI, `kotte_core.py`, config, `environment.yml`), PDF hash,
-    **`case_id → (Y_t hash, seed)` map** (per-case RNG seeded from root seed + stable case id;
-    reorder test), output hashes.
-  - *Gate bundle:* gating manifest = runtime sources + external config inputs
-    (`src/m9/kotte_core.py`, `src/m9/kotte_gate.py`, `scripts/m9_step1b_gate_prediction.py`,
-    `scripts/m9_kotte_transfer.py`, `src/m4/bundle.py`, `src/m8/ahmed_provenance.py`,
-    `experiments/m9_kotte/config.yaml`, `scripts/live_demo_config.yaml`, `environment.yml`);
-    tests + this plan as non-gating declaration hashes; live-demo-config hash + resolved
-    hardware values persisted. **Publication requires complete + eligible +
-    `gate_status="passed"`.** **Control parent links:** both control run dirs verified
-    (manifests + current `controls`-section hash match) and their IDs/verdicts/hashes
-    persisted; control 1 must be `behaviorally_reproduced`, control 2 complete.
-  - *Production comparator (`scripts/m9_production_comparator.py`):* clean tree required; one
-    commit/config produces the production all-bins table AND the sole lock-map artifact;
-    run_meta = run ID, commit, config hashes, per-capture input hashes, output-hash map.
-  - *Sweep:* clean tree required; startup parent validation (verifier;
-    complete/eligible/**passed**/stage; gating-manifest hash comparison). run_meta: parent
-    digest, git commit + state, own env attestation + conda-explicit hash, resolved `stage_a`
-    hash + `input_manifest_hash`, per-capture `adc_stream.bin` + `run_metadata.json` hashes,
-    output hashes. **No lock derivation, no Masimo.**
-  - *Scorer:* clean tree required; radar-free; **amendment preflight** (marker/version in a
-    committed `notes/analysis_prespec.md`, hashed; refusal otherwise); repeats parent
-    verification incl. `gate_status`; asserts digest agreement with the sweep run; requires
-    the comparator run's ID/commit/table hash/lock-map hash verified against its output-hash
-    map; records git commit + state + own env attestation, hashes of the sweep `run_meta.json`
-    itself, both window tables, the lock map, every Masimo CSV + capture metadata file, the
-    `stage_b_decision` section, its outputs; persists per-capture origin fields (epoch used,
-    `origin_source`, tz-normalized value, `origin_is_approximate=true`).
-- **Retired machinery, do not rebuild:** the authorization YAML + `_SCOPED_TREES` chain.
-- **Vocabulary ban** (CLAUDE.md §4) and **HANDOFF §2.2** bind throughout; all scored outputs
-  carry the approximate-origin taint.
+## 3. Primary source
 
-## File layout — new `src/m9/`, sibling scripts, M8 files NOT edited (13 Python files + 1 config)
+Primary authority:
 
-| File | Role |
-|---|---|
-| `src/m9/kotte_core.py` | DSP maths + extraction + suite (DSP-only config; no capture knowledge): extraction, steering, covariances, loaded `solve`, rank rule, masked surfaces, alias collapse + `pair_margin_db`, medoid, `joint_beta_at` (controls only), `KotteArm`/`KotteJointDopplerConfig`, `KotteEstimatorSuite` |
-| `src/m9/paper_control.py` | controls 1+2: direct `Y_t`, **pinned FFT + MUSIC comparators**, verdict truth table + comparator matrix, 20→4 RX ablation (fixed endpoints), clean-tree enforcement, control run_meta |
-| `src/m9/kotte_gate.py` | Step-1b generator (`snr_z_dynamic_db`, whole-column convention, phase pairs, per-case seeds) + P1–P6 gate via `transfer.gate_criteria` + transfer verdicts + robustness report |
-| `scripts/m9_step1b_gate_prediction.py` | **independent oracle, before `kotte_gate.py`** — direct eq 25/26 + pinned Bessel model (`scipy.special.jv`) |
-| `scripts/m9_kotte_transfer.py` | `synthetic` → control-linked, gate-status-checked bundle → `LATEST.json` |
-| `scripts/m9_production_comparator.py` | **the single owner of the production comparator + lock map** — clean commit, one config, output-hash map → `results/m9/production_comparator/<stamp>/` |
-| `scripts/m9_kotte_all_bins.py` | Stage-A sweep — capture-manifest runner input, evidence NPZ, full provenance, parent verification; no locks, no Masimo |
-| `scripts/m9_kotte_score.py` | scorer — amendment preflight, local scoring functions, hardened paired wrapper, natural-only subject-weighted `stage_b_decision.json`, lineage binding, taint + origin stamping |
-| `figures/reproduce_kotte_controls.py` | controls CLI (CLAUDE.md §3.4), `paper` / `ablation`, `--smoke` for dirty-tree scratch |
-| `experiments/m9_kotte/config.yaml` | the one M9 config — `controls` (Table-I, comparator assumptions, descopes, audits, endpoints), `transfer` (scenarios, noise + `snr_tolerance_db`, phase pairs, `gate_criteria`, `robustness_seeds`, `diagnostic_arms`), `stage_a` (bands, grid, thresholds, `rank_rtol`, 3 arms, tail policy, schema version, **capture manifest**), `stage_b_decision` (natural-only subject-weighted rule + floors + rationale) |
-| `notes/approach.md` §"Kotte" | research note (signal model, selection line, identities, rank rule, Bessel analysis, aggregation contract, ambiguity list) |
-| this file | the M9 authority doc; frozen P1–P6 predictions + gate criteria appended at the commit checkpoint |
-| `tests/test_m9_kotte_core.py`, `…_gate.py`, `…_all_bins.py`, `…_score.py` | targeted tests (scorer tests in their own file — module boundary) |
+V. V. Kotte, S. Ahmed, M.-S. Alouini, and T. Y. Al-Naffouri, "Joint Estimation
+of Single Target's High Amplitude Difference Doppler Frequencies in FMCW Radar,"
+*IEEE Transactions on Radar Systems*, vol. 2, 2024, DOI 10.1109/TRS.2024.3352189.
 
-Plus the **prospective amendment to `notes/analysis_prespec.md`** (§6 cross-reviewed, committed
-before any scoring).
+Repository PDF:
+`literature/ref_papers/joint_estimation_high_amplitude_doppler/Joint_Estimation_of_Single_Targets_High_Amplitude_Difference_Doppler_Frequencies_in_FMCW_Radar.pdf`.
 
-Results: `results/m9/{step1b, production_comparator, kotte_all_bins, kotte_score}/`,
-`results/m9_kotte_controls/<run_id>/` (gitignored; `*_smoke/` for scratch).
+The PDF wins over both Markdown conversions. Equations, conjugates, transposes, matrix
+dimensions, Algorithm 1, and figure/table facts must be checked against the PDF or its
+page renders. The long OCR-style Markdown conversion is materially corrupt around Eqs.
+(23)-(26) and Algorithm 1 and must not be used as an implementation source.
 
-## Step 1a — paper-faithful reproduction (20 RX, N_c = 16, direct Y_t)
+## 4. Paper method
 
-`Y_t` per eq (23) per target (θ0 known); range/DOA descoped; mean removal OFF; whole-column
-convention; clean tree required for official verdicts (`--smoke` for scratch).
+### 4.1 Signal and range contract
 
-**Objectives and the verdict truth table** — primary = Algorithm 1's selection `1ᵀH⁻¹1`;
-secondary = eq-26 `|β̂|²` (known θ0); each independently vs truth (one grid step, symmetric swap
-allowed):
+The paper uses one TX, `n_R` RX in a half-wavelength ULA, `N_s` fast-time samples per
+chirp, and `N_c` chirps separated by `T_PRI`. Indices are:
 
-| primary | secondary | verdict |
-|---|---|---|
-| miss | miss | `not_reproduced_under_declared_assumptions` |
-| miss | hit | `not_reproduced_under_declared_assumptions` |
-| hit | miss | `ambiguous_reproduction` (cannot pass; cannot be upgraded) |
-| hit | hit | evaluate remaining checks; differing cells recorded as diagnostic |
+- `n = 0 ... N_s-1`: fast-time sample;
+- `i = 0 ... N_c-1`: slow-time chirp;
+- `m = 1 ... n_R`: RX channel;
+- `k`: range-FFT bin; `kappa`: selected target bin.
 
-**Comparators — pinned as declared reproduction assumptions (the paper is qualitative):**
-- **FFT:** mean per-RX periodogram — each `Y_t` column's periodogram (no extra window beyond
-  the raw data; mean removal off), zero-padded to a declared `n_fft_comparator`, incoherently
-  averaged over the 20 RX; amplitude-normalized to its maximum (declared).
-- **MUSIC:** covariance `Y_tY_tᴴ/n_R`, **primary model order p = 2** (the p=4 audit varies
-  this), no loading, evaluated on the same frequency grid, pseudospectrum
-  `1/(aᴴE_nE_nᴴa)` normalized to its maximum (declared).
-- **One peak rule for every row of R1/R3:** the declared weak-peak rule (top-2 merged peak
-  within ±0.25 Hz of the weak truth; merge radius per config).
+After the range FFT, the selected-bin matrix is
 
-- **R1 (gating): Fig 8 amplitude ladder** — 3 m/−30°, SNR 0 dB, (2, 1) Hz:
-
-  | ratio | FFT | MUSIC | proposed |
-  |---|---|---|---|
-  | β2 = β1 | detects both | detects both | peak within one grid step |
-  | β2 = β1/2 | detects both | fails | peak within one grid step |
-  | β2 = β1/10 | fails | fails | peak within one grid step |
-
-- **R2: Fig 5 surfaces** — (−1,−2), (−1,4), (1,2.5) Hz targets, per-target argmax within
-  tolerance.
-- **R3: Fig 7 row 2** — (1.5, 1) Hz: proposed resolves both; FFT and MUSIC fail. Row 1 free.
-- **Descopes in config:** Fig 9 MC; Yule-AR; range/DOA.
-
-Primary config values: T_PRI=50e-3, N_c=16, n_R=20, Table I, `Y_t`-domain AWGN per the paper's
-two-line power ratio **at the fast-time-referred effective SNR ≈ 21.07 dB (amended
-2026-08-06 — see the §"The method, pinned to the paper" note)**, per-case deterministic seeds,
-grid **[−10, 10)** Hz step 0.05 + rcond mask. **Audits (one field; cannot upgrade):** ensemble
-covariance (Cases-1–4 oracle); **`snr_reference_literal` (the pre-amendment 0 dB reading)**;
-grid 0.02/0.10; mean removal on + tiny loading; MUSIC p=4; merge radius 0.15/0.40; Fig 5 at
-10 dB; **cancellation** β2 = −β1 (predicted failure).
-
-## Control 2 — the 4-RX ablation (paper geometry, synthetic; `ablation` subcommand)
-
-Clean tree required; declared in the committed script:
-- **Fixed endpoints:** 20 RX and one fixed nested 4-RX subset (first four elements), same
-  generated realization; δ ∈ {1e-2, 1e-4}, both run; no curve claim.
-- Rank per the declared rule (predicted exactly 4 — noise supplies column rank); unloaded
-  inverse never formed.
-- Whole-column phase offsets cancel exactly; gain imbalance is not an ablation prediction.
-- Slow-time = chirp index; mean removal off; pooling impossible here (recorded).
-- Pass/fail: peak error ≤ 1 grid step per Fig 8 ratio / Fig 5 target at both endpoints.
-- **Role fixed in advance:** cannot relabel arms; equal-amplitude failure ⇒ primary carried as
-  **expected-negative**; completion (not outcome) blocks the transfer bundle.
-
-## Step 1b — transfer gate (synthetic vitals cube, production geometry, λ_eff from config)
-
-**Generator** (`KotteSyntheticConfig`: fs=20, n_frames=600, 32 chirps, 4 RX, bin 7, carrier
-≈79.07 GHz from config, per-RX clutter, per-RX gain+phase tables, explicit `(φ_b, φ_h)` pairs,
-per-case seeds). Signal + noise first; channel table on the whole column; signal-only
-propagation-phase variant = named audit, statistical invariance.
-
-**`snr_z_dynamic_db`:** clean moving-target component and injected noise retained separately,
-both through the same front end → `Z_sig`, `Z_noise`; configured SNR on the dynamic component
-(`Z − mean_time(Z)` over the declared 592-frame support, same projection both):
-`10log10(mean|Z_sig_dyn|²/mean|Z_noise_dyn|²)` over frames × RX. ADC variance back-solved;
-`snr_z_raw_db` persisted separately; per-arm post-tail realized SNRs (592/576); declared vs
-realized within `snr_tolerance_db` (formula unit-tested).
-
-**`transfer.gate_criteria`** = numeric config table (per item: quantity, rule, tolerance,
-single declared seed; all-rows-pass), filled from the oracle and committed at the checkpoint.
-Deterministic gate; `robustness_seeds` multi-seed report non-gating.
-
-Scenarios (each at `(0,0)`, `(0,π/2)`, `(0,π)`, `(1.0,2.5)` rad; the oracle identifies the
-cancellation-critical configuration):
-- **S1 two-rate small-modulation regime** (±f_b AND ±f_h sidebands — not two cisoids):
-  A_b=0.05 mm, A_h=0.025 mm; f_b=0.30, f_h=1.35 Hz.
-- **S2 deep modulation + decoy** (headline): A_b=2.0 mm (index ≈6.6), A_h=0.3 mm; harmonics at
-  0.9/1.2/1.5/1.8 Hz; f_h=1.35 Hz between k=4 and k=5.
-- **S3 collision:** f_h = 4·f_b = 1.20 Hz — unresolvable by construction, recorded.
-
-**Oracle first, commit checkpoint:** oracle → append predictions + cancellation-critical
-phases + filled `gate_criteria` to this plan and the config → **commit** → implement/run the
-gate. **Bessel model pinned** (tail-mass truncation; coincident lines coherently combined;
-alias folding; `scipy.special.jv`). The oracle also produces the **multi-CPI discrimination
-table**.
-
-**Predictions (gate = P1–P6 under the criteria table):**
-- **P1 clutter/DC:** removal off + clutter → breath argmax at the 0.10 Hz floor (`band_edge`);
-  on → S1 recovers f_b.
-- **P2 rank:** noise on → per-CPI rank exactly 4; **noise-off audit → rank 1**; unloaded
-  raises; loaded proceeds.
-- **P3 two-rate recovery:** S1, primary arm → within one grid step at every phase pair (or the
-  oracle's predicted exceptions).
-- **P4 deep-modulation decoy:** S2 — implementation matches the oracle per arm (incl.
-  diagnostic arms); S3 degenerate case recorded.
-- **P5 phase cancellation (predicted failure):** single-CPI collapse/decoy takeover; medoid /
-  mean-surface / pooled partial immunity — the discrimination table reproduced.
-- **P6 invariances:** whole-column phase offsets → exact surface invariance; pooled full rank.
-
-Bundle: gate.json (`gate_status`), metrics, gating manifest + declaration hashes, control
-parent links, env attestation, resolved config, evidence.npz, robustness report. Publication
-only on complete + eligible + **passed** → `LATEST.json`.
-
-## Stage A — `KotteEstimatorSuite` + all-bins sweep (only after both controls)
-
-DSP values from `stage_a` (suite-facing, DSP-only); the capture manifest is runner input
-(`input_manifest_hash`); the sweep records both hashes:
-
-```python
-@dataclass(frozen=True)
-class KotteArm:
-    arm_id: str
-    n_c: int
-    estimator_form: str       # "cpi_medoid" | "mean_surface" | "pooled"
-    loading_delta: float
-    # run_config_hash = hash(shared resolved DSP settings + this arm's fields)
-
-@dataclass(frozen=True)
-class KotteJointDopplerConfig:      # DSP-ONLY — no captures, subjects, or reference files
-    breath_band_hz: tuple[float, float]
-    heart_band_hz: tuple[float, float]
-    grid_step_bpm: float
-    condition_mask_threshold: float
-    rank_rtol: float
-    arms: tuple[KotteArm, ...]            # EXACTLY the three real-data arms
-    min_valid_cpi_fraction: float         # MUST be 1.0 — validated
-    mean_removal_scope: str = "retained_support"
-    chirp_aggregation: str = "coherent_mean"
-    evidence_schema_version: int = 1
+```text
+Y(kappa) in C^(n_R x N_c)
+         = a(theta_0) [beta_1 a(f_d1)^T + beta_2 a(f_d2)^T] + V(kappa),
 ```
 
-**Grid — signed:** f1 ∈ ±[0.10, 0.50] Hz, f2 ∈ ±[0.80, 2.00] Hz at 0.5 bpm; |f̂| reported in
-bpm; alias collapse by `(|f1|, |f2|)` with the deterministic tie-break; **`pair_margin_db`**.
+with RX rows and chirp columns. Section III-A, Eqs. (12)-(14), finds `kappa` from
+fast-time range-FFT peaks. The later Doppler mathematics requires a valid selected bin;
+it does not algebraically depend on how that bin was selected.
 
-**Objective: `loaded_capon_power`.** No amplitude diagnostics in Stage A.
+### 4.2 DOA stage
 
-**Estimator forms:** `cpi_medoid` (per-CPI Kotte-form; `medoid_of_cpi_estimates`, L1 in bpm,
-tie-break lowest CPI index; window diagnostics = the medoid CPI's; all CPIs valid);
-`mean_surface` *(gate-only; raw surface mean over the fixed CPI set under the common mask)*;
-`pooled` (one covariance; δ retained for uniformity — not required for invertibility, still
-perturbs the objective).
+The DOA covariance and Doppler covariance are different and must never be conflated:
 
-**Arms — `stage_a.arms`:** `kotte_cpi_medoid_nc16_dl1em2` (**primary; Stage-B binds to this
-arm alone**), `kotte_cpi_medoid_nc16_dl1em4`, `kotte_pooled_nc16_dl1em2`.
-**`transfer.diagnostic_arms` (gate only):** `kotte_meansurf_nc16_dl1em2`,
-`kotte_cpi_medoid_nc32_dl1em2`. Promotion: pre-results — committed config amendment; post-results
-— a separately labelled follow-up run. Non-primary arms are exploratory.
+```text
+DOA:      R = Y Y^H / N_c       in C^(n_R x n_R)
+Doppler:  R_t = Y_t Y_t^H / n_R in C^(N_c x N_c)
+```
 
-**Native dict per arm:** `br_valid`/`hr_valid`, `br_bpm`, `hr_raw`, `selection_method`,
-`rej_reason`, `f_r_hz`, `shared_signal_hash`; evidence dicts (`selected_hz`, `pair_margin_db`,
-`masked_fraction_mean`); scalars (`rank_rt`, `n_snapshots`, `n_cpis_expected`, `n_cpis_valid`,
-`cpi_iqr_br_bpm`, `cpi_iqr_hr_bpm`, `loading_delta`, `frame_start_used`, `frame_end_used`,
-`band_edge_low/high`). Missing concepts are absent keys.
+Eq. (18) uses the spatial steering vector and the Capon weight
 
-**Evidence NPZ** (per-form schemas; `allow_pickle=False`): all forms — Z, selected pair, raw
-signed top-3, masked fractions, frames used, failure reason; `cpi_medoid`/`mean_surface` —
-per-CPI pairs + margins + eigenvalues + ranks + validity/cause arrays + failing CPI index
-(+ medoid index / common mask + averaged profiles); `pooled` — pooled eigenvalues + rank +
-profiles. One complete record per form tested.
+```text
+w_theta = R^-1 a(theta) / [a(theta)^H R^-1 a(theta)].
+```
 
-**Sweep** — M8 skeleton + manifest-listed paths only + parent verification (incl.
-`gate_status`) + provenance + Kotte `ROW_COLUMNS` + evidence writer + run_meta notes (band
-comparability; ordering prior; Kotte coverage note; approximate-origin taint). No locks, no
-Masimo.
+The paper sweeps `theta` and includes DOA in Algorithm 1. It also describes subtracting
+each RX row's temporal mean to remove stationary targets, but this operation makes the
+temporal all-ones vector a null vector and conflicts with the paper's subsequent unloaded
+inverse. This inconsistency is retained as a limitation, not silently repaired.
 
-**Production comparator** (`scripts/m9_production_comparator.py`) — the single owner: from one
-clean commit/config, the production all-bins table AND the sole
-`current_production_rerun_lock` map, with an output-hash map. Prerequisite for scoring.
+### 4.3 Joint Doppler stage: Eqs. (23)-(26)
 
-**Scorer** — radar-free; **amendment preflight** (refuse without the committed amendment;
-record + hash the spec; persist per-capture origin fields); three outputs:
-1. **The M8-shaped table** (five row families; production at the comparator's lock map;
-   `recorded_lock_as_captured` never pooled with it). Local scoring functions; golden-fixture
-   equality vs M8's.
-2. **The paired comparison** — per arm and vital on `(capture_id, lock_estimand_id, k)`,
-  **k ≥ 1**, reference-admitted ∩ both-emitted. Hardened: one row per key per side
-  (duplicate-key rejection tested); per-pair identity of reference bounds/value/admission/
-  reason (mismatch rejection tested); explicit `reference_reason` construction
-  (availability → `insufficient_*`, else spread → `nonstationary_*`); estimator-neutral field
-  names; per-subject, per-capture, and **per-protocol-role** paired counts +
-  `n_intersection_subjects` persisted; 592-vs-600 support difference recorded.
-3. **`stage_b_decision.json`** (beside the scorer outputs; sweep metadata never reopened) —
-   **user-decided formula (pass 9): natural-only, pooled within subject, subjects averaged
-   equally.** Windows from captures whose manifest protocol role is `natural` form each
-   subject's pooled paired BR MAE; subjects are averaged equally; GO iff
-   `MAE_kotte_primary ≤ MAE_production + 1.0 bpm` under that aggregation. Paced/stepped
-   captures are scored and reported **descriptively only** — excluded from the gate.
-   **Evaluability floors:** ≥ 3 subjects each with ≥ 5 natural paired windows AND ≥ 30 natural
-   paired windows total (a 30-windows-one-subject case is NO-GO — tested; unequal capture
-   lengths tested); a **sensitivity variant** with low-contribution subjects (< 5 windows)
-   dropped is persisted alongside. Zero/insufficient → automatic NO-GO. Constants + rationale
-   in `stage_b_decision` (hash recorded); the artifact carries the approximate-origin taint.
-   BR only — §2.2 forbids an HR-based rule.
+Transpose the selected-bin matrix:
 
-**Cost (estimate — to be replaced by the measured one-cell benchmark in the run log):**
-≈ 75 distinct surfaces per cell → ≈ 8–20 min locally + decode. No IBEX.
+```text
+Y_t(kappa) = Y(kappa)^T in C^(N_c x n_R)
+           = [a(f_d1) a(f_d2)] [beta_1 beta_2]^T a(theta_0)^T + V_t.
+```
 
-## Test plan (4 files; the full suite must pass — exact counts live in the run log)
+For every swept pair `(f_1, f_2)`, define
 
-- `test_m9_kotte_core.py`: divisor direct test; Cases-1–4 oracle; identities + corollaries
-  (gain = algebraic non-invariance counterexample; exact whole-column phase invariance); rank
-  rule incl. zero-scale branch + scale-change test; verdict truth table; the full R1 comparator
-  matrix incl. the **pinned FFT/MUSIC assumptions**; vectorized == loop; rcond mask; half-open
-  grid; alias collapse + tie-break; `pair_margin_db`; medoid determinism; partial-CPI semantics
-  + cause arrays + fraction validation; **tail/detrend order** (tail-immutability); mean
-  removal → rank ≤ N_c−1 + unloaded refusal; per-arm hash uniqueness; audits cannot upgrade;
-  **DSP config contains no capture knowledge** (adding a manifest entry changes no estimator
-  hash).
-- `test_m9_kotte_gate.py`: generator (noise model; whole-column convention; `snr_z_dynamic_db`
-  formula + tolerance; `snr_z_raw_db` distinct; per-arm post-tail SNRs; pinned Bessel model;
-  clutter DC; chirp-average exactness; per-case seed derivation — reorder changes no hash);
-  P1–P6 via `gate_criteria`; oracle cross-check; multi-CPI discrimination; drift tests
-  (transposed/conjugated covariance, absolute loading, dropped constraint column, perturbed
-  steering); gate/transfer separation; publish refusal on dirty tree AND
-  `gate_status != "passed"`; control-parent enforcement (verdict + completeness + **current
-  `controls`-section hash match**; control dirty-tree refusal); gating-manifest completeness;
-  stale-parent rejection.
-- `test_m9_kotte_all_bins.py`: sweep never reads the reference; **manifest enforcement**
-  (listed paths only; out-of-manifest CLI request rejected; duplicates rejected;
-  `input_manifest_hash` recorded, excluded from estimator hashes); every cell swept (rows =
-  Σ win×14×3; frames-used; shared `shared_signal_hash`); run_meta completeness; **no lock
-  derivation and no ADC reopening downstream of the sweep**; sweep clean-tree refusal (official
-  mode) + `--smoke` outputs segregated and labelled; parent refusal on failed gate_status; one
-  evidence record per form; end-to-end smoke on a synthetic capture.
-- `test_m9_kotte_score.py`: **amendment preflight** (missing/uncommitted amendment → refusal;
-  spec hashed; origin fields persisted per capture); comparator lineage (run ID/commit/table/
-  lock-map hashes verified against the output-hash map; the dirty `20260804T131040Z` shape is
-  rejected); golden-fixture scorer equality + constant baseline reads no radar column; paired
-  hardening (dup-key; mismatched-reference; key triple; k=0 boundary; `reference_reason` both
-  classes × both vitals); **natural-only subject-weighted Stage-B** (protocol-role filtering;
-  pooled-within-subject formula on unequal capture lengths; floors incl.
-  30-windows-one-subject → NO-GO; sensitivity variant persisted); `stage_b_decision.json`
-  beside scorer outputs, sweep metadata byte-identical; scorer radar-freedom + clean-tree
-  refusal; taint stamping on every scored artifact.
+```text
+A = [a(f_1) a(f_2)] in C^(N_c x 2)
+H = A^H R_t^-1 A    in C^(2 x 2).
+```
 
-## Execution order and gates
+The paper solves
 
-0. **Decisions + groundwork:** commit the **analysis-spec amendment** (§6 cross-review) and the
-   config (capture manifest with protocol roles; `stage_b_decision`); `notes/approach.md`
-   Kotte section; headline rewording noted for session close. Cross-model review of this plan:
-   **nine passes done 2026-08-05**, applied.
-1. **Build → test → commit → run control 1:** implement `kotte_core.py` + the R1 path + core
-   tests; a dirty-tree `--smoke` R1 run is permitted as scratch while building; **commit; then
-   run the official R1 verdict** (clean tree). **Gate: `behaviorally_reproduced` per the truth
-   table + comparator matrix.** NO-GO/`ambiguous_reproduction` → recorded; no real data ever
-   touched. Then R2/R3 + audits (same commit-then-run discipline).
-2. **4-RX ablation** (fixed endpoints; clean tree) → documented outcome; cannot relabel arms.
-3. **Aggregation contract** (forms + medoid + partial-CPI semantics) against the multi-CPI
-   oracle table.
-4. **Oracle → commit checkpoint → transfer gate → frozen bundle** (controls verified via
-   current section hash; `gate_status` enforced) → `LATEST.json`.
-5. **Build sweep + scorer + comparator command; one synthetic Stage-A cell through the sweep**
-   (`--smoke` while building; outside the gating manifest — no staling).
-6. **Radar-only sweep** on the manifest captures (clean tree; parent verified; no Masimo).
-7. **Production comparator run** (`m9_production_comparator.py`, clean commit) — the sole
-   lock-map + production-table owner.
-8. **Scoring + Stage-B decision** (clean tree; amendment preflight; full lineage binding;
-   natural-only subject-weighted rule). **§6 cross-review of the full diff** before results are
-   treated as final.
-9. **Session close:** HISTORY.md append + HANDOFF.md rewrite + headline rewording in
-   `JOURNAL_PAPER.md`/`THIRD_CHAPTER.md`.
+```text
+min_w  w^H R_t w    subject to w^H A = [1 1]
 
-## Risks, ranked
+w = R_t^-1 A H^-1 [1 1]^T.                         (25)
+```
 
-1. **May not transfer to 4 RX at all** — established on synthetics so a real-data null is
-   attributable to the method.
-2. **Deep-modulation decoy** — P4 + profiles/top-k/band-edge/evidence identify the mechanism.
-3. **Per-CPI noise** — `cpi_iqr_*_bpm` + the pooled arm make it visible.
-4. **Loading dominance** — δ-sensitivity arm + ablation endpoints bound it.
-5. **Phase-dependent cancellation** — explicit predicted failure (P5 + control-1 audit).
-6. **Natural-only Stage-B thinness** — restricting the gate to natural captures shrinks the
-   paired universe; the floors make an unevaluable gate an automatic NO-GO rather than a weak
-   GO, and the descriptive paced/stepped tables preserve the information.
-7. **Aperture vs breath band** — N_c=32 gate-only arm + oracle surfaces bound it.
-8. **Variant attribution** — pooled/mean-surface are ours; primary = "closest Kotte-form 4-RX
-   adaptation"; paper-faithful claims confined to control 1.
-9. **Approximate-origin ceiling** — every M9 agreement number is exploratory and
-   non-promotable on these captures; evaluation-grade wording only ("first real-data
-   evaluation"); exact-origin data (E/F/G onward) needed for validation-grade claims.
-10. **M8 entanglement** — no-touch layout; golden-fixture-guarded local copies.
+Eq. (26) estimates the joint coefficient, not two separate amplitudes:
 
-## Verification
+```text
+beta_hat = w^H Y_t a(theta_hat)* / [a(theta_hat)^H a(theta_hat)].
+```
 
-- Full suite passes via `& 'C:\ProgramData\anaconda3\condabin\conda.bat' run -n radar-vitals
-  python -m pytest -q` (exact counts in the run log). Never the env's `python.exe` by absolute
-  path.
-- Controls: official runs on a clean tree → verdict JSON + run_meta (runtime-list hashes,
-  whole-file + `controls`-section hashes, per-case seed map, output hashes).
-- Step 1b: `m9_kotte_transfer.py synthetic` (control dirs verified) → publication only on
-  `gate_status="passed"`; oracle cross-check; `snr_z_dynamic_db` within tolerance.
-- Stage A: smoke cell → radar-only sweep (manifest-listed paths only; run_meta complete) →
-  comparator run (clean commit; output-hash map) → scorer (amendment preflight; lineage bound;
-  taint + origin stamped; `stage_b_decision.json` natural-only subject-weighted; sweep metadata
-  untouched).
-- No `src/m8/` or `scripts/m8_*` file is modified (git diff check).
+Cases 1-4 show `beta_hat ~= beta_1 + beta_2` when both trial frequencies are correct and
+approximately zero when one or both are wrong. The paper explicitly states that
+`beta_1 = -beta_2` cancels the joint coefficient and makes the method inapplicable.
+
+### 4.4 Pair-selection objective
+
+Algorithm 1, not the surrounding case discussion, defines the primary frequency surface:
+
+```text
+(f_1_hat, f_2_hat) = argmax_(f_1,f_2) w^H R_t w.
+```
+
+For the unloaded full-rank equations,
+
+```text
+w^H R_t w = 1^H H^-1 1.
+```
+
+The Eq. (26) `|beta_hat|^2` surface is persisted in direct synthetic controls as an
+independent consistency diagnostic. It is not substituted for Algorithm 1.
+
+The columns of `A` are interchangeable, so `(f_1, f_2)` and `(f_2, f_1)` are symmetric.
+The paper uses prior knowledge that heart frequency is higher than breathing frequency to
+label the outputs, but it does not resolve sign and does not test human vital signs.
+
+### 4.5 Source ambiguities that implementation must not hide
+
+- Eqs. (7) and the simulation use physical Hz and `T_PRI`; the printed temporal steering
+  vector omits `T_PRI`. M9 uses `exp(j 2 pi f i T_PRI)` and labels this a physical-units
+  interpretation of the source.
+- Algorithm 1 writes a scalar `f_d` argmax although the weight contains two swept
+  frequencies. The equations and Fig. 5 require a two-dimensional sweep.
+- Eqs. (27)-(28) contain inconsistent angle subscripts.
+- The paper does not specify a frequency-grid step, equality rule, conditioning rule,
+  diagonal loading, or pseudoinverse.
+- The fast-time parameters reported in Section IV do not fully specify a consistent
+  reproduction of the complete range/DOA simulation.
+
+## 5. Paper assumptions vs project conditions
+
+| Paper assumption or parameter | Project condition | Classification | Consequence |
+|---|---|---|---|
+| One TX | TX0 only (`tx_channel_en=1`) | match | No TX multiplexing is introduced. |
+| 20 RX, half-wavelength ULA in simulation | 4 RX, RX0-RX3 ordering preserved; M9 spatial calibration not established | adaptation | Direct paper control uses 20 RX. Four RX is an ablation. No DOA claim. |
+| One uniformly spaced slow-time chirp every 50 ms | 32 chirps about 64 us apart in a roughly 2 ms burst, frames every 50 ms | adaptation | Canonical sample is fixed chirp-loop 0 from each frame. |
+| `N_c=16` | 16 consecutive frames = 0.8 s | declared primary adaptation | Paper-comparison CPI retained; poor resolution/performance is acceptable. |
+| `Y_t` is `N_c x n_R` | Raw per-chirp, per-RX complex data survives | compatible | The required matrix can be formed without collapsing RX. |
+| Unloaded invertible `R_t` | With 4 RX and `N_c=16`, rank is at most 4 | structural mismatch | Project path requires declared loading; it is not literal Kotte. |
+| Two additive complex Doppler lines | Periodic chest displacement produces conjugate sidebands and a Bessel comb | model mismatch | Synthetic transfer must expose this; no multi-line repair inside M9. |
+| Full range + DOA + Doppler pipeline | Single seated target; established project range selection; no need for localization claim | controlled adaptation | M9 evaluates Section III-C at an external radar-only bin and omits DOA. |
+| Simulation SNR = 0 dB | SNR reference point is ambiguous | unresolved source detail | Literal post-range 0 dB and a separate FFT-gain sensitivity are both retained. |
+| Generic moving-target simulations | Human chest motion and Masimo reference | unsupported transfer | Real results are an evaluation, not inherited validation. |
+
+## 6. Actual data contract
+
+### 6.1 Stored acquisition
+
+The repository decoder and HDF5 writer define:
+
+| Item | Contract |
+|---|---|
+| Raw/HDF5 cube | `(N_frames, 32 chirps, 4 RX, 256 ADC samples)` |
+| Stored dtype | `complex64` |
+| TX | one, TX0 |
+| RX order | RX0, RX1, RX2, RX3; no additional reorder after I/Q decoding |
+| Frame rate | nominal 20 Hz; frame period 50 ms |
+| Chirp timing | nominal 7 us idle + 57 us ramp = about 64 us per loop |
+| ADC | 256 samples at 5.209 Msps |
+| Range FFT | unnormalized Hann-windowed complex FFT over the final ADC axis |
+| Range resolution | 0.0436 m/bin in the active capture config |
+
+`steps/step_2/save_time_domain_cubes.py` would store `/cube` with the same shape and
+dtype, but `data/processed/time_domain_cubes/` is currently absent. M9 therefore uses the
+raw `adc_stream.bin` decoder contract; HDF5 is optional and must be numerically identical.
+
+### 6.2 Canonical project `Y_t`
+
+For a selected range bin and a 30 s window:
+
+1. Compute the unnormalized Hann range FFT per frame, chirp, and RX.
+2. Select **chirp-loop index 0** from every frame and retain all four RX values.
+3. Cast the selected-bin matrix to `complex128` for DSP.
+4. The result is `Z in C^(600 x 4)`, sampled nominally every 50 ms.
+5. Retain frames `0:592`, subtract each RX column's mean over that retained support,
+   then split into 37 CPIs of shape `(16, 4)`.
+6. Each CPI is the project-adapted `Y_t`; `T_slow = 0.05 s` and steering is
+   `exp(j 2 pi f i 0.05)`.
+
+This fixed-loop mapping is the closest uniform analogue to the paper. Within-frame chirps
+span only about 2 ms and cannot resolve 0.10-2.00 Hz over `N_c=16`.
+
+The current `src/m9/kotte_core.py::extract_rx_slow_time` coherently averages all 32
+chirps and is **not plan-conformant**. A 32-chirp coherent mean may remain only as a named
+sensitivity after a radar-only test demonstrates inter-chirp phase consistency. It may
+never replace fixed-loop 0 because of Masimo performance. The production phase extractor's
+`delta_before_mean` behavior is not evidence that raw coherent averaging is safe.
+
+### 6.3 Timing and availability constraints
+
+- The raw data preserves per-chirp complex samples and separate RX channels, satisfying the
+  data needed by Eqs. (17) and (23).
+- The repository has no per-frame timestamp vector. Nominal frame timing, capture metadata,
+  file-size divisibility, and any packet/drop metadata available at run time must be saved.
+- If frame continuity, fixed-loop indexing, finite complex data, or required metadata cannot
+  be established, the adapter fails closed before any Kotte estimate is reported.
+
+## 7. Prior M9 findings and four-file disposition
+
+These are evidence and constraints, not instructions to tune future real-data results.
+
+### 7.1 Findings that survive
+
+- **DECISION — comparison target:** M9 evaluates the Kotte joint Doppler stage. Reusing
+  project range selection and omitting DOA preserves the joint-frequency core but is not the
+  complete three-stage Kotte pipeline.
+- **DECISION — primary paper objective:** Algorithm 1's `w^H R_t w` surface is primary;
+  Eq. (26) is a direct-synthetic diagnostic.
+- **CONSTRAINT — rank:** with `Y_t in C^(16 x 4)`, the sample `R_t` has rank at most four.
+  Unloaded inversion is impossible on project geometry.
+- **CONSTRAINT — aggregation:** surface averaging and pooled snapshots change the coherent
+  two-line model. The canonical window report is the 2-D L1 medoid of per-CPI pairs, with
+  lowest-CPI-index tie-break. Pooled/mean-surface outputs are not canonical Kotte results.
+- **CONSTRAINT — mean removal:** exact per-CPI mean removal makes `R_t` singular. Project
+  mean removal over the retained 592-frame support is a declared adaptation.
+- **NEGATIVE RESULT — literal SNR:** at literal post-range/`Y_t` 0 dB, the prior Fig. 8
+  control selected the wrong ridge in 3/3 amplitude cases. The exact-covariance example had
+  truth value 4.31 and an inter-truth ridge value 5.18.
+- **DIAGNOSTIC — alternate SNR:** adding `10 log10(128) = 21.07 dB` as a hypothesized
+  range-FFT gain reproduced the declared Fig. 5/7/8 behaviors at the recorded seeds. This is
+  an interpretive sensitivity, not a settled paper fact or real-data rule.
+- **NEGATIVE RESULT — vital-sign model order:** a real sinusoidal displacement produces at
+  least `+/-f_b` and `+/-f_h`, not two cisoids. Prior synthetic work recovered 0/9 conjugate-
+  pair cases at `N_c=16` and `N_c=32` across 10, 30, and 60 dB. Increasing SNR did not fix it.
+- **DIAGNOSTIC ONLY — longer CPI:** recovery near `N_c=64` was observed for one oracle model,
+  with biased BR and less than 0.02 dB margin. It is configuration-specific and cannot select
+  the canonical real-data CPI or become an active arm.
+- **LIMITATION — cancellation:** the paper's own `beta_1=-beta_2` case fails and must remain
+  an expected negative control.
+
+### 7.2 Existing implementation and evidence provenance
+
+Partial work already exists and must be audited rather than rebuilt blindly:
+
+| Item | Recorded provenance | Status under this plan |
+|---|---|---|
+| Groundwork/config/approach | `b39888f` | Historical input; config needs plan-conformance edits before any new run. |
+| Core and controls | `3c0efc7` | Reuse after equation/data-contract audit. |
+| SNR option-B change | `2fec07e` | Alternate-SNR sensitivity only; not the canonical paper fact. |
+| Aggregation code | `f2e74c5` | Medoid/retained-support logic survives; coherent-mean adapter does not. |
+| Oracle | `9078ed8` | Diagnostic-only; never a canonical selector. |
+| Official Fig. 8 control | `20260806T154753.144349Z_6bde60353be2` | Historical evidence under the alternate-SNR interpretation. |
+| Fig. 5/7/audits | `20260806T154841.509470Z_6bde60353be2` | Historical evidence; literal-0 dB null remains explicit. |
+| 20-RX to 4-RX ablation | `20260806T155022.295892Z_6bde60353be2` | 24/24 rows passed under declared loading; does not remove the adaptation label. |
+| Chest oracle output | `results/m9/step1b/oracle/20260806T160339.308982Z/` | Diagnostic-only and gitignored; provenance retained here. |
+
+The analysis-spec amendment, SNR interpretation, and oracle mathematical finding still
+need the other model family's cross-review before they support a thesis claim. Their pending
+review does not block plan readiness; it blocks treating those claims as settled evidence.
+
+### 7.3 Disposition of the former four documents
+
+| Former document | Useful content retained here | Removed or superseded |
+|---|---|---|
+| Previous `plans/m9_kotte_plan.md` | Paper equations, controls, data/rank facts, medoid, evidence requirements, provenance | Overbuilt bundle/gate/runner architecture, MAE go/no-go, stale status, duplicated rationale |
+| `plans/m9_comments_plan.md` | Verified mathematical corrections and review decisions | Nine-pass narrative, obsolete alternatives, stale "zero code" statements |
+| `plans/m9_step1a_snr_finding.md` | Literal-vs-FFT-gain ambiguity, bound/ridge result, run provenance | Option B as a hard algorithm rule; comparator tolerance as a Kotte requirement |
+| `plans/m9_step1b_oracle_finding.md` | Sideband model mismatch, negative results, `N_c=64` limitation, four-line future direction | A/B/C checkpoint and any oracle-driven real-data arm selection |
+
+## 8. Scientific decisions frozen before further implementation
+
+These decisions may not change after Masimo or Kotte real-data errors are inspected:
+
+| Decision | Frozen value or rule | Rationale |
+|---|---|---|
+| Canonical slow-time sample | chirp-loop 0 at the selected bin from each 50 ms frame, four RX retained | Closest uniform mapping to the paper; no intra-frame phase-averaging assumption |
+| CPI | `N_c=16` consecutive frames, 0.8 s | Paper-comparison value; oracle cannot promote `N_c=64` |
+| Window | frozen consecutive, non-overlapping 600-frame/30 s grid | Existing project comparator contract |
+| Within-window support | first 592 frames; 37 complete CPIs; tail dropped before mean removal | Deterministic complete-CPI rule |
+| Mean removal | subtract RX-column mean over retained 592-frame support | Declared project adaptation; not paper literal |
+| Primary loading | trace-relative `delta=1e-2` | Required for 4-RX rank deficiency; declared before real results |
+| Loading sensitivity | trace-relative `delta=1e-4`, separately labelled | Numerical sensitivity only; cannot replace primary |
+| Primary aggregation | 2-D L1 medoid of 37 CPI pairs; lowest CPI index breaks ties | Reports an actually selected pair without incoherent surface pooling |
+| Validity | every CPI must be numerically valid; otherwise the window is invalid | Fail closed; no survivor rule selected after outcomes |
+| Search bands | breath `+/-[0.10,0.50]` Hz; heart `+/-[0.80,2.00]` Hz | Existing project physiological domains, not derived from M9/Masimo performance |
+| Grid | 0.5 bpm (`1/120` Hz) | Existing declared M9 grid; fine sampling does not imply physical resolution |
+| Canonical sign/pair | collapse signed aliases by `(abs(f_b), abs(f_h))`; keep raw signed pair; lexicographic signed tie-break | Deterministic handling of conjugate/swap symmetry |
+| Range source | one `current_production_rerun_lock` per capture, generated before Kotte by the unchanged radar-only warmup selector | Uniform current rule; no Kotte/Masimo bin selection |
+| Recorded historical lock | separate diagnostic estimand only; never pooled with rerun lock | Three pre-M2 recorded locks are documented as buggy/mislocked |
+| Capture cohort | the eight captures listed in the M9 config, with subject/protocol roles from `notes/capture_inventory.md` | Fixed exploratory cohort |
+| Real-data success threshold | none | Accuracy is a result, not an implementation gate |
+
+Before any new M9 run, `experiments/m9_kotte/config.yaml` must be aligned with this table,
+reviewed, and committed. In particular, its current `chirp_aggregation: coherent_mean`,
+oracle gate, and MAE Stage-B decision are not authoritative under this plan.
+
+## 9. Kotte-to-project adaptation boundary
+
+### Literal Kotte claim permitted
+
+Only the direct synthetic, full-rank, unloaded Section III-C control may be called a
+paper-faithful implementation of the joint Doppler equations. It uses `N_c=16`, `n_R=20`,
+the paper covariance divisors, signed two-cisoid inputs, Algorithm 1's primary surface,
+and Eq. (26) with known angle as a diagnostic. It does not reproduce the full range/DOA
+pipeline and must be described accordingly.
+
+### Project adaptation claim permitted
+
+The real-data method is **Kotte's joint Doppler estimator adapted to this project**:
+
+- range is supplied by the unchanged project warmup selector;
+- DOA is omitted because the frequency-selection surface is angle-free and the study makes
+  no localization claim;
+- slow time is fixed chirp-loop 0 across frames;
+- the 4-RX covariance is trace-loaded;
+- retained-support mean removal and multi-CPI medoid reporting are project operations;
+- breath/heart bands and absolute-frequency labeling are project priors.
+
+Skipping Kotte's range and DOA stages means the output must never be called a literal
+implementation of the complete Kotte pipeline.
+
+## 10. Implementation milestones
+
+No Python, tests, config, or experiment is implemented by this planning turn.
+
+### M9.1 — Paper-equation and existing-code conformance audit
+
+**Objective.** Establish that the existing direct-`Y_t` core implements Eqs. (23)-(26) and
+Algorithm 1 as printed before relying on prior controls.
+
+**Rationale.** Existing code predates this consolidated review and contains a nonconformant
+real-data adapter; the mathematical core may still be reusable.
+
+**In scope.** `src/m9/kotte_core.py`, `src/m9/paper_control.py`,
+`figures/reproduce_kotte_controls.py`, the `controls` config, and focused tests.
+
+**Non-goals.** Raw radar, range FFT, Masimo, DOA, real-data accuracy.
+
+**Required interfaces and shapes.** Direct complex `Y_t` of `(16,20)` for literal controls
+and `(16,4)` for the declared ablation; physical-Hz steering with `T_PRI=0.05 s`.
+
+**Algorithm.** Verify covariance divisors, constraints, solve order, Algorithm 1 surface,
+Eq. (26), swap symmetry, signed grid, and cancellation.
+
+**Numerical risks.** Rank deficiency, singular/near-singular `H`, source SNR ambiguity,
+complex conjugation/transposition errors.
+
+**Tests.** Constraint residuals, loop-versus-vectorized equality, direct identity
+`w^H R w = 1^H H^-1 1`, pair-swap invariance, signed Fig. 5 cases, equal-frequency refusal,
+`beta_1=-beta_2` expected failure, and literal/alternate SNR separation.
+
+**Validation command.** The later implementer must provide one documented control command
+using the `radar-vitals` environment and record its exact invocation and hashes.
+
+**Acceptance.** All mathematical tests pass, PDF facts are cited in test comments, direct
+controls persist both surfaces, and the literal-0 dB result remains separate from the
+alternate-SNR sensitivity. A mismatch is a valid finding but blocks M9.2 until explained.
+
+### M9.2 — Project adapter and synthetic transfer
+
+**Objective.** Prove that the project can form the required `Y_t` without reference leakage
+and characterize the two-line model on chest-like signals.
+
+**Rationale.** This separates acquisition/rank limitations from physiological model mismatch.
+
+**In scope.** Fixed-loop-0 raw-cube adapter, retained-support detrend, CPI split, trace loading,
+medoid reporting, 4-RX direct-cisoid ablation, and conjugate/Bessel synthetic displacement.
+
+**Non-goals.** Masimo, real capture accuracy, multi-line repair, oracle-selected parameters.
+
+**Expected files.** Amend the existing `src/m9/kotte_core.py` and M9 config; keep a small
+synthetic runner using the existing controls/oracle code where scientifically valid. Do not
+introduce bundle or service layers.
+
+**Data shapes/units.** Synthetic cube `(frames,32,4,256)` `complex64`; adapter output
+`(frames,4)` `complex128`; CPI `(16,4)`; `f` in Hz and `60f` in bpm.
+
+**Algorithm.** Apply the adapter contract in Section 6, compute the regularized project
+surface per CPI, canonicalize each signed pair, and report the 2-D medoid.
+
+**Numerical risks.** Cross-frame phase discontinuity, chirp-loop misindexing, rank four,
+loading dominance, flat objectives, signed aliases, breathing harmonics, cancellation.
+
+**Tests.** Exact fixed-loop extraction, RX ordering, no chirp averaging on primary,
+cross-frame phase-ramp recovery, tail immutability, mean-removal scope, expected rank, loading
+formula, invalid-CPI failure, medoid determinism, conjugate sideband generation, and evidence
+round trip without pickle.
+
+**Acceptance.** A known synthetic physical-Hz phase ramp is recovered from fixed-loop 0;
+frame continuity checks pass; the 4-RX two-cisoid control is measured; chest-model results
+match an independent diagnostic within declared numerical tolerance. Chest-model failure does
+not block a documented real-data evaluation and must not be tuned away.
+
+**Stop conditions.** Stop before real data if fixed-loop indexing, nominal timing, complex
+phase continuity, or matrix shapes cannot be established, or if the code does not fail closed
+on singular/nonfinite inputs.
+
+### M9.3 — Canonical radar-only evaluation
+
+**Objective.** Produce one canonical Kotte-adaptation estimate and one declared loading
+sensitivity for every complete window in the fixed cohort, without opening Masimo.
+
+**Rationale.** Radar decisions must be complete before reference performance is visible.
+
+**In scope.** Current-production lock-map regeneration using unchanged warmup code, eight
+manifest captures, fixed non-overlapping windows, primary and loading-sensitivity arms, evidence
+and provenance.
+
+**Non-goals.** Kotte-selected bins, all-bin winner search, DOA, parameter changes, scoring.
+
+**Expected files.** One readable radar runner (for example `scripts/m9_kotte_run.py`) calling
+the audited core; the existing config is the only experiment config.
+
+**Algorithm.** Hash raw/config/code, generate the radar-only lock map, decode each window once,
+form fixed-loop `Z`, run both frozen loading arms, and write tidy estimates plus per-window
+evidence.
+
+**Numerical risks.** Old mislocks, packet/truncation defects, phase discontinuity, NaN/Inf,
+memory pressure, all-masked surfaces.
+
+**Tests.** Manifest uniqueness, unchanged warmup-selector call, no reference imports or file
+opens, raw hash binding, exact window counts, one decode per window, deterministic rerun,
+failure rows, and evidence completeness.
+
+**Acceptance.** Every complete window has an emitted estimate or explicit failure for each arm;
+no Masimo path is opened; every row binds to capture/bin/window/config/code/input hashes; recorded
+and rerun locks remain separate. Poor or zero coverage is a valid result.
+
+**Stop conditions.** Stop the affected capture on input-hash, frame-count, timing, or decoder
+failure. Do not choose another bin or setting to rescue it.
+
+### M9.4 — Exploratory scoring and report
+
+**Objective.** Compare immutable radar-only outputs with the reference under the existing
+comparator rules without feeding reference information back into M9.
+
+**Rationale.** Accuracy and coverage are scientific outcomes, not implementation gates.
+
+**In scope.** Radar-free scoring, HR and BR coverage/error, per-capture/per-subject/per-protocol
+summaries, failure census, Bland-Altman outputs where evaluable, and a concise report.
+
+**Non-goals.** Tuning, arm promotion, a GO/NO-GO MAE threshold, or a final HR agreement claim
+from the low-dynamic-range cohort.
+
+**Expected files.** One readable scorer (for example `scripts/m9_kotte_score.py`) and a generated
+report/artifact directory. Reuse existing comparator modules; do not edit M8.
+
+**Reference contract.** Integer Unix `Timestamp`; `Beats / min` is HR truth; `Breaths / min`
+is BR reference; existing PI/stationarity gates apply. The eight old captures use approximate
+origin and every scored artifact is `exploratory_non_frozen`, ineligible for promotion or final
+agreement claims.
+
+**Tests.** Radar-free import/file audit, exact half-open reference windows, duplicate-key and
+reference-identity rejection, missing-reference handling, metric fixtures, taint propagation,
+and unchanged radar artifacts.
+
+**Acceptance.** Coverage and failure causes accompany every error table; HR is reported
+descriptively beside `constant_session_median`; protocols and lock estimands are not pooled;
+no absolute MAE is required for scientific correctness.
+
+## 11. Synthetic validation
+
+### 11.1 Literal direct-`Y_t` controls
+
+- Use the paper's `N_c=16`, `n_R=20`, `T_PRI=50 ms`, signed frequencies, and the Fig. 5,
+  Fig. 7 row 2, and Fig. 8 cases that can be reconstructed from the PDF.
+- Use `R_t = Y_t Y_t^H / n_R`; no loading and no mean removal in the literal primary.
+- Persist Algorithm 1 and Eq. (26) surfaces separately.
+- Permit pair swap when checking truth.
+- Reproduce the cancellation case as an expected failure.
+- Record seeds, generated `Y_t` hashes, config, code, PDF hash, and exact assumptions.
+
+The paper does not fully specify the grid, covariance realization, or SNR reference domain.
+Those are declared assumptions, never silently described as source facts.
+
+### 11.2 Four-RX and project controls
+
+- Run a fixed 20-RX/4-RX direct-cisoid comparison on identical realizations.
+- Use the exact project loading formula and label the result an adaptation.
+- Validate fixed-loop extraction on a synthetic raw cube with known phase evolution.
+- Exercise small displacement, deep modulation, harmonic collision, and phase-cancellation
+  scenarios without converting their oracle truth into real-data settings.
+- Treat robustness seeds as a stability description, not a tuning loop.
+
+### 11.3 Interpretation of a negative synthetic result
+
+A failed chest-transfer case does not mean the Python is wrong if the direct two-cisoid control
+passes. It may demonstrate that the published two-line model does not represent phase-modulated
+chest displacement. That negative result is preserved and the canonical real evaluation may
+proceed only with the limitation stated in advance.
+
+## 12. Real-data evaluation
+
+### 12.1 Capture and window universe
+
+- The eight captures and subject/protocol mapping are fixed in the M9 config and
+  `notes/capture_inventory.md`.
+- Use complete, consecutive, non-overlapping 30 s windows `[k*600,(k+1)*600)`.
+- Retain `k=0` as `lock_selection_in_sample`; only `k>=1` supports comparative accuracy.
+- Run the primary and loading sensitivity exactly as frozen in Section 8.
+
+### 12.2 Range selection
+
+Before Kotte runs, invoke the unchanged current production warmup selector once per capture,
+using radar only. Persist `current_production_rerun_lock`, the selector's code/config/input
+hashes, and its evidence. Do not let a Kotte surface, Masimo value, all-bin error, or historical
+recorded lock choose the canonical bin.
+
+The recorded `warmup_auto` lock is a separate diagnostic estimand because pre-M2 captures
+contain documented mislocks. It is never pooled with the rerun-lock result.
+
+### 12.3 Heart/breath interpretation
+
+The frame-axis estimator frequency is a temporal complex-modulation frequency in Hz; report
+`60*abs(f)` in bpm. It is not a direct radial-velocity estimate requiring a further wavelength
+conversion. Periodic displacement produces sidebands at physiological frequencies and their
+combinations, so:
+
+- the breath-band coordinate is labelled a breathing candidate;
+- the heart-band coordinate is labelled a heart candidate;
+- higher-frequency = heart and lower-frequency = breath is only an operational prior within
+  the two disjoint bands;
+- sidebands, harmonics, motion, or collisions can invalidate that interpretation.
+
+### 12.4 Valid and invalid outcomes
+
+Never force an estimate. Nonfinite data, rank-zero covariance, nonpositive loaded spectrum,
+invalid CPI, all-masked pair surface, or failed structural checks produce an explicit invalid
+row and evidence. Coverage is reported jointly with accuracy.
+
+### 12.5 Reference scoring and metrics
+
+Scoring occurs only after radar outputs are immutable. Report per capture, subject, protocol,
+and lock estimand:
+
+- algorithmic validity and joint radar/reference coverage;
+- MAE and RMSE in bpm on identical paired cells;
+- Bland-Altman bias and limits of agreement where the paired count supports them;
+- failure-reason counts and pair-margin summaries;
+- HR descriptive comparison with `constant_session_median` because the existing captures
+  cannot falsify an HR claim.
+
+No metric threshold decides whether Kotte was implemented correctly. Do not rank arms, pool
+protocols/locks, or turn approximate-origin scores into validation claims.
+
+## 13. Oracle policy
+
+Oracle information is diagnostic and nondeployable.
+
+It may:
+
+- check equations and synthetic generators;
+- identify model-order mismatch and expected failure mechanisms;
+- provide a labelled upper bound or sensitivity result.
+
+It may not select or promote the canonical CPI, chirp aggregation, loading, bin, band, grid,
+target, arm, acceptance rule, or score. In particular, the observed `N_c=64` recovery is not
+an active arm and cannot replace the paper-comparison `N_c=16` primary. No oracle column enters
+the real estimator or canonical performance table.
+
+## 14. SNR finding disposition
+
+The paper defines
+
+```text
+SNR = 10 log10[(|beta_1|^2 + |beta_2|^2) / sigma^2]
+```
+
+but does not state unambiguously whether `sigma^2` is before or after the range FFT.
+
+Canonical interpretation of the prior investigation:
+
+1. **Primary historical fact:** literal post-range/`Y_t` 0 dB did not reproduce Fig. 8
+   under the declared sample-covariance implementation.
+2. **Interpretive sensitivity:** adding `10 log10(N_s)` with `N_s=128` gave 21.07 dB and
+   reproduced the selected figure behaviors at recorded seeds.
+3. **Not an algorithm rule:** the 21.07 dB interpretation does not set real-data noise,
+   loading, validity, or performance thresholds.
+4. **Claim status:** the SNR interpretation remains unsettled until independently cross-reviewed;
+   both arms and their assumptions must be reported.
+
+The earlier FFT/MUSIC weak-peak tolerance was a declared control comparator rule, not part of
+Kotte's estimator, and is not carried into real-data selection.
+
+## 15. Numerical stability policy
+
+### Literal synthetic controls
+
+- Use complex floating-point arrays and reject nonfinite inputs.
+- Use the paper sample divisors.
+- Evaluate ordinary full-rank equations with linear solves rather than explicit inverses.
+- Do not load, pool, or use a pseudoinverse silently.
+- Exclude `f_1=f_2`; mask near-equal cells under a declared `rcond(H)` rule.
+- Persist masks and fail if no admissible pair remains.
+
+### Project 4-RX adaptation
+
+Let
+
+```text
+R_t = Y_t Y_t^H / 4
+delta_bar = delta * Re(trace(R_t)) / N_c
+R_delta = R_t + delta_bar I
+H_delta = A^H R_delta^-1 A.
+```
+
+The regularized project surface is exactly
+
+```text
+J_delta(f_1,f_2) = 1^H H_delta^-1 1
+                   = w_delta^H R_delta w_delta.
+```
+
+It is **not** the literal `w_delta^H R_t w_delta`; it includes the loading penalty
+`delta_bar ||w_delta||^2`. Name it `regularized_kotte_power` in outputs.
+
+Also:
+
+- numerical rank is `count(lambda_i > rank_rtol * lambda_max)`;
+- finite `lambda_max <= 0` is rank zero and invalid;
+- nonfinite eigenvalues/covariances are invalid;
+- persist unloaded eigenvalues/rank, `delta`, `delta_bar`, `rcond(H_delta)`, and masks;
+- canonicalize signed aliases before computing the runner-up margin;
+- use deterministic lexicographic tie handling;
+- no setting changes in response to Masimo error.
+
+## 16. Tests required during implementation
+
+| Category | Objective evidence |
+|---|---|
+| Paper mathematics | shapes; covariance divisors; steering units; Eq. (25) constraints; Algorithm 1 identity; Eq. (26); conjugation/transpose; pair swap; cancellation |
+| Synthetic controls | Fig. 5/7/8 declared cases; literal/alternate SNR separation; fixed seeds and hashes; equal/near-frequency handling |
+| 4-RX numerics | rank bound; loading formula; loaded-objective identity; scale behavior; phase/gain sensitivities; fail-closed branches |
+| Adapter | `(frames,32,4,256)` to fixed-loop `(frames,4)`; chirp index; RX order; dtype; Hann FFT; timing; known phase ramp; tail and mean scope |
+| Aggregation | 37 CPIs; all-valid rule; 2-D medoid membership and tie-break; signed alias collapse; margin definition |
+| Radar runner | fixed manifest; current-production lock generation; no Masimo access; deterministic window counts; input/output hashes; evidence completeness |
+| Scoring | radar-free; integer `Timestamp`; correct PR/RR fields; half-open spans; comparator gates; duplicate/reference mismatch refusal; approximate-origin taint |
+| Regression | no diff to M8/Ahmed or the project's estimator; frozen window/comparator behavior unchanged |
+
+Plots may supplement but never replace objective assertions.
+
+## 17. Acceptance criteria
+
+### M9.1
+
+- All direct-`Y_t` equations, dimensions, constraints, and objective identities pass.
+- PDF-derived controls are reproducible with declared assumptions.
+- Literal-0 dB and alternate-SNR results remain separately labelled.
+
+### M9.2
+
+- Fixed-loop-0 extraction and physical-Hz steering recover known synthetic phase ramps.
+- The 4-RX loaded adaptation is deterministic, evidenced, and explicitly nonliteral.
+- Chest-model behavior is recorded without parameter changes, whether positive or negative.
+
+### M9.3
+
+- Every fixed capture/window/arm yields an estimate or an explicit failure.
+- No reference is opened and no Kotte/Masimo-selected bin is used.
+- Every estimate traces to code, config, seed where applicable, raw hash, lock evidence,
+  and intermediate arrays.
+
+### M9.4
+
+- Radar outputs are unchanged by scoring.
+- Coverage and failures accompany error metrics.
+- Approximate-origin and low-HR-dynamic-range limitations are explicit.
+- No MAE target is required. Poor performance is a valid M9 result.
+
+## 18. Known limitations and resolved special questions
+
+| Question | Canonical answer |
+|---|---|
+| Q1. One slow-time sample? | Selected-bin complex values from chirp-loop 0 in one frame, retaining four RX; nominal interval 50 ms. |
+| Q2. Within frame or across frames? | Across frames. Within-frame `N_c=16` spans about 1 ms and cannot resolve 0.10-2.00 Hz. Coherent chirp mean is sensitivity-only. |
+| Q3. Doppler-to-vital conversion? | The frame-axis result is temporal modulation frequency in Hz; report `60*abs(f)` bpm. It is not guaranteed to be a unique physiological or radial-velocity component. |
+| Q4. Higher = heart, lower = breath? | Operational only within disjoint declared bands; invalidated by signs, harmonics, sidebands, collision, or motion. |
+| Q5. Is 4 RX enough for DOA? | Four RX can form a spatial covariance but offers less aperture than 20 RX and lacks M9 calibration evidence. M9 makes no DOA claim. |
+| Q6. May project range selection be reused? | Yes for a controlled joint-Doppler adaptation. It does not reproduce Kotte's complete range stage. |
+| Q7. May angle be fixed? | Known angle is permitted only for direct-synthetic Eq. (26) diagnostics. Real frequency selection omits DOA and Eq. (26), with disclosure. |
+| Q8. What is the 2-D objective? | Literal: maximize `1^H H^-1 1 = w^H R_t w`. Project: maximize `1^H H_delta^-1 1 = w_delta^H R_delta w_delta`, explicitly regularized. |
+| Q9. Symmetric solutions? | Search signed breath x heart domains, retain raw signs, collapse by absolute band coordinates, deterministic lexicographic tie-break. |
+| Q10. `f_1=f_2` or close? | Equality excluded; ill-conditioned `H` masked by declared threshold; all masked means invalid. Project bands are disjoint but controls still test this. |
+| Q11. Search ranges? | Existing project domains `+/-0.10-0.50` and `+/-0.80-2.00` Hz, fixed independently of Masimo; 0.5 bpm grid is sampling, not resolution. |
+| Q12. Minimum persisted evidence? | Raw/config/code/PDF hashes; lock source/bin; cube shape/dtype/timing; frame/CPI spans; selected `Z`; covariance eigenvalues/rank/loading; grids/masks/surfaces; raw and canonical pair; margin; validity cause; seed/input/output hashes. |
+
+Additional limitations:
+
+- The paper's temporal steering units and SNR domain are ambiguous.
+- The paper does not validate human heart-rate estimation.
+- Project `R_t` is structurally rank deficient without loading.
+- Retained-support mean removal, fixed-loop framing, loading, band restriction, and medoid
+  reporting are project adaptations.
+- The two-line model is misspecified for general phase-modulated chest displacement.
+- The eight old captures have approximate time origin and insufficient HR dynamic range for a
+  final HR agreement claim.
+- The project has not established calibrated 4-RX DOA performance.
+
+## 19. Implementation handoff
+
+A later implementation agent is authorized to execute this plan in milestone order, beginning
+with M9.1 and stopping after each milestone for verification. Before any new evidence run it
+must:
+
+1. re-read `CLAUDE.md` and this file;
+2. inspect the current M9 diff and preserve useful existing code;
+3. align `experiments/m9_kotte/config.yaml` with Section 8;
+4. replace the canonical coherent-mean adapter with fixed chirp-loop 0;
+5. keep coherent averaging only as a named radar-only sensitivity after its structural test;
+6. avoid M8 and the project's estimator files;
+7. use a simple core, adapter, runner, scorer, one config, and inspectable evidence;
+8. run the required cross-model reviews before treating mathematical or empirical claims as
+   settled thesis evidence.
+
+The implementer is not authorized to tune from Masimo, add the oracle `N_c=64` arm, create a
+four-line estimator, or resurrect the retired bundle/gate/MAE-decision architecture without a
+new scientific plan and user authorization.
+
+## 20. Plan-review verdict
+
+**READY WITH MINOR CHANGES — minor changes incorporated.**
+
+Independent review checked the original PDF, all four former M9 documents, actual raw-cube
+interfaces, current M9 code/config, and the consolidated draft. It required:
+
+1. fixed chirp-loop 0 across frames as canonical slow time;
+2. separate DOA and Doppler covariance divisors;
+3. an exact name/formula for the regularized project objective;
+4. explicit retained-support mean removal as an adaptation;
+5. a uniform current-production rerun lock map rather than known-buggy recorded locks;
+6. complete timing, dtype, and phase-continuity stop conditions.
+
+All six changes are present above. No planning blocker remains. Implementation remains gated by
+the milestone-specific acceptance and stop conditions in this file.

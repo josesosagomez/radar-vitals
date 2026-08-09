@@ -1,18 +1,15 @@
-# experiments/m9_kotte/config.yaml — the ONE M9 config (plans/m9_kotte_plan.md §"File layout").
+# experiments/m9_kotte/config.yaml — the ONE canonical M9 config.
 #
 # Sections:
-#   controls        — Step 1a paper-faithful reproduction + control 2 (4-RX ablation)
-#   transfer        — Step 1b synthetic vitals-cube gate (gate_criteria filled at the
-#                     oracle commit checkpoint; null until then)
-#   stage_a         — DSP-only estimator settings + the capture manifest (RUNNER INPUT,
-#                     hashed separately as input_manifest_hash — never part of any
-#                     estimator identity hash)
-#   stage_b_decision — natural-only subject-weighted BR rule + floors + rationale
+#   controls                       — M9.1 direct-Y_t controls and 4-RX ablation
+#   synthetic_transfer_diagnostics — M9.2 diagnostic scenarios; never a promotion gate
+#   stage_a                        — frozen project adapter/estimator contract
+#   radar_evaluation               — M9.3 radar-only cohort and range-lock contract
+#   scoring                        — M9.4 reference-only scoring, with no outcome threshold
 #
-# Config freshness is section-scoped (plan, pass 9): control runs persist the whole-file
-# hash AND the resolved `controls`-section hash; the transfer command requires the CURRENT
-# `controls` section hash to match each accepted control run. Editing `transfer` or
-# `stage_a` later must not stale the controls.
+# Control runs persist the whole-file hash and resolved controls-section hash.  No Masimo
+# result may change any estimator field below.  The canonical authority is
+# plans/m9_kotte_plan.md; retired oracle-gate/GO-NO-GO architecture is absent by design.
 
 schema_version: 1
 experiment_id: m9_kotte_joint_doppler_v1
@@ -25,7 +22,7 @@ citation:
   figures_reproduced: "5, 7 (row 2), 8"
 
 # ---------------------------------------------------------------------------------------
-# CONTROLS — Step 1a (paper-faithful, 20 RX, direct Y_t) + control 2 (4-RX ablation)
+# CONTROLS — M9.1 direct Y_t equations (20 RX literal) + declared 4-RX ablation
 # ---------------------------------------------------------------------------------------
 controls:
   # Paper §IV primary values (Table I page render verified 2026-08-05/06).
@@ -33,17 +30,15 @@ controls:
   n_c: 16
   n_r: 20
   snr_db: 0.0
-  # SNR = 10*log10((|beta1|^2 + |beta2|^2) / sigma^2), sigma^2 = per-element complex
-  # noise power in Y_t (the paper's two-line power ratio, page-07 render).
+  # SNR = 10*log10((|beta1|^2 + |beta2|^2) / sigma^2), PDF printed p. 118.
+  # PRIMARY CANONICAL ASSUMPTION: sigma^2 is per-element post-range/Y_t complex-noise
+  # power. This literal 0 dB reading is a declared interpretation, because the PDF does
+  # not identify whether sigma^2 is before or after the range FFT.
   snr_definition: two_line_power_ratio
-  # AMENDED 2026-08-06 (user decision — option B of plans/m9_step1a_snr_finding.md,
-  # committed BEFORE any official control run): the paper's SNR is read as
-  # fast-time-referred; the range FFT's processing gain 10*log10(n_s_fast_time) is
-  # folded in before Y_t(kappa) is formed, so the effective Y_t-domain SNR is
-  # snr_db + 10*log10(128) ~= 21.07 dB. n_s_fast_time = 128 is the paper's own N_s
-  # (§IV) — a paper-derived constant, not a tuned value. The literal Y_t-domain
-  # reading is retained as the one-field audit `snr_reference_literal`.
-  snr_reference: fast_time_with_range_fft_gain
+  snr_reference: yt_domain_literal
+  # ALTERNATE INTERPRETIVE SENSITIVITY ONLY: +10*log10(128) = 21.07 dB. N_s=128 is
+  # reported on PDF printed p. 118, but applying its gain to Y_t is not a paper fact
+  # and never sets a real-data noise, loading, validity, or performance rule.
   n_s_fast_time: 128
   mean_removal: none            # §III-B per-row mean removal is in the paper but OFF here:
                                 # exact per-channel removal makes R_t exactly singular.
@@ -86,7 +81,7 @@ controls:
       # a diagnostic, never tuned away.
       weak_tolerance_hz: 0.625
 
-  # R1 (GATING): Fig 8 amplitude ladder — 3 m / −30°, SNR 0 dB, (2, 1) Hz.
+  # R1: Fig 8 amplitude ladder — 3 m / −30°, literal post-range/Y_t 0 dB, (2, 1) Hz.
   r1_fig8:
     theta0_deg: -30.0
     f_strong_hz: 2.0            # carries beta1
@@ -131,8 +126,8 @@ controls:
   # SNR-valued audit overrides are EFFECTIVE Y_t-domain values (documented 2026-08-06).
   audits:
     ensemble_covariance: true         # exact E{Y_t Y_t^H}; Cases-1–4 oracle check
-    snr_reference_literal: true       # rerun R1 at the literal Y_t-domain reading
-                                      # (effective 0 dB) — records the memo §2(b) fact
+    alternate_range_fft_gain_sensitivity: true  # separately run Fig 5/7/8 at 21.07 dB;
+                                                  # diagnostic, nonprimary, no real-data use
     grid_step_hz: [0.02, 0.10]
     mean_removal_on_loading_delta: 1.0e-6   # per-row mean removal ON + tiny loading
     music_model_order: [4]
@@ -141,8 +136,8 @@ controls:
     cancellation_ratio: -1.0          # beta2 = −beta1 — the method's own PREDICTED failure
 
   # Control 2 — 4-RX ablation (paper geometry, synthetic, `ablation` subcommand).
-  # Role fixed in advance: equal-amplitude failure ⇒ primary carried as expected-negative;
-  # COMPLETION (not outcome) blocks the transfer bundle. No curve claim.
+  # Role fixed in advance: equal-amplitude failure is an expected-negative diagnostic.
+  # Completion is recorded, but this control is not an empirical gate. No curve claim.
   ablation:
     n_r_endpoints: [20, 4]            # fixed endpoints, same generated realization
     subset_rule: first_four_elements  # the nested 4-RX subset
@@ -151,10 +146,11 @@ controls:
     pass_rule: peak_error_le_one_grid_step_per_case_at_both_endpoints
 
 # ---------------------------------------------------------------------------------------
-# TRANSFER — Step 1b synthetic vitals cube (production geometry, λ_eff from
-# scripts/live_demo_config.yaml at runtime; resolved values + hash go in the gate bundle)
+# SYNTHETIC TRANSFER DIAGNOSTICS — M9.2 controls, never an oracle/promotion gate
 # ---------------------------------------------------------------------------------------
-transfer:
+synthetic_transfer_diagnostics:
+  role: diagnostic_nondeployable
+  parameter_promotion_allowed: false
   generator:
     fs_hz: 20.0
     n_frames: 600
@@ -177,12 +173,17 @@ transfer:
       - {re: 6.0, im: -3.5}
       - {re: -4.5, im: -6.0}
     snr_z_dynamic_db: 10.0      # configured SNR on the mean-removed dynamic component of Z
-    snr_tolerance_db: 0.5       # |declared − realized| bound (P-criteria; formula unit-tested)
+    snr_tolerance_db: 0.5       # |declared − realized| diagnostic bound
     phase_pairs_rad:            # explicit (phi_b, phi_h) pairs, every scenario × every pair
       - [0.0, 0.0]
       - [0.0, 1.5707963267948966]   # (0, π/2)
       - [0.0, 3.141592653589793]    # (0, π)
       - [1.0, 2.5]
+    phase_pair_labels:
+      - in_phase
+      - quadrature
+      - anti_phase_cancellation_diagnostic
+      - generic_offset
     root_seed: 20260806
     seed_derivation: sha256_root_seed_colon_case_id
 
@@ -193,111 +194,120 @@ transfer:
       heart_amplitude_m: 2.5e-5       # 0.025 mm
       f_breath_hz: 0.30
       f_heart_hz: 1.35
-    - scenario_id: s2_deep_modulation_decoy      # HEADLINE
+    - scenario_id: s2_deep_modulation_decoy
       breath_amplitude_m: 2.0e-3      # 2.0 mm → modulation index ≈ 6.6 rad → Bessel comb
       heart_amplitude_m: 3.0e-4       # 0.3 mm
       f_breath_hz: 0.30               # harmonics at 0.9 / 1.2 / 1.5 / 1.8 Hz
       f_heart_hz: 1.35                # between breathing harmonics k=4 and k=5
     - scenario_id: s3_harmonic_collision
-      # f_h = 4·f_b — unresolvable by construction; recorded, never gated on recovery.
+      # f_h = 4·f_b — unresolvable by construction; recorded without a recovery threshold.
       breath_amplitude_m: 2.0e-3
       heart_amplitude_m: 3.0e-4
       f_breath_hz: 0.30
       f_heart_hz: 1.20
 
-  # Gate-only diagnostic arms (in addition to the three stage_a arms). Promotion to
-  # real data: pre-results — committed config amendment; post-results — a separately
-  # labelled follow-up run.
-  diagnostic_arms:
-    - {arm_id: kotte_meansurf_nc16_dl1em2, n_c: 16, estimator_form: mean_surface, loading_delta: 1.0e-2}
-    - {arm_id: kotte_cpi_medoid_nc32_dl1em2, n_c: 32, estimator_form: cpi_medoid, loading_delta: 1.0e-2}
-
-  robustness_seeds: [11, 12, 13, 14, 15]   # multi-seed report — NON-GATING
-
-  # Filled from the independent oracle (scripts/m9_step1b_gate_prediction.py) and
-  # committed at the checkpoint BEFORE kotte_gate.py runs. The gate refuses to run
-  # while this is null. Per item: quantity, rule, tolerance, single declared seed;
-  # gate passes only if ALL rows pass.
-  gate_criteria: null
+  robustness_seeds: [11, 12, 13, 14, 15]
+  bessel_diagnostic:
+    expansion_order: 32
+    max_relative_rms_error: 1.0e-12
+    comparison: jacobi_anger_double_sum_against_clean_displacement_phasor
+  direct_cisoid_control:
+    f_breath_hz: 0.30
+    f_heart_hz: 1.35
+    beta_breath: {re: 1.0, im: 0.25}
+    beta_heart: {re: 0.20, im: -0.10}
+    noise_variance: 1.0e-3
+    seed: 20260809
+  interpretation: >-
+    These scenarios diagnose transfer from the paper's two-cisoid model to
+    phase-modulated chest displacement. Their outcomes cannot select CPI, loading,
+    range, grid, aggregation, or any real-data setting.
 
 # ---------------------------------------------------------------------------------------
-# STAGE A — DSP-only estimator config + the capture manifest (runner input)
+# PROJECT ADAPTER / ESTIMATOR CONTRACT — frozen before M9 real-data scoring
 # ---------------------------------------------------------------------------------------
 stage_a:
-  # KotteJointDopplerConfig (DSP-ONLY — no captures, subjects, or reference files).
   breath_band_hz: [0.10, 0.50]      # tests pin equality with M8's domain and
   heart_band_hz: [0.80, 2.00]       # scripts/live_demo_config.yaml
   grid_step_bpm: 0.5                # signed grid: f1 ∈ ±breath band, f2 ∈ ±heart band
   condition_mask_threshold: 1.0e-8
   rank_rtol: 1.0e-9                 # rank = #{λ_i > rank_rtol·λ_max}; λ_max ≤ 0 → rank 0
   min_valid_cpi_fraction: 1.0       # validated EXACTLY 1.0; any invalid CPI → dsp_failed
-  mean_removal_scope: retained_support   # extract 600 → retain 592 → subtract per-RX mean
-  chirp_aggregation: coherent_mean       # over the retained support → split into CPIs
+  slow_time_selection: fixed_chirp_loop_0
+  frame_period_s: 0.05
+  window_frames: 600
+  retained_frames: 592
+  cpi_frames: 16
+  cpis_per_window: 37
+  tail_policy: drop_frames_592_to_599_before_mean_removal
+  mean_removal_scope: retained_support
   evidence_schema_version: 1
-  arms:                             # EXACTLY the three real-data arms
+  arms:                             # exactly the two plan-authorized real-data arms
     - {arm_id: kotte_cpi_medoid_nc16_dl1em2, n_c: 16, estimator_form: cpi_medoid, loading_delta: 1.0e-2}
     - {arm_id: kotte_cpi_medoid_nc16_dl1em4, n_c: 16, estimator_form: cpi_medoid, loading_delta: 1.0e-4}
-    - {arm_id: kotte_pooled_nc16_dl1em2, n_c: 16, estimator_form: pooled, loading_delta: 1.0e-2}
-  primary_arm_id: kotte_cpi_medoid_nc16_dl1em2   # Stage B binds to this arm ALONE
+  primary_arm_id: kotte_cpi_medoid_nc16_dl1em2
+  loading_sensitivity_arm_id: kotte_cpi_medoid_nc16_dl1em4
+  window_report: two_dimensional_l1_medoid
+  medoid_tie_break: lowest_cpi_index
+  signed_alias_rule: collapse_by_absolute_band_coordinates_keep_raw_signs
 
-  # Sweep geometry (runner-facing, same 14 candidate bins as production warmup:
-  # protocol 0.8–1.4 m at 0.0436 m/bin → bins 19..32).
-  candidate_bins: [19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32]
-  window_frames: 600                # the frozen §7 window grid (src/m4/window_grid.py)
-
-  # CAPTURE MANIFEST — RUNNER INPUT, not estimator config (plan, pass 9). Parsed by the
-  # sweep/scorer runners only; resolved list hashed as input_manifest_hash, EXCLUDED from
-  # suite_config_hash and per-arm run_config_hash. Runners open ONLY the paths listed
-  # here. Subject map + protocol roles: notes/capture_inventory.md (user-stated,
-  # 2026-08-03). Live-demo mirrors are referenced IN PLACE as noncanonical fixtures —
-  # hashed, never edited, never promoted into data/raw/.
+# ---------------------------------------------------------------------------------------
+# RADAR-ONLY EVALUATION — M9.3; no reference paths are present in this section
+# ---------------------------------------------------------------------------------------
+radar_evaluation:
+  range_selection:
+    source: current_production_rerun_lock
+    selector: src.warmup_select.run_warmup_selection
+    selector_config: scripts/live_demo_config.yaml
+    recorded_warmup_lock_role: diagnostic_only_never_pooled
+    kotte_all_bin_selection_allowed: false
+  window_grid:
+    window_frames: 600
+    step_frames: 600
+    interval: half_open
+    first_window_role: lock_selection_in_sample
+    comparative_windows_start_k: 1
   captures:
     - {capture_id: massimo1, directory: results/live_demo/20260713_172042_live_demo_massimo1,
-       subject: A, masimo_csv: demo_massimo1.csv, protocol_role: natural, data_role: exploratory}
+       subject: A, protocol_role: natural, data_role: exploratory}
     - {capture_id: massimo2, directory: results/live_demo/20260713_182002_live_demo_massimo2,
-       subject: A, masimo_csv: demo_massimo2.csv, protocol_role: paced, data_role: exploratory}
+       subject: A, protocol_role: paced, data_role: exploratory}
     - {capture_id: massimo3, directory: results/live_demo/20260728_224902_live_demo_massimo3,
-       subject: B, masimo_csv: demo_massimo3.csv, protocol_role: natural, data_role: exploratory}
+       subject: B, protocol_role: natural, data_role: exploratory}
     - {capture_id: sweep, directory: results/live_demo/20260714_180523_live_demo_sweep,
-       subject: B, masimo_csv: demo_sweep.csv, protocol_role: stepped, data_role: exploratory}
+       subject: B, protocol_role: stepped, data_role: exploratory}
     - {capture_id: massimo4, directory: results/live_demo/20260728_230903_live_demo_massimo4,
-       subject: C, masimo_csv: demo_massimo4.csv, protocol_role: natural, data_role: exploratory}
+       subject: C, protocol_role: natural, data_role: exploratory}
     - {capture_id: massimo5, directory: results/live_demo/20260728_232415_live_demo_massimo5,
-       subject: C, masimo_csv: demo_massimo5.csv, protocol_role: natural, data_role: exploratory}
+       subject: C, protocol_role: natural, data_role: exploratory}
     - {capture_id: massimo6, directory: results/live_demo/20260729_002158_live_demo_massimo6,
-       subject: D, masimo_csv: demo_massimo6.csv, protocol_role: natural, data_role: exploratory}
+       subject: D, protocol_role: natural, data_role: exploratory}
     - {capture_id: massimo7, directory: results/live_demo/20260729_004815_live_demo_massimo7,
-       subject: D, masimo_csv: demo_massimo7.csv, protocol_role: natural, data_role: exploratory}
+       subject: D, protocol_role: natural, data_role: exploratory}
 
 # ---------------------------------------------------------------------------------------
-# STAGE B DECISION — BR only, natural-only, subject-weighted (user decisions 3+4,
-# 2026-08-05). HR is NEVER gated (HANDOFF §2.2: these captures cannot falsify an HR
-# claim). Every scored output carries the approximate-origin, no-promotion,
-# no-final-agreement-claim taint.
+# REFERENCE SCORING — M9.4; reads immutable radar outputs, never changes the estimator
 # ---------------------------------------------------------------------------------------
-stage_b_decision:
-  rule_id: natural_only_subject_weighted_v1
-  vital: br
-  kotte_arm_id: kotte_cpi_medoid_nc16_dl1em2     # the primary arm ALONE
-  comparator: production_at_comparator_lock_map
-  # Formula: windows from captures whose manifest protocol_role is `natural` form each
-  # subject's pooled paired BR MAE (pooled within subject over that subject's natural
-  # captures); subjects averaged EQUALLY. GO iff
-  #   MAE_kotte_primary <= MAE_production + go_margin_bpm  under that aggregation.
-  go_margin_bpm: 1.0
-  paired_universe: [capture_id, lock_estimand_id, k]   # k >= 1 only
-  floors:
-    min_subjects: 3                     # ≥ 3 subjects, each with
-    min_natural_paired_windows_per_subject: 5   # ≥ 5 natural paired windows, and
-    min_natural_paired_windows_total: 30        # ≥ 30 natural paired windows overall
-    # 30 windows from one subject is a NO-GO: the per-subject floor is not waived by
-    # the total. Zero or insufficient → automatic NO-GO, never a weak GO.
-  sensitivity_variant:
-    drop_subjects_below_windows: 5      # persisted ALONGSIDE, never replaces the primary
-  paced_stepped_treatment: descriptive_only   # scored and reported, excluded from the gate
-  rationale: >-
-    Natural-only because paced/stepped breathing changes the estimand (protocol-driven
-    rate); subject-weighted because captures per subject are unequal and pooling would let
-    one long capture dominate; BR-only because the existing captures carry no HR dynamic
-    range (measured 2026-07-31) so an HR gate would be unfalsifiable; the +1.0 bpm margin
-    admits a method that is at least production-comparable at first real-data contact.
+scoring:
+  estimator_settings_mutable_after_scoring: false
+  outcome_threshold: none
+  timestamp_column: Timestamp
+  heart_reference_column: Beats / min
+  breath_reference_column: Breaths / min
+  window_interval: half_open
+  comparative_windows_start_k: 1
+  reuse_existing_pi_and_stationarity_gates: true
+  metrics: [coverage, mae_bpm, rmse_bpm, bias_bpm, bland_altman_limits]
+  summaries: [capture, subject, protocol, lock_estimand]
+  constant_session_median_hr_comparator: true
+  approximate_origin_label: exploratory_non_frozen
+  promotion_eligible: false
+  capture_references:
+    - {capture_id: massimo1, csv: results/live_demo/20260713_172042_live_demo_massimo1/demo_massimo1.csv}
+    - {capture_id: massimo2, csv: results/live_demo/20260713_182002_live_demo_massimo2/demo_massimo2.csv}
+    - {capture_id: massimo3, csv: results/live_demo/20260728_224902_live_demo_massimo3/demo_massimo3.csv}
+    - {capture_id: sweep, csv: results/live_demo/20260714_180523_live_demo_sweep/demo_sweep.csv}
+    - {capture_id: massimo4, csv: results/live_demo/20260728_230903_live_demo_massimo4/demo_massimo4.csv}
+    - {capture_id: massimo5, csv: results/live_demo/20260728_232415_live_demo_massimo5/demo_massimo5.csv}
+    - {capture_id: massimo6, csv: results/live_demo/20260729_002158_live_demo_massimo6/demo_massimo6.csv}
+    - {capture_id: massimo7, csv: results/live_demo/20260729_004815_live_demo_massimo7/demo_massimo7.csv}
