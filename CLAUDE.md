@@ -25,8 +25,11 @@
   range.** Measured 2026-07-31: on sessions where PR is effectively constant, a predictor that
   ignores the radar and emits the session median scores 100% on every admissible window, so
   such sessions cannot falsify an HR claim. The seated recovery arm
-  (`notes/protocol.md`, ethics-approved 2026-08-03) exists to supply that range; BR is
-  unaffected.
+  (`notes/protocol.md`) exists to supply that range; BR is unaffected. **Authorization record:**
+  owner attestation 2026-08-09 confirms the recovery amendment was approved on 2026-08-03 under
+  parent approval `24IBEC051` and covers **15 new prospective participants in addition to existing
+  development subjects A–D**. The determination and participant consent/PIS records are confidential,
+  held by the researcher/PI and participants as applicable, and are intentionally not stored here.
 - **Baselines:** TI's on-chip vital-signs lab output; published mmWave vital-signs
   phase-based pipelines (see `notes/approach.md`).
 - **Primary metrics:** heart-rate error vs Masimo PR — MAE (bpm), RMSE (bpm), Bland-Altman
@@ -103,14 +106,14 @@
 
 ---
 
-## 6. Cross-model review rules (Claude × OpenAI)
+## 6. Independent review rules
 
-- **Plan review:** experimental/algorithm plan checked by the other model family before build.
+- **Plan review:** experimental/algorithm plans receive an independent review before build.
 - **Code review:** any diff touching range-FFT, phase extraction, filtering, peak-picking,
-  or the Masimo parser gets an independent correctness pass from the other model.
+  or the Masimo parser gets an independent correctness pass.
 - **Math/claims review:** any equation or empirical claim entering the paper is
   re-derived/re-checked independently.
-- Where the two models agree, trust it; where they diverge, investigate that divergence.
+- Record and investigate review disagreements; do not hide them.
 
 ---
 

@@ -1,5 +1,15 @@
 # M4 — Offline evaluation harness (HR + BR): implementation plan
 
+> **M0 SUPERSESSION NOTICE — 2026-08-09.** This 2026-07-26 plan transcribes the former
+> two-arm/two-role analysis contract. `notes/analysis_prespec.md` and `notes/protocol.md` now
+> govern. The current scorer/manifest is **not compliant with the M0 recovery contract** until a
+> later, separately reviewed implementation milestone adds: the `recovery` arm; immutable
+> `development` / `representation_validation` / `final_evaluation` roles; the recovery settle
+> exemption; Stage-1/Stage-2 recovery fields and exact constant-baseline formulas; final-only
+> scoring and label-state guards; the source-window and scoring-ledger keys; and retirement of the
+> prospective low-warmup-confidence retry. This notice authorizes no code, capture, scoring, or M1+
+> work.
+>
 > **Status: REVISION 6, under cross-model review** (`plans/m4_plan_cross_review.md`).
 > Revision 6 repairs the §4 manifest table: revision 5 inserted the executable contract mid-table,
 > which terminated it and orphaned the Timebase / Integrity / Provenance / Disposition rows. The

@@ -10688,3 +10688,99 @@ distinguish Kotte et al.'s published method from this fixed-range, four-RX, fram
 IWR1642 adaptation; report the result as exploratory negative transfer evidence, not a general
 failure of the published method. Do not rank or promote either loading arm. Then proceed only under
 the next approved milestone plan.
+
+## 2026-08-09 - M0 recovery analysis contract closed and reviewed
+
+**Set out to do:** implement only M0 of the owner-designated recovery plan: reconcile and review
+the analysis contract before any new capture, estimator, DSP, experiment or tuning work.
+
+**Worked (with evidence):** read the authoritative `plans/plan_codex_milestones.md` plus the
+prespec, protocol, capture inventory, HR comparator, M4 scorer plan, DCA capture reference and
+submitted recovery amendment. A required `task_breakdown` review found the initial draft not ready;
+an independent `plan_reviewer` then returned `NOT READY` on pass 1 and
+`READY WITH MINOR CHANGES` on pass 2. Every pass-2 change was incorporated. The durable record is
+`plans/m0_recovery_contract_cross_review.md`.
+
+The binding documentation now defines separate natural/paced/recovery HR estimands; a distinct
+two-stage recovery floor with exact boundary and empty-set behavior; immutable, hash-bound,
+subject-disjoint development, representation-validation and final roles; at least 5 validation and
+exactly 10 final slots; fixed paced allocations 2/2/1 and 4/3/3; no evidence-yield or low-warmup
+retry; and exact source-window/scoring-ledger identities. Existing A–D remain development-only.
+The old M4 two-arm plan has a mandatory supersession notice; no code was changed.
+
+**Failed / did not work, and why:** the first contract draft left Stage 2 able to select recovery
+accuracy rows, under-specified the constant baseline and label state, omitted ledger keys, and left
+stale authorization claims in governing documents. Review caught these defects before edits. The
+repo still cannot independently establish the recovery amendment determination because the issued
+determination and approved consent/PIS versions are absent.
+
+**Retired / no longer used:** the two-arm/two-session analysis wording; the old M5-pilot/M6-role
+vocabulary; using recovery windows to rescue the natural+paced floor; recovery-adequacy recapture;
+and low-warmup-confidence retry for representation-validation/final cohorts.
+
+**Next:** owner supplies the recovery determination's issued reference/date, formal board name,
+approved consent/PIS versions, and confirmation that at least 15 prospective people plus permitted
+replacements are covered. Until then no recovery capture may run. Do not proceed to M1 from this
+M0 session.
+
+## 2026-08-09 (correction) - M0 remains open pending other-family review
+
+**Set out to do:** perform the final conformance check on the documentation written during the M0
+session.
+
+**Worked (with evidence):** the independent `plan_reviewer` found all substantive contract terms
+and the documentation-only scope conformant. It also caught a governance contradiction: the prior
+entry called the contract closed even though the tool did not expose/prove the other model family
+required by `CLAUDE.md` §6. Status banners, protocol gates, review record and handoff now state the
+truth: the substantive draft is review-ready, but **M0 is NOT READY**.
+
+**Failed / did not work, and why:** the independent reviewer was sufficient for the user's required
+`plan_reviewer` check but cannot honestly be represented as an other-model-family review. The prior
+"closed" wording was therefore premature.
+
+**Retired / no longer used:** any statement that M0 or cross-model review is complete.
+
+**Next:** obtain and record the other-model-family review, then resolve the separately open recovery
+authorization metadata/expanded-enrollment coverage. Do not proceed to M1 or recovery capture.
+
+## 2026-08-09 (later) - Model-family-specific review requirement removed
+
+**Set out to do:** apply the owner's decision that this project will not require review by a
+particular model family, while preserving independent review as a quality gate.
+
+**Worked (with evidence):** `CLAUDE.md` §6 now requires independent plan, code and math/claims
+review without naming Claude, OpenAI or an "other" family. `AGENTS.md` and all current M0 status
+documents were reconciled. The completed `task_breakdown` and `plan_reviewer` passes now discharge
+the review rule as written.
+
+**Failed / did not work, and why:** nothing. Historical cross-model review entries remain unchanged
+because they truthfully describe what happened at the time.
+
+**Retired / no longer used:** model-family identity as a prerequisite for plan, code or claims
+review; the corresponding M0 blocker.
+
+**Next:** M0 remains blocked only on recovery authorization/reference metadata and confirmation
+that the expanded minimum 15-person prospective cohort (plus permitted replacements) is covered.
+
+## 2026-08-09 (final M0 disposition) - Confidential authorization attested; M0 ready
+
+**Set out to do:** resolve whether the private recovery determination, participant consent records
+and 15-person prospective cohort satisfy the remaining M0 metadata gate.
+
+**Worked (with evidence):** owner attestation confirms that the recovery amendment was approved on
+2026-08-03 under parent approval `24IBEC051` and covers exactly 15 new prospective participants in
+addition to development subjects A–D. The determination exists and is held privately by the
+researcher and PI. Consent/PIS records are private between the researcher and participants. Neither
+class of confidential document is required as a repository artifact. The approved 15-person ceiling
+exactly supplies five representation-validation and ten final-evaluation subjects.
+
+**Failed / did not work, and why:** the earlier wording incorrectly treated confidential,
+owner-held records as missing project evidence and left participant replacements open. The approval
+uses all 15 prospective places, so no additional participant replacement is assumed; withdrawal
+leaves a missing slot and counts against the applicable floor.
+
+**Retired / no longer used:** the authorization/reference blocker; any request to commit private
+determination or consent/PIS documents; participant replacements beyond the approved 15.
+
+**Next:** overall verdict **M0 READY**. Do not proceed to M1, capture, estimator or DSP work without
+an explicit user request.

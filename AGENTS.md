@@ -13,4 +13,4 @@ Non-negotiables (full detail in `CLAUDE.md`):
 3. Never fabricate results; never tune the radar to a low-quality Masimo segment.
 4. Ground truth = the `Beats / min` (PR) column, aligned via the integer Unix-epoch `Timestamp`.
 5. Every heart-rate estimate must dump intermediate signals for debugging.
-6. This repo is cross-reviewed by two model families — surface disagreements, don't hide them.
+6. Independent review rules live in `CLAUDE.md` §6; surface disagreements, don't hide them.

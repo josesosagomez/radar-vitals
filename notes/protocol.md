@@ -10,21 +10,22 @@
 
 ## Study design
 
-- **10 subjects, 3 sessions each** (30 sessions total).
-  > **Changed from 2 to 3 on 2026-08-03**, when IBEC approved the exertion amendment. Session 3
-  > is the **HR dynamic-range (recovery) arm** — see its own section below for why it exists
-  > and what it requires. `notes/analysis_prespec.md` is still frozen at 2 sessions and
-  > **must be amended before any M5 pilot session** (trigger re-set by the user 2026-08-04, the
-  > old "before M0 is deposited" trigger having died with M0); until then the two files disagree
-  > and this one is the newer and governs what is captured.
+- **Exactly 5 representation-validation subjects plus exactly 10 final-evaluation slots,
+  3 sessions each.** The existing four subjects A–D remain development-only and do not enter either
+  prospective cohort. Scope is therefore exactly 15 new prospective people and at least 19 unique
+  subjects in the project.
+  > Session 3 is the **HR dynamic-range (recovery) arm**. Owner attestation 2026-08-09 confirms
+  > approval on 2026-08-03 under parent approval `24IBEC051`, covering these 15 new prospective
+  > participants in addition to A–D. The determination and consent/PIS records are confidential and
+  > intentionally held outside the repository.
 - **Session 1: natural breathing.** Subject breathes normally; no pacing.
 - **Session 2: paced breathing** with a metronome at a fixed target rate.
-  - Rates: **12, 15, 18 breaths/min**, one steady rate per subject, assigned by
-    **enrolment-order rotation** (12 → 15 → 18 repeating), which for 10 subjects
-    fixes the allocation at **4 / 3 / 3** (rate 12 takes the extra, tenth, subject).
-    This allocation is **frozen before any data is collected** — it defines the
-    mixture weights of the paced arm-level LoA (`notes/analysis_prespec.md` §1,
-    M3R-31) and must never be chosen post-hoc. Rationale:
+  - Rates: **12, 15, 18 breaths/min**, one steady rate per subject, assigned by independent
+    **cohort-slot rotation** (12 → 15 → 18 repeating). The five representation-validation
+    slots are **2 / 2 / 1** and the ten final-evaluation slots are **4 / 3 / 3**. The approved
+    15-person ceiling is fully allocated; no additional participant replacement is assumed. These are the
+    mixture weights of the paced arm-level LoA (`notes/analysis_prespec.md` §1, M3R-31).
+    Rationale:
     12 bpm harmonics sit clear of the cardiac band (easy case); 18 bpm (0.30 Hz)
     puts the 4th harmonic at ~1.2 Hz = 72 bpm, inside the resting-HR band.
   - Metronome = **2x the target rate** (each beat = one inhale or one exhale).
@@ -53,7 +54,8 @@
 - **Order is fixed** (natural, then paced, then recovery) — record as a study limitation
   (no counterbalancing). Recovery is placed last deliberately: it is the only arm involving
   exertion, so a subject who withdraws after it still contributes two complete arms.
-- Both sessions otherwise follow the identical fixed conditions below.
+- All three sessions otherwise follow the fixed conditions below, except the recovery arm's
+  explicitly stated settle-criterion exemption.
 
 ---
 
@@ -124,10 +126,10 @@
   > **Changed from 5 to 10 minutes on 2026-07-24**, before any session was captured under it,
   > so it is simply what the protocol has always said rather than a later amendment. (The
   > original wording justified this by its position relative to the M0 deposit; no deposit ever
-  > existed — M0 was removed 2026-08-03 — but the decision and its date are unaffected.) **The ethics approval permits up to 10 minutes** (user-confirmed
-  > 2026-07-24; recorded on the user's authority — the approval document itself is
-  > not in this repo). Approval **`24IBEC051`**, issuing board **IBEC, KAUST**, covers
-  > both collection and publication (user-confirmed 2026-07-25). **Do not exceed 10 minutes.**
+  > existed — M0 was removed 2026-08-03 — but the decision and its date are unaffected.) The
+  > project record says parent approval **`24IBEC051`** permits up to 10 minutes and covers
+  > collection/publication (user-confirmed 2026-07-24/25); the approval document itself is not in
+  > the repo. **Do not exceed 10 minutes.**
   >
   > **Why.** At the measured 10-46% HR coverage, a 5-min session produced only ~9
   > windows, i.e. ~1.8-8.3 accepted windows per subject across both sessions before
@@ -140,11 +142,12 @@
   > bin for the entire session**, so a posture shift late in a longer sit corrupts
   > the tail of the recording without any obvious symptom — the same class of silent
   > failure as the 2026-07-14 mislock. The 486 s (~8 min) sweep session showed this
-  > is tolerable, but that subject was actively pacing. **The M5 pilot must verify
+  > is tolerable, but that subject was actively pacing. **Representation validation must verify
   > the locked bin still tracks the chest at minute 9-10** (inspect the run with
   > `scripts/diagnose_live_run.py`); if it does not, the duration comes back down.
   >
-  > Storage: ~1.55 GB raw ADC per 10-min session, ~31 GB for the 20-session study.
+  > Storage: ~1.55 GB raw ADC per 10-min session; the 45 prospective sessions at the minimum
+  > 5-validation/10-final design require approximately 69.8 GB before technical session recaptures.
 
 ## Warmup & bin lock
 
@@ -159,11 +162,10 @@
   lock. There is no extra pre-buffer settle delay — HR appears one window after
   the stream starts. The subject must be seated and still from before the run
   starts through the end.
-- If warmup locks a poor bin (**`selected_confidence == "low"`** in
-  `warmup_bin_selection.json`), re-run **at most once** rather than nudging the subject; if the
-  retry is still "low", **record the session anyway** (do not keep retrying). Both attempts and the
-  study-level retry incidence are logged; see the exact disposition in
-  `notes/analysis_prespec.md` §6 (item 7). Inspect with `scripts/diagnose_live_run.py <run_dir>`.
+- If warmup reports **`selected_confidence == "low"`**, record the flag but do **not** retry or
+  replace a `representation_validation` or `final_evaluation` session. Continue the session and
+  count every complete window. Separately labelled engineering/development diagnostics may repeat,
+  but never enter validation/final denominators. See `notes/analysis_prespec.md` §6 item 7.
 
 ## Equipment checklist (before each session)
 
@@ -185,7 +187,7 @@
 - [ ] Logging/CSV export active
 - [ ] Sensored hand resting on the leg — will not move during recording
 
-## SETTLE CRITERION — mandatory, every arm, no exceptions
+## SETTLE CRITERION — mandatory for natural, paced and diagnostic captures
 
 > **Added 2026-07-14 after a measured failure.** In the 2026-07-13 smoke run the subject's PR ran
 > **75 → 94 → 65 bpm over the first 25 s of recording** (PI 7–10, so the excursion was **real**,
@@ -202,8 +204,8 @@
 Seated settling typically takes **2–3 minutes**. Budget it. If the criterion is not met within
 5 minutes, **abort and re-seat** — do not record and hope.
 
-**This applies to natural, paced and diagnostic arms alike** (the previous 2-minute settle was
-written only under the paced arm, and the smoke tests skipped it).
+**This applies to natural, paced and diagnostic captures alike.** Recovery uses its explicit
+post-exertion start rule below; that is the only study-arm exemption.
 
 Record in `HISTORY.md`: settle duration, and the PR at the moment recording started.
 
@@ -212,7 +214,8 @@ Record in `HISTORY.md`: settle duration, and the PR at the moment recording star
 1. Seat the subject in the fixed posture; measure/record the distance.
 2. Confirm the Perfusion Index is adequate (low PI segments are treated as unreliable reference —
    flag, do not chase; see CLAUDE.md §4).
-3. **Wait for the SETTLE CRITERION above.** This is a gate, not a suggestion.
+3. **Wait for the SETTLE CRITERION above.** This is a gate for natural/paced/diagnostic captures.
+   For recovery, follow the recovery section's explicit post-exertion start rule instead.
 3a. **CLOCK SYNC (mandatory, agreement-blind).** Before recording, synchronise the PC and the
    Masimo phone to a common NTP time source and **record both clock offsets** in the session log.
    The PC↔phone offset must be **within ±1 s**; re-check at session end for drift. If it exceeds
@@ -272,13 +275,15 @@ approval's 10-minute ceiling, which applies to this arm too.
 
 ## HR dynamic-range arm — the seated RECOVERY capture
 
-> **STATUS: ETHICS-APPROVED 2026-08-03; part of the protocol. Two non-ethics gates remain
-> open — see "Remaining gates" below. Do not capture a study session yet.**
-> The amendment to **`24IBEC051`** adding brief submaximal exertion was submitted 2026-07-25
-> and approved by IBEC, KAUST. Submission text: `notes/ethics_amendment_hr_recovery.md`
+> **STATUS: ANALYSIS CONTRACT REVIEWED; AUTHORIZATION OWNER-ATTESTED 2026-08-09.** The amendment
+> to **`24IBEC051`** was approved on 2026-08-03 and covers 15 new prospective participants in
+> addition to existing development subjects A–D. The determination is confidential and held by the
+> researcher/PI; consent/PIS records are private between the researcher and participants and are
+> intentionally not stored here. Submission text: `notes/ethics_amendment_hr_recovery.md`
 > (PI Slim Alouini; submitting researcher Jose Maria Sosa; project *Contactless Heart-Rate
-> Estimation with a 77 GHz FMCW Radar*). Determination reference: `[[RECORD — the amendment's
-> own approval reference and date, as issued; `24IBEC051` is the parent approval]]`.
+> Estimation with a 77 GHz FMCW Radar*). Parent approval: `24IBEC051`; original approval date
+> recorded in the submission: 25/05/2026; request date: 25/07/2026; issuing board currently
+> recorded only as `IBEC, KAUST`.
 
 ### Why this arm has to exist
 
@@ -290,8 +295,8 @@ entirely and emits the session-median PR scores **83–100%** on those captures.
 
 That is not a statement about the estimator. It is a statement about the data: **these
 sessions cannot distinguish a working HR estimator from a stub that returns 85 bpm.** Any HR
-acceptance criterion validated on them is unfalsifiable, and running M6 unchanged would
-reproduce the defect across 20 sessions instead of 8.
+acceptance criterion validated on them is unfalsifiable, and collecting the former two-arm
+10-subject design unchanged would reproduce the defect rather than test tracking.
 
 The BR side already solved this. The stepped sweep arm above deliberately moves the
 breathing rate 12 → 21 bpm, and it is the **only** capture in which BR tracking has been
@@ -322,7 +327,7 @@ then slowly, over several minutes.
 | **Natural day-to-day / time-of-day variation** | Real but uncontrolled and *between* sessions, not within one. Does nothing for a per-session agreement claim, and cannot be commanded or logged as a design variable. |
 | **Cold pressor / Valsalva** | Larger HR excursion, but adds discomfort and a materially higher risk profile for no advantage over recovery. Would need the same ethics amendment and more. |
 
-### Protocol (as approved)
+### Recovery procedure recorded in the submitted amendment
 
 1. Set up and verify the room exactly as "Fixed conditions" and the equipment checklist
    require. Do this **before** the exertion, so the subject sits down into a ready rig.
@@ -352,8 +357,8 @@ then slowly, over several minutes.
 
 ### Screening and exclusions — mandatory for this arm
 
-Approved on condition of the screening below. These are **additional** to the existing
-protocol, which carries no cardiovascular exclusions because it never needed any.
+The submitted amendment and project protocol specify the screening below. These are
+**additional** to the existing non-exertional protocol.
 
 - [ ] **PAR-Q+** (Physical Activity Readiness Questionnaire for Everyone) completed **before**
       any exertion. **Any positive response excludes the subject from this arm** — they may
@@ -381,22 +386,31 @@ protocol, which carries no cardiovascular exclusions because it never needed any
 recovery decays fastest, so those windows legitimately breach within-window stationarity. The
 usable evidence is the slower mid-to-late ramp, which is both admissible and wide.
 
-### Adequacy criterion — fixed before the arm runs, so the arm can fail
+### Recovery adequacy and evidence floor
 
-A capture from this arm is **adequate for HR validation** only if, computed from the Masimo
-CSV alone and **before** any radar comparison:
+The complete executable contract is `notes/analysis_prespec.md` §2c. In summary, Stage 1 is
+reference-only. Let `R_s` be the full-precision finite `median_pr_bpm` values from complete
+HR-reference-admitted recovery windows. Require:
 
-1. **≥ 10 comparator-admissible windows** (`hr_reference(...)["admitted"]`), and
-2. the admissible windows' reference PR spans **≥ 20 bpm** (max − min of `median_pr_bpm`), and
-3. the **constant-predictor baseline scores < 50%** at ±5 bpm — i.e. emitting the session
-   median PR fails on most admissible windows.
+1. `|R_s| ≥ 10`;
+2. `max(R_s) − min(R_s) ≥ 20.0 bpm`;
+3. with `c_s` the ordinary numeric median of `R_s` (mean of the two centre values for even `n`,
+   no rounding), `sum 1(|R_s − c_s| ≤ 5.0) / |R_s| < 0.5`.
 
-Criterion 3 is the operative one: it is the direct negation of the defect found on
-2026-07-31, and it is what makes a later HR agreement claim falsifiable. **All three are
-computed from the reference only**, so checking them cannot leak radar performance into the
-protocol decision (CLAUDE.md §4).
+Count gates run before median/range/division; empty values are recorded as null, not NaN/Inf.
+Stage 1 may use Masimo plus fixed grid/timebase/integrity metadata only — no radar samples,
+radar-validity result, estimator output or agreement.
 
-If a capture fails adequacy, record it and re-run the arm — do not weaken the criterion.
+After scoring, Stage 2 requires at least four jointly evaluable recovery windows and applies the
+same bit-for-bit `c_s` to that subset, again requiring a hit rate strictly below 0.5. Exactly 0.5
+fails. Stage 2 governs headline eligibility only; it never filters analysis rows. At least 8 of the
+fixed 10 final subjects must pass both stages for a recovery population headline, in addition to
+the arm estimability and precision rules.
+
+**No adequacy/yield retry.** A Stage-1 or Stage-2 failure is retained, counted and reported. It
+does not trigger recapture, replacement, estimator change or threshold change. A Stage-1-failing
+session is scored once after its reference-only status is sealed, for descriptive radar coverage
+and results, but never enters the recovery LoA estimand.
 
 **Calibration check, 2026-07-31.** The criterion was evaluated against all 8 existing
 captures, from their Masimo CSVs alone. **All 8 fail**, which is the intended behaviour — it
@@ -421,34 +435,19 @@ admissibility itself selects for stationarity.
 
 ### Gates
 
-**Ethics — DISCHARGED 2026-08-03.** Approved by IBEC, KAUST as an amendment to `24IBEC051`.
-The screening in "Screening and exclusions" above is a condition of that approval, not a
-suggestion. The mental-arithmetic fallback described in §10 of the submission is **moot** and
-must not be run in place of the approved arm.
+- [x] **Independent analysis-contract review.** The required `task_breakdown` and independent
+      `plan_reviewer` reviews completed 2026-08-09. Substantive verdict:
+      **READY WITH MINOR CHANGES**; all minor changes were incorporated. Record:
+      `plans/m0_recovery_contract_cross_review.md`.
+- [x] **Three-arm prespec reconciliation.** `notes/analysis_prespec.md` now defines the separate
+      recovery estimand, two-stage floor, data roles, subject counts and missing-window rules.
+- [x] **Authorization/enrollment attestation.** Owner confirmation 2026-08-09 records approval on
+      2026-08-03 under parent reference `24IBEC051`, exactly 15 new prospective participants in
+      addition to A–D, and confidential determination/consent/PIS records held outside the repo.
+      No participant replacement beyond the approved 15 is assumed.
 
-**Two gates remain, and neither is ethics:**
-
-- [ ] **Cross-review (CLAUDE.md §6).** This arm is an experimental-plan change and **has not
-      been independently reviewed**. Ethics approval is a safety and consent determination —
-      it says nothing about whether the design answers the scientific question. Record the
-      outcome here.
-- [ ] **Analysis pre-spec edit (`notes/analysis_prespec.md` §1).** The pre-spec says
-      **10 subjects × 2 sessions** with arm `a ∈ {natural, paced}`. This arm makes it three.
-      It is **not yet frozen** (the freeze is the user's irreversible M0 act), so this is a
-      **pre-freeze edit, not a §4 amendment** — no new version DOI is implied. It still needs
-      CLAUDE.md §6 cross-model review, since the completed M3 review covered the 2-arm design.
-      A dated PENDING banner in that file makes the contradiction visible; **this file is the
-      newer one and governs what is captured.**
-      > **Watch the evidence floor.** This arm is deliberately non-stationary while HR
-      > admissibility requires within-window PR spread ≤ 5 bpm, so early-recovery windows will
-      > legitimately fail. Whether the §2a/§2b floor is arm-specific must be decided **before**
-      > the freeze — a floor adjusted after seeing this arm's yield is not a floor.
-
-**There is no longer a governance gate before study capture.** This paragraph previously read
-"no study capture may be taken until the pre-registration is deposited" — **that gate was removed
-with M0 on 2026-08-03** (`HANDOFF.md` §3) and asserting it here was simply wrong. M5/M6/M7 are
-blocked by nothing. What still governs capture is unchanged and is not governance: ethics
-approval `24IBEC051`, the settle criterion, the clock-sync step, and the protocol below.
+**M0 verdict: READY.** The mental-arithmetic fallback is not authorized as a substitute for the
+reviewed recovery arm.
 
 ---
 
@@ -458,6 +457,9 @@ approval `24IBEC051`, the settle criterion, the clock-sync step, and the protoco
   (raw ADC mirror, `live_estimates.csv`, `live_intermediates.npz`,
   `warmup_bin_selection.json`, `run_metadata.json`).
 - Add the session as a row in `data/manifest.local.csv`.
+- Maintain the committed, SHA-256-bound cohort registry required by
+  `notes/analysis_prespec.md` §3.1. It records subject ID, immutable role and slot, paced rate,
+  session IDs/hashes and label-access state. All sessions from one subject use the same role.
 - Record the capture in HISTORY.md: subject, distance, duration, observed PR
   range, and any disturbances (CLAUDE.md reproducibility rule §6).
 
@@ -465,54 +467,22 @@ approval `24IBEC051`, the settle criterion, the clock-sync step, and the protoco
 
 ## Resolved / remaining decisions
 
-Resolved (see Study design above): **10 subjects x 3 sessions** — session 1 natural,
-session 2 paced, session 3 recovery (added 2026-08-03, ethics-approved); **10-min recordings**
-(2026-07-24, within the approval's 10-min ceiling); seated 0.8-1.4 m warmup auto-lock.
+**Resolved by M0:**
 
-**Capture tool — resolved:** raw `.bin` is recorded by `scripts/live_demo.py` in
-live mode (mirrors the raw ADC to `adc_stream.bin`). **This is the study capture
-path.** A second, standalone headless capture tool also exists —
-`steps/step_1/capture.py`, which writes `data/raw/<id>.bin` plus metadata with a
-SHA-256 and a manifest row, and was verified end-to-end on 2026-07-22 (HISTORY.md,
-session 9). *(This file previously said "there is no standalone capture script",
-which was false.)* **Use `live_demo.py` for study sessions** — it is the path that
-produces the diagnostics the analysis depends on.
+- three separate natural, paced and recovery HR estimands; no pooled headline;
+- natural+paced and recovery evidence floors remain separate;
+- existing A–D development-only; first five prospective slots representation validation; next ten
+  final evaluation; no subject or correlated session crosses roles;
+- final paced allocation 4/3/3 and validation allocation 2/2/1;
+- no recovery/yield/warmup retry; only objective technical admission failures may be re-captured;
+- every complete grid window and expected estimator/vital/config key is materialized in the ledger;
+- study capture path remains `scripts/live_demo.py`, which mirrors `adc_stream.bin` and emits the
+  required diagnostics. The standalone `steps/step_1/capture.py` is not the study path.
 
-**Paced breathing rates — resolved:** 12 / 15 / 18 bpm, rotated across subjects
-(see Study design), **for the M6 study arm**.
+**Authorization/privacy record:** the recovery determination exists and is held privately by the
+researcher and PI. Participant consent/PIS records remain private between the researcher and each
+participant. Approval covers exactly 15 new prospective participants in addition to A–D; no extra
+participant replacements are assumed.
 
-**Collision-provoking capture (M7) — approved, design still open.** The ethics
-approval covers a **subject-specific** paced rate chosen so 4 x f_r lands on the
-subject's HR (user-confirmed 2026-07-24). This is a *method-development* capture,
-separate from the 12/15/18 study rotation above. **Its rate must NOT be computed
-from resting HR:** pacing moves HR — this subject went ~65 -> 72 bpm when paced,
-and in the sweep session ran 80-88 bpm, which is why that capture's real collision
-landed on the **21 bpm** step rather than the designed 18 (HISTORY.md 2026-07-14).
-Set the rate from HR measured *during* a short paced warm-up, or bracket a narrow
-range around the prediction. Full design lives in `plans/implementation_plan.md` M7.
-
-**HR dynamic range — OPEN, and it constrains what M6 can claim.** Measured 2026-07-31: the
-within-session PR spread of all 8 existing captures (2.6–5.2 bpm) is narrower than the
-agreement tolerance, so those sessions cannot falsify an HR claim — a constant predictor
-scores 83–100% on them. The **seated recovery arm** proposed above is the fix, and it is
-**blocked on an ethics amendment** because it adds exertion. Two decisions are outstanding:
-(1) whether to seek that amendment or accept the weaker mental-stress fallback; and
-(2) whether the M6 sessions themselves should carry a ramp segment, or whether the ramp stays
-a separate method-development arm. **Until one of these lands, an HR acceptance criterion
-cannot be validated on any data this study will produce** — a BR criterion is unaffected and
-can proceed on the stepped-sweep evidence.
-
-**Open (nothing is blocked on a deposit — M0 was removed 2026-08-03):**
-- ~~**The evidence floor**~~ — **CLOSED 2026-07-25.** Fixed as Option A in
-  `notes/analysis_prespec.md` §2a/§2b: per-session ≥ 1 evaluable window, per-subject ≥ 4,
-  study-wide ≥ 8 of 10 subjects, LoA CI half-width ≤ 5 bpm, natural-drop miss rule. **It
-  survived M0's removal and remains binding as engineering** (user decision 2026-08-04): a
-  below-floor result narrows the claim and is logged, it is not ignored. The reason it had to
-  be fixed before the pilot is unchanged and has nothing to do with any deposit — a floor
-  chosen after seeing the yield is not a floor.
-- **Ethics approval** — reference **`24IBEC051`**, issuing board **IBEC, KAUST**
-  (user-confirmed 2026-07-25; covers collection *and* publication). For the Methods
-  section, confirm the full formal expansion of "IBEC" as it appears on the approval.
-
-Next action is a live hardware smoke test on yourself before running any subject
-(`plans/implementation_plan.md` M1).
+M0 is documentation-only and now ready. **Do not infer authorization for M1 implementation or
+capture execution from this status; those actions require their own milestone authorization.**

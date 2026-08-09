@@ -12,8 +12,13 @@
 > `notes/comparator_prespec_br.md` (BR scoring — **M3, cross-reviewed 2026-07-25/26; all findings
 > resolved**), `notes/protocol.md` (capture protocol), `notes/capture_inventory.md`.
 >
-> **Cross-review COMPLETE:** all M3 findings (M3R-01…48) are **resolved** across 17 rounds (see
-> `plans/m3_prespec_cross_review.md`). There is no freeze and no deposit — M0 was removed.
+> **M0 independent review completed — 2026-08-09.** The required
+> `task_breakdown` check and independent `plan_reviewer` passes are recorded in
+> `plans/m0_recovery_contract_cross_review.md`. The substantive plan verdict was
+> **READY WITH MINOR CHANGES** and all three minor changes were incorporated. A final conformance
+> pass returned **PASS** after the owner removed the model-family-specific requirement from
+> `CLAUDE.md` §6. Owner authorization/enrollment attestation was recorded afterward.
+> **Overall M0 verdict: READY.**
 >
 > **Change log, kept so the spec is self-documenting:**
 > **2026-07-27 — §6 item 7, location-only.** The parenthetical naming the code that sets
@@ -37,53 +42,34 @@
 > stands on its own terms.) It was included in the
 > five-discipline review of `plans/m8_step1b_ahmed_transfer.md`.
 >
-> **2026-08-03 — PENDING, NOT YET APPLIED: a third arm.** *(An internal-consistency debt, not a
-> blocker on anything — M0 is gone. It still decides what M6 can claim.)* **Trigger, set by the
-> user 2026-08-04: this edit must land BEFORE ANY M5 PILOT SESSION.** It does not block the
-> three new BR captures (subjects E/F/G), which are not M5.* IBEC approved an amendment to
-> `24IBEC051` adding a **seated HR-recovery arm** (`notes/protocol.md`, "HR dynamic-range arm").
-> The study design is now **10 subjects × 3 sessions**, and arm becomes
-> `a ∈ {natural, paced, recovery}`. **§1 below still says 2 sessions and 2 arms and has NOT been
-> edited** — the change needs CLAUDE.md §6 cross-model review first (the completed M3 review
-> covered the 2-arm design). **This banner exists so the contradiction is visible rather than
-> silent; `notes/protocol.md` is the newer document and governs what is captured.**
+> **2026-08-09 — M0 RECOVERY CONTRACT APPLIED.** Recovery is a third, non-exchangeable HR arm.
+> The final-evaluation design is exactly 10 subjects × 3 sessions; a separate cohort of at least
+> 5 subjects is reserved for representation validation, and the 4 existing subjects remain
+> development-only. Natural, paced and recovery have separate estimands and evidence statuses.
+> Recovery cannot rescue the natural+paced floor. The exact recovery adequacy, role firewall,
+> missing-window disposition and count reasoning are binding below.
 >
-> What the edit must cover when it is made:
-> - **§1 estimand:** extend the arm set; add a third arm-conditional LoA. The two-level model
->   survives intact — with one session per arm per subject still true at 3 arms, the
->   "no session-within-subject variance component" argument is unchanged.
-> - **§1 non-exchangeability:** recovery is a third non-exchangeable regime, so it gets its own
->   `μ_a` and LoA and is **never pooled** with natural or paced (M3R-27 already forbids a
->   combined headline).
-> - **§2b per-subject floor** reads "≥ 4 evaluable windows (**across the 2 sessions**)" — the
->   denominator changes at 3 sessions and the number must be re-decided, not silently rescaled.
-> - **§2b miss rule** names only natural and paced ("drop that subject's **natural** arm to
->   descriptive; report **paced** only"). It has no branch for a recovery arm that misses.
-> - **§2b "No add-sessions lever"** and its conclusion that the *"`24IBEC051` permits > 2
->   sessions/subject?"* question (A5(a)) is **moot** are now contradicted on their face. The
->   distinction the edit must draw explicitly: the recovery arm is **not** an add-sessions lever
->   in the §2b sense — it does not add sessions to raise evidence *yield*, it adds an arm to make
->   the HR claim *falsifiable*. Option A still narrows rather than recruits. Say so, or a
->   reviewer will read a plain contradiction.
-> - **§2a/§2b evidence floor — the real risk.** The recovery arm is *deliberately* non-stationary,
->   and HR admissibility requires within-window PR spread ≤ 5 bpm
->   (`src/comparator.py:_HR_STATIONARITY_MAX_BPM`). Early-recovery windows will legitimately fail
->   it. **The floor may not be achievable in this arm**, and whether it is arm-specific must be
->   decided *before* that arm is captured — not after seeing its yield. An honesty rule now, not a
->   governance one.
-> - **Order:** sessions run natural → paced → recovery, fixed, no counterbalancing.
+> **Authorization/enrollment status — OWNER-ATTESTED 2026-08-09.** The recovery amendment was
+> approved on 2026-08-03 under parent approval `24IBEC051` by the body recorded in this project as
+> `IBEC, KAUST`. It covers **15 new prospective participants in addition to existing development
+> subjects A–D**, exactly matching the 5-validation/10-final design. The determination is confidential
+> and held by the researcher and PI; consent/PIS records are private between the researcher and each
+> participant. These documents are intentionally not repository artifacts. The 15-person allowance
+> is fully allocated, so no additional participant replacement beyond those 15 is authorized here.
 
 ---
 
 ## 1. Agreement model
 
 Radar–reference differences `d = (radar − reference)` are analysed **per vital sign** (HR, BR) with
-a **subject-clustered limits-of-agreement model**. The design is **10 subjects × 2 sessions, and
-the two sessions are the two fixed conditions** (session 1 = natural, session 2 = paced), so
+a **subject-clustered limits-of-agreement model**. The final-evaluation design is **exactly
+10 subjects × 3 sessions** (session 1 = natural, session 2 = paced, session 3 = recovery), so
 **"session" and "arm/condition" coincide** — there is exactly one session per arm per subject.
 Windows within a session are the within-subject replicates; they are **not** independent pairs.
+The separate representation-validation cohort is not part of the final agreement estimands.
 
-**Estimand and model (arm-specific, PRIMARY).** For arm `a ∈ {natural, paced}` and difference
+**Estimand and model (arm-specific, PRIMARY).** For arm
+`a ∈ {natural, paced, recovery}` and difference
 `d_ik` (subject `i`, window `k`):
 
   `d_ik = μ_a + b_i + e_ik`, with `b_i ~ N(0, σ²_b)` (subject random intercept),
@@ -91,20 +77,25 @@ Windows within a session are the within-subject replicates; they are **not** ind
 
 fitted by a linear mixed / variance-components model (Carstensen, Simpson & Gurrin 2008).
 **Arm-specific limits of agreement:** `LoA_a = μ_a ± 1.96·√(σ²_b + σ²_w)`. Bias `μ_a` and LoA are
-reported **separately for each arm**, because natural and paced are non-exchangeable measurement
-regimes, not exchangeable random sessions.
+reported **separately for each arm**, because natural, paced and recovery are non-exchangeable
+measurement regimes, not exchangeable random sessions. For recovery, Stage 1 in §2c alone defines
+estimand eligibility: every Stage-1-passing final session contributes **all** its jointly evaluable
+windows irrespective of Stage-2 status. Stage 2 never selects accuracy rows or subjects; it only
+governs whether a recovery headline is permitted.
 
 **No session-within-subject variance component.** With exactly one session per arm per subject, a
 between-session-within-subject term is **not identifiable** — it is confounded with the arm mean.
 The earlier draft's `σ²_s` is therefore dropped; the model has **two** levels only: subject
 (`σ²_b`) and within-subject-arm window residual (`σ²_w`).
 
-**No single combined LoA (M3R-27).** Because arm is a fixed effect, a pooled "marginal" LoA would
+**No single combined LoA (M3R-27, extended by M0).** Because arm is a fixed effect, a pooled
+"marginal" LoA would
 surround a covariate-specific mean whose value depends on arbitrary centering/weights — not one
 well-defined estimand — and §3.2 already forbids a combined headline. So **only arm-conditional**
-limits are reported; there is **no** single natural+paced LoA.
+limits are reported; there is **no** single natural+paced+recovery LoA or pooled three-arm
+headline. An arm-equal combined display may be descriptive only and must expose every arm.
 
-**Paced commanded-rate estimand — FROZEN (M3R-31).** Per `notes/protocol.md`, each subject is paced
+**Paced commanded-rate estimand — binding (M3R-31).** Per `notes/protocol.md`, each subject is paced
 at a **single steady commanded rate** (12, 15, *or* 18 bpm), so commanded rate is a **between-subject**
 attribute, **not** a within-subject factor. The **only inferential paced estimand is the arm-level
 paced LoA** `μ_paced ± 1.96·√(σ²_b + σ²_w)` from the arm model `d_ik = μ_paced + b_i + e_ik`.
@@ -114,13 +105,14 @@ mixture across the 12/15/18 subgroups (M3R-31 r2)**, whose bias `μ_paced` and b
 a zero-mean intercept cannot absorb a systematic between-group shift — instead, between-group rate
 differences enter `σ²_b` as genuine between-subject spread and any rate mean-shift enters `μ_paced` as
 the mixture mean. **No separate commanded-rate fixed-effect term, rate-specific variance rule, or
-per-rate CI is added or reported.** **The allocation is fixed prospectively and reported, never an
-analyst choice:** the 10 subjects are assigned rates by the protocol's **enrolment-order rotation**
-(12 → 15 → 18 repeating), which for `N = 10` yields **counts 4 / 3 / 3** — rate 12 takes the extra
-(tenth) subject — fixed **before any data is collected or scored**. Every paced LoA is reported
+per-rate CI is added or reported.** **The allocation is deterministic and reported, never an
+analyst choice:** the 10 final-evaluation slots use the protocol's **enrolment-order rotation**
+(12 → 15 → 18 repeating), which yields **counts 4 / 3 / 3** — rate 12 takes the extra
+(tenth) slot. Every paced LoA is reported
 **with its realized per-rate subject counts** (the mixture weights), so the weighting is transparent.
-*(This enrolment-order start is a study-design default reconciled into `notes/protocol.md`; the user
-may re-fix the allocation, but it must be frozen pre-collection, never chosen post-hoc.)* **Which
+The five representation-validation slots use the same rotation independently, yielding
+**2 / 2 / 1**. The 15 approved prospective slots fully allocate the enrollment ceiling; no
+additional participant replacement is assumed. **Which
 subjects enter the paced estimand differs by vital sign, by design (§3.2):** the **HR** paced LoA is
 the mixture over **12 and 15 bpm subjects only** (7 subjects, counts 4/3; the 18 bpm subjects sit in
 the 4·f_r≈HR collision zone and are reported **separately / descriptively**, never pooled — §3.2); the
@@ -242,7 +234,7 @@ that is unavailable, reported as a point sensitivity without a CI). **Scope of t
 stated honestly:** it addresses **proportional bias only**; it uses a **constant residual SD**
 `σ²_e,reg`, so it does **not** correct heteroscedasticity — a heteroscedastic constant LoA therefore
 **remains a declared limitation**, not something this sensitivity removes. Choosing a
-transform *as the new primary* after M6 is **forbidden**.
+transform *as the new primary* after final evaluation is **forbidden**.
 
 - **References (verified 2026-07-25):**
   - Bland & Altman, *Lancet* 1986; **1**(8476):307–310 — original limits of agreement.
@@ -256,17 +248,14 @@ transform *as the new primary* after M6 is **forbidden**.
 
 ## 2. Evidence floor and precision target
 
-> **Status after M0's removal — BINDING AS ENGINEERING (user decision 2026-08-04).** The floor
-> was written when it was also governance for a deposit gate. **The deposit is gone; the floor
-> is not.** It keeps its force: a below-floor result **narrows the claim and is logged**, it is
-> not quietly ignored. What it never was, and must never be described as, is a *timing* claim —
-> nothing here is pre-registered. Its value is that it is written out in full and applied
-> identically to every estimator compared, and that it is fixed **before** the yield it judges
-> is seen (the §4 prospective-only rule, which also survived M0). A floor chosen after seeing
-> the pilot yield is not a floor — that reasoning never depended on a deposit.
+> **Status — BINDING INTERNAL ANALYSIS CONTRACT.** A below-floor result narrows the claim and is
+> logged; it is never ignored or repaired by adding sessions for evidence yield. The rules are
+> applied identically to every estimator compared. This is a transparency and consistency rule,
+> not a registration or timing claim.
 
-The minimum number of **evaluable** (radar-accepted **and** comparator-admissible,
-non-overlapping 30 s) windows the study is powered to report.
+Here **jointly evaluable** means radar-accepted **and** HR-reference-admitted on the fixed,
+non-overlapping 30 s grid. `reference_admitted` means that the HR comparator admits the reference
+window without regard to whether the radar emits an estimate.
 
 **Vital-sign scope (M3R-28).** Option A below is the **HR (primary-endpoint) evidence floor** — it
 was derived from the HR AHET-acceptance yield and the HR comparator
@@ -277,73 +266,85 @@ windows exist, always with its own coverage**, using a BR-evaluable count (radar
 HR count. The ≤ 5 bpm precision target and the miss rule apply to the **HR** primary endpoint only;
 no unspecified joint HR+BR window set is ever used.
 
-### 2a. Option A — as the user chose it (FROZEN, verbatim from `plans/m0_b1_evidence_floor_memo.md` §3)
+### 2a. Natural+paced evidence floor
+
 | item | value |
 |---|---|
-| per-session floor | ≥ 1 evaluable window |
-| per-subject floor | ≥ 4 evaluable windows (across the 2 sessions) |
+| per-session floor | ≥ 1 jointly evaluable window |
+| per-subject floor | ≥ 4 jointly evaluable windows across **natural + paced only** |
+| cohort floor | ≥ 8 of the fixed 10 final-evaluation subjects meet the per-subject floor |
 | precision target | limits-of-agreement CI half-width ≤ 5 bpm (§1 model) |
-| **miss rule** | if a session yields < 1 evaluable window, **drop that subject's natural arm to descriptive; report paced only** |
+| zero-window disposition | that session contributes zero accuracy rows and zero coverage; its arm/session is descriptive, while the other arm remains eligible |
 
-This is exactly the user's 2026-07-24/25 selection — no more.
+Recovery windows **never count** toward this floor and cannot rescue it. Subjects below the floor
+are retained; all eligible arm data and zero-coverage sessions remain in their required
+denominators. The cohort rule changes only the natural+paced claim status, never membership.
 
 **Operational definition of "CI half-width ≤ 5 bpm"** (the LoA CIs from §1 can be asymmetric):
 the target is met iff **the maximum of the four distances** from each LoA point estimate (upper and
 lower) to each of its two CI endpoints is ≤ 5 bpm — evaluated **per arm** on the **primary
-(cluster-bootstrap) CI** (§1, M3R-29 Option A). The **consequence of missing it** is frozen in §2b.
+(cluster-bootstrap) CI** (§1, M3R-29 Option A). Missing it makes that arm descriptive-only: bias,
+observed spread and coverage remain reported, but no population LoA headline is permitted.
 
-### 2b. Extensions — FROZEN (user decision 2026-07-25, adopting the cross-review recommendation)
-The following complete the HR evidence floor and are now binding:
-- **Study-wide floor:** the study-wide primary HR agreement claim requires **≥ 8 of the 10
-  subjects** to meet the per-subject floor. If fewer than 8 do, the **study-wide claim weakens to
-  descriptive** (bias and observed spread; no population LoA), reported as a limitation.
-- **Symmetric zero-window handling:** the §2a miss rule is **symmetric** — **either** arm (natural
-  *or* paced) that yields **< 1 evaluable window** has **that arm** reported descriptive-only; the
-  subject's other arm still contributes to its arm-specific primary analysis.
-- **No automatic whole-subject exclusion.** A subject below the **≥ 4** per-subject floor is **not**
-  removed: its **eligible arm data remain in the arm-specific analysis**, flagged **below-floor**
-  with counts reported. The **≥ 8/10 study-wide rule** (above) — not deletion of the subject — is
-  what governs whether the study-wide primary claim survives. (This keeps a below-floor
-  subject's otherwise-usable data in the analysis rather than discarding it on a count.)
-- **Precision-miss consequence:** if the ≤ 5 bpm CI-half-width target (§2a) is not met for an arm,
-  that arm's **headline weakens to descriptive** (bias and observed spread; no population LoA),
-  stated as a limitation — never renegotiated.
-- **Denominator of the ≥ 8/10 floor, and its relation to the arm-specific LoAs (M3R-42 clarification
-  — no frozen threshold changed).** The ≥ 8/10 is a **study-wide, per-subject coverage**
-  prerequisite: a subject **qualifies** if it meets the per-subject floor (≥ 4 **evaluable** windows
-  across its 2 sessions), where *evaluable* is fixed **before** any pooling rule (radar-accepted +
-  comparator-admissible; §2 head). The §3.2 HR **18 bpm exclusion is a *pooling* rule applied *after***
-  evaluability, so an 18 bpm subject's paced windows still count toward **its own** per-subject floor
-  and toward the ≥ 8/10 study-wide count. **The ≥ 8/10 is NOT a per-arm requirement.** Each
-  arm-specific LoA is reported over its **own** contributing subjects `S_a` (§1); consistent with the
-  no-double-standard rule, a subject **barred from an arm's estimand does not count toward that arm's
-  `S_a`** — the subjects paced at 18 bpm are **excluded from the paced-HR arm's `S_a`** (so that arm's
-  `S_a ≤ 7` under the 4/3/3 allocation), while they still contribute to the study-wide ≥ 8/10, to the
-  **natural** arm, to the descriptive per-rate 18 bpm summary, and to the BR paced pool (they are
-  **not** barred from *all* estimands). **Design consequence — CONFIRMED (user decision 2026-07-26):**
-  because the 18 bpm collision arm is run **deliberately** (`notes/protocol.md`), the **paced-HR
-  arm-specific LoA rests on ≤ 7 subjects by design** and cannot by itself reach an 8-subject bar; the
-  ≥ 8/10 governs the study's **overall** subject coverage (the natural arm can reach 10), **not** the
-  paced-HR arm count. The user confirmed this study-wide (not per-arm) reading is the intended meaning
-  of the frozen §2b, and that the paced-HR headline resting on ≤ 7 subjects is acceptable by design —
-  the 4/3/3 allocation and the paced-HR claim are unchanged.
+### 2b. Natural+paced denominator and pooling details
 
-### 2c. Reconciliation with §6 (no outcome-based exclusion)
-The floor thresholds **evaluable-window count only** — never the agreement value — and is applied
-**identically to every subject/session regardless of how well radar and reference agree**. A
-session with 0 evaluable windows contributes nothing because it *has* nothing to contribute (it is
-empty), not because unfavourable results were deleted. The safeguards: the rule is **prospective,
-count-based, and symmetric across arms** (§2b) — no session or arm is moved to "descriptive" on the
-basis of its bias/error; **no whole subject is ever excluded** (its eligible arm data stay in, §2b);
-and **every descriptive-only or below-floor session/subject/arm is reported with its count and
-reason** (§6).
+- The ≥ 8/10 rule is a **natural+paced per-subject evidence status**, not a per-arm threshold and
+  not a pooled three-arm headline.
+- An 18 bpm subject's jointly evaluable paced windows count toward that subject's ≥ 4
+  natural+paced floor and the ≥ 8/10 count, but remain excluded from the inferential paced-HR
+  `S_a`. Under 4/3/3 allocation the paced-HR LoA therefore uses at most 7 subjects; the 18 bpm
+  group remains descriptive for HR and remains eligible for BR.
+- No subject is automatically excluded for falling below a count. Accuracy uses contributing
+  subjects; coverage uses all admitted sessions including zeros; all shortfalls and reasons are
+  reported.
 
-**No add-sessions lever** (Option A narrows the claim rather than recruiting more), so the
-"`24IBEC051` permits > 2 sessions/subject?" question (A5(a)) is **moot**.
+### 2c. Recovery reference adequacy and evidence floor
 
-**Motivation.** The pilot measured **0** evaluable non-overlapping windows in the natural arm
-(`plans/m0_b1_evidence_floor_memo.md` §1); Option A makes a contribution-free natural session a
-declared, prospective outcome, not a post-hoc rescue.
+Recovery has a separate two-stage rule. It does not modify the natural+paced status.
+
+**Stage 1 — reference-only estimand eligibility.** For final or representation-validation subject
+`s`, let `R_s` be the finite `median_pr_bpm` values, one per complete HR-reference-admitted recovery
+window, in window order. Stage 1 may use only the Masimo reference plus fixed frame-grid,
+timebase and integrity metadata needed to form aligned complete windows. It may not access radar
+samples, radar-validity results, estimator outputs or agreement values.
+
+Evaluate count gates before range, median or hit-rate calculations:
+
+1. `|R_s| ≥ 10`;
+2. `max(R_s) − min(R_s) ≥ 20.0 bpm`;
+3. define `c_s = median(R_s)` using the ordinary numeric median (the mean of the two centre values
+   when `|R_s|` is even), at full precision with no rounding; then require
+   `sum_r 1(|R_s[r] − c_s| ≤ 5.0) / |R_s| < 0.5`.
+
+If `|R_s| = 0`, record `c_s`, range and Stage-1 hit rate as null and fail Stage 1. A Stage-1-failing
+session retains every ledger row and is reported separately/descriptively. It does not enter the
+recovery LoA estimand and cannot trigger recapture.
+
+**Stage 2 — headline evidence, never row selection.** Let `J_s` be the jointly evaluable recovery
+windows from a Stage-1-passing session. Require `|J_s| ≥ 4`, then apply the **same bit-for-bit
+`c_s`** from Stage 1:
+
+`sum_{j in J_s} 1(|median_pr_bpm_j − c_s| ≤ 5.0) / |J_s| < 0.5`.
+
+Exactly 0.5 fails. If `|J_s| < 4`, Stage 2 fails before division; if `|J_s| = 0`, record the hit
+rate as null. No NaN or infinity is emitted. Stage 2 never filters rows or subjects from accuracy:
+all jointly evaluable windows from every Stage-1-passing session enter the recovery analysis.
+
+**Recovery headline status.** At least **8 of the fixed 10 final-evaluation subjects** must pass
+both stages, and the recovery arm must also satisfy the §1 estimability/bootstrap rules and the
+§2a four-distance precision target. The denominator is all ten fixed final slots. A missing,
+withdrawn-after-opening, or exertion-ineligible recovery session fails the recovery floor. If fewer
+than eight qualify, recovery results are descriptive, all counts remain visible, and no population
+recovery LoA headline is permitted.
+
+### 2d. No outcome-based exclusion or evidence-yield recapture
+
+No session, subject or row is removed because of bias or error. Recovery Stage 1 is reference-only;
+Stage 2 is a headline gate, not a selector. Stage-1 failure, Stage-2 failure, low radar coverage,
+poor agreement and low warmup confidence cannot trigger a replacement session. Only the objective
+technical admission failures in §6 items 3–5 may permit a same-subject recapture, and only before
+any data from that subject are scored. The recovery arm adds a distinct falsifiability estimand; it
+is not an add-sessions lever for increasing yield.
 
 ## 3. Method-comparison discipline (with normative pooling table)
 
@@ -381,16 +382,54 @@ declared, prospective outcome, not a post-hoc rescue.
   estimator arms.**
 
 ### 3.1 Data-roles table (binding)
+
 | data | role |
 |---|---|
-| 8 existing captures | **development/tuning AND exploratory evaluation only; never primary/headline.** Exploratory agreement (e.g. M4's HR reproduction, M8/M9/M10 offline arms) is permitted and labelled exploratory; performance on a capture a method was tuned on is additionally labelled **apparent / in-sample**. For M8, approximate-origin reference scoring is additionally labelled `exploratory_non_frozen` and is ineligible for promotion/final agreement claims. |
-| M1 smoke test | **engineering-only** — never scored, never evaluation (CLAUDE.md §4). |
-| M5 pilot | post-freeze exploratory — may change the rules; excluded from primary metrics |
-| M6 | evaluation only — never tuning; the primary evidence base |
-| **M7 collision capture** | **role is method-specific.** **Primary only** for an estimator that was *not* fit, tuned, or selected using M7. For any method whose parameters/thresholds are fit or chosen using M7 — e.g. the Stage 1B lag-10 veto (M11c) and M8's collision tuning — M7 is **method-development/exploratory** and is **excluded from that method's primary/headline metrics**. A capture cannot both fit and confirm the same method. |
+| Existing 8 captures, subjects A–D | **`development`** — tuning/discovery and exploratory apparent/in-sample analysis only; never validation or final/headline evidence. Approximate-origin scores keep their `exploratory_non_frozen` taint. |
+| Engineering smoke | **`engineering_only`** — never agreement evaluation. |
+| First 5 eligible prospective enrolments | **`representation_validation`** — the declared M3 representation gate, one fixed M4 promotion gate, and the already-declared one-touch BR bin-rule check recorded in `notes/capture_inventory.md`; adaptively consumed and never final evidence. Paced-rate slots are 12/15/18/12/15 = 2/2/1. |
+| Next 10 eligible prospective enrolments | **`final_evaluation`** — single M5 final scoring only; no tuning, representation choice, threshold change or repair. Paced-rate slots are 12/15/18 repeating = 4/3/3. |
+| Diagnostic/collision captures | **`development`** for every method fit, selected or changed using them; never final evidence. A capture cannot fit and confirm the same method. |
+
+**Deterministic assignment and subject firewall.** Role is assigned by enrolment order after consent
+and general study eligibility, before any session data or reference values are inspected. Later
+recovery-specific ineligibility never changes role. Every natural, paced, recovery and technical
+session-recapture record from one subject carries that subject's single role. Correlated sessions
+from one subject may never cross roles, and role reassignment is forbidden.
+
+**Hash-bound cohort registry.** Before any representation-validation or final reference values are
+inspected, a clean committed registry binds canonical subject ID, immutable role, cohort slot,
+paced-rate assignment, all known session IDs, raw/config/reference hashes when available,
+assignment date/commit and label-access state. Role membership lists are SHA-256 bound. Later
+registry revisions may append session IDs, hashes or state; each revision points to the previous
+registry hash and may not mutate role or slot.
+
+**Label-access states.** Representation validation moves
+`sealed → stage1_reference_only → validation_opened`. Final evaluation moves
+`sealed → stage1_reference_only → final_scored`. For both roles, Stage 1 uses only the inputs
+allowed by §2c. For final evaluation, `stage1_reference_only → final_scored` is one fail-closed
+M5 transaction under already committed scorer/config hashes: no code, parameter, cohort or recapture
+change is permitted, and Stage-1 values are not exposed to the estimator team until the final
+scoring artifacts are sealed.
+
+**Withdrawal and enrollment ceiling.** Approval covers exactly 15 new prospective participants,
+fully allocated to five validation and ten final slots. No additional participant replacement is
+authorized by this contract. A participant who withdraws is logged; their slot stays missing and
+fails the applicable fixed-denominator floor. A same-subject technical session recapture under §6
+items 3–5 is not a new participant and remains separately governed by the objective recapture rule.
+
+**Count rationale and stop rule.** Minimum scope is 4 existing development subjects + at least
+5 new representation-validation subjects + exactly 10 new final-evaluation slots: at least
+19 unique subjects in the project and exactly 15 prospective people. Five validation
+subjects are a feasibility gate, not an effect-size-powered population validation; its small-cluster
+uncertainty must be stated. Ten final slots are retained because the ≥8/10 floors, 4/3/3 allocation
+and small-cluster LoA limitations are defined around ten. If at least 15 prospective people are not
+recruitable, stop and revise scope; do not shrink the final cohort after observing yield.
 
 ### 3.2 Pooling table (binding)
-- **M5 pilot never enters** primary or headline metrics.
+
+- Historical uses of `M5 pilot` / `M6 evaluation` as data roles are retired. Under the recovery
+  plan, M5 is the one-time final evaluation of `final_evaluation` subjects only.
 - **18 bpm paced arm — HR only.** For **HR**, the 18 bpm arm is **always reported separately and
   never pooled** into headline metrics (it sits inside the 4·f_r ≈ HR collision zone —
   `notes/protocol.md`). **For BR this exclusion does NOT apply** (the collision is an HR-cancellation
@@ -418,16 +457,14 @@ declared, prospective outcome, not a post-hoc rescue.
     `MAE = mean_{s∈S_a}(MAE_s)`;  **`RMSE = sqrt( mean_{s∈S_a}(MSE_s) )`** (the root of the mean of
     subject MSEs — **not** `mean_s(RMSE_s)`, which differs), both over the **accuracy set**;
     `coverage = mean_s(cov_s)` over the **coverage set** (all admitted subjects, `n_s = 0` included).
-- **Arms are reported separately** (natural, paced) — these are the primary summaries. A **combined
-  natural+paced headline is NOT reported** as a single pooled number, because after the HR-only
-  18 bpm exclusion (§3.2 above) subjects contribute unequal arm sets, so a pooled figure is not one
-  comparable estimand. If a combined view is shown it is **arm-equal-weighted and labelled
-  descriptive**, never a headline LoA.
+- **Arms are reported separately** (natural, paced, recovery). A combined three-arm headline is
+  never reported. Any combined view is arm-equal-weighted, exposes every arm and is labelled
+  descriptive, never a headline LoA.
 - Unequal evaluable-window counts feed the variance-components model (§1) directly.
 
 ## 4. Amendment mechanism
 
-An amendment is: a dated changelog entry (what changed, why); cross-model review where CLAUDE.md §6
+An amendment is: a dated changelog entry (what changed, why); independent review where CLAUDE.md §6
 applies; a dated `HISTORY.md` entry; applied **prospectively only** (never retrofitted to
 already-collected data). An unrecorded change is void — the version in this file governs.
 *(The original wording required "a new Zenodo version DOI under the concept DOI" and called an
@@ -465,8 +502,17 @@ bias/error.
 1. **Reference unavailable / inadmissible** — window fails a comparator gate
    (`notes/comparator_prespec.md` §2.2 for HR, `notes/comparator_prespec_br.md` §2.2 for BR):
    excluded, counted.
-2. **Radar NaN** — no estimate produced: **counted as a coverage failure** (it lowers coverage; it
-   is *not* a licence to drop the session).
+2. **Radar NaN** — a missing estimator output row, exception, invalid estimate, corrupt frame or
+   zero-filled frame is materialized as radar-NaN. On a reference-admitted window it is a coverage
+   failure; it is never a licence to omit a row or drop the session.
+
+Reference disposition has priority. For each vital and expected estimator key, the primary
+identity is:
+
+`complete windows = reference failures + reference-admitted radar-NaN + jointly evaluable`.
+
+Reference-failure-plus-radar-NaN overlap is retained in a diagnostic cross-tab, never double-counted
+in the primary partition.
 
 **Session level (decided before scoring, from capture/reference integrity — never from agreement):**
 3. **Protocol abort (intentional early termination)** — the settle criterion is not met, or the
@@ -491,37 +537,36 @@ bias/error.
    restart before recording**. **No offset may be chosen or adjusted by optimising radar–reference
    agreement** (the §4-forbidden tuning). `frame0_epoch` (§7) uses the synchronised PC UTC clock.
    Procedure lives in `notes/protocol.md`.
-6. **Incomplete / missing reference (M3R-21).** **No whole-session reference floor is defined** —
-   neither comparator defines one. Partial reference is handled **entirely by the per-window
-   comparator gates** (a window with no admissible reference is excluded and counted; §2.2 of each
-   comparator) **plus the evidence floor (§2).** A **wholly missing Masimo file** is a
-   separately-logged **no-agreement** session (radar-only, descriptive at most).
-7. **Poor warmup bin-lock (outcome-blind).** **Frozen trigger:** re-run iff
-   `warmup_bin_selection.json` reports **`selected_confidence == "low"`**.
-   (`src/warmup_select.py:run_warmup_selection` sets "low" when no energy-eligible candidate yields a
-   valid, confident DSP winner — i.e. **all** candidates energy-ineligible, **or** an
-   energy-eligible candidate wins but lacks the required HR/BR validity/confidence.) Warmup
-   selection **runs the DSP internally**, so it is **reference/agreement-blind and pre-*display*,
-   not pre-*estimate***; it never sees the Masimo. **Retry accounting (M3R-20):** because the
-   trigger reads radar signal availability, retries must not silently lift coverage — **at most one
-   re-run per session**; the discarded attempt is logged with its `selected_confidence` but its
-   windows **do not enter the coverage denominator** (it was never a scored session); the number of
-   sessions requiring a retry, and the number still "low" after retry, are **reported at study
-   level**. **If the retry is also "low", the session is captured and scored anyway** (no further
-   retries) — a low-confidence session is **never silently dropped**, so coverage cannot be
-   inflated by discarding hard sessions.
+6. **Incomplete / missing reference (M3R-21, M0 recovery extension).** Natural, paced and BR have
+   no whole-session reference floor; partial reference is handled by the per-window comparator
+   gates plus the applicable evidence floor. Recovery HR additionally applies the reference-only
+   Stage-1 session rule in §2c. A wholly missing Masimo file is a logged no-agreement session
+   (radar-only/descriptive); for a final recovery slot it also fails Stage 1 and the fixed-denominator
+   recovery floor.
+7. **Poor warmup bin-lock — prospective validation/final disposition.** Low
+   `selected_confidence` is recorded but **never triggers a retry or replacement** for
+   `representation_validation` or `final_evaluation`. The session continues and every complete
+   window counts. Separately labelled engineering/development diagnostics may repeat a capture, but
+   those data remain development-only and cannot enter validation or final denominators.
 
-**Replacement policy (binding):** a session not admitted for reasons 3–5 **may be re-captured**
-(same subject, same protocol) **only before any of that subject's data is scored**; both the
-discarded and the replacement session are **logged with reason**. Reason 6 is a no-agreement
-session (not re-captured); reason 7 is the single warmup retry above. No replacement once scoring
-has begun. Missing/replaced sessions are counted against the evidence floor (§2).
+**Replacement policy (binding):** a session not admitted for objective reasons 3–5 **may be
+re-captured** (same subject, same protocol) only before any of that subject's data is scored; both
+attempts are logged with reason. Reason 6, recovery Stage-1/Stage-2 failure, low radar coverage,
+poor agreement and reason 7 are never recapture triggers. No replacement is allowed once scoring
+has begun. Missing sessions count against the applicable floor (§2). Whole-subject withdrawal is
+handled by the no-participant-replacement rule in §3.1.
 
 **Subject level:** a subject falling below the per-subject floor (§2) is handled by the frozen
 evidence-floor rule, **not** by discretionary exclusion.
 
 ## 7. Window selection and required breakdowns
 
+- **Canonical identities and expected rows.** The source-window table is keyed by
+  `(subject_id, session_id, k)`. The scoring ledger is keyed by
+  `(session_id, k, estimator_id, vital, scorer_config_hash)`. Exactly one scoring row is required
+  for every expected Cartesian-product key. A duplicate key hard-fails; a missing, exceptional or
+  invalid estimator output is materialized as radar-NaN. Every complete 600-frame window has a
+  source row. An incomplete tail is counted separately and is not a window.
 - **Exact non-overlapping 30 s window grid (FROZEN).** At the 20 Hz frame rate, 30 s = **600
   frames**. Windows are the consecutive, non-overlapping, **half-open frame intervals**
   `[k·600, (k+1)·600)` for `k = 0, 1, 2, …`, indexed by **frame number** (not wall-clock — the
@@ -611,22 +656,24 @@ of them uses only design/tuning data (§3.1) and, where noted, an amendment:
 
 ### Open-items checklist
 
-> **Re-scoped 2026-08-04.** These previously "all had to close before the deposit is frozen".
-> There is no deposit — M0 was removed 2026-08-03. They remain a real checklist of engineering
-> debt; what they gate is stated per item, or nothing.
+> **M0 status 2026-08-09 — READY.** The analysis decisions below are independently reviewed;
+> owner authorization/enrollment attestation is recorded above. Future scorer support is explicitly
+> deferred to a later reviewed milestone.
 - [x] §1 statistical citations verified 2026-07-25 (BA 1986/2007, Carstensen 2008, Zou 2013)
-- [x] §1 agreement model corrected (2-level per-arm; **cluster-bootstrap primary CI** — M3R-29
-      Option A, user 2026-07-26 — with its **anti-conservative-precision-gate** limitation declared
-      and **accepted** (M3R-45, user 2026-07-26); **MOVER a pre-named *candidate* sensitivity**, validated only after
-      implementation + statistician review + benchmark (M3R-46); regression-LoA sensitivity uses both
-      variance components after M3R-30) — still requires the math/claims sign-off below
-- [x] §2a Option A core frozen (2026-07-25) — per-session ≥1, per-subject ≥4, ≤5 bpm CI, natural-drop miss rule
-- [x] §2b extensions FROZEN (user decision 2026-07-25): study-wide ≥8/10, symmetric zero-window
-      handling, **no** whole-subject exclusion, precision-miss → descriptive
+- [x] §1 three separate natural/paced/recovery HR estimands; no pooled three-arm headline
+- [x] §2a/§2b natural+paced floor retained separately: ≥1/session, ≥4 across those two arms,
+      ≥8/10 final subjects, symmetric zero handling, no subject deletion, precision miss → descriptive
+- [x] §2c recovery Stage-1/Stage-2 formulas, empty-set behavior, fixed 10-subject denominator and
+      no evidence-yield recapture
+- [x] §3.1 subject-disjoint, deterministic, hash-bound development/representation-validation/final
+      cohorts; exactly 5 validation and 10 final slots; label-state and no-participant-replacement rule
 - [x] §3 published-pipeline baseline — Alizadeh 2019 as a declared **reference-blind adaptation** (M3R-04)
 - [x] §5 BR endpoints imported from M3's comparator; §3.2 18 bpm pooling made HR-only (M3R-08)
-- [x] §6 exclusion/disposition hierarchy enumerated (M3R-10)
-- [x] §7 non-overlapping-window grid frozen exactly (frame-index, first window included) (M3R-09)
+- [x] §6/§7 missing-window partition, ledger keys, complete Cartesian product and incomplete-tail rule
 - [x] math/claims cross-model review of §1 **passed** and all M3 findings (M3R-01…48) **resolved**
-      across 17 rounds (Codex, 2026-07-25/26; `plans/m3_prespec_cross_review.md`) — **cross-review
-      COMPLETE**; this pre-spec is ready for the M0 freeze.
+      across 17 rounds (Codex, 2026-07-25/26; `plans/m3_prespec_cross_review.md`)
+- [x] M0 `task_breakdown` and independent `plan_reviewer` completed 2026-08-09; substantive verdict
+      **READY WITH MINOR CHANGES**, all minor changes incorporated
+- [x] owner attestation recorded: recovery approval under `24IBEC051`, confidential records held
+      outside repo, exactly 15 new prospective participants additional to A–D
+- [x] overall M0 verdict **READY**

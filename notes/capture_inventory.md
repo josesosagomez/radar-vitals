@@ -129,7 +129,7 @@ better supported than they were recorded as being:
 **What it does NOT change.** Four subjects is still small, and the subjects were not randomly
 sampled. Nothing here becomes primary.
 
-## Train/test split for the BR bin-selection work
+## Representation-validation role for the BR bin-selection work
 
 > **SUPERSEDED 2026-08-03, corrected here 2026-08-05.** This section previously read: *"discovery
 > on A + B (`massimo1`, `massimo2`, `massimo3`, `sweep`); the held-out test on C + D (`massimo4`…
@@ -141,13 +141,22 @@ of the same policy family (tol=2, then tol=5 at the user's request) on 2026-08-0
 `results/diagnose/bin_policy/20260804T151531Z/` and `…152351Z/`. Two touches is not one, so they
 are no longer a clean holdout for **any** bin-policy question.
 
-**Current split (agreed 2026-08-04):**
+**M0 role reconciliation, 2026-08-09.** The one-touch BR bin-rule check is a declared use of the
+shared `representation_validation` cohort; it does not create a separate subject role. If E/F/G
+are the first three eligible prospective enrolments, they occupy the first three of the five
+representation-validation slots. The next two eligible enrolments complete that cohort. The
+following ten occupy final-evaluation slots and remain untouched by this BR check. Exact subject
+IDs, roles, slots and hashes are governed by the committed cohort registry in
+`notes/analysis_prespec.md` §3.1; no session from one person may cross roles.
+
+**Current BR-specific split:**
 
 | role | captures |
 |---|---|
 | **Training / discovery** | **all eight** — subjects A, B, C, D |
-| **Held-out test, touched once** | **three new captures, subjects E, F, G** — not yet collected |
+| **Representation validation, touched once for this BR rule** | **three new captures, subjects E, F, G** — not yet collected; never final evidence |
 
-The BR bin rule was frozen against the training set on 2026-08-04
+The BR bin rule was fixed against the training set on 2026-08-04
 (`results/diagnose/br_bin_rule/20260804T204634Z_freeze/frozen_rule.json`) and has **not** been
-scored on any holdout, because none exists yet. `HANDOFF.md` §4.1/§4.2a is the current authority.
+scored on representation validation, because none exists yet. The one-touch result may validate
+or reject that BR rule but can never become final evidence.
