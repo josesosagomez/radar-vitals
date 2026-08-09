@@ -1,444 +1,156 @@
 # Handoff — resume here
 
-> Read this and `CLAUDE.md` before doing anything. **State verified 2026-08-08.**
-> `HISTORY.md` is the append-only log; this file is the always-current summary. Where they
-> disagree, this file is wrong and should be fixed.
-
-**M8 Ahmed documentation update (2026-08-08):** canonical two-lock × seven-arm execution and
-scoring are complete and documented in `reports/m8_ahmed_correction_final_report.md`. Figure 8
-remains not reproduced under declared assumptions; synthetic controls passed. Real metrics are
-approximate-origin, protocol-stratified, k>=1 descriptive rows only; do not pool locks or rank
-arms. Optional all-bin diagnostic was not authorized and was not run. The thesis and journal
-writing sources now carry the same result in `THIRD_CHAPTER.md` §10.3 and `JOURNAL_PAPER.md`
-§4.4. The next method is M9 Kotte; resume only from its approved authority/current decision gate.
+> Read this and `CLAUDE.md` before doing anything. **State verified 2026-08-09.**
+> `HISTORY.md` is append-only; this file is the current resume point.
 
 ## 1. Project snapshot
 
-Estimate heart rate and breathing rate from a TI IWR1642BOOST + DCA1000 FMCW radar while a subject
-sits 0.8–1.4 m away, and quantify agreement against a Masimo MightySat fingertip pulse oximeter.
-HR truth is the Masimo `Beats / min`; BR reference is `Breaths / min`; both align on the integer
-Unix-epoch `Timestamp`. Output: a journal paper plus a thesis chapter.
+This thesis/research project estimates heart rate and breathing rate from a TI IWR1642BOOST +
+DCA1000 FMCW radar for a seated subject at roughly 0.8–1.4 m. The Masimo MightySat reference uses
+integer Unix `Timestamp`; `Beats / min` is HR truth and `Breaths / min` is the BR reference. The
+existing eight captures have approximate time origin and low within-session HR dynamic range, so
+their agreement outputs are exploratory and cannot support a final HR agreement claim.
 
-**Production method:** per 30 s window at a warmup-locked range bin — phase extraction
-(`delta_before_mean`) → impulse-noise clip → for **BR** a fused FFT/HA/STFT estimate over
-0.10–0.50 Hz; for **HR**, ECA (project out respiration harmonics) → argmax in 0.8–2.0 Hz → AHET
-second-harmonic verification, which returns **NaN rather than a guess** when it fails.
+The production estimator, Ahmed M8 evaluation, and Kotte M9 evaluation are separate. Do not change
+Ahmed or the project's estimator while working on Kotte evidence.
 
-Two things the one-liner hides, both of which have caused real mistakes:
+## 2. Current state
 
-- **There is no static clutter removal.** `phase.clutter_removal` defaults to `"none"` and the
-  call is an identity at that setting. It was measured and rejected — see §6.
-- **Warmup is not a filter that picks a bin.** It runs the *entire* downstream chain once per
-  candidate bin (14 of them) and scores the results. So any DSP change can move the bin lock.
+Active branch: **`vital_signs_kotte_v12`**. Current verified tip: **`46cec82`**. The load-bearing
+M9 commits are:
 
-## 2. Where the project is
+- `3ac060e` — reviewed Kotte core/config/radar path and tests;
+- `99c22d0` — reviewed radar-free scorer and tests;
+- `22ed3b6` — established Masimo duplicate normalization before post-parser duplicate refusal;
+- `46cec82` — reviewed paper controls and synthetic-transfer runner.
 
-**Infrastructure is strong; the science is thin, and what exists is exploratory.**
-
-Active branch **`vital_signs_ahmed_v11`**. M8's scientific source was frozen at `3058fe1`, the
-runner repair at `df51a95`, and the replacement real-evaluation authorization at `e182288`.
-The canonical M5 execution and documentation are complete; verify the current tip and tree with
-`git log -1 --oneline` and `git status --short` before starting new work. The final report is
-`reports/m8_ahmed_correction_final_report.md`.
-
-| Track | Milestone | Status |
-|---|---|---|
-| C | **M8 — Ahmed harmonic accumulation** | **CORRECTED AND VALIDATED 2026-08-08** — Figure 8 not reproduced; canonical two-lock/seven-arm evaluation complete; claim-ineligible exploratory scoring in final report |
-| C | **M9 — Kotte joint-Doppler** | **Steps 0-3 DONE; controls PASSED; step-4 checkpoint BLOCKED on a user decision** (the oracle finding) — §4.1 |
-| C | M10 baselines | not started |
-| A | M1 live smoke test | not run |
-| A | M2 respiration fix | landed; only done-when #5 open |
-| A | M3 BR comparator spec | closed, 48/48 findings |
-| A | M4 offline harness | built (`scripts/score_offline.py`), has run for real |
-| B | M5 pilot / M6 study | not started; no longer blocked by anything |
-| 0 | ~~M0 governance milestone~~ | **REMOVED 2026-08-03 by user decision** — §3 |
-| D | M12 paper / figures / chapter | not started; headline reworded — §3 |
-
-### 2.1 The dataset — 8 captures, FOUR subjects
-
-Corrected 2026-08-04; the record previously said one subject, which was wrong. Authoritative
-map in `notes/capture_inventory.md` — **subject identity is not machine-recorded anywhere** and
-cannot be recovered from the artifacts.
-
-| Subject | Captures |
+| Track | Status |
 |---|---|
-| A | `massimo1`, `massimo2` |
-| B | `massimo3`, `sweep` |
-| C | `massimo4`, `massimo5` |
-| D | `massimo6`, `massimo7` |
+| M8 Ahmed | corrected exploratory evaluation complete; final report at `reports/m8_ahmed_correction_final_report.md` |
+| M9 Kotte | **implemented and validated 2026-08-09**; all M9.1–M9.4 test and code-review gates passed |
+| M10 baselines | not started; requires its own approved plan |
+| New captures E/F/G | still awaited; they are the untouched BR bin-rule holdout and need exact-origin metadata |
 
-All exploratory; all informed the method's design. Four subjects is still small and
-non-randomly sampled. **None carries a persisted `frame0_epoch`** — any reference alignment is
-approximate (from `start_wall_utc`), which is why M9 scoring needs the §4.1 amendment.
+The working tree still contains unrelated/user documentation changes and deleted superseded M9
+planning files. Inspect `git status --short` and preserve them. Do not reset or stage them as a
+bundle. `tmp/` is untracked and requires ownership inspection before cleanup.
 
-### 2.2 What the data can and cannot support (measured 2026-07-31)
+## 3. Active task / next steps
 
-`scripts/diagnose_signal_presence.py`, evidence `results/diagnose/signal_presence/20260731T155946Z/`.
-Everything there is a **feasibility ceiling, not a result** — the audit used the reference to decide
-where to look and switched every gate off. Never quote it as accuracy or coverage, and **derive no
-threshold, band edge or bin choice from it**.
+M9 implementation is complete. The next safe actions are:
 
-- **The reference is not the weak link.** 100% of Masimo rows have PI ≥ 0.5 in all 8 captures,
-  physiological PR/RR medians, full temporal overlap.
-- **BR is extractable.** True respiration frequency beats random decoys in 7 of 8 captures;
-  locked-bin BR SNR +8.2 to +17.3 dB in 7 of 8. **Tracking demonstrated in `sweep`** (permutation
-  `p=.001`, Spearman +0.56 locked / +0.90 best bin) — the only capture whose protocol deliberately
-  varies BR.
-- **HR is neither demonstrated nor demonstrable here.** No tracking evidence anywhere
-  (permutation `p=.30–1.00`); at the locked bin the heart-band argmax is **worse than a constant
-  predictor in all 8**. And structurally: within-session PR spread is **2.6–5.2 bpm, narrower than
-  the ±5 bpm tolerance**, so a predictor emitting the session median scores 83–100%. **These
-  sessions cannot distinguish a working HR estimator from a stub returning 85 bpm.**
+1. If explicitly authorized, integrate the accepted M9 result into `THIRD_CHAPTER.md` and
+   `JOURNAL_PAPER.md` using the thesis-safe wording in §5 below.
+2. Do not rerun or tune M9 from Masimo. Any estimator-setting change requires a new reviewed plan.
+3. Start M10 only from an approved M10 authority; do not infer it from M9 history.
+4. When E/F/G captures arrive, follow `notes/protocol.md` and the existing one-touch BR bin-rule
+   scoring instructions; do not reuse the eight exploratory captures as an untouched holdout.
 
-**Consequence: do not write an HR acceptance criterion against these captures.** It would be
-unfalsifiable. BR work can proceed. This binds M9: HR is reported descriptively next to
-`constant_session_median`, never gated.
+## 4. Decisions that must not drift
 
-### 2.3 Where the HR coverage bottleneck actually is (measured 2026-07-31)
+- The only M9 authority is `plans/m9_kotte_plan.md`.
+- Literal Kotte evidence is the direct full-rank two-line control. The project path is a disclosed
+  adaptation: external radar-only range lock, no DOA claim, four RX, fixed chirp-loop 0 across
+  50 ms frames, retained-support mean removal, trace loading, band restriction, 37 `N_c=16` CPIs,
+  and lowest-index L1 medoid aggregation.
+- Slow time is frame-to-frame fixed chirp-loop 0, not the 32-chirp coherent mean and not the
+  existing frame-rate vital-sign phase signal.
+- The two real-data loading arms (`delta=1e-2`, `delta=1e-4`) remain separate. Never rank, select,
+  pool, or promote them from their Masimo scores.
+- Literal post-range/`Y_t` 0 dB is the primary paper-control interpretation. The +21.0721 dB
+  FFT-gain result is a separately labelled sensitivity, not a real-data setting.
+- `N_c=64`, oracle information, recorded historical locks, all-bin selection, and the former MAE
+  GO/NO-GO architecture are not active M9 arms.
+- Canonical range locks are `current_production_rerun_lock` from unchanged warmup code. Recorded
+  locks remain diagnostic-only.
+- Scoring uses unchanged `src.masimo.load_masimo` clock-glitch normalization, then requires unique
+  integer parsed timestamps. All 30 merged seconds are persisted as evidence.
+- Comparative metrics use only `k>=1`; `k=0` is labelled `lock_selection_in_sample` and diagnostic.
+- All eight-capture scoring outputs are `exploratory_non_frozen`, promotion-ineligible, and
+  claim-ineligible. Poor results must not feed back into estimator choices.
 
-HR coverage is 12% pooled. `scripts/diagnose_bin_sweep.py` scored every candidate bin on every
-window (840 cells over the three 0%-coverage captures):
+## 5. Verified M9 evidence and interpretation
 
-- **It is NOT bin selection.** Energy-eligible (plausibly-chest) bins yield **0.8%**; the only bins
-  with any yield sit 20–34 dB down, exactly the ones the eligibility gate distrusts.
-- **The binding constraint is AHET's second-harmonic check** — median ratio **−2.23 dB** against a
-  **+1.0 dB** gate; only 14.1% of eligible cells reach it. The harmonic mostly isn't there.
-- **27.6% of cells never attempt AHET at all** (`spectrum_stage == 0`, the
-  `f_r_hz is None or f_r_is_outlier` no-ECA path, `src/vitals.py:523`).
-- Warmup *is* locking onto the subject — locked-bin BR validity 16–17/20 — confirmed independently
-  by breathing.
+### Paper and synthetic evidence
 
-## 3. M0 removed — the standing vocabulary rule, and the headline
+- M9.1 implementation-validation controls:
+  `results/m9_kotte_controls/20260808T214759.951535Z_b3b3bb4e128b_implementation_validation_non_thesis`.
+- Literal 0 dB Figs. 5/7/8 controls are negative; the 21.0721 dB sensitivity reproduces the
+  selected behaviors. The loaded four-RX literal ablation is also negative.
+- M9.2 diagnostic transfer:
+  `results/m9_kotte_synthetic_transfer/20260808T225156.641305Z_d01cbc2d8404_diagnostic_nondeployable`.
+  Direct two-cisoid controls pass both loading arms. Chest transfer is 0/24 and robustness is 0/10.
+  This is preserved negative evidence of the two-line model's transfer limitation.
 
-**The M0 governance milestone was REMOVED 2026-08-03 by user decision**, along with its hard gate
-on study captures; what it would have contained is recorded in `HISTORY.md` 2026-08-03.
-M5/M6/M7 are no longer blocked by governance.
+### Immutable radar-only evidence
 
-**What this project claims about its own specs is a TRANSPARENCY claim, never a TIMING claim:**
-the comparator and analysis specifications are written down in full and applied identically to
-every estimator compared. Nothing asserts that any of them predates the data, and all agreement
-results are exploratory/descriptive. **Never reintroduce** the banned strings — "pre-registered",
-"pre-specified", "frozen before data", "registered \<date\>", "deposited", "predeclared" or
-"confirmatory" — about this study's own specs or results, in any file, manuscript, title or talk.
-Full rule: `HISTORY.md` 2026-08-03 and CLAUDE.md §4. Say "written down in the committed script and
-applied identically to every estimator compared". **The purge is not complete.** The last known
-leftover of the original strings ("registered in" inside `notes/analysis_prespec.md`'s
-approximate-origin paragraph) was fixed by Amendment M9-1 (`b39888f`, 2026-08-06), but
-"predeclared" was added to the banned list only afterwards and has never been swept: verified
-2026-08-08 that it still describes this study's own specs at `notes/approach.md:318` and `:578`
-(that file carries no VOID banner), at `notes/analysis_prespec.md:451` (under that file's own
-banner), and at 12 sites across six `plans/` documents. `HISTORY.md` uses it too and is
-append-only, so those stay. `notes/` and `plans/` were deliberately left alone — the owner scoped
-the 2026-08-08 pass to this file. **If you sweep again, classify every match by hand — `grep -v`
-filters hid real hits three times on 2026-08-04.**
+Canonical handoff:
+`results/m9_kotte_radar/20260809T001318.369165Z_d01cbc2d8404_radar_only_unscored`.
 
-**"Primary" is the project's word for the M6/M7 data role** (renamed away from the banned
-"confirmatory" label, 2026-08-04, 41 sites). Watch the collision: `analysis_prespec.md` uses
-"primary" in three senses (endpoint, CI recipe, data role) — always attach a disambiguating noun.
+- 8 captures, 128 complete 600-frame windows, 256 arm rows;
+- 256/256 algorithmically valid; 9,472/9,472 CPIs valid, rank 4;
+- 128 shared-`Z` plus 256 arm NPZ artifacts, all pickle-free;
+- selected-bin `Z` shape `(600,4)` complex128; decoded cube identity
+  `(600,32,4,256)` complex64; CPI shape `(37,16,4)`;
+- evidence surfaces `(37,98,290)` on the signed physical-Hz grids;
+- radar artifact is immutable: 400 files, digest
+  `adf4434de20b9c88f34a730dc9dae1cf61c77933f4a6024ab28e9c11e8f1e9b1`.
 
-**Four decisions from 2026-08-04 that outlive the vocabulary work — do not unknowingly reverse:**
+### Exploratory scoring evidence
 
-1. **The evidence floor is BINDING AS ENGINEERING** (`analysis_prespec.md` §2a/§2b): per-session
-   ≥ 1, per-subject ≥ 4, study-wide ≥ 8/10, LoA CI half-width ≤ 5 bpm, natural-drop miss rule.
-2. **`notes/comparator_prespec_br.md` is BINDING**; `src/comparator.py:br_reference` implements it.
-3. **`notes/ethics_amendment_hr_recovery.md` is a RECORD AS SUBMITTED — do not edit the body.**
-4. **The 2-vs-3-session contradiction** between `protocol.md` and `analysis_prespec.md` must be
-   resolved **before any M5 pilot session** (needs §6 cross-review). It does not block E/F/G.
+Canonical scoring artifact:
+`results/m9_kotte_score/20260809T014500.317959Z_adf4434de20b_exploratory_non_frozen`.
 
-**Survived M0's removal because they were never governance:** synthetic-control-first,
-prospective-only changes, the pilot's exclusion from M6 metrics, CLAUDE.md §6 cross-review. The
-spec files under `notes/` continue as internal engineering specs — `src/m4/window_grid.py`
-hard-errors against `analysis_prespec.md` §7. Do not delete them.
+- 632 scored rows, 100 summaries, 408 paired evidence rows;
+- all 240 comparative radar arm/windows are algorithmically valid;
+- unique admitted comparative reference cells: HR 66/120, BR 105/120;
+- both radar arms have 100% algorithmic coverage; joint coverage follows reference admission;
+- 30 duplicate Masimo seconds were normalized by the unchanged parser and fully audited;
+- pair margins are extremely small (overall minimum about `1.8e-5` dB), indicating weak
+  pair-selection separation despite declared numerical validity.
 
-**The paper's headline — REWORDED by user decision 2026-08-05:** *first real-data
-**evaluation** of two simulation-only published methods — Ahmed harmonic accumulation [R1] and
-Kotte joint high-amplitude-difference Doppler [R2] — under one common comparator, with coverage
-reported.* "Validation" was dropped because the authorized scoring on the existing captures is
-approximate-origin, non-promotable, and barred from final agreement claims; "validation" is
-reserved for future exact-origin data. `JOURNAL_PAPER.md` / `THIRD_CHAPTER.md` still carry the
-old wording — **rewording them is a pending task at M9 session close.** The headline is IN
-PROGRESS; the old (pre-2026-08-03) headline cannot be reinstated.
+Protocol MAE in bpm:
 
-## 4. ACTIVE WORK
+| Protocol | HR `delta=1e-2` | HR `delta=1e-4` | HR session median (descriptive) | BR `delta=1e-2` | BR `delta=1e-4` |
+|---|---:|---:|---:|---:|---:|
+| natural | 29.434 | 29.368 | 0.981 | 6.406 | 5.447 |
+| paced | 19.100 | 10.700 | 0.800 | 10.700 | 8.200 |
+| stepped | 27.438 | 26.938 | 1.375 | 11.800 | 11.300 |
 
-### 4.1 M9 Kotte — the active task. Plan complete; implement it.
+Thesis-safe conclusion: **our fixed-range, four-RX, frame-axis, loaded adaptation of Kotte et al.
+substantially underestimates HR and has substantial BR error on these approximate-origin IWR1642
+captures.** This is trustworthy negative project-transfer evidence. It does **not** show that
+Kotte et al.'s published method generally fails for human vital-sign estimation.
 
-**The single authority is `plans/m9_kotte_plan.md`.** Read it in full before writing any code —
-it is the product of nine verified cross-review passes (dispositions in
-`plans/m9_comments_plan.md`; every comment was checked against the paper extraction, its page
-renders, or the repo code before being applied; one was rebutted with evidence). Do not
-re-derive design decisions the review already settled — the disposition file records what was
-overturned and why.
+## 6. Known limitations
 
-**What M9 is:** first real-data evaluation of Kotte et al., "Joint Estimation of Single
-Target's High Amplitude Difference Doppler Frequencies in FMCW Radar" (IEEE T-RS vol. 2, 2024,
-DOI 10.1109/TRS.2024.3352189) — a Capon-like joint two-frequency estimator on the complex
-slow-time × RX matrix at one range bin (not on extracted phase; M9 is the harness's first
-non-phase consumer). Ladder: control 1 (paper-faithful 20-RX reproduction, direct `Y_t`,
-synthetic) → control 2 (4-RX ablation, fixed endpoints) → transfer gate (synthetic vitals cube,
-P1–P6 written down in the plan, frozen bundle) → radar-only all-bins sweep (3 arms) → production
-comparator regeneration → scoring + Stage-B decision. Stage B (DOA) is out of scope beyond a
-go/no-go note.
+- Kotte's source simulations use a two-line point-target model; chest displacement produces
+  conjugate sidebands and a higher-order Bessel comb.
+- The project has four RX, so the literal unloaded covariance is rank-deficient at `N_c=16`;
+  trace loading is an explicit adaptation.
+- Range is supplied by the unchanged project warmup selector; the paper range/DOA pipeline is not
+  implemented and no DOA conclusion is supported.
+- The old captures have approximate origin and narrow HR range. The session-median comparison is
+  descriptive and uses reference information; it is not a deployable baseline.
+- Very small pair margins show weak objective separation even where the declared validity rules
+  pass.
+- M9.1 paper-control artifacts are implementation-gate evidence, not thesis outcome evidence;
+  M9.2 transfer is diagnostic/nondeployable.
 
-**The five user decisions (2026-08-05) — recorded, do not re-ask:**
-1. Step 1a reproduces Figs 5+7+8 with FFT+MUSIC; Fig 9 Monte Carlo and Yule-AR are descoped.
-2. `notes/analysis_prespec.md` gets a **prospective amendment** (with §6 cross-review, committed
-   before any M9 scoring run) extending the approximate-origin `exploratory_non_frozen`
-   treatment to M9 — the existing exception (:559-565) names M8 only. All scored M9 outputs
-   carry the no-promotion/no-final-claim taint. Radar-only work does not wait on it; the scorer
-   refuses to run without it.
-3. Stage-B MAE is **subject-weighted**.
-4. Exact formula: **natural-only captures, pooled within subject, subjects averaged equally**;
-   floors ≥3 subjects with ≥5 natural paired windows each and ≥30 total; paced/stepped captures
-   scored descriptively only; sensitivity variant with low-contribution subjects dropped.
-5. Headline reworded to "first real-data **evaluation**" (§3).
+## 7. Pointers
 
-**Execution-order status: steps 0-3 DONE, step 4 half done and blocked.**
-
-| Step | State |
+| File or artifact | Purpose |
 |---|---|
-| 0 groundwork | **done** `b39888f` — config, `notes/approach.md` §5.8, analysis-spec Amendment M9-1 |
-| 1 core + controls build | **done** `3c0efc7`; SNR amendment `2fec07e` |
-| 1 official R1 verdict | **done — `behaviorally_reproduced`. THE MILESTONE GATE IS PASSED.** |
-| 1 R2 / R3 / audits | **done** — R2 3/3 exact, R3 resolves Δ=0.5 Hz, audits recorded |
-| 2 4-RX ablation | **done — 24/24 rows pass**, rank 4 at 4 RX, phase invariance 3.9e-12 |
-| 3 aggregation contract | **done** `f2e74c5` — forms, medoid, partial-CPI, suite, 20 tests |
-| 4 oracle | **done** `9078ed8` — and it found a blocker (below) |
-| 4 checkpoint → gate → bundle | **BLOCKED on a user decision** |
-| 5-8 sweep / comparator / scorer | not started |
-
-**Control evidence lives in gitignored `results/`, so the run IDs are recorded here:**
-R1 `20260806T154753.144349Z_6bde60353be2`; R2/R3/audits
-`20260806T154841.509470Z_6bde60353be2`; ablation `20260806T155022.295892Z_6bde60353be2`
-— all clean-tree at commit `2fec07e`, `smoke: false`. Oracle:
-`results/m9/step1b/oracle/20260806T160339.308982Z/`. Anything under `*_smoke/` is
-non-gating scratch and can never be evidence.
-
-**BLOCKED ON THE USER: choose option A, B, or C in
-`plans/m9_step1b_oracle_finding.md`.** The oracle (which the plan requires to run
-*before* `kotte_gate.py` exists) found that a real sinusoidal chest displacement produces
-**conjugate sideband pairs** — `J_{-1} = −J_{+1}`, so `±f_b` and `±f_h` are all present
-even in the small-modulation limit. The signal carries **≥ 4 lines where Kotte's
-estimator constrains 2**: a model-order **misspecification**, not a noise problem.
-Isolated against a two-cisoid control at identical aperture/SNR/gains — two cisoids
-recover 9/9 at N_c=16/30 dB; **conjugate pairs recover 0/9 at N_c=16 AND N_c=32 at 10,
-30 and 60 dB.** Fifty extra dB fixes nothing; only aperture does, near N_c=64 (3.2 s),
-and even there BR is biased and the margin is < 0.02 dB. This predicts **P3 fails at the
-primary arm** and quantifies the plan's risk #7. Recommendation: **B** — add a declared
-`N_c=64` arm (config amendment + §6 cross-review) *before* freezing, keeping N_c=16 as
-primary, so the gate tests the regime where the method can work and the paper gains a
-two-point aperture curve instead of a bare null. `transfer.gate_criteria` stays `null`
-until the checkpoint happens.
-
-**After that decision, in order:** fill `gate_criteria` from the oracle → commit the
-checkpoint → build `src/m9/kotte_gate.py` + `scripts/m9_kotte_transfer.py` +
-`tests/test_m9_kotte_gate.py` → transfer gate → bundle (publication requires
-`gate_status == "passed"`) → steps 5-8 (sweep, production comparator, scorer, Stage-B).
-
-**Three §6 cross-reviews are outstanding** and all need the other model family:
-1. analysis-spec **Amendment M9-1** (`m9_amendment_cross_review: pending`) — **the scorer
-   refuses to run until this reads `completed`**, so it blocks step 8;
-2. the **step-1a SNR amendment** (`m9_snr_amendment_cross_review: pending`) — the
-   controls already ran against it; a verdict is not settled paper evidence until this
-   passes;
-3. the **oracle finding** (`m9_oracle_finding_cross_review: pending`).
-
-**Non-negotiables while implementing (details and rationale in the plan):**
-- **No M8 file is edited** — the frozen M8 gate bundle and its source-text-pinned tests must
-  stay valid. M9 is `src/m9/` + sibling scripts (13 Python files + 1 config).
-- **Evidence runs require a clean tree**; dirty-tree execution only via `--smoke` into
-  segregated `*_smoke/` outputs that can never gate, score, or decide.
-- **`gate_status == "passed"` is required to publish the transfer bundle** and is verified by
-  the sweep and scorer (`publish_latest` alone would accept a failed gate — verified).
-- **The sweep opens no Masimo file and derives no locks.** The production comparator + the sole
-  `current_production_rerun_lock` map come from one command
-  (`scripts/m9_production_comparator.py`) on a clean commit — the old
-  `results/diagnose/bin_sweep/20260804T131040Z` run is dirty-tree (verified) and ineligible.
-- **The scorer is radar-free**, refuses to run without the committed amendment, and stamps
-  every scored artifact with the approximate-origin taint.
-- **HR is never gated** (§2.2); Stage-B is BR-only, natural-only, subject-weighted, primary arm
-  only.
-
-### 4.2 Waiting on the user: three new captures (E, F, G)
-
-The user is collecting three new captures from three new people. They are the **only untouched
-BR bin-selection holdout** (`massimo4`–`massimo7` are spent — §7) and the first data able to
-discharge M2 done-when #5. Requirements (`notes/protocol.md`): natural breathing (not the
-recovery arm), Masimo with the step 3a clock sync, scene behind the chair recorded, settle
-criterion enforced. With the current build they carry a true `frame0_epoch` (§4.4).
-
-### 4.3 The BR bin rule — FROZEN; score it once when E/F/G land
-
-**The learned-feature arm is a closed NO-GO** (2026-08-04): out-of-fold it lost to a
-zero-parameter rule (2.384 vs 2.291 MAE), the winning sign vector was unstable across all 4
-LOSO folds, and a permutation null showed the 834-vector search reaches 2.665 on shuffled
-errors for free. Do not re-open by adding features — the constraint is n=4 subjects. Full
-numbers: `HISTORY.md` 2026-08-04; artifacts `results/diagnose/br_bin_preflight/20260804T192908Z/`.
-
-**What won: `medoid_consensus_always_emit` v1, frozen 2026-08-04** — among `br_valid` bins,
-report the one whose `br_bpm` is closest to the window median over valid bins; tie-break higher
-energy; always emit. Zero fitted parameters. Pooled over the 105 admissible `k>=1` windows:
-coverage 1.00 / MAE 2.291 / hit±3 0.733, vs production 0.867 / 2.679 / 0.670; paired per-subject
-delta +0.473 bpm (SE 0.266), better in 3 of 4 subjects. Frozen artifact:
-`results/diagnose/br_bin_rule/20260804T204634Z_freeze/frozen_rule.json` (SHA-256
-`cda0b352…174f81af`); predictions with 95% PIs and the success criteria (paired delta > 0;
-failure if ≤ 0 or worse in ≥2 of 3 subjects; **no absolute MAE threshold**) are recorded at the
-freeze. Label-origin sensitivity clean (offset grid {0, +7.5, +15} s moves rule MAE ≤ 0.046).
-
-**One-touch scoring when the captures exist** (needs `diagnose_bin_sweep` +
-`diagnose_signal_presence` runs on them first):
-
-```
-python -X utf8 scripts/br_bin_rule.py --mode test \
-  --frozen-rule results/diagnose/br_bin_rule/20260804T204634Z_freeze/frozen_rule.json \
-  --i-have-frozen-the-rule --sweep-run <dir> --presence-run <dir> \
-  --subject-map <suffix>=E <suffix>=F <suffix>=G
-```
-
-### 4.4 Already landed — no action needed, but know it
-
-**Frame 0's true capture epoch is now recorded** for future captures. `LiveFrameSource` stamps
-`t_first_packet_utc`, corrects for leading zero-fill; `run_metadata.json` gains
-`frame0_epoch_utc`/`frame0_epoch_source`; `score_offline.py::resolve_frame0_epoch()` prefers it
-and falls back to `start_wall_utc` for the 8 old captures, which cannot be retrofitted
-(hence the M9 amendment). 10 tests in `tests/test_frame0_epoch.py`.
-
-### 4.5 Also available (not active)
-
-- **M1 live smoke test** — hours, no dependencies, also discharges M2 #5 if it carries a synced
-  Masimo.
-- **M11a coverage** — aimed at §2.3's finding (AHET verification, the no-ECA path). §6
-  cross-review applies; §2.2 forbids validating an HR criterion on the existing captures.
-- **M10 baselines** — not started.
-
-## 5. M8 Ahmed — corrected canonical evaluation complete
-
-Authority is `plans/m8_ahmed_correction_plan.md`, with the accepted Step 1a/Step 1b plans and
-addendum beneath it. The implementation preserves Layer A pulse-radar `q=2f`, `30q bpm` and the
-project's Layer B FMCW unwrapped-phase `q=f`, `60q bpm` mapping.
-
-The replacement promotion-eligible synthetic gate is
-`results/m8_ahmed_transfer/synthetic/20260808T183335.468320Z_779928f3a61c` (manifest
-`3f0467d5…83d6`). The canonical paired radar bundle is
-`results/m8_ahmed_transfer/radar/20260808T183600.392760Z_bc3ccf4635c5` (manifest
-`51b68e93…5532`): eight captures × two locks × seven arms, with 128 source spans, 256 shared
-cells, 1,792 estimator rows, 1,536 Ahmed evidence rows, and 256 production evidence rows.
-
-Canonical scoring is
-`results/m8_ahmed_transfer/scored/20260808T191921.669826Z_bc3ccf4635c5` (manifest
-`96b81120…835`), with 3,584 unique HR/BR rows. Comparative metrics use `k>=1`; k=0 is diagnostic
-only. Natural, paced, and unknown protocol strata and the two lock estimands remain separate.
-The complete exact tables are in `reports/m8_ahmed_correction_final_report.md`.
-
-The Figure 8 successor is honestly `not_reproduced_under_declared_assumptions`. Real scoring is
-`exploratory_non_frozen`, uses an approximate 5–15 s time-origin uncertainty, and is
-`not_eligible_for_promotion_or_final_agreement_claims`. Do not rank arms, pool protocols/locks,
-or describe Ahmed's 100% algorithmic validity as measured 100% joint coverage. The optional
-14-bin diagnostic was not authorized and was not run. Earlier sweep/scorer bundles remain
-historical-only and invalid as canonical evidence.
-
-## 6. Settled questions — do not re-open without new data
-
-- **Static clutter removal** — implemented (`src/clutter.py`), **OFF**, measured not to help
-  (warmup free 13%→**7%**, lock moved in 4 of 8 captures). Default path bit-identical, pinned
-  by test.
-- **The 5-bin relock tracker** — simulated 2026-08-04; `P3_relock` fired 0–1 times across all
-  38 combinations — inert. **Do not port the relock half from `git stash@{0}`.** The
-  neighbourhood-read half (`P2`) was not adopted either (halved coverage on the holdout).
-- **Warmup bin selection is not the HR coverage bottleneck** (§2.3). It still matters for BR
-  accuracy — the per-window oracle ceiling is MAE 1.10 vs production 2.68; about a third of
-  that headroom is reachable with zero fitted parameters (§4.3); the rest is not identifiable
-  at n=4.
-- **A learned bin rule does not beat the zero-parameter medoid** — measured 2026-08-04 (§4.3).
-  Re-open only with more subjects, via the same go/no-go script.
-- **Respiration collapse** — fixed via `resp_edge_veto` + STFT-consistency gates. Do not
-  re-open. Accepted cost: a genuine ~6 bpm breather on the edge bin is permanently invalid.
-  Only done-when #5 remains open (needs a capture with non-approximate alignment).
-- **M8/Ahmed on real data** — corrected canonical comparison is complete (§5). Do not re-run,
-  pool, rank, or promote it without new authority and a scientifically stated reason.
-
-## 7. Gotchas that will bite you
-
-- **The BR holdout is partly spent.** `massimo4`–`massimo7` were scored under two operating
-  points of the same policy family; no longer a clean holdout for any bin-policy question. The
-  §4.2 plan (test on E/F/G) resolves this.
-- **The 3 pre-M2-fix captures do not reproduce their recorded warmup evidence.** `massimo1`,
-  `massimo2`, `sweep`: their `run_metadata.json` `locked_bin` came from buggy code; massimo2's
-  and sweep's live locks (20, 21) are documented mislocks. **Re-derive locks with current code**
-  (current: massimo1 27, massimo2 26, sweep 26). In M9 this is institutionalized: the lock map
-  comes only from `scripts/m9_production_comparator.py`.
-- **`is_locked_bin` in the old sweep CSV is the PRE-M2-FIX recorded lock** — banned as feature
-  and baseline (`src/br_features.py:BANNED_COLUMNS`).
-- **Any DSP change can move the bin lock.** Run `scripts/validate_warmup_selection.py` after
-  any change.
-- **The old production bin-sweep run `20260804T131040Z` is dirty-tree** (`git_tree_clean:
-  false`, no config hash — verified 2026-08-05). Usable as a feature-study input as before, but
-  **ineligible as the M9 scoring comparator** — M9 regenerates its own.
-- **`src/m4/estimator_scoring.paired_partitions` silently overwrites duplicate keys** and takes
-  admission from the production row while erroring from each row's own reference. Never call it
-  without the M9 wrapper's pre-assertions (one row per key per side; per-pair reference
-  identity).
-- **`BundleWriter.publish_latest` does NOT check `gate_status`** — it would publish a completed,
-  promotion-eligible, *failed* gate. Any new bundle CLI must enforce `gate_status == "passed"`
-  itself (the M9 plan does).
-- **The BR admissibility gate drops 15 of 120 `k>=1` windows, all by stationarity** — not
-  uniform across captures (massimo7 −5 … massimo1/2/sweep −0); always report it.
-- **`oracle SNR` and AHET's `ratio_db` are not comparable** — different spectra and floors.
-- **Line endings are pinned to LF and it is load-bearing.** Any script hashing a text payload
-  must write binary or `newline="\n"`.
-- **Canonical Step 1a bundle: 2 payload hashes are CRLF-era.** Documented erratum. **Do not
-  "fix" the digests** — that falsifies a provenance record; explicitly rejected.
-- **Never parse `git status --porcelain` from a stripped string** — use
-  `src/m8/ahmed_provenance.py::git_status_paths`. Pin git state in tests asserting on
-  promotion/cleanliness (`_pin_git_provenance`). Git's index caches on `(size, mtime)` — change
-  fixture lengths.
-- **Session types are not machine-recorded.** `notes/capture_inventory.md`: massimo1 natural,
-  massimo2 **paced 16**, sweep **stepped 12→15→18→21**; massimo3–7 user-declared natural
-  (verify against the Masimo RRp channel — massimo2 reads a flat 16.0). This feeds M9's capture
-  manifest **protocol roles**, which the natural-only Stage-B rule depends on.
-  `score_offline.py` requires explicit `--session-type` (OSR-19).
-- **Nothing checks a new capture** for packet loss, frame misalignment, ADC clipping or
-  mirrored I/Q — that tooling was removed 2026-07-31 on user instruction. `live_demo.py` writes
-  `live_raw_mirror_hash: null`, so `score_offline.py`'s directory-form `--pinned-lock-source`
-  refuses future live captures; use the integer form (`kind="manual"`).
-- **6 of 8 captures have no raw hash in their metadata.** massimo1/2/sweep have 2026-07-25
-  hashes in `notes/capture_inventory.md`; massimo3–7's are in `HISTORY.md` 2026-07-31 only. M9
-  hashes every `adc_stream.bin` per run; the live mirrors are referenced **in place** as
-  noncanonical fixtures — never edited, never promoted into `data/raw/`.
-- `results/live_demo/` holds exactly the 8 canonical captures; massimo7 has duplicate/missing
-  Masimo seconds — use the parser's integer-`Timestamp` dedup.
-- Do not mutate `data/raw/`, `results/live_demo/`, live estimates, metadata, warmup evidence or
-  Masimo CSVs.
-- **Environment:** plain `conda` is not on PATH. Use
-  `& 'C:\ProgramData\anaconda3\condabin\conda.bat' run -n radar-vitals python …`, and never call
-  the env's `python.exe` by absolute path (it crashes matplotlib `savefig`).
-
-## 8. Pointers
-
-| Purpose | Path |
-|---|---|
-| Project rules | `CLAUDE.md` |
-| Append-only log | `HISTORY.md` |
-| Milestone roadmap | `plans/implementation_plan.md` |
-| **M9 plan — THE authority for the active task** | `plans/m9_kotte_plan.md` |
-| **M9 review dispositions (9 passes, 1 rebuttal, 5 user decisions)** | `plans/m9_comments_plan.md` |
-| **M9 oracle finding — THE BLOCKING decision memo** | `plans/m9_step1b_oracle_finding.md` |
-| M9 step-1a SNR finding (resolved: option B applied) | `plans/m9_step1a_snr_finding.md` |
-| M9 built code (steps 0-4) | `experiments/m9_kotte/config.yaml`, `src/m9/`, `figures/reproduce_kotte_controls.py`, `scripts/m9_step1b_gate_prediction.py`, `tests/test_m9_kotte_core.py` |
-| **Kotte paper extraction + page renders** | `literature/ref_papers/joint_estimation_high_amplitude_doppler/` |
-| Method rationale, ECA+AHET spec | `notes/approach.md` (Kotte: §5.8, written 2026-08-06) |
-| Analysis spec (window grid §7, evidence floor §2a/§2b, approx-origin rule :559-565) | `notes/analysis_prespec.md` |
-| HR / BR comparator specs | `notes/comparator_prespec.md`, `notes/comparator_prespec_br.md` |
-| Capture protocol, ethics, scene requirement | `notes/protocol.md` |
-| **Capture inventory + SUBJECT MAP + protocol roles** | `notes/capture_inventory.md` |
-| Approved IBEC amendment (recovery arm) — record as submitted | `notes/ethics_amendment_hr_recovery.md` |
-| **M8 correction authority and final report** | `plans/m8_ahmed_correction_plan.md`, `reports/m8_ahmed_correction_final_report.md` |
-| M8 suite/gate/provenance modules (completed; do not change without invalidating its evidence chain) | `src/m8/`, `src/m4/estimator_runner.py`, `src/m4/estimator_scoring.py`, `src/m4/evidence_serialization.py` |
-| M8 canonical runner/scorer | `scripts/m8_ahmed_transfer.py` (`real-smoke`, `real-radar`, `score`) |
-| Production DSP | `src/respiration.py`, `src/vitals.py`, `src/window_pipeline.py` |
-| Warmup selection + regression check | `src/warmup_select.py`; `scripts/validate_warmup_selection.py` |
-| Offline scorer / comparators | `scripts/score_offline.py`, `src/comparator.py` |
-| Per-bin sweep / signal presence / bin policy diagnostics | `scripts/diagnose_bin_sweep.py`, `scripts/diagnose_signal_presence.py`, `scripts/simulate_bin_policy.py` |
-| FROZEN BR bin rule + one-touch test | `scripts/br_bin_rule.py` → `results/diagnose/br_bin_rule/20260804T204634Z_freeze/` |
-| Frozen window grid | `src/m4/window_grid.py` |
-| The 8 captures | `results/live_demo/` |
+| `plans/m9_kotte_plan.md` | sole approved M9 implementation authority |
+| `src/m9/kotte_core.py` | equations, search, adapter, loading, CPI and medoid implementation |
+| `src/m9/paper_control.py` | literal/alternate paper controls and evidence |
+| `figures/reproduce_kotte_controls.py` | reproducible paper-control artifacts/figures |
+| `scripts/m9_kotte_synthetic_transfer.py` | diagnostic two-line/chest transfer runner |
+| `scripts/m9_kotte_run.py` | canonical radar-only runner |
+| `scripts/m9_kotte_score.py` | radar-free exploratory scorer |
+| `experiments/m9_kotte/config.yaml` | sole active M9 experiment configuration |
+| `tests/test_m9_kotte_core.py` | equation, control, adapter and synthetic contracts |
+| `tests/test_m9_kotte_run.py` | radar runner, lock, evidence and firewall contracts |
+| `tests/test_m9_kotte_score.py` | scorer, alignment, metric, taint and immutability contracts |
+| M9.3 radar artifact above | immutable unscored estimator handoff |
+| M9.4 scoring artifact above | accepted exploratory metrics and report |

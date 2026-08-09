@@ -10591,3 +10591,100 @@ sweep/comparator/scorer (steps 5-8).
 **Retired / no longer used:** manuscript language presenting Ahmed as pending or the superseded all-bin sweep as canonical evidence.
 
 **Next:** begin the next published method only under its approved plan and current owner decisions; preserve the Ahmed result without outcome-based profile changes.
+
+## 2026-08-08 - M9 Kotte plan consolidated from four documents
+
+**Set out to do:** review the original Kotte PDF, the actual FMCW acquisition contract, and all
+four M9 planning/finding files; replace them with one reviewed canonical implementation plan.
+No Kotte implementation, test creation, tuning, or real-data experiment was authorized.
+
+**Worked (with evidence):** `plans/m9_kotte_plan.md` is now the sole active M9 plan. A
+`research_agent` independently reconstructed Eqs. (17), (18), and (23)-(26), Algorithm 1,
+matrix dimensions, covariance divisors, source ambiguities, and the paper's simulation-only
+evidence from the original PDF. A `task_breakdown` critically classified the four former
+documents, and a `plan_reviewer` checked the consolidated design against the PDF, repository
+interfaces, partial M9 code/config, and acquisition geometry. Final verdict: **READY WITH MINOR
+CHANGES**, all incorporated. The decisive correction is that canonical project slow time is
+fixed chirp-loop 0 across 50 ms frames; the existing 32-chirp coherent average is sensitivity-
+only and `src/m9/kotte_core.py` is not yet plan-conformant. The plan also distinguishes
+`YY^H/N_c` DOA covariance from `Y_tY_t^H/n_R` Doppler covariance, defines the regularized
+four-RX objective exactly, freezes retained-support mean removal as an adaptation, and uses a
+uniform current-production radar-only rerun lock rather than known-buggy recorded locks.
+
+**Failed / did not work, and why:** the initial consolidated draft assumed the 32-chirp
+coherent mean was the canonical slow-time sample. Review rejected that: the within-frame chirps
+are about 64 us apart in a roughly 2 ms burst, and the production phase path does not prove raw
+inter-chirp coherence. The fixed-loop-0 mapping resolved the blocker. A reviewer suggestion to
+use recorded warmup locks was also rejected after checking the handoff's documented pre-M2
+mislocks; the reviewer confirmed that uniform current-code rerun locks are the correct fix.
+
+**Retired / no longer used:** `plans/m9_comments_plan.md`,
+`plans/m9_step1a_snr_finding.md`, and `plans/m9_step1b_oracle_finding.md` were removed only after
+their useful scientific facts, negative results, decisions, caveats, and provenance were moved
+into the canonical plan. Also retired from the active plan: the transfer-bundle gate,
+oracle-driven `N_c=64` promotion, and MAE GO/NO-GO architecture. Git history preserves the old
+documents. No M8, production Python, own-estimator code, test, result, or raw input was changed.
+
+**Next:** implement only from `plans/m9_kotte_plan.md`, beginning with M9.1's paper-equation and
+existing-code conformance audit. Before any new evidence run, align the M9 config and adapter
+with fixed chirp-loop 0, and complete the required other-family claim reviews.
+
+## 2026-08-09 - M9 Kotte implementation and exploratory evaluation completed
+
+**Set out to do:** implement only the approved `plans/m9_kotte_plan.md`, validate the Kotte
+joint Doppler-frequency equations and the IWR1642 adaptation, run the fixed radar cohort without
+reference access, then score the immutable radar outputs separately without tuning.
+
+**Worked (with evidence):** M9.1 implemented inspectable Eq. (23)-(26) and Algorithm 1 paths,
+including ordinary versus Hermitian transpose, covariance divisor, two-frequency constraints,
+Eq. (25) weights, Eq. (26) conjugation, masks, conditioning, and full objective surfaces. The
+literal post-range/`Y_t` 0 dB controls did not reproduce Figs. 5, 7, or 8; the separately labelled
+21.0721 dB FFT-gain sensitivity reproduced the selected control behaviors. M9.2 implemented the
+fixed chirp-loop-0 adapter, exact `600 -> 592 -> 37 x 16` CPI contract, declared four-RX loading,
+signed-grid search, raw/canonical pairs, and lowest-index L1 medoid. Its final diagnostic artifact
+is `results/m9_kotte_synthetic_transfer/20260808T225156.641305Z_d01cbc2d8404_diagnostic_nondeployable`:
+direct two-cisoid controls passed both loading arms, while the chest model recovered 0/24 arm-cases
+and robustness recovered 0/10, retained as negative transfer evidence.
+
+M9.3 committed the reviewed radar path at `3ac060e` and produced the immutable radar-only handoff
+`results/m9_kotte_radar/20260809T001318.369165Z_d01cbc2d8404_radar_only_unscored`. It contains
+8 captures, 128 complete 600-frame windows, 256 separate arm estimates, 128 shared-`Z` artifacts,
+and 256 arm artifacts. All 256 estimates and all 9,472 CPIs were algorithmically valid. Independent
+reconstruction verified covariance, loading, `H`, objective, conditioning, and medoid evidence;
+the radar tree remained a 400-file immutable input during scoring.
+
+M9.4 scorer commits are `99c22d0` and `22ed3b6`; reviewed M9.1/M9.2 support code was preserved at
+`46cec82`. Canonical exploratory scoring artifact
+`results/m9_kotte_score/20260809T014500.317959Z_adf4434de20b_exploratory_non_frozen` contains
+632 scored rows, 100 summaries, and 408 paired evidence rows. Comparative metrics exclude `k=0`.
+Both loading arms remain separate and all outputs are promotion- and claim-ineligible. Reference
+admission was 66/120 unique comparative HR cells and 105/120 BR cells; radar algorithmic coverage
+was 100% for both arms. Protocol HR MAE for `delta=1e-2` / `delta=1e-4` was 29.434 / 29.368 bpm
+(natural), 19.100 / 10.700 bpm (paced), and 27.438 / 26.938 bpm (stepped). The descriptive
+`constant_session_median` HR MAE was 0.981, 0.800, and 1.375 bpm respectively. BR MAE was
+6.406 / 5.447 bpm (natural), 10.700 / 8.200 bpm (paced), and 11.800 / 11.300 bpm (stepped).
+All source, reference, radar, output, and duplicate-normalization hashes passed independent audit;
+the two code-review families reported no remaining material findings.
+
+**Failed / did not work, and why:** the literal 0 dB paper controls, four-RX literal ablation,
+chest-transfer controls, and real-data HR/BR accuracy were negative. On the approximate-origin,
+low-HR-dynamic-range cohort, both project adaptations substantially underestimated HR and were
+far worse than the no-radar descriptive session median. Pair-selection margins were extremely
+small (overall minimum about `1.8e-5` dB), showing weak separation despite declared numerical
+validity. The first canonical scoring attempt also failed closed because the scorer rejected raw
+duplicate Masimo seconds before the established parser. Seven captures contain 30 known duplicate
+clock-glitch seconds. Independent review identified the ordering as a HIGH implementation defect;
+the corrected scorer now uses unchanged `load_masimo` normalization first, persists merge evidence,
+and still rejects duplicate keys after parsing. The failed attempt created no output and changed no
+radar artifact.
+
+**Retired / no longer used:** raw pre-parser duplicate rejection; the former transfer-bundle and
+MAE GO/NO-GO architecture; oracle-driven `N_c=64` promotion; any interpretation of the 21.0721 dB
+sensitivity as the literal paper assumption or as a real-data setting. Historical diagnostic
+artifacts remain preserved and labelled nondeployable/non-thesis where applicable.
+
+**Next:** treat M9 as complete. If integrating it into `THIRD_CHAPTER.md` or `JOURNAL_PAPER.md`,
+distinguish Kotte et al.'s published method from this fixed-range, four-RX, frame-axis, loaded
+IWR1642 adaptation; report the result as exploratory negative transfer evidence, not a general
+failure of the published method. Do not rank or promote either loading arm. Then proceed only under
+the next approved milestone plan.

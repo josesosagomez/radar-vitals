@@ -12,8 +12,8 @@
 > **This affects the planned headline.** "Comparator pre-registration" was listed here as the
 > paper's primary novelty; that claim is no longer available. The strongest remaining candidate
 > is the **real-data evaluation of two simulation-only published methods** (M8 Ahmed,
-> M9 Kotte) under one common comparator with coverage reported. **M8 Ahmed is complete;
-> M9 Kotte is the next method.**
+> M9 Kotte) under one common comparator with coverage reported. **M8 Ahmed and M9 Kotte are
+> complete; multi-subject validation and the remaining baseline comparison are still pending.**
 >
 > See `plans/implementation_plan.md` "Track 0", `HANDOFF.md` §4, `HISTORY.md` 2026-08-03.
 
@@ -56,12 +56,12 @@
 |---|---|
 | Multi-subject dataset | **WEAK** — n = 4 subjects, 8 sessions (corrected 2026-08-03; previously recorded as n = 1) |
 | Agreement vs reference (MAE/RMSE/Bland–Altman) | **MISSING** — pilot numbers only, n = 4 subjects |
-| Comparison against ≥1 published method | **PARTIAL** — Ahmed HA complete; Kotte and TI on-chip comparison remain |
+| Comparison against ≥1 published method | **PARTIAL** — Ahmed HA and Kotte joint-Doppler complete; TI on-chip comparison remains |
 | Coverage at a defensible level | **WEAK** — 10–46% of windows produce an estimate |
 | Ethics approval / informed consent for human subjects | **OBTAINED** (confirmed 2026-07-23) — record the reference number for the Methods section (§10) |
 | Working system, verified | **DONE** [VERIFIED — 796 passed, 1 xfailed] |
 | Explicit, auditable evaluation methodology | **DONE** — specified and applied consistently. *Not* pre-registered (M0 removed 2026-08-03), so it is a transparency contribution, not a timing claim |
-| **Real-data evaluation of two simulation-only published methods** | **PARTIAL** — M8 Ahmed HA complete; M9 Kotte joint-Doppler next |
+| **Real-data evaluation of two simulation-only published methods** | **PARTIAL** — M8 Ahmed HA and M9 Kotte complete; multi-subject validation remains |
 | Reproducible pipeline, seeds, hashes | **DONE** |
 
 **Minimum viable path to submission**, in order:
@@ -104,8 +104,8 @@ You said high-impact and undecided. Here is the honest landscape for *this* pape
 | **IEEE J. Electromagnetics, RF and Microwaves in Medicine and Biology (J-ERM)** | ~3 | **Good topical fit** — RF for medicine | Smaller, specialised readership | Reasonable niche fallback |
 
 **Recommendation: target JBHI.** It rewards exactly what this project has (a real system, a
-clinical reference, honest agreement statistics) and what makes it distinctive (the first
-real-data test of two published simulation-only methods, scored under one common comparator with
+clinical reference, honest agreement statistics) and what makes it distinctive (a real-data
+evaluation of two published simulation-only methods, scored under one common comparator with
 coverage reported). TBME is the better home if you decide the *methodology* is the headline
 rather than the sensor. Keep npj Digital Medicine as a later ambition contingent on a clinical
 cohort, not as a target for this manuscript.
@@ -278,7 +278,66 @@ FMCW unwrapped-phase adaptation (`q=f`, `60q bpm`), not Ahmed's original pulse-r
 (`q=2f`, `30q bpm`). Exact per-profile values and provenance are in
 `reports/m8_ahmed_correction_final_report.md`.
 
-### 4.5 Negative results worth publishing
+### 4.5 Kotte joint Doppler: controlled transfer to FMCW chest data [VERIFIED IMPLEMENTATION; EXPLORATORY AGREEMENT]
+
+Kotte et al.'s published method jointly searches two Doppler frequencies using the transposed
+selected-bin matrix `Y_t = Y(kappa)^T`. For each pair, the implementation forms
+`A=[a(f1) a(f2)]`, `R_t=Y_tY_t^H/n_R`, `H=A^H R_t^{-1}A`, and the constrained weight
+`w=R_t^{-1}AH^{-1}[1,1]^T` (Eq. 25). Algorithm 1's primary objective is
+`J=w^H R_t w=1^H H^{-1}1`; the Eq. 26 joint-coefficient surface is retained only as a
+direct-synthetic diagnostic. The real-data path omits DOA and Eq. 26 and selects with the
+regularized Algorithm 1 surface. Pair columns are interchangeable, equal/ill-conditioned pairs
+are masked, and physical frequency is converted to `60|f|` bpm. The signed domains are
+`±0.10–0.50 Hz` (breathing) and `±0.80–2.00 Hz` (heart), sampled at `1/120 Hz` (0.5 bpm).
+The printed steering vector omits `T_PRI`; the implementation includes `T_PRI=0.05 s` as the
+declared physical-Hz interpretation. Within disjoint bands the lower candidate is labelled
+breathing and the higher candidate heart; Masimo is never used for this assignment.
+
+For the literal surface, the selected pair is the deterministic lexicographic tie-broken argmax
+over admissible grid cells. The real-data path instead maximizes the loaded
+`regularized_kotte_power` surface over the same admissibility rules.
+
+The paper's 20-RX DOA/range simulation is not reproduced on this hardware. The project adapter
+reuses the unchanged warmup range bin, omits DOA, and processes each complex64 cube
+`(600,32,4,256)` by fixed chirp-loop-0 extraction to `Z (600,4)` complex128. After first-592
+support retention and per-RX mean removal, 37 `(16,4)` CPIs are evaluated at 0.05-s slow-time
+spacing. Because four RX channels make the temporal covariance rank-deficient, both declared
+loaded arms (`delta=1e-2` primary project arm, `1e-4` loading sensitivity) are reported
+separately using the explicit regularized objective `1^H H_delta^{-1}1`.
+
+Direct-cisoid and phase-ramp controls passed; chest-displacement transfer failure (0/24 chest
+cases and 0/10 robustness cases) is a nondeployable diagnostic consistent with two-line model
+limitations. The canonical run
+covered eight captures, 128 windows and 256 arm rows; all radar rows and CPIs were algorithmically
+valid. `k=0` was excluded from comparison. Reference admission was 66/120 HR and 105/120 BR
+cells; 30 duplicate reference seconds were normalized by the existing parser. All scoring is
+`exploratory_non_frozen` and promotion-ineligible.
+
+| Vital / protocol | `delta` | Scored / total | Coverage | MAE / RMSE (bpm) | Bias (bpm) |
+|---|---:|---:|---:|---:|---:|
+| HR / natural | 1e-2 | 53 / 100 | 0.53 | 29.434 / 30.608 | −29.434 |
+| HR / natural | 1e-4 | 53 / 100 | 0.53 | 29.368 / 30.911 | −29.368 |
+| HR / paced | 1e-2 | 5 / 5 | 1.00 | 19.100 / 20.059 | −19.100 |
+| HR / paced | 1e-4 | 5 / 5 | 1.00 | 10.700 / 12.106 | −10.500 |
+| HR / stepped | 1e-2 | 8 / 15 | 0.53 | 27.438 / 27.854 | −27.438 |
+| HR / stepped | 1e-4 | 8 / 15 | 0.53 | 26.938 / 27.299 | −26.938 |
+| BR / natural | 1e-2 | 85 / 100 | 0.85 | 6.406 / 7.547 | +2.688 |
+| BR / natural | 1e-4 | 85 / 100 | 0.85 | 5.447 / 6.632 | −3.188 |
+| BR / paced | 1e-2 | 5 / 5 | 1.00 | 10.700 / 11.039 | +10.700 |
+| BR / paced | 1e-4 | 5 / 5 | 1.00 | 8.200 / 9.482 | +8.200 |
+| BR / stepped | 1e-2 | 15 / 15 | 1.00 | 11.800 / 12.172 | +11.800 |
+| BR / stepped | 1e-4 | 15 / 15 | 1.00 | 11.300 / 11.860 | +11.300 |
+
+M9.1 literal post-range/`Y_t` 0-dB R1/R2/R3 controls were
+`not_reproduced_under_declared_assumptions`. The separate 21.0721-dB FFT-gain interpretation
+reproduced selected behavior but remains unsettled and nonprimary. These implementation-only
+controls have `thesis_evidence_eligible=false` and are outcome-decision-ineligible; they are not
+thesis outcome evidence or real-data rules. HR remains descriptive beside `constant_session_median` because timing is approximate and the
+sessions have little within-session HR dynamic range. Pair margins were tiny (minimum about
+`1.8e-5 dB`). The result is a negative transfer finding for this fixed-range, 4-RX adaptation,
+not evidence against Kotte's original 20-RX simulation method.
+
+### 4.6 Negative results worth publishing
 
 Fixed-threshold harmonic proximity (over-triggers); adaptive k_max (too blunt); ECA v1 measured
 at **0.00 dB removed** in the cardiac band at low breathing rates — i.e. **the production
@@ -303,7 +362,7 @@ Assumes a ~9,000-word JBHI/TBME-style paper; compress for IEEE Sensors J.
 |---|---|---|---|
 | **Title** | §6 | — | — |
 | **Abstract** | Problem → gap (two published methods never tested on real data; comparator + silent failures) → what we did → key numbers with coverage → implication | 200 | — |
-| **I. Introduction** | Contactless monitoring motivation [R7, R11]; harmonic interference problem; the gaps (two leading methods are simulation-only; unreported comparators; unreported coverage); contribution list | 1000 | CH §1 |
+| **I. Introduction** | Contactless monitoring motivation [R7, R11]; harmonic interference problem; the gaps (two published simulation-only methods; unreported comparators; unreported coverage); contribution list | 1000 | CH §1 |
 | **II. Related work** | Table of the six harmonic-interference approaches; foundations [R5–R8]; original Ahmed and Kotte evidence was simulation-only; declare the project's Ahmed FMCW adaptation and its pulse-radar claim boundary | 1200 | CH §4, §10.3 |
 | **III. Signal model and system** | FMCW ranging, phase-displacement relation (3.2 rad/mm at 77 GHz), the harmonic sum model, hardware and chirp table, protocol | 1500 | CH §2, §3 |
 | **IV. Method** | ECA + AHET spec with equations; deviations from [R1] declared; **warmup bin selection with the energy-eligibility rule**; diagnostics commitment | 1800 | CH §5, §6, §9 |
@@ -324,7 +383,7 @@ of methodology papers look for it there.
 
 **Title options** (all avoid claiming accuracy we cannot yet defend):
 
-1. *"Do They Work on Real Radar? First Empirical Evaluation of Two Simulation-Only Methods for
+1. *"Do They Work on Real Radar? Empirical Evaluation of Two Simulation-Only Methods for
    mmWave Vital-Sign Estimation"* — leads with the headline claim.
 2. *"Coverage, Comparators, and Silent Failures in mmWave Radar Heart-Rate Estimation"* — leads
    with the findings; strong for TBME.
@@ -338,9 +397,10 @@ of methodology papers look for it there.
 
 > Contactless heart-rate estimation from millimetre-wave radar is limited by respiratory
 > harmonics that fall inside the cardiac band. Reported accuracies across the literature are
-> difficult to compare, and two of the leading proposed remedies — harmonic accumulation [R1] and
-> joint high-amplitude-difference Doppler [R2] — were originally evaluated **only in simulation**.
-> We evaluate harmonic accumulation on real FMCW radar data [Kotte result pending], alongside an extensive-cancellation and
+> difficult to compare, and two published simulation methods — Ahmed's harmonic accumulation
+> [R1] and Kotte's joint high-amplitude-difference Doppler [R21] — were originally evaluated
+> **only in simulation**.
+> We evaluate harmonic accumulation and joint Doppler on real FMCW radar data, alongside an extensive-cancellation and
 > harmonic-verification pipeline, on a 77 GHz FMCW radar for seated subjects at 0.8–1.4 m,
 > validated against a fingertip pulse oximeter. All estimators are scored on identical
 > non-overlapping windows under a single explicitly stated comparator, with coverage reported
@@ -482,6 +542,9 @@ annotated versions with the role each plays in the argument are in
   Radars," arXiv:2303.13816, 2023.
 - **[R15]** Beltrão, G., et al., "Adaptive Nonlinear Least Squares Framework for Contactless Vital
   Sign Monitoring," *IEEE Trans. Microwave Theory Tech.*, vol. 71, no. 4, 2023.
+- **[R21]** Kotte, V.V., Ahmed, S., Alouini, M.-S., and Al-Naffouri, T.Y., "Joint Estimation of
+  Single Target's High Amplitude Difference Doppler Frequencies in FMCW Radar," *IEEE
+  Transactions on Radar Systems*, vol. 2, 2024, DOI: 10.1109/TRS.2024.3352189.
 
 **Foundations**
 - **[R5]** Droitcour, A.D., et al., "Range correlation and I/Q performance benefits in single-chip
@@ -528,12 +591,11 @@ annotated versions with the role each plays in the argument are in
 
 1. **Run a live hardware smoke test** before subject 1 — the live capture path has not been
    exercised since 2026-07-14. This is now the first blocker.
-2. **Proceed to M9 Kotte joint-Doppler; M8 Ahmed HA is complete on the eight existing
-   captures.** Together they form the paper's published-method comparison. Note the
-   limit measured 2026-07-31: those captures can support **BR agreement** and **HR
-   coverage/feasibility**, but **not HR tracking** — a constant predictor scores 100% on every
-   admissible window (`HANDOFF.md` §2.1). State that limit in the paper rather than letting a
-   reviewer find it.
+2. **Preserve the completed M9 Kotte radar-only and exploratory scoring artifacts.** Together
+   with M8 Ahmed they form the paper's published-method comparison. The existing captures can
+   support exploratory **BR error/coverage characterization** and **HR coverage/feasibility**, but **not HR tracking** — a constant
+   predictor scores 100% on every admissible window (`HANDOFF.md` §2.1). State that limit in the
+   paper rather than letting a reviewer find it.
 3. **Run the 10-subject study**, including the collision-provoking arm and the recovery arm.
    Ethics approval is in hand (`24IBEC051` + the 2026-08-03 exertion amendment); log the
    reference numbers for the Methods section.

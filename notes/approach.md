@@ -374,8 +374,8 @@ descriptive summaries, and no production-promotion claim.
 Kotte, Ahmed, Alouini, Al-Naffouri, "Joint Estimation of Single Target's High
 Amplitude Difference Doppler Frequencies in FMCW Radar", IEEE T-RS vol. 2, 2024,
 DOI 10.1109/TRS.2024.3352189. Simulation-only in the paper; M9 is its first
-real-data evaluation. Authority: `plans/m9_kotte_plan.md` (nine review passes,
-dispositions in `plans/m9_comments_plan.md`). Unlike every other method in this
+real-data evaluation. The sole planning authority is `plans/m9_kotte_plan.md`, which
+consolidates the earlier review and finding documents. Unlike every other method in this
 survey, it consumes the **complex slow-time × RX matrix at one range bin**, not
 extracted phase — M9 is the harness's first non-phase consumer.
 
@@ -409,17 +409,18 @@ gain imbalance is in expectation a pure scalar under the stated assumptions —
 finite-sample sensitivity is the algebraic non-invariance counterexample test.
 
 **The method's own failure mode:** β2 ≈ −β1 collapses the true peak (paper Case 1
-remark). Carried as a predicted-failure audit in control 1 and prediction P5 in
-the transfer gate, with the multi-CPI discrimination table pinning how the
-estimator forms (per-CPI medoid / mean surface / pooled) differ under it.
+remark). M9.1 carries this as an `expected_paper_limitation` control with the same
+surface and provenance evidence as the other direct-`Y_t` cases. It cannot be
+converted into a rejection threshold or repaired inside M9.
 
 **Rank rule (the 4-RX landmine).** At n_R=4, rank(R_t) ≤ 4 < N_c=16, so the
 unloaded inverse does not exist on real geometry. Primary response: RX-only
 snapshots + trace-relative loading per CPI. Numerical rank is
 `#{λ_i > rank_rtol·λ_max}`; finite `λ_max ≤ 0` → rank 0 → covariance failure
 path; nonfinite eigenvalues rejected; identical rule everywhere; eigenvalues and
-rank persisted. Pooling CPIs restores full rank but is a *different* (incoherent)
-model — ours, not the paper's, and labelled so.
+rank persisted. The project adaptation therefore uses the two declared
+trace-relative loading arms (`delta=1e-2` primary and `delta=1e-4` sensitivity)
+per 16-frame CPI, with the 2-D medoid as the sole window report.
 
 **Bessel-comb analysis (why transfer is not obvious).** The chest phase is
 `exp(j(4π/λ_eff)d(t))` with λ_eff ≈ 3.79 mm; a 2 mm breathing amplitude gives
@@ -428,22 +429,18 @@ harmonics marching through the heart band — the transfer question is whether t
 selected f2 is f_h or a breathing harmonic. The paper's model (two additive
 cisoids in β1, β2) is the *small-modulation* limit; S1 (small amplitudes) tests
 the paper regime, S2 (deep modulation + decoy harmonics) the real one, S3 the
-degenerate f_h = 4·f_b collision. The independent oracle
-(`scripts/m9_step1b_gate_prediction.py`, pinned truncated-Bessel model with
-coherent combination of coincident lines and alias folding) predicts each before
-the gate implementation runs.
+degenerate f_h = 4·f_b collision. These are diagnostic synthetic controls only:
+their outcomes cannot select or promote a real-data CPI, loading, range, band,
+grid, or aggregation rule.
 
 **Aggregation contract (600-frame window → one estimate).** Extract 600 frames →
-retain the first `n_cpis·N_c` (592 at N_c=16) → subtract the per-RX mean over the
-retained support → split into CPIs (`mean_removal_scope: "retained_support"`;
-the discarded tail provably cannot affect any result). Forms: `cpi_medoid`
-(primary; per-CPI Kotte-form estimates, medoid under L1 in bpm, tie-break lowest
-CPI index; all CPIs must be valid — `min_valid_cpi_fraction` is exactly 1.0),
-`mean_surface` (gate-only diagnostic; raw surface mean under the common mask),
-`pooled` (one covariance over all snapshots; δ retained for uniformity). Signed
-grid f1 ∈ ±[0.10,0.50] Hz, f2 ∈ ±[0.80,2.00] Hz at 0.5 bpm; alias collapse by
-`(|f1|,|f2|)` with a deterministic tie-break; `pair_margin_db` is the one defined
-selection-margin diagnostic.
+select chirp-loop 0 at the chosen range bin from each frame while retaining all
+four RX → retain the first 592 frames → subtract the per-RX mean over that retained
+support → split into 37 CPIs of `(16,4)`. The discarded eight-frame tail cannot
+affect the result. Every CPI must be valid. Each CPI reports a Kotte-form pair and
+the window reports the 2-D L1 medoid in bpm, with lowest CPI index breaking ties.
+The signed grid is f1 ∈ ±[0.10,0.50] Hz and f2 ∈ ±[0.80,2.00] Hz at 0.5 bpm;
+aliases collapse by `(|f1|,|f2|)` while retaining the raw signed pair.
 
 **Ambiguity list (declared, not resolved silently):**
 - The paper's fast-time/range setup is internally inconsistent (extraction
@@ -460,12 +457,15 @@ selection-margin diagnostic.
   MUSIC comparator constructions are pinned in `experiments/m9_kotte/config.yaml`
   as **declared reproduction assumptions**, not paper facts.
 
-**Role in this project:** not a production-method candidate until it survives its
-controls and transfer gate; Stage A evaluates it on all 8 exploratory captures at
-every candidate bin next to the production comparator; the Stage-B (DOA) decision
-is a go/no-go note bound to the natural-only, subject-weighted BR rule in the
-config. HR is reported descriptively only (HANDOFF §2.2). Every scored M9 number
-carries the approximate-origin, no-promotion taint (analysis-spec amendment).
+**Role in this project:** M9 first validates the direct-`Y_t` equations, then the
+fixed-loop project adapter and diagnostic chest-transfer controls. Radar-only
+evaluation uses one unchanged `current_production_rerun_lock` per each of the eight
+fixed exploratory captures; Kotte never searches all bins for a winner. Reference
+scoring happens only after radar outputs are immutable and has no outcome-based
+promotion or MAE acceptance threshold. Coverage, errors, and failure causes are
+reported as outcomes. The old
+captures retain their approximate-origin and insufficient-HR-dynamic-range
+limitations, so they cannot support a final HR agreement or promotion claim.
 
 ---
 
