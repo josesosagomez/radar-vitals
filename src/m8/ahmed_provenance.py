@@ -13,9 +13,12 @@ promotion-ineligible.
 from __future__ import annotations
 
 import ast
+import base64
+import binascii
 import contextlib
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 import importlib.util
 import io
 import json
@@ -1085,6 +1088,12 @@ _ATTESTATION_COMMAND_EXIT_STATUSES = ((0,), (0, 5), (0, 5), (0,))
 # one argv element cannot be part of the frozen command identity.
 _JUNIT_XML_OPTION_PREFIX = "--junitxml="
 _JUNIT_XML_PATH_PLACEHOLDER = "<temporary-run-report>"
+# Passing reports are currently below 200 KiB.  Eight MiB leaves ample room for the
+# complete 1,327-node xUnit document while preventing an unbounded read from a malformed
+# or substituted runner.
+_MAX_JUNIT_XML_BYTES = 8 * 1024 * 1024
+_CAPTURED_STDIO_MODE = "captured_text"
+_INHERITED_STDIO_MODE = "inherited_not_captured"
 
 
 def _attestation_commands(
@@ -1125,8 +1134,43 @@ def _collected_node_ids(stdout: str) -> list[str]:
     ]
 
 
-def _skipped_node_ids_from_junit_xml(report_path: Path) -> list[str]:
-    """Observed skipped pytest node IDs, read from the executed run's own report.
+def _pytest_node_id_from_junit_testcase(testcase: ElementTree.Element) -> str:
+    """Reconstruct one exact pytest node ID from pytest's xUnit2 address fields."""
+    module_prefix_by_file = {
+        path: path.removesuffix(".py").replace("/", ".") for path in _ATTESTED_TEST_FILES
+    }
+    classname = testcase.get("classname") or ""
+    test_name = testcase.get("name") or ""
+    matching_files = [
+        path
+        for path, prefix in module_prefix_by_file.items()
+        if classname == prefix or classname.startswith(f"{prefix}.")
+    ]
+    if not matching_files:
+        raise ValueError(
+            f"the executed run reported {classname!r}, which is not one of "
+            "the attested test files"
+        )
+    # Longest prefix wins so a nested module can never be attributed to a shorter one.
+    file_path = max(matching_files, key=lambda path: len(module_prefix_by_file[path]))
+    enclosing_classes = classname[len(module_prefix_by_file[file_path]):].strip(".")
+    node_parts = [file_path]
+    if enclosing_classes:
+        node_parts.extend(enclosing_classes.split("."))
+    node_parts.append(test_name)
+    return "::".join(node_parts)
+
+
+def _pytest_node_ids_from_junit_root(root: ElementTree.Element) -> list[str]:
+    """Every executed pytest node ID in exact xUnit2 document order."""
+    return [
+        _pytest_node_id_from_junit_testcase(testcase)
+        for testcase in root.iter("testcase")
+    ]
+
+
+def _skipped_node_ids_from_junit_root(root: ElementTree.Element) -> list[str]:
+    """Observed skipped pytest node IDs from an already validated xUnit2 tree.
 
     Taking the skip identities from a separate ``-m <marker>`` collection would name the
     DECLARED nodes, not the nodes that actually skipped.  A compensating pair - one declared
@@ -1138,45 +1182,366 @@ def _skipped_node_ids_from_junit_xml(report_path: Path) -> list[str]:
     ``.`` and the ``.py`` suffix stripped, followed by any enclosing class names, and
     ``name`` as the final component including any parametrisation.  The file path is
     therefore recovered by matching the frozen attested file list, which also means a skip
-    reported outside that list is rejected instead of being silently renamed.  The XML is
-    written by the builder's own pytest invocation into a temporary directory, so the
-    standard-library parser is used on trusted input.
+    reported outside that list is rejected instead of being silently renamed.  The caller
+    must first enforce the closed grammar in ``_junit_evidence_from_bytes``; this helper
+    only performs node-ID reconstruction after that validation boundary.
+    """
+    skipped_node_ids: list[str] = []
+    for testcase in root.iter("testcase"):
+        if testcase.find("skipped") is None:
+            continue
+        skipped_node_ids.append(_pytest_node_id_from_junit_testcase(testcase))
+    return skipped_node_ids
+
+
+def _skipped_node_ids_from_junit_xml(report_path: Path) -> list[str]:
+    _evidence, skipped_node_ids = _read_junit_evidence(report_path)
+    return skipped_node_ids
+
+
+def _execute_junit_path(purpose: str, argv: Sequence[str]) -> Path | None:
+    """Return the sole execute-report path, identified from role and argv structure."""
+    report_options = [
+        item.removeprefix(_JUNIT_XML_OPTION_PREFIX)
+        for item in argv
+        if item.startswith(_JUNIT_XML_OPTION_PREFIX)
+    ]
+    if purpose != "execute":
+        if report_options:
+            raise ValueError("only the execute attestation command may request JUnit XML")
+        return None
+    if "--collect-only" in argv or len(report_options) != 1 or not report_options[0]:
+        raise ValueError(
+            "execute attestation command must contain exactly one JUnit XML argument"
+        )
+    return Path(report_options[0])
+
+
+def _run_attestation_command(
+    purpose: str,
+    argv: Sequence[str],
+    *,
+    repository: Path,
+    command_environment: Mapping[str, str],
+    command_runner=subprocess.run,
+) -> tuple[subprocess.CompletedProcess, str, str | None, str | None]:
+    """Run one attestation command with the stdio mode required by its role.
+
+    Collection output is a parsed input, so it remains captured and hash-bound.  The
+    execute command is identified structurally by its sole JUnit argument and inherits
+    the parent handles for Windows native-library compatibility.  Its exact bounded JUnit
+    bytes, rather than unavailable console text, are validated separately.
+    """
+    execute_report_path = _execute_junit_path(purpose, argv)
+    if execute_report_path is not None:
+        completed = command_runner(
+            list(argv), cwd=str(repository), env=dict(command_environment)
+        )
+        return completed, _INHERITED_STDIO_MODE, None, None
+
+    completed = command_runner(
+        list(argv),
+        cwd=str(repository),
+        env=dict(command_environment),
+        capture_output=True,
+        text=True,
+    )
+    if type(completed.stdout) is not str or type(completed.stderr) is not str:
+        raise RuntimeError("captured test-attestation output is not decoded text")
+    return (
+        completed,
+        _CAPTURED_STDIO_MODE,
+        sha256_bytes(completed.stdout.encode("utf-8")),
+        sha256_bytes(completed.stderr.encode("utf-8")),
+    )
+
+
+def _nonnegative_junit_count(suite: ElementTree.Element, name: str) -> int:
+    value = suite.get(name)
+    if value is None or re.fullmatch(r"[0-9]+", value) is None:
+        raise ValueError(f"JUnit {name} count is malformed")
+    return int(value)
+
+
+def _require_junit_attributes(
+    element: ElementTree.Element,
+    expected: set[str],
+    *,
+    context: str,
+) -> None:
+    if set(element.attrib) != expected:
+        raise ValueError(f"JUnit {context} attributes are malformed")
+
+
+def _require_structural_junit_text(
+    element: ElementTree.Element,
+    *,
+    context: str,
+    allow_content: bool = False,
+) -> None:
+    if not allow_content and element.text is not None and not element.text.isspace():
+        raise ValueError(f"JUnit {context} contains unexpected text")
+    if element.tail is not None and not element.tail.isspace():
+        raise ValueError(f"JUnit {context} contains unexpected tail text")
+
+
+def _nonnegative_junit_decimal(value: str | None, *, context: str) -> Decimal:
+    # Pinned pytest 8.4.2 emits both suite and testcase durations with ``:.3f``.
+    if value is None or re.fullmatch(r"[0-9]+\.[0-9]{3}", value) is None:
+        raise ValueError(f"JUnit {context} is malformed")
+    try:
+        parsed = Decimal(value)
+    except InvalidOperation as exc:
+        raise ValueError(f"JUnit {context} is malformed") from exc
+    if not parsed.is_finite() or parsed < 0:
+        raise ValueError(f"JUnit {context} is malformed")
+    return parsed
+
+
+def _validate_junit_properties(
+    properties: ElementTree.Element,
+    *,
+    context: str,
+) -> None:
+    _require_junit_attributes(properties, set(), context=f"{context} properties")
+    _require_structural_junit_text(properties, context=f"{context} properties")
+    property_nodes = list(properties)
+    if not property_nodes:
+        raise ValueError(f"JUnit {context} properties are empty")
+    for property_node in property_nodes:
+        if property_node.tag != "property":
+            raise ValueError(f"JUnit {context} properties contain an unknown child")
+        _require_junit_attributes(
+            property_node, {"name", "value"}, context=f"{context} property"
+        )
+        if list(property_node):
+            raise ValueError(f"JUnit {context} property contains child elements")
+        _require_structural_junit_text(
+            property_node, context=f"{context} property"
+        )
+
+
+def _validate_junit_testcase(testcase: ElementTree.Element) -> str:
+    """Validate pytest 8 xUnit2 testcase grammar and return its stable identity."""
+    _require_junit_attributes(
+        testcase, {"classname", "name", "time"}, context="testcase"
+    )
+    _require_structural_junit_text(testcase, context="testcase")
+    if not testcase.get("classname") or not testcase.get("name"):
+        raise ValueError("JUnit testcase identity is incomplete")
+    _nonnegative_junit_decimal(testcase.get("time"), context="testcase duration")
+
+    seen_properties = False
+    seen_outcome = False
+    seen_output = False
+    outcome_tags = {"skipped", "failure", "error"}
+    for index, child in enumerate(testcase):
+        if child.tag == "properties":
+            if index != 0 or seen_properties or seen_outcome or seen_output:
+                raise ValueError("JUnit testcase properties cardinality/order is malformed")
+            seen_properties = True
+            _validate_junit_properties(child, context="testcase")
+        elif child.tag in outcome_tags:
+            if seen_outcome or seen_output:
+                raise ValueError("JUnit testcase outcome cardinality/order is malformed")
+            seen_outcome = True
+            if child.tag in {"failure", "error"}:
+                _require_junit_attributes(
+                    child, {"message"}, context=f"{child.tag} outcome"
+                )
+            else:
+                if set(child.attrib) not in ({"message"}, {"type", "message"}):
+                    raise ValueError("JUnit skipped attributes are malformed")
+                if "type" in child.attrib and child.get("type") not in {
+                    "pytest.skip", "pytest.xfail"
+                }:
+                    raise ValueError("JUnit skipped type is malformed")
+            if list(child):
+                raise ValueError("JUnit testcase outcome contains child elements")
+            _require_structural_junit_text(
+                child, context=f"{child.tag} outcome", allow_content=True
+            )
+        elif child.tag in {"system-out", "system-err"}:
+            seen_output = True
+            _require_junit_attributes(child, set(), context=child.tag)
+            if list(child):
+                raise ValueError(f"JUnit {child.tag} contains child elements")
+            _require_structural_junit_text(
+                child, context=child.tag, allow_content=True
+            )
+        else:
+            raise ValueError("JUnit testcase contains an unknown child")
+    return f"{testcase.get('classname')}::{testcase.get('name')}"
+
+
+def _strict_junit_root(xml_bytes: bytes) -> ElementTree.Element:
+    """Parse only the closed pytest 8.4 xUnit2 grammar used by this gate.
+
+    The pinned pytest emits an optional UTF-8 XML declaration, ``testsuites`` with
+    one ``pytest`` suite, optional suite/testcase properties, testcase outcomes, and
+    optional captured ``system-out``/``system-err`` text.  It emits no DTD, entities,
+    namespaces, comments, CDATA, or processing instructions.  Those forms are rejected
+    before ElementTree receives the bytes, so entity expansion cannot begin.
     """
     try:
-        tree = ElementTree.parse(report_path)
-    except (OSError, ElementTree.ParseError) as exc:
+        xml_text = xml_bytes.decode("utf-8", errors="strict")
+    except UnicodeDecodeError as exc:
+        raise ValueError("executed test JUnit XML is not strict UTF-8") from exc
+
+    if xml_text.startswith("\ufeff"):
+        raise ValueError("executed test JUnit XML UTF-8 BOM is forbidden")
+
+    body = xml_text
+    if body.startswith("<?xml"):
+        declaration_end = body.find("?>")
+        if declaration_end < 0:
+            raise ValueError("executed test JUnit XML declaration is malformed")
+        declaration = body[: declaration_end + 2]
+        if declaration not in {
+            '<?xml version="1.0" encoding="utf-8"?>',
+            "<?xml version='1.0' encoding='utf-8'?>",
+        }:
+            raise ValueError("executed test JUnit XML declaration is unsupported")
+        body = body[declaration_end + 2 :]
+    if "<!" in body:
+        raise ValueError("executed test JUnit XML declarations are forbidden")
+    if "<?" in body:
+        raise ValueError("executed test JUnit XML processing instructions are forbidden")
+    if re.search(r"<[^>]*\sxmlns(?::[A-Za-z_][\w.-]*)?\s*=", body):
+        raise ValueError("executed test JUnit XML namespaces are forbidden")
+
+    try:
+        root = ElementTree.fromstring(xml_bytes)
+    except ElementTree.ParseError as exc:
+        raise ValueError("executed test JUnit XML is malformed") from exc
+    if root.tag != "testsuites":
+        raise ValueError("executed test JUnit XML root is not testsuites")
+    _require_junit_attributes(root, {"name"}, context="testsuites")
+    if root.get("name") != "pytest tests":
+        raise ValueError("JUnit testsuites identity is malformed")
+    _require_structural_junit_text(root, context="testsuites")
+
+    suites = list(root)
+    if len(suites) != 1 or suites[0].tag != "testsuite":
+        raise ValueError("executed test JUnit XML is not one xUnit2 testsuite")
+    suite = suites[0]
+    _require_junit_attributes(
+        suite,
+        {
+            "name", "errors", "failures", "skipped", "tests", "time",
+            "timestamp", "hostname",
+        },
+        context="testsuite",
+    )
+    if suite.get("name") != "pytest":
+        raise ValueError("JUnit testsuite identity is malformed")
+    _require_structural_junit_text(suite, context="testsuite")
+
+    seen_suite_properties = False
+    testcase_identities: set[str] = set()
+    for index, child in enumerate(suite):
+        if child.tag == "properties":
+            if index != 0 or seen_suite_properties:
+                raise ValueError("JUnit testsuite properties cardinality/order is malformed")
+            seen_suite_properties = True
+            _validate_junit_properties(child, context="testsuite")
+        elif child.tag == "testcase":
+            identity = _validate_junit_testcase(child)
+            if identity in testcase_identities:
+                raise ValueError("JUnit testcase identity is duplicated")
+            testcase_identities.add(identity)
+        else:
+            raise ValueError("JUnit testsuite contains an unknown child")
+    return root
+
+
+def _junit_evidence_from_bytes(
+    xml_bytes: bytes,
+) -> tuple[dict[str, object], list[str]]:
+    if not xml_bytes:
+        raise ValueError("executed test JUnit XML is empty")
+    if len(xml_bytes) > _MAX_JUNIT_XML_BYTES:
+        raise ValueError(
+            f"executed test JUnit XML exceeds {_MAX_JUNIT_XML_BYTES} bytes"
+        )
+    root = _strict_junit_root(xml_bytes)
+    suites = list(root)
+    suite = suites[0]
+    tests_count = _nonnegative_junit_count(suite, "tests")
+    errors_count = _nonnegative_junit_count(suite, "errors")
+    failures_count = _nonnegative_junit_count(suite, "failures")
+    skipped_count = _nonnegative_junit_count(suite, "skipped")
+    suite_time_seconds = suite.get("time")
+    _nonnegative_junit_decimal(suite_time_seconds, context="suite duration")
+    suite_timestamp = suite.get("timestamp")
+    try:
+        parsed_timestamp = datetime.fromisoformat(suite_timestamp or "")
+    except ValueError as exc:
+        raise ValueError("JUnit suite timestamp is malformed") from exc
+    if parsed_timestamp.tzinfo is None:
+        raise ValueError("JUnit suite timestamp must be timezone-aware")
+
+    testcases = list(suite.findall("testcase"))
+    if len(testcases) != tests_count:
+        raise ValueError("JUnit testcase cardinality differs from its suite count")
+    outcome_element_by_count = {
+        "errors": "error",
+        "failures": "failure",
+        "skipped": "skipped",
+    }
+    observed_counts = {name: 0 for name in outcome_element_by_count}
+    for testcase in testcases:
+        outcomes = [
+            name
+            for name, element_name in outcome_element_by_count.items()
+            if testcase.find(element_name) is not None
+        ]
+        if len(outcomes) > 1:
+            raise ValueError("JUnit testcase has multiple terminal outcomes")
+        if outcomes:
+            observed_counts[outcomes[0]] += 1
+    if observed_counts != {
+        "errors": errors_count,
+        "failures": failures_count,
+        "skipped": skipped_count,
+    }:
+        raise ValueError("JUnit suite counts disagree with testcase outcomes")
+    passed_count = tests_count - errors_count - failures_count - skipped_count
+    if passed_count < 0:
+        raise ValueError("JUnit suite counts exceed its testcase total")
+
+    ordered_pytest_node_ids = _pytest_node_ids_from_junit_root(root)
+    evidence = {
+        "schema_id": "pytest_xunit2_single_suite_v2",
+        "xml_base64": base64.b64encode(xml_bytes).decode("ascii"),
+        "xml_sha256": sha256_bytes(xml_bytes),
+        "size_bytes": len(xml_bytes),
+        "tests_count": tests_count,
+        "passed_count": passed_count,
+        "skipped_count": skipped_count,
+        "failures_count": failures_count,
+        "errors_count": errors_count,
+        "suite_time_seconds": suite_time_seconds,
+        "suite_timestamp": suite_timestamp,
+        "ordered_pytest_node_ids": ordered_pytest_node_ids,
+    }
+    return evidence, _skipped_node_ids_from_junit_root(root)
+
+
+def _read_junit_evidence(report_path: Path) -> tuple[dict[str, object], list[str]]:
+    try:
+        with Path(report_path).open("rb") as handle:
+            xml_bytes = handle.read(_MAX_JUNIT_XML_BYTES + 1)
+    except OSError as exc:
         raise RuntimeError(
             f"cannot read the executed run's outcome report {report_path}: {exc}"
         ) from exc
-
-    module_prefix_by_file = {
-        path: path.removesuffix(".py").replace("/", ".") for path in _ATTESTED_TEST_FILES
-    }
-    skipped_node_ids: list[str] = []
-    for testcase in tree.iter("testcase"):
-        if testcase.find("skipped") is None:
-            continue
-        classname = testcase.get("classname") or ""
-        test_name = testcase.get("name") or ""
-        matching_files = [
-            path
-            for path, prefix in module_prefix_by_file.items()
-            if classname == prefix or classname.startswith(f"{prefix}.")
-        ]
-        if not matching_files:
-            raise RuntimeError(
-                f"the executed run reported a skip in {classname!r}, which is not one of "
-                "the attested test files"
-            )
-        # Longest prefix wins so a nested module can never be attributed to a shorter one.
-        file_path = max(matching_files, key=lambda path: len(module_prefix_by_file[path]))
-        enclosing_classes = classname[len(module_prefix_by_file[file_path]):].strip(".")
-        node_parts = [file_path]
-        if enclosing_classes:
-            node_parts.extend(enclosing_classes.split("."))
-        node_parts.append(test_name)
-        skipped_node_ids.append("::".join(node_parts))
-    return skipped_node_ids
+    try:
+        return _junit_evidence_from_bytes(xml_bytes)
+    except ValueError as exc:
+        raise RuntimeError(
+            f"executed run outcome report {report_path} is invalid: {exc}"
+        ) from exc
 
 
 def _attestation_input_hashes(source_manifest: SourceManifest) -> dict[str, str]:
@@ -1219,55 +1584,84 @@ def build_test_attestation(
     command_environment = dict(os.environ)
     command_environment[_REAL_DATA_ENV_NAME] = _REAL_DATA_ENV_VALUE
     completed_commands: list[dict] = []
-    outputs: list[subprocess.CompletedProcess] = []
+    captured_outputs: list[subprocess.CompletedProcess] = []
 
     # The outcome report is a transient intermediate of this check, not an artifact of the
     # experiment, so it is written to a temporary directory and never into the repository
     # or ``results/``.
     # ``temporary_parent`` is operational plumbing for restricted or unusual platforms.
-    # It never enters the persisted scientific identity; the report itself is summarized
-    # by node IDs, counts, and command-output hashes and then deleted.
+    # It never enters the persisted scientific identity; the report's exact bounded bytes
+    # and summary are embedded and hash-bound in the attestation before it is deleted.
     with tempfile.TemporaryDirectory(
         prefix="m8_test_attestation_",
         dir=None if temporary_parent is None else str(Path(temporary_parent).resolve()),
     ) as report_directory:
         junit_xml_path = Path(report_directory) / "attested_pytest_report.xml"
         commands = _attestation_commands(sys.executable, str(junit_xml_path))
+        execute_command_count = 0
         for purpose, argv, allowed_statuses in zip(
             _ATTESTATION_COMMAND_PURPOSES, commands, _ATTESTATION_COMMAND_EXIT_STATUSES
         ):
-            completed = command_runner(
-                list(argv),
-                cwd=str(repository),
-                env=command_environment,
-                capture_output=True,
-                text=True,
-            )
-            outputs.append(completed)
+            try:
+                execute_report_path = _execute_junit_path(purpose, argv)
+            except ValueError as exc:
+                raise RuntimeError("test attestation command structure is invalid") from exc
+            if (
+                execute_report_path is not None
+                and execute_report_path.resolve() != junit_xml_path.resolve()
+            ):
+                raise RuntimeError("execute command JUnit path differs from the allocated report")
+            if execute_report_path is not None:
+                execute_command_count += 1
+            try:
+                (
+                    completed,
+                    stdio_capture_mode,
+                    stdout_sha256,
+                    stderr_sha256,
+                ) = _run_attestation_command(
+                    purpose,
+                    argv,
+                    repository=repository,
+                    command_environment=command_environment,
+                    command_runner=command_runner,
+                )
+            except ValueError as exc:
+                raise RuntimeError("test attestation command structure is invalid") from exc
+            if execute_report_path is None:
+                captured_outputs.append(completed)
             completed_commands.append(
                 {
                     "purpose": purpose,
                     "argv": list(argv),
+                    "working_directory": str(repository),
                     "exit_status": int(completed.returncode),
-                    "stdout_sha256": sha256_bytes(completed.stdout.encode("utf-8")),
-                    "stderr_sha256": sha256_bytes(completed.stderr.encode("utf-8")),
+                    "stdio_capture_mode": stdio_capture_mode,
+                    "stdout_sha256": stdout_sha256,
+                    "stderr_sha256": stderr_sha256,
                 }
             )
             if completed.returncode not in allowed_statuses:
+                output_tail = ""
+                if execute_report_path is None:
+                    output_tail = f": {completed.stdout[-2000:]}{completed.stderr[-2000:]}"
                 raise RuntimeError(
                     f"test attestation {purpose} command failed with exit "
-                    f"{completed.returncode}: "
-                    f"{completed.stdout[-2000:]}{completed.stderr[-2000:]}"
+                    f"{completed.returncode}{output_tail}"
                 )
+        if execute_command_count != 1:
+            raise RuntimeError("test attestation must execute exactly one inherited JUnit command")
+        if len(captured_outputs) != len(_ATTESTATION_COMMAND_PURPOSES) - 1:
+            raise RuntimeError("test attestation collection command cardinality differs")
 
-        node_ids = _collected_node_ids(outputs[0].stdout)
+        node_ids = _collected_node_ids(captured_outputs[0].stdout)
         if not node_ids or len(node_ids) != len(set(node_ids)):
             raise RuntimeError("test collection did not emit unique ordered pytest node IDs")
 
         # One collection per declared class, so membership is read from the markers in the
         # committed test source rather than being inferred from the executed run.
         declared_skip_node_ids: dict[str, list[str]] = {}
-        for marker, collection in zip(_DECLARED_SKIP_MARKERS, outputs[1:-1]):
+        for marker, collection in zip(_DECLARED_SKIP_MARKERS, captured_outputs[1:]):
             declared = _collected_node_ids(collection.stdout)
             if len(set(declared)) != len(declared) or not set(declared) <= set(node_ids):
                 raise RuntimeError(
@@ -1277,7 +1671,11 @@ def build_test_attestation(
             declared_skip_node_ids[marker] = declared
         permitted_skip_node_ids = set().union(*declared_skip_node_ids.values())
 
-        observed_skipped_node_ids = _skipped_node_ids_from_junit_xml(junit_xml_path)
+        execute_junit, observed_skipped_node_ids = _read_junit_evidence(junit_xml_path)
+        if execute_junit["ordered_pytest_node_ids"] != node_ids:
+            raise RuntimeError(
+                "executed JUnit node order/identity differs from collected pytest nodes"
+            )
 
     if len(set(observed_skipped_node_ids)) != len(observed_skipped_node_ids):
         raise RuntimeError("the executed run reported the same skipped node more than once")
@@ -1289,24 +1687,21 @@ def build_test_attestation(
             f"being recorded: {undeclared_skips}"
         )
 
-    execute_stdout = outputs[-1].stdout
-    passed_matches = re.findall(r"(\d+) passed", execute_stdout)
-    passed_count = int(passed_matches[-1]) if passed_matches else 0
-    skipped_matches = re.findall(r"(\d+) skipped", execute_stdout)
-    skipped_count = int(skipped_matches[-1]) if skipped_matches else 0
-    forbidden_outcomes = re.findall(
-        r"(\d+) (failed|xfailed|xpassed|error|errors)", execute_stdout
+    passed_count = int(execute_junit["passed_count"])
+    skipped_count = int(execute_junit["skipped_count"])
+    failed_count = int(execute_junit["failures_count"]) + int(
+        execute_junit["errors_count"]
     )
     if (
         passed_count + skipped_count != len(node_ids)
         or skipped_count != len(observed_skipped_node_ids)
-        or any(int(count) for count, _name in forbidden_outcomes)
+        or failed_count != 0
     ):
         raise RuntimeError(
             "test execution did not pass every collected node apart from declared "
             f"skips: collected={len(node_ids)}, passed={passed_count}, "
             f"skipped={skipped_count}, observed_skips={len(observed_skipped_node_ids)}, "
-            f"declared_skips={len(permitted_skip_node_ids)}, other={forbidden_outcomes}"
+            f"declared_skips={len(permitted_skip_node_ids)}, failed={failed_count}"
         )
 
     versions = {"numpy": np.__version__}
@@ -1314,12 +1709,13 @@ def build_test_attestation(
         module = __import__(module_name)
         versions[module_name] = str(module.__version__)
     attestation = {
-        "schema_version": 2,
+        "schema_version": 3,
         "status": "passed",
         "source_manifest_sha256": source_manifest.manifest_sha256,
         "started_utc": started,
         "completed_utc": datetime.now(timezone.utc).isoformat(),
         "ordered_commands": completed_commands,
+        "execute_junit": execute_junit,
         "ordered_pytest_node_ids": node_ids,
         "declared_skip_pytest_node_ids": declared_skip_node_ids,
         "skipped_pytest_node_ids": observed_skipped_node_ids,
@@ -1342,12 +1738,53 @@ def build_test_attestation(
     return attestation
 
 
+def _validate_execute_junit_document(
+    document: object,
+) -> tuple[dict[str, object], list[str]]:
+    expected_keys = {
+        "schema_id",
+        "xml_base64",
+        "xml_sha256",
+        "size_bytes",
+        "tests_count",
+        "passed_count",
+        "skipped_count",
+        "failures_count",
+        "errors_count",
+        "suite_time_seconds",
+        "suite_timestamp",
+        "ordered_pytest_node_ids",
+    }
+    if not isinstance(document, Mapping) or set(document) != expected_keys:
+        raise ValueError("test attestation execute JUnit schema is malformed")
+    encoded = document["xml_base64"]
+    if type(encoded) is not str:
+        raise ValueError("test attestation execute JUnit bytes are malformed")
+    maximum_encoded_length = 4 * ((_MAX_JUNIT_XML_BYTES + 2) // 3)
+    if len(encoded) > maximum_encoded_length:
+        raise ValueError("test attestation execute JUnit exceeds its bounded size")
+    try:
+        xml_bytes = base64.b64decode(encoded.encode("ascii"), validate=True)
+    except (UnicodeEncodeError, binascii.Error, ValueError) as exc:
+        raise ValueError("test attestation execute JUnit bytes are malformed") from exc
+    if len(xml_bytes) > _MAX_JUNIT_XML_BYTES:
+        raise ValueError("test attestation execute JUnit exceeds its bounded size")
+    if document["size_bytes"] != len(xml_bytes):
+        raise ValueError("test attestation execute JUnit byte count differs")
+    if document["xml_sha256"] != sha256_bytes(xml_bytes):
+        raise ValueError("test attestation execute JUnit hash differs")
+    parsed, skipped_node_ids = _junit_evidence_from_bytes(xml_bytes)
+    if dict(document) != parsed:
+        raise ValueError("test attestation execute JUnit summary differs from exact XML")
+    return parsed, skipped_node_ids
+
+
 def validate_test_attestation(
     document: Mapping[str, object],
     source_manifest: SourceManifest | Mapping[str, object],
 ) -> None:
     """Strictly validate a persisted focused-test attestation and its source binding."""
-    expected_keys = {
+    v2_expected_keys = {
         "schema_version", "status", "source_manifest_sha256", "started_utc",
         "completed_utc", "ordered_commands", "ordered_pytest_node_ids",
         "declared_skip_pytest_node_ids", "skipped_pytest_node_ids",
@@ -1355,12 +1792,23 @@ def validate_test_attestation(
         "collected_count", "passed_count", "failed_count", "skipped_count",
         "environment", "input_sha256",
     }
-    if not isinstance(document, Mapping) or set(document) != expected_keys:
+    if not isinstance(document, Mapping):
         raise ValueError("test attestation has a malformed top-level schema")
-    # Schema 2 replaced the single real-data skip class with the marker-derived declared
-    # classes, and made ``skipped_pytest_node_ids`` observed rather than inferred.
-    if document["schema_version"] != 2 or document["status"] != "passed":
-        raise ValueError("test attestation status/schema is not passed/v2")
+    schema_version = document.get("schema_version")
+    if schema_version == 2:
+        if set(document) != v2_expected_keys:
+            raise ValueError("test attestation has a malformed top-level schema")
+    elif schema_version == 3:
+        if set(document) != v2_expected_keys | {"execute_junit"}:
+            raise ValueError("test attestation has a malformed top-level schema")
+    else:
+        raise ValueError("test attestation status/schema is not passed/supported")
+    # Schema 2 is the immutable all-captured historical contract.  Schema 3 retains its
+    # scientific identity and adds exact JUnit authority for inherited final execution.
+    if document["status"] != "passed":
+        if schema_version == 2:
+            raise ValueError("test attestation status/schema is not passed/v2")
+        raise ValueError("test attestation status/schema is not passed/v3")
     if isinstance(source_manifest, SourceManifest):
         source_sha = source_manifest.manifest_sha256
         source_entries = {entry["path"]: entry["sha256"] for entry in source_manifest.entries}
@@ -1419,15 +1867,22 @@ def validate_test_attestation(
             f"test attestation must contain {len(_ATTESTATION_COMMAND_PURPOSES)} "
             "ordered commands"
         )
+    inherited_execute_count = 0
     for command, purpose, argv, allowed_statuses in zip(
         commands,
         _ATTESTATION_COMMAND_PURPOSES,
         expected_argv,
         _ATTESTATION_COMMAND_EXIT_STATUSES,
     ):
-        if not isinstance(command, Mapping) or set(command) != {
+        v2_command_keys = {
             "purpose", "argv", "exit_status", "stdout_sha256", "stderr_sha256"
-        }:
+        }
+        expected_command_keys = (
+            v2_command_keys
+            if schema_version == 2
+            else v2_command_keys | {"stdio_capture_mode", "working_directory"}
+        )
+        if not isinstance(command, Mapping) or set(command) != expected_command_keys:
             raise ValueError("test attestation command schema is malformed")
         recorded_argv = command["argv"]
         if type(recorded_argv) is not list or any(
@@ -1440,10 +1895,52 @@ def validate_test_attestation(
             raise ValueError("test attestation ordered command identity mismatch")
         if type(command["exit_status"]) is not int or command["exit_status"] not in allowed_statuses:
             raise ValueError("test attestation command did not pass")
-        for key in ("stdout_sha256", "stderr_sha256"):
-            digest = command[key]
-            if type(digest) is not str or _SHA256_PATTERN.fullmatch(digest) is None:
-                raise ValueError("test attestation output hash is malformed")
+        if schema_version == 2:
+            for key in ("stdout_sha256", "stderr_sha256"):
+                digest = command[key]
+                if type(digest) is not str or _SHA256_PATTERN.fullmatch(digest) is None:
+                    raise ValueError("test attestation output hash is malformed")
+        else:
+            working_directory = command["working_directory"]
+            if (
+                type(working_directory) is not str
+                or not working_directory
+                or not Path(working_directory).is_absolute()
+            ):
+                raise ValueError("test attestation command working directory is malformed")
+            try:
+                execute_report_path = _execute_junit_path(purpose, recorded_argv)
+            except ValueError as exc:
+                raise ValueError("test attestation execute command structure is malformed") from exc
+            if execute_report_path is None:
+                if command["stdio_capture_mode"] != _CAPTURED_STDIO_MODE:
+                    raise ValueError("test attestation collection stdio mode is malformed")
+                for key in ("stdout_sha256", "stderr_sha256"):
+                    digest = command[key]
+                    if type(digest) is not str or _SHA256_PATTERN.fullmatch(digest) is None:
+                        raise ValueError("test attestation captured output hash is malformed")
+            else:
+                inherited_execute_count += 1
+                if command["stdio_capture_mode"] != _INHERITED_STDIO_MODE:
+                    raise ValueError("test attestation execute stdio mode is malformed")
+                if command["stdout_sha256"] is not None or command["stderr_sha256"] is not None:
+                    raise ValueError(
+                        "test attestation inherited execute output hashes must be null"
+                    )
+    if schema_version == 3:
+        working_directories = {
+            command["working_directory"] for command in commands
+        }
+        if len(working_directories) != 1:
+            raise ValueError("test attestation command working directory identity mismatch")
+    junit_skipped_node_ids = None
+    execute_junit = None
+    if schema_version == 3:
+        if inherited_execute_count != 1:
+            raise ValueError("test attestation must contain one inherited execute command")
+        execute_junit, junit_skipped_node_ids = _validate_execute_junit_document(
+            document["execute_junit"]
+        )
 
     if document["m8_run_real_data_tests_env_value"] != _REAL_DATA_ENV_VALUE:
         raise ValueError(
@@ -1454,6 +1951,14 @@ def validate_test_attestation(
         type(node) is not str or "::" not in node for node in node_ids
     ) or len(node_ids) != len(set(node_ids)):
         raise ValueError("test attestation ordered pytest node IDs are malformed")
+    if (
+        schema_version == 3
+        and execute_junit is not None
+        and execute_junit["ordered_pytest_node_ids"] != node_ids
+    ):
+        raise ValueError(
+            "test attestation collected node order/identity differs from exact execute JUnit"
+        )
     # The declared classes are the permitted-skip set.  They must be present for exactly
     # the frozen markers, so a class cannot be dropped to make an undeclared skip look
     # declared, and a class cannot be invented to widen what is permitted.
@@ -1486,6 +1991,10 @@ def validate_test_attestation(
         raise ValueError("test attestation skipped pytest node IDs are malformed")
     if not set(skipped_node_ids) <= set(node_ids):
         raise ValueError("test attestation skipped nodes are outside the attested collection")
+    if schema_version == 3 and skipped_node_ids != junit_skipped_node_ids:
+        raise ValueError(
+            "test attestation skipped node IDs differ from exact execute JUnit"
+        )
     # The observed skips must each be declared.  A declared node that executed is fine and
     # expected: on a machine that holds the optional artifacts, fewer nodes skip.
     undeclared_skips = sorted(set(skipped_node_ids) - permitted_skip_node_ids)
@@ -1512,6 +2021,16 @@ def validate_test_attestation(
         )
     if document["passed_count"] + document["skipped_count"] != len(node_ids):
         raise ValueError("test attestation node/count reconciliation failed")
+    if schema_version == 3:
+        assert execute_junit is not None
+        if (
+            document["collected_count"] != execute_junit["tests_count"]
+            or document["passed_count"] != execute_junit["passed_count"]
+            or document["skipped_count"] != execute_junit["skipped_count"]
+            or document["failed_count"]
+            != execute_junit["failures_count"] + execute_junit["errors_count"]
+        ):
+            raise ValueError("test attestation counts differ from exact execute JUnit")
 
     hashes = document["input_sha256"]
     expected_paths = (*_ATTESTED_TEST_FILES, *_ATTESTATION_CONFIG_INPUTS)

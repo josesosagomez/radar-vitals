@@ -11073,3 +11073,171 @@ committed at `9b01d936db35b8427ee3b36579bd62a828a05926`; only the later authoriz
 parent-boundary corrections are currently uncommitted. If accepted and explicitly authorized,
 commit the correction before regenerating the clean gate/authorization/radar/scoring chain. Do not
 begin M2.
+
+## 2026-08-09 - M1 Windows-safe exact test-attestation execution
+
+**Set out to do:** generate the clean synthetic gate at gate-source commit
+`53019f309e5810ba1495a38fe0e1ab97e0a6d381`, diagnose why the exact attested pytest execution did
+not complete on Windows, and repair only the gate test-attestation transport without changing any
+scientific estimator behavior.
+
+**Worked (with evidence):** the first three attestation collection commands remain captured text
+because their node-ID output is parsed and SHA-256-bound. The sole execute command is identified
+structurally by role, absence of `--collect-only`, and exactly one nonempty `--junitxml` argument;
+it now inherits stdout/stderr handles. This is a Windows native-library compatibility requirement,
+not a scientific exception. The command's argv, absolute common working directory, explicit return
+status and unavailable console hashes (`null`) are recorded.
+
+Test-attestation schema v3 embeds the exact pytest xUnit2 XML bytes as bounded base64 (maximum 8
+MiB), records their byte count and SHA-256, and records suite counts, duration and timezone-aware
+timestamp. Both construction and validation reparse those exact bytes, require one suite, reconcile
+every testcase outcome with suite counts, reconstruct observed skipped node identities, and require
+all top-level counts and skip identities to agree. Missing, empty, oversized, malformed, tampered or
+internally inconsistent JUnit fails closed; a nonzero execute status cannot produce an attestation.
+Unknown schemas and v2/v3 field mixing fail. The immutable v2 all-captured validator path remains
+accepted under its original schema.
+
+Deterministic regressions cover captured/inherited mode consistency, null versus present output
+hashes, working-directory identity, missing/malformed/tampered JUnit, summary disagreement, the byte
+bound, exact v2 compatibility, execute failures, failures/errors/skips, and 2 MiB each on captured
+stdout and stderr. Under full `conda run -n radar-vitals --no-capture-output` activation, the real
+formerly hanging
+`tests/test_m8_ahmed_fig8.py::test_cli_execute_writes_strict_complete_artifacts` completed through
+the inherited-handle helper (`1 passed` in 2.39 s in the final run). The final combined provenance,
+transfer, bundle and strict-preflight selection completed with `223 passed, 15 warnings` in 40.95 s.
+
+**Failed / did not work, and why:** the original builder used
+`subprocess.run(..., capture_output=True)` for the final 1,327-node pytest execution. The test list
+passes when visible, but the redirected final process repeatedly stalled/fatally exited in
+Matplotlib native code at the Fig8 `Axes.axvline` node. Replacing pipes with ordinary redirected
+temporary files did not solve that native-handle failure and was reverted. Merely prepending common
+environment DLL directories also reproduced Windows fatal code `0xc06d007f`; full Conda activation
+is required. No completed gate artifact or authorization edit was produced by these attempts.
+
+**Retired / no longer used:** captured or file-redirected stdout/stderr for the final attested pytest
+execute command; parsing pytest's human console summary as the outcome authority; and representing
+unavailable inherited console output with fabricated empty hashes.
+
+**Next:** independently verify and review this uncommitted attestation repair. If accepted, commit it
+only with explicit authorization, then rerun the canonical synthetic gate from the new clean source
+commit. Update only the sole canonical authorization YAML in the subsequent direct child after the
+new gate is verified. Do not launch raw/reference access or begin M2 before that reviewed chain.
+
+## 2026-08-09 - M1 strict closed-grammar JUnit correction
+
+**Set out to do:** repair the independent-verifier finding that v3's exact JUnit parser still
+accepted internal DTD/entity declarations and ignored unknown XML children, attributes and
+namespaces while later treating the persisted bytes as outcome authority.
+
+**Worked (with evidence):** the parser grammar was traced against both real pytest 8.4.2 xUnit2
+reports from the exact nested Fig8 invocation and the pinned `_pytest.junitxml` emitter. The accepted
+grammar is now documented and closed: `testsuites` with its exact name attribute; one `pytest`
+`testsuite` with the eight emitted attributes; optional suite and testcase `properties/property`;
+`testcase` with classname/name/time; at most one `skipped`, `failure` or `error`; and zero or more
+text-bearing `system-out`/`system-err` nodes. Attributes, ordering, child cardinality, finite
+nonnegative durations, timezone timestamp, unique testcase identities, structural whitespace and
+suite/testcase counts are all checked explicitly. Real pytest property, skip, failure, error and
+captured-output shapes remain accepted so their outcomes can be rejected or accounted for by the
+existing gate policy.
+
+Before ElementTree is called, the bounded bytes are strict-UTF-8 decoded and any DTD/entity or other
+`<!...` declaration, namespace declaration, comment/CDATA, or processing instruction beyond the
+exact optional UTF-8 XML declaration is rejected. A bounded nested-entity amplification regression
+monkeypatches `ElementTree.fromstring` to raise if invoked and proves the entity-bearing document is
+rejected before parsing. The standalone skip-ID helper now routes through the same strict evidence
+parser; its inaccurate trusted-input comment was removed. The persisted-v2 validator branch is
+unchanged.
+
+Targeted reproductions cover internal DTD/entity declarations, nested amplification, unknown suite
+and testcase children, unknown suite/testcase/property attributes, namespaces, processing
+instructions, invalid skip types, duplicate outcomes and unexpected structural text, plus a
+positive combined properties/failure/error/skip/repeated-output document (`16 passed`). The full
+provenance suite completed with `131 passed, 15 warnings` in 34.65 s, including the real inherited
+Fig8/JUnit path in 2.37 s. Transfer, bundle and strict-preflight compatibility completed with
+`105 passed, 12 warnings` in 6.52 s.
+
+**Failed / did not work, and why:** the previous v3 implementation used ElementTree's permissive
+tree construction as if it were schema validation. ElementTree expands bounded internal entities
+and silently omits some non-element syntax from the traversed tree, while the earlier code only
+looked for known testcase outcomes. Exact-byte hashing did not make that grammar strict. The
+independent-verifier FAIL was therefore correct.
+
+**Retired / no longer used:** treating builder-local XML as trusted solely because pytest wrote the
+expected path; accepting arbitrary XML grammar so long as known suite counts happened to reconcile;
+and direct skip-ID parsing that bypassed v3's exact evidence validator.
+
+**Next:** independent retest and code review of the complete uncommitted v3 transport plus
+closed-grammar correction. If accepted, commit only with explicit authorization and restart the
+clean canonical gate chain from that new commit. Do not reuse `53019f...` as the gate source after
+this source/test change, access raw/reference data, or begin M2.
+
+## 2026-08-09 - M1 exact JUnit numeric lexemes and BOM correction
+
+**Set out to do:** close the three remaining verifier-reported exact-grammar gaps in v3 JUnit count,
+duration and document-prefix validation without changing the accepted pytest command or v2.
+
+**Worked (with evidence):** JUnit counts now require a full ASCII `[0-9]+` match before integer
+conversion, so Unicode digits cannot enter a persisted count. Inspection of pinned pytest 8.4.2
+confirmed both suite and testcase duration fields are emitted with `:.3f`; both now require exactly
+`[0-9]+\.[0-9]{3}` before the existing finite/nonnegative Decimal check. A leading UTF-8 BOM is
+explicitly rejected immediately after strict decoding and before XML declaration handling.
+
+Regressions reject Arabic-Indic count digits, exponent-form suite and testcase durations, and BOMs
+both with and without an XML declaration. Positive boundaries accept pytest-emitted `0.000` and a
+multi-digit fixed-three-decimal testcase duration. All deterministic fake xUnit durations were
+updated to the actual pinned formatter shape. Targeted strict/builder tests completed with
+`18 passed`; full provenance completed with `137 passed, 15 warnings` in 34.52 s, including the real
+inherited Fig8/JUnit node in 2.37 s; transfer/bundle/strict-preflight compatibility completed with
+`105 passed, 12 warnings` in 6.47 s.
+
+**Failed / did not work, and why:** Python `str.isdigit()` accepts non-ASCII Unicode digits and
+`Decimal` accepts exponent and variable-precision forms that pinned pytest never emits. ElementTree
+also accepts a leading UTF-8 BOM. Those permissive library boundaries were therefore not exact
+pytest grammar even though the resulting numeric values were nonnegative.
+
+**Retired / no longer used:** Unicode-wide digit acceptance, general Decimal duration syntax, and
+implicit BOM acceptance in v3 JUnit evidence.
+
+**Next:** independent verification/review of the cumulative uncommitted v3 repair. If accepted,
+commit only with explicit authorization and restart the clean canonical gate chain from the new
+commit. Do not access raw/reference data or begin M2.
+
+## 2026-08-09 - M1 exact ordered execute-selection binding
+
+**Set out to do:** repair the code-review finding that v3 reconciled execution counts and skipped
+identities but did not prove that every passing JUnit testcase was the same node, in the same order,
+as the collection command.
+
+**Worked (with evidence):** one centralized mapper now reconstructs every pytest node ID from strict
+xUnit2 `classname`/`name` fields using the longest frozen attested-file prefix, enclosing class
+segments and the unchanged parameterized test name. Both the full execution list and skipped subset
+use this mapper, so their path/class/function/parameter handling cannot diverge. The exact full list
+is preserved in JUnit document order in execute-evidence schema
+`pytest_xunit2_single_suite_v2` and therefore covered by the existing exact-byte/evidence hashes.
+
+The producer requires exact ordered equality between collected node IDs and independently parsed
+execute JUnit IDs before emitting an attestation. The persisted validator independently reparses the
+embedded XML and requires that same exact ordered equality against top-level
+`ordered_pytest_node_ids`; count- or set-only equality is insufficient. Same-count replacement and
+reordering, a dropped node with internally adjusted counts, duplicated testcase identity, and an
+evidence-list edit without matching XML all fail closed. Immutable top-level attestation v2 remains
+unchanged.
+
+Regressions cover function, class-method and parameterized name reconstruction; a 1,327-testcase
+ordered document; producer-side same-count reordering; validator-side internally consistent
+replacement/reorder/drop; and duplicate identity rejection. The targeted set completed with
+`8 passed`; full provenance completed with `144 passed, 15 warnings` in 35.22 s, including the real
+inherited Fig8/JUnit path in 2.41 s; transfer/bundle/strict-preflight compatibility completed with
+`105 passed, 12 warnings` in 6.55 s.
+
+**Failed / did not work, and why:** suite/testcase cardinality, unique xUnit identities and skip
+reconciliation still allowed an attacker to replace or reorder a passing testcase while preserving
+all counts. The former schema did not persist the complete ordered execution identity, so hashing
+that incomplete summary could not close the gap.
+
+**Retired / no longer used:** count-only proof that the execution selection equals collection, and
+separate skipped-only node-ID reconstruction logic.
+
+**Next:** independent verification/review of the cumulative uncommitted v3 repair. If accepted,
+commit only with explicit authorization and restart the clean canonical gate chain from the new
+commit. Do not access raw/reference data or begin M2.

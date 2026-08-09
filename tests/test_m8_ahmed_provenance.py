@@ -13,6 +13,7 @@ import ast
 import copy
 from dataclasses import replace
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -923,7 +924,7 @@ def test_builder_emits_a_valid_attestation_bound_to_its_source_manifest(
     assert tmp_path in report_path.parents
     assert REPO_ROOT not in report_path.parents
 
-    assert attestation["schema_version"] == 2
+    assert attestation["schema_version"] == 3
     assert attestation["status"] == "passed"
     assert attestation["source_manifest_sha256"] == fake_source_manifest.manifest_sha256
     assert attestation["collected_count"] == len(attested_node_ids)
@@ -949,6 +950,33 @@ def test_builder_emits_a_valid_attestation_bound_to_its_source_manifest(
         5,
         0,
     ]
+    assert [call["capture_output"] for call in runner.calls] == [True, True, True, False]
+    assert [call["text"] for call in runner.calls] == [True, True, True, False]
+    assert {
+        command["working_directory"] for command in attestation["ordered_commands"]
+    } == {str(tmp_path)}
+    assert [
+        command["stdio_capture_mode"] for command in attestation["ordered_commands"]
+    ] == [
+        "captured_text",
+        "captured_text",
+        "captured_text",
+        "inherited_not_captured",
+    ]
+    for command in attestation["ordered_commands"][:-1]:
+        assert len(command["stdout_sha256"]) == 64
+        assert len(command["stderr_sha256"]) == 64
+    execute_command = attestation["ordered_commands"][-1]
+    assert execute_command["stdout_sha256"] is None
+    assert execute_command["stderr_sha256"] is None
+    assert attestation["execute_junit"]["schema_id"] == (
+        "pytest_xunit2_single_suite_v2"
+    )
+    assert attestation["execute_junit"]["tests_count"] == len(attested_node_ids)
+    assert attestation["execute_junit"]["ordered_pytest_node_ids"] == (
+        attested_node_ids
+    )
+    assert attestation["execute_junit"]["xml_base64"]
 
     # The frozen command must actually run the gate-critical tests, and every one of
     # them must be hash-bound in the attestation's input closure.
@@ -965,6 +993,120 @@ def test_builder_emits_a_valid_attestation_bound_to_its_source_manifest(
         assert digest == fake_input_digest(path)
 
     validate_test_attestation(attestation, fake_source_manifest)
+
+
+def test_validator_preserves_the_immutable_v2_all_captured_contract(
+    fake_source_manifest, valid_test_attestation
+):
+    """Persisted v2 gates remain valid under their original all-captured schema."""
+    legacy = copy.deepcopy(valid_test_attestation)
+    legacy["schema_version"] = 2
+    del legacy["execute_junit"]
+    for command in legacy["ordered_commands"]:
+        del command["stdio_capture_mode"]
+        del command["working_directory"]
+        if command["stdout_sha256"] is None:
+            command["stdout_sha256"] = "a" * 64
+        if command["stderr_sha256"] is None:
+            command["stderr_sha256"] = "b" * 64
+
+    validate_test_attestation(legacy, fake_source_manifest)
+
+
+@pytest.mark.parametrize(
+    "mutation, expected_message",
+    [
+        ("captured_collection_claims_inherited", "collection stdio mode"),
+        ("captured_collection_lacks_hash", "captured output hash"),
+        ("inherited_execute_claims_captured", "execute stdio mode"),
+        ("inherited_execute_invents_hash", "output hashes must be null"),
+        ("execute_working_directory_differs", "working directory identity mismatch"),
+        ("relative_working_directory", "working directory is malformed"),
+        ("missing_execute_junit", "malformed top-level schema"),
+        ("unknown_schema_version", "not passed/supported"),
+        ("v2_mixed_with_v3_field", "malformed top-level schema"),
+        ("tampered_junit_hash", "JUnit hash differs"),
+        ("tampered_junit_summary", "summary differs from exact XML"),
+        ("tampered_junit_node_order", "summary differs from exact XML"),
+    ],
+)
+def test_v3_stdio_and_exact_junit_mutations_fail_closed(
+    fake_source_manifest,
+    valid_test_attestation,
+    mutation,
+    expected_message,
+):
+    document = copy.deepcopy(valid_test_attestation)
+    if mutation == "captured_collection_claims_inherited":
+        document["ordered_commands"][0]["stdio_capture_mode"] = (
+            "inherited_not_captured"
+        )
+    elif mutation == "captured_collection_lacks_hash":
+        document["ordered_commands"][0]["stdout_sha256"] = None
+    elif mutation == "inherited_execute_claims_captured":
+        document["ordered_commands"][-1]["stdio_capture_mode"] = "captured_text"
+    elif mutation == "inherited_execute_invents_hash":
+        document["ordered_commands"][-1]["stdout_sha256"] = "a" * 64
+    elif mutation == "execute_working_directory_differs":
+        document["ordered_commands"][-1]["working_directory"] = str(
+            REPO_ROOT.parent
+        )
+    elif mutation == "relative_working_directory":
+        document["ordered_commands"][0]["working_directory"] = "."
+    elif mutation == "missing_execute_junit":
+        del document["execute_junit"]
+    elif mutation == "unknown_schema_version":
+        document["schema_version"] = 4
+    elif mutation == "v2_mixed_with_v3_field":
+        document["schema_version"] = 2
+    elif mutation == "tampered_junit_hash":
+        document["execute_junit"]["xml_sha256"] = "0" * 64
+    elif mutation == "tampered_junit_summary":
+        document["execute_junit"]["suite_time_seconds"] = "999.0"
+    elif mutation == "tampered_junit_node_order":
+        document["execute_junit"]["ordered_pytest_node_ids"].reverse()
+    else:  # pragma: no cover - parametrization is exhaustive
+        raise AssertionError(mutation)
+
+    with pytest.raises(ValueError, match=expected_message):
+        validate_test_attestation(document, fake_source_manifest)
+
+
+@pytest.mark.parametrize("mutation", ["replace", "reorder", "drop"])
+def test_validator_rejects_an_internally_consistent_different_execute_selection(
+    fake_source_manifest,
+    valid_test_attestation,
+    mutation,
+):
+    import base64
+    from xml.etree import ElementTree
+
+    import src.m8.ahmed_provenance as provenance
+
+    document = copy.deepcopy(valid_test_attestation)
+    xml_bytes = base64.b64decode(document["execute_junit"]["xml_base64"])
+    root = ElementTree.fromstring(xml_bytes)
+    suite = list(root)[0]
+    testcases = list(suite.findall("testcase"))
+    if mutation == "replace":
+        testcases[0].set("name", "test_same_count_replacement")
+    elif mutation == "reorder":
+        suite.remove(testcases[0])
+        suite.insert(1, testcases[0])
+    elif mutation == "drop":
+        suite.remove(testcases[-1])
+        suite.set("tests", str(len(testcases) - 1))
+    else:  # pragma: no cover - parametrization is exhaustive
+        raise AssertionError(mutation)
+    mutated_xml = ElementTree.tostring(
+        root, encoding="utf-8", xml_declaration=True
+    )
+    document["execute_junit"], _skipped = provenance._junit_evidence_from_bytes(
+        mutated_xml
+    )
+
+    with pytest.raises(ValueError, match="node order/identity differs"):
+        validate_test_attestation(document, fake_source_manifest)
 
 
 def test_the_report_path_is_the_only_variable_part_of_the_frozen_commands(
@@ -1101,6 +1243,403 @@ def test_builder_refuses_when_the_execution_command_fails(
         build_test_attestation(
             fake_source_manifest, root=tmp_path, command_runner=runner
         )
+
+
+@pytest.mark.parametrize("report_mutation", ["missing", "malformed"])
+def test_builder_refuses_a_missing_or_malformed_inherited_execute_junit(
+    fake_source_manifest,
+    attested_node_ids,
+    tmp_path,
+    forbid_nested_pytest,
+    report_mutation,
+):
+    class MutatingJunitRunner(FakePytestRunner):
+        def __call__(self, argv, **kwargs):
+            completed = super().__call__(argv, **kwargs)
+            report_options = [
+                item for item in argv if item.startswith("--junitxml=")
+            ]
+            if report_options:
+                report_path = Path(report_options[0].removeprefix("--junitxml="))
+                if report_mutation == "missing":
+                    report_path.unlink()
+                else:
+                    report_path.write_bytes(b"not XML")
+            return completed
+
+    with pytest.raises(RuntimeError, match="outcome report"):
+        build_test_attestation(
+            fake_source_manifest,
+            root=tmp_path,
+            command_runner=MutatingJunitRunner(attested_node_ids),
+        )
+
+
+def test_builder_refuses_a_same_count_reordered_execute_selection(
+    fake_source_manifest,
+    attested_node_ids,
+    tmp_path,
+    forbid_nested_pytest,
+):
+    from xml.etree import ElementTree
+
+    class ReorderedJunitRunner(FakePytestRunner):
+        def __call__(self, argv, **kwargs):
+            completed = super().__call__(argv, **kwargs)
+            report_options = [
+                item for item in argv if item.startswith("--junitxml=")
+            ]
+            if report_options:
+                report_path = Path(report_options[0].removeprefix("--junitxml="))
+                tree = ElementTree.parse(report_path)
+                suite = list(tree.getroot())[0]
+                testcases = list(suite.findall("testcase"))
+                suite.remove(testcases[0])
+                suite.insert(1, testcases[0])
+                tree.write(report_path, encoding="utf-8", xml_declaration=True)
+            return completed
+
+    with pytest.raises(RuntimeError, match="node order/identity differs"):
+        build_test_attestation(
+            fake_source_manifest,
+            root=tmp_path,
+            command_runner=ReorderedJunitRunner(attested_node_ids),
+        )
+
+
+def test_junit_reader_enforces_its_byte_bound(monkeypatch):
+    import src.m8.ahmed_provenance as provenance
+
+    monkeypatch.setattr(provenance, "_MAX_JUNIT_XML_BYTES", 16)
+    with pytest.raises(ValueError, match="exceeds 16 bytes"):
+        provenance._junit_evidence_from_bytes(b"x" * 17)
+
+
+def _minimal_strict_junit_xml(testcase_xml: str) -> bytes:
+    return (
+        '<?xml version="1.0" encoding="utf-8"?>'
+        '<testsuites name="pytest tests"><testsuite name="pytest" errors="0" '
+        'failures="0" skipped="0" tests="1" time="0.010" '
+        'timestamp="2026-01-01T00:00:00+00:00" hostname="fixture-host">'
+        f"{testcase_xml}</testsuite></testsuites>"
+    ).encode("utf-8")
+
+
+@pytest.mark.parametrize(
+    "xml_bytes, expected_message",
+    [
+        (
+            b'<?xml version="1.0" encoding="utf-8"?>'
+            b'<!DOCTYPE testsuites [<!ENTITY injected "pytest tests">]>'
+            b'<testsuites name="&injected;"></testsuites>',
+            "declarations are forbidden",
+        ),
+        (
+            _minimal_strict_junit_xml(
+                '<testcase classname="tests.test_m8_ahmed_provenance" '
+                'name="test_x" time="0.010"/><evil/>'
+            ),
+            "testsuite contains an unknown child",
+        ),
+        (
+            _minimal_strict_junit_xml(
+                '<testcase classname="tests.test_m8_ahmed_provenance" '
+                'name="test_x" time="0.010"><evil/></testcase>'
+            ),
+            "testcase contains an unknown child",
+        ),
+        (
+            _minimal_strict_junit_xml(
+                '<testcase classname="tests.test_m8_ahmed_provenance" '
+                'name="test_x" time="0.010" injected="true"/>'
+            ),
+            "testcase attributes are malformed",
+        ),
+        (
+            _minimal_strict_junit_xml(
+                '<testcase classname="tests.test_m8_ahmed_provenance" '
+                'name="test_x" time="0.010"/>'
+            ).replace(b' hostname="fixture-host"', b' hostname="fixture-host" evil="1"'),
+            "testsuite attributes are malformed",
+        ),
+        (
+            _minimal_strict_junit_xml(
+                '<testcase classname="tests.test_m8_ahmed_provenance" '
+                'name="test_x" time="0.010"/>'
+            ).replace(
+                b'<testsuites name=',
+                b'<testsuites xmlns:evil="urn:evil" name=',
+            ),
+            "namespaces are forbidden",
+        ),
+        (
+            _minimal_strict_junit_xml(
+                '<testcase classname="tests.test_m8_ahmed_provenance" '
+                'name="test_x" time="0.010"/>'
+            ).replace(b'<testsuites', b'<?unexpected value?><testsuites'),
+            "processing instructions are forbidden",
+        ),
+        (
+            _minimal_strict_junit_xml(
+                '<testcase classname="tests.test_m8_ahmed_provenance" '
+                'name="test_x" time="0.010"><properties><property name="a" '
+                'value="b" extra="c"/></properties></testcase>'
+            ),
+            "property attributes are malformed",
+        ),
+        (
+            _minimal_strict_junit_xml(
+                '<testcase classname="tests.test_m8_ahmed_provenance" '
+                'name="test_x" time="0.010"><skipped type="operator.skip" '
+                'message="no"/></testcase>'
+            ).replace(b'skipped="0"', b'skipped="1"'),
+            "skipped type is malformed",
+        ),
+        (
+            _minimal_strict_junit_xml(
+                '<testcase classname="tests.test_m8_ahmed_provenance" '
+                'name="test_x" time="0.010"><failure message="a"/>'
+                '<error message="b"/></testcase>'
+            ).replace(b'errors="0" failures="0"', b'errors="1" failures="1"'),
+            "outcome cardinality/order is malformed",
+        ),
+        (
+            _minimal_strict_junit_xml(
+                '<testcase classname="tests.test_m8_ahmed_provenance" '
+                'name="test_x" time="0.010"/>not-whitespace'
+            ),
+            "unexpected tail text",
+        ),
+        (
+            _minimal_strict_junit_xml(
+                '<testcase classname="tests.test_m8_ahmed_provenance" '
+                'name="test_x" time="0.010"/>'
+            ).replace(b'tests="1"', 'tests="١"'.encode("utf-8")),
+            "tests count is malformed",
+        ),
+        (
+            _minimal_strict_junit_xml(
+                '<testcase classname="tests.test_m8_ahmed_provenance" '
+                'name="test_x" time="0.010"/>'
+            ).replace(b'time="0.010"', b'time="1e-3"', 1),
+            "suite duration is malformed",
+        ),
+        (
+            _minimal_strict_junit_xml(
+                '<testcase classname="tests.test_m8_ahmed_provenance" '
+                'name="test_x" time="1e-3"/>'
+            ),
+            "testcase duration is malformed",
+        ),
+        (
+            b"\xef\xbb\xbf"
+            + _minimal_strict_junit_xml(
+                '<testcase classname="tests.test_m8_ahmed_provenance" '
+                'name="test_x" time="0.010"/>'
+            ),
+            "UTF-8 BOM is forbidden",
+        ),
+        (
+            b"\xef\xbb\xbf"
+            + _minimal_strict_junit_xml(
+                '<testcase classname="tests.test_m8_ahmed_provenance" '
+                'name="test_x" time="0.010"/>'
+            ).split(b"?>", 1)[1],
+            "UTF-8 BOM is forbidden",
+        ),
+    ],
+)
+def test_strict_junit_grammar_rejects_unexpected_xml(xml_bytes, expected_message):
+    import src.m8.ahmed_provenance as provenance
+
+    with pytest.raises(ValueError, match=expected_message):
+        provenance._junit_evidence_from_bytes(xml_bytes)
+
+
+def test_nested_entity_amplification_is_rejected_before_parsing(monkeypatch):
+    import src.m8.ahmed_provenance as provenance
+
+    xml_bytes = (
+        b'<?xml version="1.0" encoding="utf-8"?>'
+        b'<!DOCTYPE testsuites ['
+        b'<!ENTITY a "1234567890">'
+        b'<!ENTITY b "&a;&a;&a;&a;&a;&a;&a;&a;&a;&a;">'
+        b'<!ENTITY c "&b;&b;&b;&b;&b;&b;&b;&b;&b;&b;">]>'
+        b'<testsuites name="&c;"></testsuites>'
+    )
+
+    def _parsing_must_not_start(_xml_bytes):
+        raise AssertionError("ElementTree parsed entity-bearing XML")
+
+    monkeypatch.setattr(provenance.ElementTree, "fromstring", _parsing_must_not_start)
+    with pytest.raises(ValueError, match="declarations are forbidden"):
+        provenance._junit_evidence_from_bytes(xml_bytes)
+
+
+def test_strict_junit_accepts_pytest_fixed_decimal_duration_boundaries():
+    import src.m8.ahmed_provenance as provenance
+
+    xml_bytes = _minimal_strict_junit_xml(
+        '<testcase classname="tests.test_m8_ahmed_provenance" '
+        'name="test_x" time="123456789.999"/>'
+    ).replace(b'time="0.010"', b'time="0.000"', 1)
+
+    evidence, skipped_node_ids = provenance._junit_evidence_from_bytes(xml_bytes)
+
+    assert evidence["suite_time_seconds"] == "0.000"
+    assert evidence["tests_count"] == 1
+    assert skipped_node_ids == []
+
+
+def test_strict_junit_preserves_a_1327_case_execution_order():
+    import src.m8.ahmed_provenance as provenance
+
+    expected_node_ids = [
+        f"tests/test_m8_ahmed_provenance.py::test_generated[{index}]"
+        for index in range(1327)
+    ]
+    testcase_xml = "".join(
+        '<testcase classname="tests.test_m8_ahmed_provenance" '
+        f'name="test_generated[{index}]" time="0.000"/>'
+        for index in range(1327)
+    )
+    xml_bytes = (
+        '<?xml version="1.0" encoding="utf-8"?>'
+        '<testsuites name="pytest tests"><testsuite name="pytest" errors="0" '
+        'failures="0" skipped="0" tests="1327" time="1.327" '
+        'timestamp="2026-01-01T00:00:00+00:00" hostname="fixture-host">'
+        f"{testcase_xml}</testsuite></testsuites>"
+    ).encode("utf-8")
+
+    evidence, skipped_node_ids = provenance._junit_evidence_from_bytes(xml_bytes)
+
+    assert evidence["ordered_pytest_node_ids"] == expected_node_ids
+    assert evidence["tests_count"] == 1327
+    assert skipped_node_ids == []
+
+
+def test_strict_junit_rejects_a_duplicate_testcase_identity():
+    import src.m8.ahmed_provenance as provenance
+
+    duplicated = (
+        '<testcase classname="tests.test_m8_ahmed_provenance" '
+        'name="test_duplicate" time="0.000"/>'
+    ) * 2
+    xml_bytes = (
+        '<testsuites name="pytest tests"><testsuite name="pytest" errors="0" '
+        'failures="0" skipped="0" tests="2" time="0.000" '
+        'timestamp="2026-01-01T00:00:00+00:00" hostname="fixture-host">'
+        f"{duplicated}</testsuite></testsuites>"
+    ).encode("utf-8")
+
+    with pytest.raises(ValueError, match="testcase identity is duplicated"):
+        provenance._junit_evidence_from_bytes(xml_bytes)
+
+
+def test_strict_junit_grammar_accepts_real_pytest_optional_nodes():
+    import src.m8.ahmed_provenance as provenance
+
+    xml_bytes = (
+        '<?xml version="1.0" encoding="utf-8"?>'
+        '<testsuites name="pytest tests"><testsuite name="pytest" errors="1" '
+        'failures="1" skipped="1" tests="3" time="0.030" '
+        'timestamp="2026-01-01T00:00:00+00:00" hostname="fixture-host">'
+        '<properties><property name="architecture" value="x86_64"/></properties>'
+        '<testcase classname="tests.test_m8_ahmed_provenance" name="test_failure" '
+        'time="0.010"><properties><property name="seed" value="0"/></properties>'
+        '<failure message="assertion">trace &lt;!DOCTYPE is escaped text</failure>'
+        '<system-out>captured output</system-out><system-out>teardown output</system-out>'
+        '</testcase>'
+        '<testcase classname="tests.test_m8_ahmed_provenance" name="test_error" '
+        'time="0.010"><error message="setup failed">trace</error>'
+        '<system-err>captured error</system-err></testcase>'
+        '<testcase classname="tests.test_m8_ahmed_provenance" name="test_skip" '
+        'time="0.010"><skipped type="pytest.skip" message="fixture skip">details</skipped>'
+        '</testcase></testsuite></testsuites>'
+    ).encode("utf-8")
+
+    evidence, skipped_node_ids = provenance._junit_evidence_from_bytes(xml_bytes)
+
+    assert evidence["tests_count"] == 3
+    assert evidence["failures_count"] == 1
+    assert evidence["errors_count"] == 1
+    assert evidence["skipped_count"] == 1
+    assert skipped_node_ids == [
+        "tests/test_m8_ahmed_provenance.py::test_skip"
+    ]
+
+
+def test_captured_collection_helper_drains_multi_megabyte_stdout_and_stderr(tmp_path):
+    """Captured collection uses subprocess communication, so full pipes cannot deadlock."""
+    from src.m8.ahmed_provenance import (  # noqa: WPS436 - helper under test
+        _run_attestation_command,
+    )
+
+    payload_size = 2 * 1024 * 1024
+    argv = [
+        sys.executable,
+        "-X",
+        "utf8",
+        "-c",
+        (
+            "import sys; size=int(sys.argv[1]); "
+            "sys.stdout.write('o' * size); sys.stdout.flush(); "
+            "sys.stderr.write('e' * size); sys.stderr.flush()"
+        ),
+        str(payload_size),
+    ]
+    completed, mode, stdout_hash, stderr_hash = _run_attestation_command(
+        "collect",
+        argv,
+        repository=REPO_ROOT,
+        command_environment=os.environ,
+    )
+
+    assert completed.returncode == 0
+    assert len(completed.stdout) == payload_size
+    assert len(completed.stderr) == payload_size
+    assert mode == "captured_text"
+    assert len(stdout_hash) == 64
+    assert len(stderr_hash) == 64
+
+
+def test_inherited_execute_helper_runs_the_real_agg_fig8_node(tmp_path, capfd):
+    """The formerly hanging native Matplotlib node completes with inherited handles."""
+    from src.m8.ahmed_provenance import (  # noqa: WPS436 - helper under test
+        _read_junit_evidence,
+        _run_attestation_command,
+    )
+
+    report_path = tmp_path / "fig8.xml"
+    argv = [
+        sys.executable,
+        "-X",
+        "utf8",
+        "-m",
+        "pytest",
+        "tests/test_m8_ahmed_fig8.py::test_cli_execute_writes_strict_complete_artifacts",
+        "-q",
+        f"--junitxml={report_path}",
+    ]
+    # This test itself normally runs under pytest's file-descriptor capture.  Disable that
+    # outer redirection so the child sees the same ordinary inherited handles as it does
+    # when the synthetic-gate CLI invokes the attested execute command.
+    with capfd.disabled():
+        completed, mode, stdout_hash, stderr_hash = _run_attestation_command(
+            "execute",
+            argv,
+            repository=REPO_ROOT,
+            command_environment=os.environ,
+        )
+
+    assert completed.returncode == 0
+    assert mode == "inherited_not_captured"
+    assert stdout_hash is None
+    assert stderr_hash is None
+    evidence, skipped = _read_junit_evidence(report_path)
+    assert evidence["tests_count"] == 1
+    assert evidence["passed_count"] == 1
+    assert skipped == []
 
 
 def test_builder_refuses_and_stops_when_collection_fails(
@@ -1266,25 +1805,35 @@ def test_the_outcome_report_parser_reconstructs_pytest_node_ids(tmp_path):
     observed skip set disjoint from the declared set and reject every honest run.
     """
     from src.m8.ahmed_provenance import (  # noqa: WPS436 - parser under test
+        _read_junit_evidence,
         _skipped_node_ids_from_junit_xml,
     )
 
     report = tmp_path / "report.xml"
     report.write_text(
         '<?xml version="1.0" encoding="utf-8"?>'
-        '<testsuites><testsuite name="pytest" tests="4" skipped="3">'
-        '<testcase classname="tests.test_m4_bundle" name="test_passes" time="0.01" />'
-        '<testcase classname="tests.test_m4_bundle" name="test_plain" time="0.01">'
+        '<testsuites name="pytest tests"><testsuite name="pytest" tests="4" '
+        'errors="0" failures="0" skipped="3" time="0.040" '
+        'timestamp="2026-01-01T00:00:00+00:00" hostname="fixture-host">'
+        '<testcase classname="tests.test_m4_bundle" name="test_passes" time="0.010" />'
+        '<testcase classname="tests.test_m4_bundle" name="test_plain" time="0.010">'
         '<skipped type="pytest.skip" message="no artifact" /></testcase>'
-        '<testcase classname="tests.test_m4_bundle" name="test_parametrised[a-1]" time="0.01">'
+        '<testcase classname="tests.test_m4_bundle" name="test_parametrised[a-1]" time="0.010">'
         '<skipped type="pytest.skip" message="no artifact" /></testcase>'
-        '<testcase classname="tests.test_m4_bundle.TestGroup" name="test_method" time="0.01">'
+        '<testcase classname="tests.test_m4_bundle.TestGroup" name="test_method" time="0.010">'
         '<skipped type="pytest.skip" message="no artifact" /></testcase>'
         "</testsuite></testsuites>",
         encoding="utf-8",
     )
 
     assert _skipped_node_ids_from_junit_xml(report) == [
+        "tests/test_m4_bundle.py::test_plain",
+        "tests/test_m4_bundle.py::test_parametrised[a-1]",
+        "tests/test_m4_bundle.py::TestGroup::test_method",
+    ]
+    evidence, _skipped = _read_junit_evidence(report)
+    assert evidence["ordered_pytest_node_ids"] == [
+        "tests/test_m4_bundle.py::test_passes",
         "tests/test_m4_bundle.py::test_plain",
         "tests/test_m4_bundle.py::test_parametrised[a-1]",
         "tests/test_m4_bundle.py::TestGroup::test_method",
@@ -1300,8 +1849,10 @@ def test_the_outcome_report_parser_rejects_a_skip_outside_the_attested_files(tmp
     report = tmp_path / "report.xml"
     report.write_text(
         '<?xml version="1.0" encoding="utf-8"?>'
-        '<testsuites><testsuite name="pytest" tests="1" skipped="1">'
-        '<testcase classname="tests.test_somewhere_unattested" name="test_x" time="0.01">'
+        '<testsuites name="pytest tests"><testsuite name="pytest" tests="1" '
+        'errors="0" failures="0" skipped="1" time="0.010" '
+        'timestamp="2026-01-01T00:00:00+00:00" hostname="fixture-host">'
+        '<testcase classname="tests.test_somewhere_unattested" name="test_x" time="0.010">'
         '<skipped type="pytest.skip" message="?" /></testcase>'
         "</testsuite></testsuites>",
         encoding="utf-8",
@@ -1479,7 +2030,7 @@ def test_builder_refuses_a_skip_count_that_disagrees_with_the_executed_report(
     tmp_path,
     forbid_nested_pytest,
 ):
-    """The summary line and the machine-readable report must agree on how many skipped."""
+    """The exact machine-readable report must be internally self-consistent."""
     runner = FakePytestRunner(
         attested_node_ids,
         real_data_node_ids=declared_real_data_node_ids,
@@ -1487,12 +2038,11 @@ def test_builder_refuses_a_skip_count_that_disagrees_with_the_executed_report(
         execute_stdout=f"{len(attested_node_ids) - 2} passed, 2 skipped in 1.00s\n",
     )
 
-    with pytest.raises(RuntimeError, match="did not pass every collected node") as raised:
+    with pytest.raises(RuntimeError, match="outcome report.*is invalid") as raised:
         build_test_attestation(
             fake_source_manifest, root=tmp_path, command_runner=runner
         )
-    assert "skipped=2" in str(raised.value)
-    assert "observed_skips=1" in str(raised.value)
+    assert "suite counts disagree with testcase outcomes" in str(raised.value)
 
 
 def test_builder_refuses_a_real_data_node_outside_the_attested_collection(
@@ -1535,7 +2085,7 @@ def test_builder_pins_the_governing_real_data_environment_variable(
     "mutation, expected_message",
     [
         ("skipped_node_outside_collection", "outside the attested collection"),
-        ("skipped_list_disagrees_with_count", "failed or skipped"),
+        ("skipped_list_disagrees_with_count", "differ from exact execute JUnit"),
         ("unpinned_real_data_environment", "did not pin the governing real-data"),
         ("emptied_declared_class", "no declared class covers"),
         ("dropped_declared_class", "exactly the frozen skip classes"),
@@ -1587,13 +2137,7 @@ def test_tampered_skip_declaration_fails_closed(
 def test_builder_refuses_a_run_reporting_errors(
     fake_source_manifest, attested_node_ids, tmp_path, forbid_nested_pytest
 ):
-    """A teardown error is reported alongside a full ``N passed``, so only the
-    forbidden-outcome rule can reject this run.
-
-    That is what makes the case sharp: ``passed=N`` plus ``skipped=0`` already reconciles
-    with the N collected nodes, so the rejection is attributable to the reported error and
-    not to a count mismatch.  The message is checked for that attribution.
-    """
+    """A JUnit error outcome prevents a passing attestation."""
     runner = FakePytestRunner(
         attested_node_ids,
         execute_stdout=f"{len(attested_node_ids)} passed, 1 error in 1.00s\n",
@@ -1605,9 +2149,9 @@ def test_builder_refuses_a_run_reporting_errors(
         )
     message = str(raised.value)
     assert f"collected={len(attested_node_ids)}" in message
-    assert f"passed={len(attested_node_ids)}" in message
+    assert f"passed={len(attested_node_ids) - 1}" in message
     assert "skipped=0" in message
-    assert "other=[('1', 'error')]" in message
+    assert "failed=1" in message
 
 
 def test_builder_refuses_an_empty_or_duplicated_collection(

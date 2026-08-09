@@ -10,6 +10,7 @@ this file for why a fake command runner is mandatory there.
 import hashlib
 import os
 from pathlib import Path
+import re
 from xml.etree import ElementTree
 
 # Set non-interactive backend before any test module (or the modules they import)
@@ -101,7 +102,15 @@ def _collect_only_stdout(node_ids) -> str:
     return "\n".join(node_ids) + f"\n\n{len(node_ids)} tests collected in 0.10s\n"
 
 
-def _write_junit_xml(report_path: Path, node_ids, skipped_node_ids) -> None:
+def _write_junit_xml(
+    report_path: Path,
+    node_ids,
+    skipped_node_ids,
+    *,
+    failures_count: int = 0,
+    errors_count: int = 0,
+    reported_skipped_count: int | None = None,
+) -> None:
     """Write the outcome report pytest itself would write for this run.
 
     The builder reads the skipped node identities from this file rather than from a marker
@@ -110,26 +119,40 @@ def _write_junit_xml(report_path: Path, node_ids, skipped_node_ids) -> None:
     and ``.py`` stripped, plus any enclosing classes, and ``name`` is the final component.
     """
     skipped = set(skipped_node_ids)
-    suites = ElementTree.Element("testsuites")
+    terminal_outcomes = [node_id for node_id in node_ids if node_id not in skipped]
+    failed = set(terminal_outcomes[:failures_count])
+    errored = set(
+        terminal_outcomes[failures_count : failures_count + errors_count]
+    )
+    suites = ElementTree.Element("testsuites", name="pytest tests")
     suite = ElementTree.SubElement(
         suites,
         "testsuite",
         name="pytest",
-        errors="0",
-        failures="0",
-        skipped=str(len(skipped)),
+        errors=str(errors_count),
+        failures=str(failures_count),
+        skipped=str(
+            len(skipped) if reported_skipped_count is None else reported_skipped_count
+        ),
         tests=str(len(node_ids)),
+        time="1.000",
+        timestamp="2026-01-01T00:00:00+00:00",
+        hostname="fixture-host",
     )
     for node_id in node_ids:
         file_path, *rest = node_id.split("::")
         classname = ".".join([file_path.removesuffix(".py").replace("/", "."), *rest[:-1]])
         case = ElementTree.SubElement(
-            suite, "testcase", classname=classname, name=rest[-1], time="0.01"
+            suite, "testcase", classname=classname, name=rest[-1], time="0.010"
         )
         if node_id in skipped:
             ElementTree.SubElement(
                 case, "skipped", type="pytest.skip", message="fixture skip"
             )
+        elif node_id in failed:
+            ElementTree.SubElement(case, "failure", message="fixture failure")
+        elif node_id in errored:
+            ElementTree.SubElement(case, "error", message="fixture error")
     report_path.parent.mkdir(parents=True, exist_ok=True)
     ElementTree.ElementTree(suites).write(report_path, encoding="utf-8", xml_declaration=True)
 
@@ -140,8 +163,8 @@ class FakePytestRunner:
     The builder issues exactly four commands: a ``--collect-only`` pass whose stdout
     supplies the ordered node IDs, one ``-m <marker> --collect-only`` pass per declared
     skip class (``real_data``, then ``optional_artifact_or_mode``) whose stdout supplies
-    that class's declared nodes, then an execution pass whose stdout supplies the outcome
-    summary and whose ``--junitxml`` report supplies the OBSERVED skipped node IDs.  All
+    that class's declared nodes, then an execution pass whose ``--junitxml`` report is the
+    complete outcome authority.  All
     four are synthesised here so a test can describe a green run, a red run, a declared or
     an undeclared skip, a declared node that executed anyway, or a crashed command without
     running anything.
@@ -217,12 +240,25 @@ class FakePytestRunner:
         self.calls: list[dict] = []
 
     def __call__(self, argv, *, cwd=None, env=None, capture_output=False, text=False):
-        assert capture_output is True, "the builder must capture command output"
-        assert text is True, "the builder must decode command output as text"
         assert env is not None, "the builder must pass an explicit environment"
         argv = list(argv)
-        self.calls.append({"argv": argv, "cwd": cwd, "env": dict(env)})
-        if "--collect-only" in argv:
+        is_collection = "--collect-only" in argv
+        if is_collection:
+            assert capture_output is True, "the builder must capture collection output"
+            assert text is True, "the builder must decode collection output as text"
+        else:
+            assert capture_output is False, "the execute command must inherit stdout/stderr"
+            assert text is False, "the execute command must not request decoded output"
+        self.calls.append(
+            {
+                "argv": argv,
+                "cwd": cwd,
+                "env": dict(env),
+                "capture_output": capture_output,
+                "text": text,
+            }
+        )
+        if is_collection:
             if "real_data" in argv:
                 return _FakeCompletedProcess(
                     self.real_data_collect_returncode, self.real_data_collect_stdout
@@ -237,10 +273,18 @@ class FakePytestRunner:
         assert len(report_options) == 1, (
             "the builder must ask the executed command for exactly one junit XML report"
         )
+        failures_match = re.findall(r"(\d+) failed", self.execute_stdout)
+        errors_match = re.findall(r"(\d+) errors?", self.execute_stdout)
+        skipped_match = re.findall(r"(\d+) skipped", self.execute_stdout)
         _write_junit_xml(
             Path(report_options[0].removeprefix("--junitxml=")),
             self.node_ids,
             self.skipped_node_ids,
+            failures_count=int(failures_match[-1]) if failures_match else 0,
+            errors_count=int(errors_match[-1]) if errors_match else 0,
+            reported_skipped_count=(
+                int(skipped_match[-1]) if skipped_match else len(self.skipped_node_ids)
+            ),
         )
         return _FakeCompletedProcess(self.execute_returncode, self.execute_stdout)
 
