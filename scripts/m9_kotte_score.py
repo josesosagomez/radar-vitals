@@ -408,9 +408,49 @@ REQUIRED_REFERENCE_COLUMNS = (
     "Breaths / min",
 )
 
+NORMALIZED_REFERENCE_COLUMNS = (
+    "epoch_utc", "pr_bpm", "spo2", "pi", "pvi", "rr_bpm",
+)
+REFERENCE_DIAGNOSTIC_KEYS = (
+    "n_raw_rows", "n_unique_epochs", "n_duplicates_merged", "n_missing_seconds",
+)
+
+
+def _normalized_reference_diagnostics(reference: pd.DataFrame) -> dict[str, int]:
+    """Validate the unchanged parser output, including its duplicate normalization counts."""
+    if not isinstance(reference, pd.DataFrame):
+        raise ScoreContractError("normalized reference must be a pandas DataFrame")
+    missing = [column for column in NORMALIZED_REFERENCE_COLUMNS if column not in reference]
+    if missing:
+        raise ScoreContractError(f"normalized reference is missing columns: {missing}")
+    timestamps = reference["epoch_utc"]
+    if timestamps.isna().any() or not pd.api.types.is_integer_dtype(timestamps.dtype):
+        raise ScoreContractError("Masimo parser did not preserve integer Timestamp")
+    if timestamps.duplicated().any():
+        raise ScoreContractError("normalized reference contains duplicate epoch_utc keys")
+    if reference.empty:
+        raise ScoreContractError("normalized reference contains no epochs")
+
+    diagnostics: dict[str, int] = {}
+    for key in REFERENCE_DIAGNOSTIC_KEYS:
+        value = reference.attrs.get(key)
+        if type(value) is not int or value < 0:
+            raise ScoreContractError(f"normalized reference has invalid parser diagnostic {key}")
+        diagnostics[key] = value
+    if diagnostics["n_unique_epochs"] != len(reference):
+        raise ScoreContractError("normalized reference unique-epoch count is inconsistent")
+    if diagnostics["n_duplicates_merged"] != (
+        diagnostics["n_raw_rows"] - diagnostics["n_unique_epochs"]
+    ):
+        raise ScoreContractError("normalized reference duplicate-merge count is inconsistent")
+    expected_missing = int(timestamps.max() - timestamps.min() + 1 - len(reference))
+    if diagnostics["n_missing_seconds"] != expected_missing:
+        raise ScoreContractError("normalized reference missing-second count is inconsistent")
+    return diagnostics
+
 
 def load_reference_strict(path: Path) -> pd.DataFrame:
-    """Reject ambiguous identity before using the unchanged Masimo parser."""
+    """Validate raw identity, then apply and verify the unchanged Masimo normalization."""
     try:
         with path.open(encoding="utf-8", newline="") as handle:
             header = next(csv.reader(handle))
@@ -428,16 +468,27 @@ def load_reference_strict(path: Path) -> pd.DataFrame:
     timestamps = raw["Timestamp"]
     if not pd.api.types.is_integer_dtype(timestamps.dtype) or timestamps.isna().any():
         raise ScoreContractError("reference requires an integer Timestamp column")
-    if timestamps.duplicated().any():
-        raise ScoreContractError("reference contains duplicate Timestamp keys")
+    if raw.empty:
+        raise ScoreContractError("reference contains no rows")
     try:
         parsed = masimo.load_masimo(path)
     except Exception as exc:
         raise ScoreContractError(f"Masimo reference contract failed: {path}: {exc}") from exc
-    if not pd.api.types.is_integer_dtype(parsed["epoch_utc"].dtype):
-        raise ScoreContractError("Masimo parser did not preserve integer Timestamp")
-    if parsed["epoch_utc"].duplicated().any():
-        raise ScoreContractError("Masimo parser produced duplicate Timestamp keys")
+    diagnostics = _normalized_reference_diagnostics(parsed)
+    expected_raw_rows = len(raw)
+    expected_unique_epochs = int(timestamps.nunique())
+    expected_duplicates_merged = expected_raw_rows - expected_unique_epochs
+    expected_missing_seconds = int(
+        timestamps.max() - timestamps.min() + 1 - expected_unique_epochs
+    )
+    expected = {
+        "n_raw_rows": expected_raw_rows,
+        "n_unique_epochs": expected_unique_epochs,
+        "n_duplicates_merged": expected_duplicates_merged,
+        "n_missing_seconds": expected_missing_seconds,
+    }
+    if diagnostics != expected:
+        raise ScoreContractError("Masimo parser diagnostics disagree with the raw reference")
     return parsed
 
 
@@ -888,6 +939,7 @@ def execute_score(
     origins: dict[str, tuple[float, str, bool]] = {}
     references: dict[str, pd.DataFrame] = {}
     reference_hashes: dict[str, str] = {}
+    reference_duplicate_diagnostics: dict[str, dict] = {}
     metadata_hashes: dict[str, str] = {}
     metadata_paths: dict[str, Path] = {}
     for capture_id in sorted(capture_ids):
@@ -909,7 +961,19 @@ def execute_score(
         origins[capture_id] = resolve_frame0_epoch(metadata)
         reference_path = references_by_id[capture_id]
         reference_hashes[capture_id] = sha256_file(reference_path)
-        references[capture_id] = reference_loader(reference_path)
+        reference = reference_loader(reference_path)
+        parser_diagnostics = _normalized_reference_diagnostics(reference)
+        references[capture_id] = reference
+        reference_duplicate_diagnostics[capture_id] = {
+            "capture_id": capture_id,
+            "reference_path": str(reference_path.resolve()),
+            "reference_sha256": reference_hashes[capture_id],
+            **parser_diagnostics,
+            "normalization_policy": (
+                "src.masimo.load_masimo: numeric mean rounded to 1 dp; "
+                "non-numeric columns retain first"
+            ),
+        }
 
     if official and not all(value[2] for value in origins.values()):
         raise ScoreContractError(
@@ -949,6 +1013,10 @@ def execute_score(
     atomic_write_csv(output_dir / "summaries.csv", summaries)
     atomic_write_json(output_dir / "failure_census.json", failures)
     atomic_write_json(output_dir / "pair_margin_diagnostics.json", margins)
+    atomic_write_json(
+        output_dir / "reference_duplicate_diagnostics.json",
+        reference_duplicate_diagnostics,
+    )
     atomic_write_json(
         output_dir / "radar_input_snapshot.json",
         {"before": before.files, "before_digest_sha256": before.digest_sha256,
@@ -993,6 +1061,7 @@ def execute_score(
         "source_hashes": source_hashes,
         "source_identities": verified_sources,
         "reference_hashes": reference_hashes,
+        "reference_duplicate_diagnostics": reference_duplicate_diagnostics,
         "capture_metadata_hashes": metadata_hashes,
         "origins": {
             capture_id: {

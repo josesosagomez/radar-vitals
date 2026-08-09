@@ -257,7 +257,7 @@ def test_constant_session_median_is_descriptive_beside_both_arms(tmp_path: Path)
     assert not any("rank" in key or "best" in key for row in result.summaries for key in row)
 
 
-@pytest.mark.parametrize("mutation", ["float_timestamp", "duplicate_timestamp", "wrong_hr"])
+@pytest.mark.parametrize("mutation", ["float_timestamp", "null_timestamp", "wrong_hr"])
 def test_reference_contract_rejects_malformed_identity(
     tmp_path: Path, mutation: str
 ) -> None:
@@ -266,16 +266,111 @@ def test_reference_contract_rejects_malformed_identity(
     frame = pd.read_csv(path)
     if mutation == "float_timestamp":
         frame["Timestamp"] = frame["Timestamp"].astype(float) + 0.5
-    elif mutation == "duplicate_timestamp":
-        frame.loc[1, "Timestamp"] = frame.loc[0, "Timestamp"]
+    elif mutation == "null_timestamp":
+        frame.loc[1, "Timestamp"] = np.nan
     else:
         frame = frame.rename(columns={"Beats / min": "O2 Saturation duplicate"})
     frame.to_csv(path, index=False)
-    expected = "integer Timestamp" if mutation == "float_timestamp" else (
-        "duplicate Timestamp" if mutation == "duplicate_timestamp" else "exact columns"
-    )
+    expected = "integer Timestamp" if mutation != "wrong_hr" else "exact columns"
     with pytest.raises(scoring.ScoreContractError, match=expected):
         scoring.load_reference_strict(path)
+
+
+def test_conflicting_raw_timestamp_is_normalized_and_persisted(tmp_path: Path) -> None:
+    radar, config, reference = _fixture(tmp_path)
+    radar_digest_before = scoring.snapshot_directory(radar).digest_sha256
+    raw = pd.read_csv(reference)
+    raw["Session"] = raw["Session"].astype(object)
+    raw.loc[0, "Session"], raw.loc[0, "Index"] = "first-session", 1000
+    raw.loc[1, "Session"], raw.loc[1, "Index"] = "second-session", 1001
+    raw.loc[0, ["Beats / min", "Perfusion Index", "Breaths / min"]] = [70.0, 1.0, 10.0]
+    raw.loc[1, "Timestamp"] = raw.loc[0, "Timestamp"]
+    raw.loc[1, ["Beats / min", "Perfusion Index", "Breaths / min"]] = [71.0, 1.3, 11.0]
+    raw.to_csv(reference, index=False)
+
+    normalized = scoring.load_reference_strict(reference)
+    merged = normalized[normalized["epoch_utc"] == int(raw.loc[0, "Timestamp"])].iloc[0]
+    assert merged["pr_bpm"] == 70.5
+    assert merged["pi"] == 1.2
+    assert merged["rr_bpm"] == 10.5
+    assert merged["session"] == "first-session"
+    assert merged["index"] == 1000
+    assert normalized.attrs["n_raw_rows"] == 90
+    assert normalized.attrs["n_unique_epochs"] == 89
+    assert normalized.attrs["n_duplicates_merged"] == 1
+    assert normalized.attrs["n_missing_seconds"] == 1
+
+    result = scoring.execute_score(
+        radar_input=radar, config_path=config, output_root=tmp_path / "out",
+        repo_root=tmp_path, official=False, run_id="raw_duplicate",
+        created_utc="2030-01-02T03:04:05+00:00",
+    )
+    evidence = json.loads(
+        (result.output_dir / "reference_duplicate_diagnostics.json").read_text(
+            encoding="utf-8"
+        )
+    )["c1"]
+    assert evidence["capture_id"] == "c1"
+    assert evidence["reference_path"] == str(reference.resolve())
+    assert evidence["reference_sha256"] == _hash(reference)
+    assert evidence["n_raw_rows"] == 90
+    assert evidence["n_unique_epochs"] == 89
+    assert evidence["n_duplicates_merged"] == 1
+    assert evidence["n_missing_seconds"] == 1
+    run_meta = json.loads((result.output_dir / "run_meta.json").read_text(encoding="utf-8"))
+    assert run_meta["reference_duplicate_diagnostics"]["c1"] == evidence
+    handoff = json.loads(
+        (result.output_dir / "scoring_handoff.json").read_text(encoding="utf-8")
+    )
+    assert handoff["reference_hashes"]["c1"] == _hash(reference)
+    assert handoff["output_hashes"]["reference_duplicate_diagnostics.json"] == _hash(
+        result.output_dir / "reference_duplicate_diagnostics.json"
+    )
+    assert handoff["output_hashes"]["run_meta.json"] == _hash(
+        result.output_dir / "run_meta.json"
+    )
+    assert scoring.snapshot_directory(radar).digest_sha256 == radar_digest_before
+
+
+@pytest.mark.parametrize(
+    "diagnostic_key",
+    ["n_raw_rows", "n_unique_epochs", "n_duplicates_merged", "n_missing_seconds"],
+)
+def test_inconsistent_parser_diagnostics_are_rejected(
+    tmp_path: Path, diagnostic_key: str
+) -> None:
+    radar, config, _ = _fixture(tmp_path)
+
+    def inconsistent_loader(path: Path) -> pd.DataFrame:
+        normalized = scoring.load_reference_strict(path)
+        normalized.attrs[diagnostic_key] += 1
+        return normalized
+
+    with pytest.raises(scoring.ScoreContractError, match="inconsistent"):
+        scoring.execute_score(
+            radar_input=radar, config_path=config, output_root=tmp_path / "out",
+            repo_root=tmp_path, official=False, run_id="inconsistent_diagnostics",
+            created_utc="2030-01-02T03:04:05+00:00",
+            reference_loader=inconsistent_loader,
+        )
+    assert not (tmp_path / "out").exists()
+
+
+def test_post_parser_duplicate_epoch_is_rejected(tmp_path: Path) -> None:
+    radar, config, _ = _fixture(tmp_path)
+
+    def duplicate_after_parser(path: Path) -> pd.DataFrame:
+        normalized = scoring.load_reference_strict(path)
+        return pd.concat([normalized, normalized.iloc[[0]]], ignore_index=True)
+
+    with pytest.raises(scoring.ScoreContractError, match="duplicate epoch_utc"):
+        scoring.execute_score(
+            radar_input=radar, config_path=config, output_root=tmp_path / "out",
+            repo_root=tmp_path, official=False, run_id="post_parser_duplicate",
+            created_utc="2030-01-02T03:04:05+00:00",
+            reference_loader=duplicate_after_parser,
+        )
+    assert not (tmp_path / "out").exists()
 
 
 def test_duplicate_radar_key_rejected(tmp_path: Path) -> None:
