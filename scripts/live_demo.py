@@ -770,7 +770,7 @@ def _prospective_start_delay_s(metadata: dict | None) -> int:
     """Legacy countdown duration; recovery capture must begin without a 60 s wait."""
     if metadata is not None and metadata.get("arm") == "recovery":
         return 0
-    return 1
+    return 30
 
 
 def _derive_recovery_timing(
