@@ -610,6 +610,13 @@ cross-model DSP review has not been done** — required before this path is pape
 - Quality gate: exclude/flag Masimo segments with low Perfusion Index. Never tune the
   radar algorithm to chase a low-PI reference segment.
 - Baselines: TI on-chip vital-signs output; a published phase-based pipeline.
+- **M2 acquisition engineering (2026-08-10): PASS; physical acquisition pending.** Prospective
+  version-3 manifests, exact frame-0 timing, start/end clock gates, packet/frame validity,
+  hash-bound two-phase capture, the P001-P015 subject registry, label firewall and fixed
+  -1/0/+1-second sensitivity contracts are implemented and independently reviewed. The operator
+  procedure is `notes/m2_capture_runbook.md`. This is not a capture result and does not complete
+  M2; real sessions must still pass the approved timing, provenance, metadata, cohort and
+  dynamic-HR acquisition checks.
 
 ---
 

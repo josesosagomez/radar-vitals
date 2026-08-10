@@ -1,102 +1,107 @@
-# Handoff — M1 complete
+# Handoff — M2 engineering preflight PASS; acquisition pending
 
 > Read this and `CLAUDE.md` before doing anything. **State verified 2026-08-10.**
 > `HISTORY.md` is append-only; this file is the current resume point.
 
 ## 1. Current state
 
-Active branch: **`vital_signs_own_v13`**. M1 implementation, canonical execution and independent
-artifact verification are **PASS**. There is no active M1 code or artifact work.
+Active branch: **`vital_signs_own_v13`**. Current HEAD before the M2 working-tree changes:
+**`da3287dd911c253f41e10feb02f3f4641c3b219e`**.
 
-The scientific gate-source commit is
-**`0dc0698f5f208077744c6b90561645ddc0eea024`**. The clean sole authorization-only child used for
-all real-data stages is **`a47182677d808911c551fae8585e02a23532b74f`**. This HANDOFF/HISTORY
-refresh may appear in a later documentation-only commit; such a descendant does not change the
-scientific source, authorization transition or artifact identities below.
+M2 acquisition engineering is implemented, tested and independently reviewed: **engineering
+preflight PASS**. No prospective participant was captured, no real prospective reference was
+opened, and no capture result was fabricated. Overall **M2 is FAIL / pending physical acquisition**.
+Do not start M3.
 
-M1 did not change ECA, AHET, thresholds, range-bin selection, signal representation or estimator
-scientific behavior, and it was not tuned to Masimo. It corrected the scoring/provenance contract:
-the complete `k>=0` ledger, separate `k=0`, persisted-lock `k>=1`, exact denominator reconstruction,
-zero-output macro inclusion, typed bounded evidence and fail-closed source/data/config/reference
-identity are now canonical.
+The worktree intentionally contains uncommitted M2 code, tests, registry, templates, plan and
+documentation. This is an operational stop: `scripts/live_demo.py` refuses prospective capture
+until the reviewed M2 changes and initial registry are deliberately committed and the checkout is
+clean. Do not weaken that gate.
 
-## 2. Canonical artifact chain
+## 2. Implemented M2 contract
 
-| Stage | Artifact | Manifest SHA-256 |
-|---|---|---|
-| Gate | `results/m8_ahmed_transfer/synthetic/20260809T212052.240643Z_779928f3a61c` | `db941e47ac424af67fa57fe256b2bec7f115d2e4ab0a50155e10b519ab9d7991` |
-| Smoke | `results/m8_ahmed_transfer/smoke_m1_a4718267/20260809T212711.258830Z_1a9372ff2b33` | `74c39a9b07c16c29881a239e44b8cdc4d05c9a1db2b77235503111ac6c18d641` |
-| Radar | `results/m8_ahmed_transfer/radar_m1_a4718267/20260809T212904.045947Z_1a9372ff2b33` | `1530fbf6942c21e32a9b889a2c73bd1f988fa2038bac23760bb22fd31eb06f50` |
-| Score | `results/production_eca_ahet/scored/20260809T220332.406724Z_1a9372ff2b33` | `c359fa71191e1271ee17fe61e74731b1622d4a2c05a70668c378d48b5f53f9d7` |
+- `src/m2/manifest_v3.py` plus `src/m2/manifest.py`: separate prospective-v3 scoring validation
+  with historical-v2 compatibility.
+- `src/m2/acquisition_metadata.py`: strict common/natural/paced/recovery metadata and privacy-safe
+  finalization schemas; both clock offsets use the inclusive absolute 1-second gate.
+- `src/m2/cohort_registry.py`: canonical immutable P001-P015 registry/history/digest validation,
+  fixed five/ten roles and paced rotation, controlled missing states, retry attempts and the
+  post-shutdown captured-session registration operation.
+- `src/m2/label_firewall.py`: atomic-only prospective label transitions and capabilities. Final
+  score output is built inside the transaction; score/audit/registry/digest rollback together.
+- `src/m2/capture_artifacts.py`: strict sealed radar receipt, registry-bound registration,
+  no-overwrite reference finalization and directly scoring-loadable manifest.
+- `src/m2/validity.py`, `src/m2/time_sensitivity.py`, `src/m2/retry.py`, `src/m2/preflight.py`:
+  frame/window validity, fixed -1/0/+1-second sensitivity, objective retries and ordered dry run.
+- `scripts/live_demo.py`: acquisition-only changes for exact frame-0 start assignment, packet/map
+  evidence and exact 12,000-frame cap. Recovery requires a synchronized seating timestamp, skips
+  the natural/paced countdown, and binds the derived seat-to-frame-0 delay. The estimator/DSP path
+  was not modified.
+- Operator CLIs: `scripts/m2_register_capture.py`, `scripts/m2_finalize_capture.py`, and
+  `scripts/m2_preflight.py`.
 
-The score's `production_summary.json` SHA-256 is
-`6bf50705df8d720615d5d2b0e64fa07175904673c79afccb99bfa46d04ba0d94`. Its canonical provenance
-status is `complete_clean_tree_hash_bound`; source-chain verification is true. The authorization
-SHA-256 is `e4f187ac7f19e4281a983cea6e1e3061188a662c11ae571c88a687c1f36944fb`, source-manifest identity
-is `1a9372ff2b33cc7589e93cbb7a9565f07ad957d515cd5402db1ff9eefae15079`, reference identity is
-`d79a907e68ddbf3970ebaebc428f6fe90490d967414d771627f09fdc18673e87`, environment identity is
-`be1d5b17caa15772263be0deeb859b81f0e8b89ecbad1b0bd3e07d32bd874b5f`, and Conda explicit identity
-is `0fb28a7698955668a26a552347239cd703a9aac08ead973ca14e2d3c47a0b050`.
+Initial registry SHA-256:
+`e1bf942ff8bfbdd2b9f4b92e448099142058805bc8d0213576db12d8a3689a7c`, matching
+`cohort_registry/registry_v001.json.sha256`.
 
-The gate attestation recorded 1,373 collected tests: `1372 passed, 1 skipped, 0 failed/errors`.
-Smoke cardinalities are 1 source/2 shared/14 estimator/12 Ahmed/2 production. Radar cardinalities
-are 128 source/256 shared/1,792 estimator/1,536 Ahmed/256 production. All manifest and payload
-hashes, parents, exact Cartesian row identities, authorization transition, source reconstruction,
-raw/config/reference maps and bounded typed NPZ/index evidence passed verification; NPZ evidence is
-pickle-free.
+## 3. Verification evidence
 
-## 3. Canonical M1 result
+- Synthetic dry run and independent manifest recheck: PASS, all seven ordered stages; exact invalid
+  window indices `[0, 1]`.
+- Final focused suite: **816 passed, 12 warnings**.
+- Final full suite: **3139 passed, 5 skipped, 1790 warnings** in 204.27 s. It requires full Conda
+  activation and separate writable temp parents for outer and nested pytest on this Windows host.
+- Independent code review: **PASS**, no remaining material M2 defect.
+- `compileall`, M2 imports and `git diff --check`: PASS.
+- No HR estimator, M3 representation or `data/raw/` engineering changes; no real-data access.
 
-- All-window radar coverage: **`14/128 = 0.109375`**.
-- Joint given reference: **`9/67 = 0.13432835820895522`**.
-- Persisted-lock `k>=1` radar coverage: **`11/120 = 0.09166666666666666`**.
-- Separate `k=0`: 8 source, 3 radar-valid, 1 reference-admitted, 0 joint.
-- All-window MAE/RMSE/bias: `2.7655614552159387 / 5.275212052978818 /
-  -2.385366027726006` bpm.
-- All-window capture-macro radar coverage: `0.19427083333333334`; zero-radar m3/m5,
-  zero-joint m3/m5/m7.
-- `k>=1` capture-macro radar coverage: `0.16973684210526316`; zero-radar and zero-joint
-  m3/m5/m7.
-- All eight captures remain in coverage macros even when accuracy is undefined.
+## 4. Exact next action
 
-All 128 fresh production HR values, validity decisions and reasons exactly equal the audited parent
-and have identity SHA-256
-`0ced713d76e2ac5d29a26d15a4b8a81f5e83f84d81e5bf156885d9d53ce17906`.
+1. Review and commit only the intended M2 changes. Confirm `git status --short` is empty and the
+   initial registry/digest is committed. Do not ask the operator to edit per-session YAML inside the
+   checkout; use an external working directory so the capture commit stays clean.
+2. Follow `notes/m2_capture_runbook.md` exactly. It contains the physical setup, arm-specific
+   procedure, strict live command, post-shutdown registry command, finalizer and preflight command.
+3. Preserve every attempt. Do not improvise a recapture. Only a validated objective protocol-abort,
+   corrupt-raw or epoch-sync record can permit a same-subject retry before scoring.
+4. Return to this same task with promoted session directories and the latest registry revision.
+   Validate timing/provenance, packet conservation, frame map and radar-NaN propagation, required
+   metadata, subject-disjoint membership, and recovery dynamic-HR acquisition before changing the
+   M2 verdict.
 
-## 4. Interpretation and landmines
+## 5. Capture landmines
 
-- The historical **30.08%** survivor-biased coverage is retired. Do not revive or cite it.
-- `k=0` remains in the complete ledger and is reported separately; never silently drop it.
-- The score manifest's `promotion_eligible: false` expresses claim status for exploratory,
-  approximate-origin, single-subject development data. It is **not** a provenance failure; canonical
-  provenance is `complete_clean_tree_hash_bound`.
-- Existing captures have approximate frame origins (roughly 5–15 s uncertainty), insufficient HR
-  dynamic range and no population-validation role. Correct arithmetic does not make them final
-  agreement evidence.
-- Canonical Windows execution requires full
-  `C:/ProgramData/anaconda3/Scripts/conda.exe run -n radar-vitals --no-capture-output`, a unique short
-  external `TEMP`/`TMP` under `C:\tmp`, and inherited handles for the final attested pytest child.
-  Deep temp paths can break temporary Git repositories; captured/redirected final Matplotlib handles
-  can fail native DLL execution.
-- Do not edit `data/raw/`, manually handle score rows, weaken clean-tree/hash gates, tune to Masimo,
-  or rerun/replace the canonical chain without explicit authorization.
-
-## 5. Next step
-
-M1 is complete. M2 is the next milestone only if the user separately authorizes it and its accepted
-plan is reviewed before implementation. Do not infer M2 authorization from M1 completion.
+- Exact command duration is 600 seconds and the canonical stream is exactly 12,000 frames at 20 Hz.
+- Frame origin is the first-byte/start-assignment event for frame index 0, never `start_wall_utc` or
+  full-frame completion.
+- Record signed `PC UTC - phone UTC` at both ends; each absolute value must be <=1.0 seconds.
+- Use automatic warmup bin selection. Never use manual bin, replay, no-configure, alternate config,
+  Masimo agreement, or reference values to choose DSP or alignment.
+- Packet loss flags the session; the Boolean frame map decides affected radar-NaN windows. It does
+  not authorize retry.
+- Natural and paced require the numeric 60-second settle evidence and retain the 60-second command
+  countdown. Recovery explicitly does not; after live Masimo exertion-stop PR reaches 100-120 bpm,
+  record synchronized seating UTC, start with no countdown, and retain the derived seat-to-frame-0
+  delay.
+- Low warmup confidence, missing reference, recovery adequacy/yield, radar coverage and agreement
+  never authorize recapture.
+- Keep participant names, re-identification keys, screening answers, diagnoses, symptoms,
+  medications/pregnancy data, consent/PIS and health narratives outside the repository.
+- `data/raw/` becomes read-only immediately after each no-overwrite promotion.
 
 ## 6. Key files
 
 | File | Purpose |
 |---|---|
-| `plans/plan_codex_milestones.md` | milestone boundaries and acceptance criteria |
-| `src/m4/estimator_scoring.py` | canonical M1 rollup and scorer provenance contract |
-| `src/m4/estimator_runner.py` | bounded evidence producer and radar transition gate |
-| `src/m8/ahmed_provenance.py` | source, authorization and test-attestation contracts |
-| `scripts/score_production.py` | canonical M1 scoring CLI |
-| `experiments/m8_ahmed_transfer/capture_registry.yaml` | bound capture/config/reference inventory |
-| `experiments/m8_ahmed_transfer/authorizations/real_evaluation_20260808.yaml` | canonical authorization |
-| `notes/analysis_prespec.md` | estimands, ledgers and zero-output rules |
-| `notes/protocol.md` | capture protocol and timing limitations |
-| `HISTORY.md` | append-only implementation and evidence record |
+| `plans/m2_engineering_acquisition_preflight.md` | reviewed M2 engineering contract |
+| `notes/m2_capture_runbook.md` | exact physical acquisition and finalization procedure |
+| `notes/protocol.md` | approved three-arm participant protocol |
+| `notes/analysis_prespec.md` | cohorts, timing, validity, retry and dynamic-HR rules |
+| `cohort_registry/registry_v001.json` | initial P001-P015 cohort allocation |
+| `templates/m2_acquisition_*.yaml` | arm-specific acquisition sidecars |
+| `templates/m2_finalization.yaml` | post-capture/end-offset/reference record |
+| `scripts/live_demo.py` | sole prospective live acquisition path |
+| `scripts/m2_register_capture.py` | receipt-to-registry immutable revision command |
+| `scripts/m2_finalize_capture.py` | reference binding and no-overwrite promotion command |
+| `scripts/m2_preflight.py` | dry-run and real-manifest engineering validator |
+| `HISTORY.md` | append-only evidence and decision log |

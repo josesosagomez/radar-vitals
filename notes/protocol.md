@@ -455,13 +455,21 @@ reviewed recovery arm.
 
 - The live demo writes everything to `results/live_demo/<run_dir>/`
   (raw ADC mirror, `live_estimates.csv`, `live_intermediates.npz`,
-  `warmup_bin_selection.json`, `run_metadata.json`).
-- Add the session as a row in `data/manifest.local.csv`.
+  `warmup_bin_selection.json`, `run_metadata.json`). In prospective mode it additionally seals the
+  exact config/sidecar bytes, frame-validity map, packet counters, raw/config hashes, clean capture
+  commit, exact frame-0 start-assignment UTC, and `sealed_radar_receipt.json`.
+- Prospective sessions do **not** use `data/manifest.local.csv`. Follow
+  `notes/m2_capture_runbook.md`: register the sealed receipt in the next immutable cohort-registry
+  revision, then run the separate no-overwrite finalizer after the end-clock measurement and Masimo
+  export. The finalizer emits the version-3 scoring manifest.
 - Maintain the committed, SHA-256-bound cohort registry required by
   `notes/analysis_prespec.md` §3.1. It records subject ID, immutable role and slot, paced rate,
   session IDs/hashes and label-access state. All sessions from one subject use the same role.
-- Record the capture in HISTORY.md: subject, distance, duration, observed PR
-  range, and any disturbances (CLAUDE.md reproducibility rule §6).
+- Record privacy-safe capture facts in HISTORY.md: subject pseudonym, arm, distance, duration,
+  settle or recovery-start facts, disturbances, and sealed receipt/registry hashes. Do **not**
+  record a prospective PR range or any other reference outcome before the authorized label-firewall
+  transition. Finalization and preflight may copy, hash, and bind opaque reference bytes; they do
+  not authorize parsing, inspection, summarization, or scoring.
 
 ---
 

@@ -11383,3 +11383,86 @@ approximate time origins and development-only/single-subject claim status. No M2
 **Next:** no active M1 code or artifact work remains. Begin M2 only under a separate explicit
 authorization and its accepted milestone plan; do not reinterpret these exploratory artifacts as
 population validation or final agreement evidence.
+
+## 2026-08-10 - M2 acquisition engineering preflight completed; physical acquisition pending
+
+**Set out to do:** implement only the M2 engineering/acquisition contract needed to make future
+natural, paced and recovery captures scientifically traceable, then stop before hardware or human
+acquisition. The scope explicitly excluded HR-estimator changes, M3 representations, Masimo-driven
+DSP choices and fabricated capture results.
+
+**Worked (with evidence):** the independently reviewed engineering plan is
+`plans/m2_engineering_acquisition_preflight.md`. A separate prospective manifest v3, strict
+acquisition/finalization metadata, immutable P001-P015 cohort registry, label-access firewall,
+objective retry records, fixed -1/0/+1-second sensitivity artifacts, per-frame validity handling,
+two-phase sealed-receipt/finalization flow, and no-overwrite capture-registration CLI were added
+under `src/m2/`, `scripts/`, `templates/` and `cohort_registry/`. The live producer now persists the
+exact frame-index-0 start-assignment UTC, start offset, packet counts, Boolean frame-validity map,
+raw/config/metadata hashes, exact CLI, clean capture commit and an exact 12,000-frame/600-second
+canonical stream. The post-shutdown flow binds the end offset and reference acquisition without
+allowing synthetic promotion or overwrite. Invalid source windows remain materialized as radar-NaN.
+
+Prospective reference capability can be minted only by the atomic firewall transaction. Public
+registry writes cannot change P001-P015 label state; forged Stage-1/audit chains fail. Final scoring
+uses an in-transaction builder so score, audit, registry revision and digest publish together or all
+roll back. Registry history/digest sidecars, receipt/run/manifest semantic equality, paced-rate slot
+assignment, packet byte conservation, exact timing gates and privacy-safe schemas fail closed.
+
+The isolated synthetic preflight passed all seven ordered stages and identified invalid windows
+exactly `[0, 1]`. The final focused M2/M4/live compatibility command passed **778 tests** with 12
+dependency deprecation warnings. The final repository-wide run, under the properly activated
+`radar-vitals` Conda environment and separate writable outer/child temp roots, passed
+**3101 tests, 5 skipped, 1790 warnings** in 202.94 seconds. The five skips are repository-declared
+optional/real-input cases. `compileall`, imports, registry detached SHA-256
+`e1bf942ff8bfbdd2b9f4b92e448099142058805bc8d0213576db12d8a3689a7c`, and `git diff --check`
+passed. Independent code review's final verdict was **PASS**, with no remaining material finding.
+
+**Failed / did not work, and why:** early passing tests missed path-bound capability, atomic audit,
+registry-history, strict receipt/manifest, paced allocation, exact frame-cap, retry-ledger, packet
+conservation and privacy failure paths. Independent review exposed them; each was frozen as a
+regression and repaired. A later review found direct prospective label mutation and a circular,
+placeholder-fabricable final-score transition; the firewall was redesigned around atomic-only
+prospective authority and an in-transaction score builder. Direct invocation of the environment's
+Python also crashed in native Matplotlib with Windows `0xc06d007f`; full Conda activation fixed the
+DLL boundary. The first activated full run then had one sandbox temp-permission failure in a nested
+pytest child (`3100 passed, 5 skipped` otherwise); separate writable parent roots for outer and
+nested pytest produced the complete green run. These failed attempts produced no capture or study
+result.
+
+**Retired / no longer used for prospective capture:** `data/manifest.local.csv`, `start_wall_utc`
+as frame origin, manual/manifest range-bin pinning, replay/no-configure/config overrides, wall-clock
+duration stopping, unguarded P-subject reference reads, caller-fabricated prospective capabilities,
+and pre-existing placeholder score artifacts. They remain only where historical workflows require
+backward compatibility.
+
+**Next:** review and commit the M2 implementation plus initial registry so the checkout is clean;
+the live prospective command intentionally refuses the current uncommitted tree. Then perform the
+physical sessions exactly as `notes/m2_capture_runbook.md` describes and return to this same task
+with the new immutable bundles and registry revisions. Overall M2 remains **FAIL / pending physical
+acquisition** until timing, provenance, validity, metadata, subject-disjoint cohort membership and
+the approved recovery dynamic-HR protocol pass on real captures. Do not proceed to M3.
+
+**Final recovery-start correction and verification:** independent operational review found that the
+legacy 60-second live countdown would erase the intended early recovery ramp and that a prefilled
+seat-to-record delay would be fabricated. Prospective recovery now requires the operator-observed
+synchronized-PC seating UTC, has no countdown, and derives
+`sit_to_record_delay_s = frame0_epoch_utc - recovery_seated_start_utc`; this event, source and delay
+are bound through run metadata, sealed receipt and manifest. Natural/paced retain the 60-second
+countdown. Missing, nonfinite, future, wrong-arm and post-hoc-tampered timing fails closed. The
+operator runbook now also contains the exact PR/SpO2 visibility, safety-stop/abort, full-recording
+stillness/pacing, opaque-reference and retry instructions. Independent focused verification passed
+**804 tests, 12 warnings**. The final full repository suite passed **3127 tests, 5 skipped, 1790
+warnings** in 204.81 seconds under the activated `radar-vitals` environment. Independent review is
+required once more on these final bytes before physical capture.
+
+**Final safety-stop gate:** the last review found that controlled participant/safety-stop vocabulary
+was still schema-representable at the acquired-session boundary. Prospective recovery live preflight,
+receipt creation, receipt reopening and acquired-v3 manifest validation now all require
+`stopping_event_category: target_reached`; participant/safety stops remain privacy-safe controlled
+non-acquisition dispositions only. Independent focused verification passed **816 tests, 12
+warnings**. The final full repository suite passed **3139 tests, 5 skipped, 1790 warnings** in
+204.27 seconds. The final current-byte independent review follows this correction.
+
+**Final independent review:** PASS on the current bytes, with no remaining blocker, high or other
+material finding. The engineering preflight is ready for the physical-capture boundary; overall M2
+remains pending until the real prospective sessions satisfy the frozen admission and cohort rules.

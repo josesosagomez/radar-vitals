@@ -39,6 +39,7 @@ import collections
 import csv
 import hashlib
 import json
+import math
 import queue
 import struct
 import subprocess
@@ -66,6 +67,9 @@ from src.warmup_select import (
     run_warmup_selection,
 )
 from src.window_pipeline import run_window_dsp
+
+from src.m2.acquisition_metadata import RECOVERY_SEATED_START_SOURCE
+from src.m2.manifest_v3 import FRAME0_EVENT_SOURCE
 
 PAYLOAD_BYTES_PER_PKT = 1456   # DCA1000 ADC payload bytes per UDP packet
 
@@ -198,6 +202,7 @@ class LiveFrameSource(FrameSource):
         net_cfg: dict | None = None,
         zero_fill_leading_loss: bool = True,
         raw_mirror_path: Path | None = None,
+        max_frames: int | None = None,
     ):
         if sock_dat is None and net_cfg is None:
             raise ValueError("LiveFrameSource: provide sock_dat or net_cfg")
@@ -212,6 +217,9 @@ class LiveFrameSource(FrameSource):
         self._iq_swap = bool(profile_cfg["iq_swap"])
         self._bytes_per_frame = self._n_chirps * self._n_rx * self._n_adc * 4
         self._raw_mirror_path = raw_mirror_path
+        if max_frames is not None and (type(max_frames) is not int or max_frames <= 0):
+            raise ValueError("max_frames must be a positive exact integer")
+        self._max_frames = max_frames
         self._q: queue.Queue = queue.Queue(maxsize=400)
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -219,15 +227,16 @@ class LiveFrameSource(FrameSource):
         # Public stats (read after stop)
         self.n_received: int = 0
         self.n_dropped: int = 0
+        self.packets_short_discarded: int = 0
+        self.packets_duplicate_or_late_discarded: int = 0
         self.zero_filled_bytes: int = 0
         self.mirror_truncated_bytes: int = 0
+        self.frame_validity: list[bool] = []
         self._frame_idx: int = 0
-        #: UTC epoch at receipt of the FIRST data packet of the stream, and the leading
-        #: zero-fill that preceded it. Together these give frame 0's true epoch — which
-        #: `start_wall_utc` does not, because it is written before the sensor is even
-        #: configured (chirp-profile upload over UART takes seconds). Scoring a 30 s window
-        #: grid against a 5-15 s error is a third of a window; see `_frame0_epoch_utc`.
+        #: Historical first-packet diagnostic retained for old fixtures. Prospective M2
+        #: capture uses `frame0_start_assignment_utc` below and never back-corrects loss.
         self.t_first_packet_utc: float | None = None
+        self.frame0_start_assignment_utc: float | None = None
         self.leading_zero_filled_bytes: int = 0
 
     def start(self) -> None:
@@ -260,15 +269,39 @@ class LiveFrameSource(FrameSource):
         buf = bytearray()
         first_seq: int | None = None
         last_seq: int = 0
+        stream_bytes_assigned = 0
+        invalid_intervals: list[tuple[int, int]] = []
+        next_invalid_interval = 0
         mirror = open(self._raw_mirror_path, "wb") if self._raw_mirror_path else None
         self._sock.settimeout(0.1)
+
+        def append_stream_bytes(content: bytes, *, valid: bool) -> None:
+            nonlocal stream_bytes_assigned
+            if self._max_frames is not None:
+                canonical_bytes = self._max_frames * self._bytes_per_frame
+                packet_aligned_limit = (
+                    (canonical_bytes + PAYLOAD_BYTES_PER_PKT - 1)
+                    // PAYLOAD_BYTES_PER_PKT
+                    * PAYLOAD_BYTES_PER_PKT
+                )
+                remaining = max(0, packet_aligned_limit - stream_bytes_assigned)
+                content = content[:remaining]
+            interval_start = stream_bytes_assigned
+            buf.extend(content)
+            if mirror:
+                mirror.write(content)
+            stream_bytes_assigned += len(content)
+            if not valid and content:
+                invalid_intervals.append((interval_start, stream_bytes_assigned))
+
         try:
             while not self._stop.is_set():
                 try:
                     pkt = self._sock.recv(1470)
                 except Exception:
                     continue
-                if len(pkt) < 10:
+                if len(pkt) != 10 + PAYLOAD_BYTES_PER_PKT:
+                    self.packets_short_discarded += 1
                     continue
 
                 seq = struct.unpack_from("<I", pkt, 0)[0]
@@ -276,53 +309,97 @@ class LiveFrameSource(FrameSource):
 
                 # Discard duplicates and out-of-order late arrivals (mirrors capture.py)
                 if last_seq and seq <= last_seq:
+                    self.packets_duplicate_or_late_discarded += 1
                     continue
 
                 if first_seq is None:
                     first_seq = seq
-                    # Stamped here, not at frame assembly: this is the closest observable
-                    # moment to the radar emitting frame 0. Receipt lags emission by
-                    # transmission + buffering (tens of ms), far below the 1 Hz resolution
-                    # of the Masimo reference, so it is not worth modelling.
-                    self.t_first_packet_utc = datetime.now(timezone.utc).timestamp()
+                    # Frozen M2 origin: the observable PC UTC instant at which the first
+                    # received payload byte (or leading zero-fill byte) is assigned to the
+                    # logical stream beginning at frame index 0.  It is deliberately not
+                    # backdated to an inferred sensing time and is earlier than completion
+                    # of the first assembled frame by about one frame period.
+                    assignment_utc = datetime.now(timezone.utc).timestamp()
+                    self.frame0_start_assignment_utc = assignment_utc
+                    self.t_first_packet_utc = assignment_utc  # historical diagnostic alias
                     # Leading-loss zero-fill: only for a fresh stream we started.
                     # In --no-configure mode we are attaching mid-stream; seq may be
                     # 50000+, so zero-filling that many packets would corrupt alignment.
                     if self._zero_fill_leading and seq > 1:
-                        gap = seq - 1
-                        self.n_dropped += gap
-                        gap_bytes = gap * PAYLOAD_BYTES_PER_PKT
+                        observed_gap = seq - 1
+                        gap_intervals_to_materialize = observed_gap
+                        if self._max_frames is not None:
+                            canonical_bytes = self._max_frames * self._bytes_per_frame
+                            maximum_intervals = (
+                                canonical_bytes + PAYLOAD_BYTES_PER_PKT - 1
+                            ) // PAYLOAD_BYTES_PER_PKT
+                            gap_intervals_to_materialize = min(
+                                gap_intervals_to_materialize, maximum_intervals
+                            )
+                        self.n_dropped += gap_intervals_to_materialize
+                        gap_bytes = gap_intervals_to_materialize * PAYLOAD_BYTES_PER_PKT
                         zeros = b"\x00" * gap_bytes
-                        buf.extend(zeros)
-                        if mirror:
-                            mirror.write(zeros)
+                        append_stream_bytes(zeros, valid=False)
                         self.zero_filled_bytes += gap_bytes
                         self.leading_zero_filled_bytes = gap_bytes
                 elif seq > last_seq + 1:
                     # Mid-stream gap
-                    gap = seq - last_seq - 1
-                    self.n_dropped += gap
-                    gap_bytes = gap * PAYLOAD_BYTES_PER_PKT
+                    observed_gap = seq - last_seq - 1
+                    gap_intervals_to_materialize = observed_gap
+                    if self._max_frames is not None:
+                        canonical_bytes = self._max_frames * self._bytes_per_frame
+                        packet_aligned_limit = (
+                            (canonical_bytes + PAYLOAD_BYTES_PER_PKT - 1)
+                            // PAYLOAD_BYTES_PER_PKT
+                            * PAYLOAD_BYTES_PER_PKT
+                        )
+                        remaining_intervals = max(
+                            0,
+                            (packet_aligned_limit - stream_bytes_assigned)
+                            // PAYLOAD_BYTES_PER_PKT,
+                        )
+                        gap_intervals_to_materialize = min(
+                            gap_intervals_to_materialize, remaining_intervals
+                        )
+                    # Canonical packet counters describe only intervals represented by
+                    # this capture.  A sequence gap beyond the exact logical boundary is
+                    # outside the acquisition and must not break receipt byte conservation.
+                    self.n_dropped += gap_intervals_to_materialize
+                    gap_bytes = gap_intervals_to_materialize * PAYLOAD_BYTES_PER_PKT
                     zeros = b"\x00" * gap_bytes
-                    buf.extend(zeros)
-                    if mirror:
-                        mirror.write(zeros)
+                    append_stream_bytes(zeros, valid=False)
                     self.zero_filled_bytes += gap_bytes
 
-                buf.extend(payload)
-                if mirror:
-                    mirror.write(payload)
-                self.n_received += 1
+                before_payload = stream_bytes_assigned
+                append_stream_bytes(payload, valid=True)
+                if stream_bytes_assigned - before_payload == PAYLOAD_BYTES_PER_PKT:
+                    self.n_received += 1
                 last_seq = seq
 
-                while len(buf) >= self._bytes_per_frame:
+                while len(buf) >= self._bytes_per_frame and (
+                    self._max_frames is None or self._frame_idx < self._max_frames
+                ):
+                    frame_start = self._frame_idx * self._bytes_per_frame
+                    frame_stop = frame_start + self._bytes_per_frame
+                    while (
+                        next_invalid_interval < len(invalid_intervals)
+                        and invalid_intervals[next_invalid_interval][1] <= frame_start
+                    ):
+                        next_invalid_interval += 1
+                    frame_is_valid = not (
+                        next_invalid_interval < len(invalid_intervals)
+                        and invalid_intervals[next_invalid_interval][0] < frame_stop
+                    )
                     frame_bytes = bytes(buf[: self._bytes_per_frame])
                     del buf[: self._bytes_per_frame]
+                    self.frame_validity.append(frame_is_valid)
                     try:
                         self._q.put_nowait((self._frame_idx, self._decode_frame(frame_bytes)))
                     except queue.Full:
                         pass
                     self._frame_idx += 1
+                if self._max_frames is not None and self._frame_idx >= self._max_frames:
+                    self._stop.set()
         finally:
             # Frame-align the mirror by dropping any trailing partial frame, so
             # read_adc_bin can load it. This is cheap (a truncate, no read) and
@@ -331,24 +408,29 @@ class LiveFrameSource(FrameSource):
                 mirror.close()
                 if self._raw_mirror_path and self._raw_mirror_path.exists():
                     size = self._raw_mirror_path.stat().st_size
-                    remainder = size % self._bytes_per_frame
-                    if remainder:
+                    target_size = (
+                        self._max_frames * self._bytes_per_frame
+                        if self._max_frames is not None
+                        and self._frame_idx >= self._max_frames
+                        else size - size % self._bytes_per_frame
+                    )
+                    truncated = max(0, size - target_size)
+                    if truncated:
                         with self._raw_mirror_path.open("r+b") as fh:
-                            fh.truncate(size - remainder)
-                        self.mirror_truncated_bytes = remainder
+                            fh.truncate(target_size)
+                        self.mirror_truncated_bytes = truncated
 
     def frame0_epoch_utc(self, frame_rate_hz: float) -> float | None:
-        """True UTC epoch of frame 0, or None if no packet ever arrived.
-
-        Corrects the first-packet timestamp backwards by any *leading* zero-fill: when the
-        stream is joined after sequence 1, those missing packets are zero-filled into the
-        buffer, so the data that becomes frame 0 actually began before the first packet we
-        saw. Mid-stream gaps do not shift the origin and are excluded.
-        """
+        """Observed frame-index-0 start-assignment UTC, never an inferred sensing time."""
+        if self.frame0_start_assignment_utc is not None:
+            return self.frame0_start_assignment_utc
+        # Compatibility for pre-M2 fixture objects which set only the historical fields.
+        # The live M2 loop always sets frame0_start_assignment_utc, so prospective artifacts
+        # never take this inferred/backdated branch.
         if self.t_first_packet_utc is None:
             return None
-        lead_frames = self.leading_zero_filled_bytes / self._bytes_per_frame
-        return self.t_first_packet_utc - lead_frames / float(frame_rate_hz)
+        leading_frames = self.leading_zero_filled_bytes / self._bytes_per_frame
+        return self.t_first_packet_utc - leading_frames / float(frame_rate_hz)
 
     def get_frame(self, timeout_s: float = 0.0):
         try:
@@ -656,11 +738,151 @@ def _parse_args():
     ap.add_argument("--duration-s", type=float, default=None)
     ap.add_argument("--no-configure", action="store_true")
     ap.add_argument(
+        "--prospective-sidecar",
+        type=Path,
+        default=None,
+        help="Validated M2 acquisition YAML; enables the strict prospective live contract.",
+    )
+    ap.add_argument(
+        "--cohort-registry",
+        type=Path,
+        default=None,
+        help="Immutable M2 cohort registry revision bound by a prospective capture.",
+    )
+    ap.add_argument(
+        "--recovery-seated-start-utc",
+        type=float,
+        default=None,
+        help=(
+            "Synchronized-PC UTC epoch seconds observed when the recovery participant "
+            "is seated; required only for prospective recovery."
+        ),
+    )
+    ap.add_argument(
         "--headless",
         action="store_true",
         help="Run without the Matplotlib display; intended for replay artifact smoke tests.",
     )
     return ap.parse_args()
+
+
+def _prospective_start_delay_s(metadata: dict | None) -> int:
+    """Legacy countdown duration; recovery capture must begin without a 60 s wait."""
+    if metadata is not None and metadata.get("arm") == "recovery":
+        return 0
+    return 60
+
+
+def _derive_recovery_timing(
+    metadata: dict,
+    recovery_seated_start_utc: float | None,
+    frame0_epoch_utc: float | None,
+) -> dict[str, float | str]:
+    """Bind the observed seating event to frame 0 and derive the actual delay."""
+    if metadata.get("arm") != "recovery":
+        if recovery_seated_start_utc is not None:
+            raise ValueError("--recovery-seated-start-utc is valid only for recovery")
+        return {}
+    if (
+        type(recovery_seated_start_utc) not in (int, float)
+        or not math.isfinite(float(recovery_seated_start_utc))
+    ):
+        raise ValueError("prospective recovery requires a finite seated-start UTC epoch")
+    if type(frame0_epoch_utc) not in (int, float) or not math.isfinite(
+        float(frame0_epoch_utc)
+    ):
+        raise ValueError("prospective recovery requires an observed frame-0 UTC epoch")
+    seated_start_utc = float(recovery_seated_start_utc)
+    frame0_utc = float(frame0_epoch_utc)
+    delay_s = frame0_utc - seated_start_utc
+    if delay_s < 0.0:
+        raise ValueError("recovery seated-start UTC cannot be after frame 0")
+    return {
+        "recovery_seated_start_utc": seated_start_utc,
+        "recovery_seated_start_event_source": RECOVERY_SEATED_START_SOURCE,
+        "sit_to_record_delay_s": delay_s,
+    }
+
+
+def _validate_prospective_cli(args, cfg: dict, cfg_path: Path, git: dict) -> dict | None:
+    """Fail before hardware access if a prospective invocation can drift from protocol."""
+    if args.prospective_sidecar is None:
+        if args.cohort_registry is not None:
+            raise ValueError("--cohort-registry requires --prospective-sidecar")
+        return None
+
+    from src.m2.acquisition_metadata import Arm, DataRole, load_sidecar
+    from src.m2.cohort_registry import load_registry, validate_membership
+
+    metadata = load_sidecar(args.prospective_sidecar)
+    default_config = (_ROOT / "scripts" / "live_demo_config.yaml").resolve()
+    violations: list[str] = []
+    recovery_start_utc = getattr(args, "recovery_seated_start_utc", None)
+    if metadata["arm"] == "recovery":
+        if metadata.get("stopping_event_category") != "target_reached":
+            violations.append(
+                "recovery live acquisition requires stopping_event_category=target_reached; "
+                "participant/safety stops must use a non-acquisition record"
+            )
+        if (
+            type(recovery_start_utc) not in (int, float)
+            or not math.isfinite(float(recovery_start_utc))
+            or (
+                not metadata.get("synthetic_fixture", False)
+                and float(recovery_start_utc) > time.time()
+            )
+        ):
+            violations.append(
+                "prospective recovery requires a finite, non-future "
+                "--recovery-seated-start-utc"
+            )
+    elif recovery_start_utc is not None:
+        violations.append("--recovery-seated-start-utc is valid only for recovery")
+    if args.live_session is None or args.live_session != metadata["session_id"]:
+        violations.append("--live-session must equal the acquisition sidecar session_id")
+    if args.replay_session is not None or args.replay_paths:
+        violations.append("replay is forbidden in prospective study mode")
+    if args.replay_fast:
+        violations.append("--replay-fast is forbidden in prospective study mode")
+    if args.locked_bin is not None:
+        violations.append("--locked-bin is forbidden; warmup auto-lock is mandatory")
+    if args.no_configure:
+        violations.append("--no-configure is forbidden in prospective study mode")
+    if cfg_path.resolve() != default_config:
+        violations.append("prospective study mode forbids capture-config overrides")
+    if args.duration_s != 600.0:
+        violations.append("--duration-s must be exactly 600")
+    if not bool(cfg.get("bin_selection", {}).get("enabled")):
+        violations.append("bin_selection.enabled must be true")
+    if cfg.get("session", {}).get("locked_bin") is not None:
+        violations.append("session.locked_bin must be null for automatic warmup selection")
+    if args.cohort_registry is None:
+        violations.append("--cohort-registry is required in prospective study mode")
+    else:
+        registry = load_registry(args.cohort_registry)
+        arm = Arm(metadata["arm"])
+        validate_membership(
+            args.cohort_registry,
+            subject_id=str(metadata["subject_id"]),
+            cohort_slot=int(metadata["cohort_slot"]),
+            data_role=DataRole(metadata["data_role"]),
+            session_id=str(metadata["session_id"]),
+            arm=arm,
+        )
+        if arm is Arm.PACED:
+            subject = next(
+                row for row in registry["subjects"]
+                if row["subject_id"] == metadata["subject_id"]
+            )
+            if metadata["commanded_rate_bpm"] != subject["paced_rate_bpm"]:
+                violations.append(
+                    "paced commanded rate disagrees with the fixed cohort registry assignment"
+                )
+    if git.get("git_commit") == "unknown" or git.get("git_dirty") is not False:
+        violations.append("prospective capture requires a known clean git commit")
+    if violations:
+        raise ValueError("prospective capture contract failed: " + "; ".join(violations))
+    return metadata
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -674,14 +896,19 @@ def main() -> None:
     with cfg_path.open() as fh:
         cfg = yaml.safe_load(fh)
 
-    delay_s = 60
-    
+    np.random.seed(int(cfg.get("seed", 42)))
+
+    git = _git_info()
+    try:
+        prospective_metadata = _validate_prospective_cli(args, cfg, cfg_path, git)
+    except ValueError as exc:
+        sys.exit(f"ERROR: {exc}")
+
+    delay_s = _prospective_start_delay_s(prospective_metadata)
     if delay_s > 0:
         for remaining in range(int(delay_s), 0, -1):
             print(f"Starting capture in {remaining} s...")
             time.sleep(1)
-
-    np.random.seed(int(cfg.get("seed", 42)))
 
     # Backend must be selected before pyplot is imported anywhere
     if args.headless:
@@ -697,7 +924,9 @@ def main() -> None:
         mode = "replay"
 
     # ── Session metadata from manifest ────────────────────────────────────────
-    manifest = _load_manifest(Path(cfg["paths"]["manifest"]))
+    # Prospective acquisition uses the validated sidecar as its sole study-metadata source;
+    # the legacy local CSV remains only for historical/replay workflows.
+    manifest = [] if prospective_metadata is not None else _load_manifest(Path(cfg["paths"]["manifest"]))
     session_id = "unknown"
     session_row: dict | None = None
     manifest_locked_bin: int | None = None
@@ -711,6 +940,11 @@ def main() -> None:
     elif args.live_session:
         session_id = args.live_session
         session_row = _find_session(manifest, session_id)
+
+    if prospective_metadata is not None:
+        session_id = str(prospective_metadata["session_id"])
+        posture = str(prospective_metadata["posture"])
+        distance_cm = f"{100.0 * float(prospective_metadata['distance_m']):.6g}"
 
     if session_row:
         lb_str = session_row.get("locked_bin", "").strip()
@@ -767,16 +1001,24 @@ def main() -> None:
     run_dir = _create_run_dir(results_dir, mode, session_id)
     print(f"Run directory: {run_dir}")
     warmup_selection_path = run_dir / "warmup_bin_selection.json"
+    if prospective_metadata is not None:
+        from src.m2.capture_artifacts import prepare_capture_inputs
+
+        prepare_capture_inputs(
+            run_dir,
+            source_config_path=cfg_path,
+            effective_config=cfg,
+            acquisition_sidecar_path=args.prospective_sidecar,
+        )
 
     # ── Initial run_metadata.json ─────────────────────────────────────────────
-    git = _git_info()
     run_meta: dict = {
         "command": " ".join(sys.argv),
+        "exact_cli_invocation": list(sys.argv),
         "start_wall_utc": datetime.now(timezone.utc).isoformat(),
         "end_wall_utc": None,
-        # Set at the end of a live run from the actual first-packet timestamp. NOT the same
-        # as start_wall_utc, which is written above — before the DCA1000 and IWR1642 are
-        # configured, so it precedes frame 0 by seconds.
+        # Set at the end of a live run from the exact frame-index-0 start-assignment event.
+        # This is not start_wall_utc, which precedes hardware configuration by seconds.
         "frame0_epoch_utc": None,
         "frame0_epoch_source": None,
         "mode": mode,
@@ -802,6 +1044,21 @@ def main() -> None:
         "raw_stream_format": "adc_bytes_no_packet_headers",
         "live_raw_mirror_hash": None,
         "live_packet_stats": None,
+        "prospective_study_mode": prospective_metadata is not None,
+        "acquisition_metadata": prospective_metadata,
+        "recovery_seated_start_utc": (
+            float(args.recovery_seated_start_utc)
+            if prospective_metadata is not None
+            and prospective_metadata["arm"] == "recovery"
+            else None
+        ),
+        "recovery_seated_start_event_source": (
+            RECOVERY_SEATED_START_SOURCE
+            if prospective_metadata is not None
+            and prospective_metadata["arm"] == "recovery"
+            else None
+        ),
+        "exact_cli_invocation": list(sys.argv),
         **git,
     }
     meta_path = run_dir / "run_metadata.json"
@@ -872,6 +1129,7 @@ def main() -> None:
                 sock_dat=dca._sock_dat,
                 zero_fill_leading_loss=True,
                 raw_mirror_path=raw_mirror,
+                max_frames=12_000 if prospective_metadata is not None else None,
             )
         else:
             print("--no-configure: attaching to already-running stream.")
@@ -880,6 +1138,7 @@ def main() -> None:
                 net_cfg=net_cfg,
                 zero_fill_leading_loss=False,
                 raw_mirror_path=raw_mirror,
+                max_frames=12_000 if prospective_metadata is not None else None,
             )
 
         frame_source.start()
@@ -935,7 +1194,24 @@ def main() -> None:
         run_meta["end_wall_utc"] = datetime.now(timezone.utc).isoformat()
         run_meta["completion_status"] = "completed"
         if mode == "live" and isinstance(frame_source, LiveFrameSource):
+            validity_path = run_dir / "frame_validity.npy"
+            np.save(validity_path, np.asarray(frame_source.frame_validity, dtype=np.bool_))
             run_meta["live_packet_stats"] = {
+                "packets_received": frame_source.n_received,
+                "packets_dropped": frame_source.n_dropped,
+                "packets_short_discarded": frame_source.packets_short_discarded,
+                "packets_duplicate_or_late_discarded": (
+                    frame_source.packets_duplicate_or_late_discarded
+                ),
+                "n_frames": len(frame_source.frame_validity),
+                "n_invalid_frames": int(
+                    np.count_nonzero(~np.asarray(frame_source.frame_validity, dtype=np.bool_))
+                ),
+                "trailing_partial_frame_bytes": frame_source.mirror_truncated_bytes,
+                "bytes_per_frame": frame_source._bytes_per_frame,
+                "frame_validity_map_path": validity_path.name,
+                "frame_validity_map_sha256": _sha256_file(validity_path),
+                # Historical aliases retained for old live-run diagnostics only.
                 "n_received": frame_source.n_received,
                 "n_dropped": frame_source.n_dropped,
                 "zero_filled_bytes": frame_source.zero_filled_bytes,
@@ -948,9 +1224,30 @@ def main() -> None:
             _f0 = frame_source.frame0_epoch_utc(float(cfg["session"]["frame_rate_hz"]))
             run_meta["frame0_epoch_utc"] = _f0
             run_meta["frame0_epoch_source"] = (
-                "first_packet_receipt_minus_leading_zero_fill" if _f0 is not None else None
+                FRAME0_EVENT_SOURCE if _f0 is not None else None
+            )
+            if prospective_metadata is not None and prospective_metadata["arm"] == "recovery":
+                run_meta.update(
+                    _derive_recovery_timing(
+                        prospective_metadata,
+                        args.recovery_seated_start_utc,
+                        _f0,
+                    )
+                )
+            raw_mirror_path = run_dir / "adc_stream.bin"
+            run_meta["live_raw_mirror_hash"] = (
+                _sha256_file(raw_mirror_path) if raw_mirror_path.is_file() else None
             )
         _write_metadata(meta_path, run_meta)
+        if prospective_metadata is not None:
+            from src.m2.capture_artifacts import write_sealed_radar_receipt
+
+            write_sealed_radar_receipt(
+                run_dir,
+                acquisition_sidecar_path=args.prospective_sidecar,
+                cohort_registry_path=args.cohort_registry,
+                exact_cli_invocation=list(sys.argv),
+            )
         print(f"Artifacts: {run_dir}")
 
     # ── Safe figure close (must be called from within the animation callback) ──

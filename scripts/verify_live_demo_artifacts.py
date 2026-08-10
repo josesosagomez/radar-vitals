@@ -11,6 +11,8 @@ import json
 import math
 from pathlib import Path
 
+import numpy as np
+
 
 def _load_json(path: Path) -> dict:
     with path.open("r", encoding="utf-8") as fh:
@@ -127,6 +129,7 @@ def verify_run(run_dir: Path, expect_mode: str | None = None) -> int:
 
     if expect_mode == "live":
         packet_stats = meta.get("live_packet_stats") or {}
+        packets_received = packet_stats.get("packets_received", packet_stats.get("n_received", 0))
         checks.extend([
             _check(
                 "live_raw_mirror_hash_present",
@@ -140,10 +143,50 @@ def verify_run(run_dir: Path, expect_mode: str | None = None) -> int:
             ),
             _check(
                 "live_packets_received",
-                int(packet_stats.get("n_received", 0)) > 0,
-                f"n_received={packet_stats.get('n_received')}",
+                int(packets_received) > 0,
+                f"packets_received={packets_received}",
             ),
         ])
+
+        if meta.get("prospective_study_mode"):
+            validity_path = run_dir / "frame_validity.npy"
+            receipt_path = run_dir / "sealed_radar_receipt.json"
+            checks.extend([
+                _check(
+                    "prospective_frame0_event",
+                    meta.get("frame0_epoch_source")
+                    == "frame_index_0_start_assignment_pc_utc",
+                    str(meta.get("frame0_epoch_source")),
+                ),
+                _check("frame_validity_exists", validity_path.is_file(), str(validity_path)),
+                _check("sealed_radar_receipt_exists", receipt_path.is_file(), str(receipt_path)),
+                _check(
+                    "capture_commit_clean",
+                    meta.get("git_dirty") is False and meta.get("git_commit") not in {None, "unknown"},
+                    f"commit={meta.get('git_commit')!r} dirty={meta.get('git_dirty')!r}",
+                ),
+            ])
+            if validity_path.is_file():
+                validity = np.load(validity_path, allow_pickle=False)
+                checks.extend([
+                    _check(
+                        "frame_validity_boolean_1d",
+                        validity.dtype == np.bool_ and validity.ndim == 1,
+                        f"dtype={validity.dtype} shape={validity.shape}",
+                    ),
+                    _check(
+                        "frame_validity_count_matches",
+                        validity.size == int(packet_stats.get("n_frames", -1)),
+                        f"map={validity.size} n_frames={packet_stats.get('n_frames')}",
+                    ),
+                    _check(
+                        "frame_invalid_count_matches",
+                        int(np.count_nonzero(~validity))
+                        == int(packet_stats.get("n_invalid_frames", -1)),
+                        f"map_invalid={int(np.count_nonzero(~validity))} "
+                        f"metadata={packet_stats.get('n_invalid_frames')}",
+                    ),
+                ])
 
     if rows and selected_candidate is not None and not selected_candidate.get("failed"):
         first = rows[0]
