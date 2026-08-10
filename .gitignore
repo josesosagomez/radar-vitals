@@ -11,6 +11,7 @@ __pycache__/
 # Large raw/processed data — keep the folder, ignore big blobs.
 # Radar captures and exports can be huge; track configs + metrics, not raw binaries.
 data*/
+m2_capture_work*/
 
 # Results: keep configs + metrics (json/yaml), ignore heavy artifacts
 results*/
