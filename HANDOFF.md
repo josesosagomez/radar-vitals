@@ -36,10 +36,11 @@ Cohort registry: `cohort_registry/registry_v001.json`, revision 1, digest
 `e1bf942ff8bfbdd2b9f4b92e448099142058805bc8d0213576db12d8a3689a7c`, all 45 sessions `state: planned`,
 all subjects `label_state: sealed`.
 
-**Test state.** Verified today: `tests/test_m2_cohort_registry.py` + `tests/test_m2_capture_artifacts.py`
-= **131 passed**. A full-suite baseline run is in flight and its number is **not yet recorded**. The
-"3139 passed" figure quoted in earlier notes was measured at `da3287d`, predates several commits, and
-three countdown tests were red in between — treat it as unverified until the baseline lands.
+**Test state — milestone-0 baseline, measured 2026-08-12.** Full suite: **3140 passed, 5 skipped** in
+231 s, under `conda run -n radar-vitals python -m pytest -q` with the default temp directory. This is
+the reference point for acceptance criterion 7 of the scaffold plan. Consistency check: the earlier
+`da3287d` figure was 3139 passed, and exactly one test was added since (the registry guard), so
+nothing vanished in between.
 
 ## 3. Active task / next steps
 

@@ -11545,6 +11545,20 @@ countdown disagreement found while doing so.
   it joins the seated stage, at a known ramp cost); the tool stamps the recovery seating epoch itself
   as the seated stage's first action, before the distance measurement, so the recorded delay is honest
   rather than flattering; `sit_to_record_delay_s` gets no bound yet — observe real values first.
+- **Milestone-0 baseline recorded: full suite 3140 passed, 5 skipped in 231 s** under
+  `conda run -n radar-vitals python -m pytest -q`. Consistency check: the `da3287d` figure was 3139
+  passed and exactly one test was added since (the registry guard), so no test vanished across the
+  intervening commits. Commits `e04ae16` (registry restore), `1db9d8d` (countdown), `289d5b3` (plan),
+  `01f0905` (guard test), `bf1e51e` (runbook + HANDOFF) are pushed.
+- **A first baseline attempt was invalid, and the cause was the invocation, not the repository.**
+  Passing a single shared `--basetemp` produced **25 spurious failures** across
+  `tests/test_m8_ahmed_provenance.py` (19), `tests/test_m1_production_scoring.py` (5) and
+  `tests/test_m4_preflight_strict.py` (1). Those tests build throwaway git repositories in temp dirs,
+  and funnelling them through one temp parent collides. Re-running two of them with the default temp
+  gave 2 passed, which is what identified the cause. The earlier HANDOFF note about needing "separate
+  writable temp parents for outer and nested pytest" was applied backwards — a *shared* parent is
+  exactly the failure it warns about. No number from the bad run was written to any file. The correct
+  invocation is now recorded in `HANDOFF.md` section 3 so the next run does not repeat it.
 - **Revision 3 written**, applying every second-review finding plus those decisions: the seated stage
   is now 9 fields collected as 4 inputs, the tool stamps the epoch (which also deletes the PowerShell
   culture-format workaround and is what makes the recovery launch path testable), per-stage artifacts
