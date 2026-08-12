@@ -9,9 +9,13 @@ M3 work or any change to the HR estimator.
 1. Review and commit the M2 engineering changes and initial cohort registry. A prospective run is
    intentionally rejected unless `git status --short` is empty and `git rev-parse HEAD` is known.
 2. Verify `cohort_registry/registry_v001.json.sha256` equals the SHA-256 of the exact JSON bytes.
-3. Keep each editable acquisition/finalization YAML and settle-evidence file **outside the Git
-   checkout** (for example, `C:\m2_capture_work\P001_natural\`). Editing an in-repository sidecar
-   would make the capture checkout dirty and the live command would refuse to start.
+3. Keep each editable acquisition/finalization YAML and settle-evidence file either **outside the Git
+   checkout** or under the gitignored in-repository work root `m2_capture_work/` — for example
+   `m2_capture_work\P001_natural\`. `.gitignore` ignores `m2_capture_work*/`, so files there do not
+   make the checkout dirty. An editable sidecar anywhere else in the repository would, and the live
+   command would then refuse to start. Note that gitignored is **not** the same as outside the
+   checkout: a forced `git add -f`, an `-A -f` sweep or a repository archive would still pick these
+   files up, so keep `scene_non_health_notes` free of any identifying detail.
 4. Assign `P001` through `P015` strictly by enrolment order. Never change the registry's slot,
    role, paced-rate assignment, or subject ID. `P001`-`P005` are representation validation;
    `P006`-`P015` are final evaluation.
@@ -98,7 +102,7 @@ C:\ProgramData\anaconda3\Scripts\conda.exe run -n radar-vitals --no-capture-outp
   python scripts/live_demo.py `
   --live-session P001_natural `
   --duration-s 600 `
-  --prospective-sidecar C:\m2_capture_work\P001_natural\acquisition.yaml `
+  --prospective-sidecar m2_capture_work\P001_natural\acquisition.yaml `
   --cohort-registry cohort_registry\registry_v001.json
 ```
 
@@ -117,10 +121,16 @@ C:\ProgramData\anaconda3\Scripts\conda.exe run -n radar-vitals --no-capture-outp
   python scripts/live_demo.py `
   --live-session P001_recovery `
   --duration-s 600 `
-  --prospective-sidecar C:\m2_capture_work\P001_recovery\acquisition.yaml `
+  --prospective-sidecar m2_capture_work\P001_recovery\acquisition.yaml `
   --cohort-registry cohort_registry\registry_v001.json `
   --recovery-seated-start-utc $recoverySeatedStartUtc
 ```
+
+> **Pending change, not yet active.** The manual `$recoverySeatedStartUtc` assignment above is the
+> current procedure and remains correct today. `plans/m2_sidecar_scaffold.md` (D-OWN-5, D13) decides
+> that `scripts/m2_scaffold_sidecar.py measure --stage seated` will stamp this epoch itself, as its
+> first action, so it cannot be mistyped or culture-formatted. That script **does not exist yet**.
+> Keep following the manual procedure until it ships, at which point this section is replaced.
 
 Do not add `--locked-bin`, `--no-configure`, `--replay`, `--replay-session`, `--replay-fast`, a
 non-default `--config`, or any duration other than 600. Natural and paced have the fixed 30-second
@@ -167,9 +177,9 @@ create a new immutable promoted directory. For an acquired reference:
 ```powershell
 C:\ProgramData\anaconda3\Scripts\conda.exe run -n radar-vitals --no-capture-output `
   python scripts/m2_finalize_capture.py results\live_demo\<RUN_DIR> `
-  --finalization-sidecar C:\m2_capture_work\P001_natural\finalization.yaml `
+  --finalization-sidecar m2_capture_work\P001_natural\finalization.yaml `
   --cohort-registry cohort_registry\registry_v002.json `
-  --reference C:\m2_capture_work\P001_natural\P001_natural_reference.csv `
+  --reference m2_capture_work\P001_natural\P001_natural_reference.csv `
   --destination data\raw\prospective\P001_natural
 
 C:\ProgramData\anaconda3\Scripts\conda.exe run -n radar-vitals --no-capture-output `
