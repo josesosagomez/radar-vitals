@@ -65,6 +65,27 @@ def _atomic_stage1(tmp_path: Path, registry: Path, *, subject_id: str = "P001"):
     return next_registry, audit, reference, capability
 
 
+def test_committed_registry_and_digest_sidecar_exist_on_disk():
+    """Guard the precondition every other M2 registry test assumes.
+
+    Commit a5edecc deleted the canonical registry and its digest sidecar. The result was 68
+    failures across this file and tests/test_m2_capture_artifacts.py, all surfacing as
+    FileNotFoundError inside unrelated helpers rather than as a clear statement of what was
+    wrong. This test fails first and says so directly.
+    """
+    digest_path = DEFAULT_REGISTRY_PATH.with_suffix(DEFAULT_REGISTRY_PATH.suffix + ".sha256")
+    assert DEFAULT_REGISTRY_PATH.is_file(), (
+        f"{DEFAULT_REGISTRY_PATH} is missing: no prospective capture can start without it, "
+        "and --cohort-registry is mandatory in prospective study mode"
+    )
+    assert digest_path.is_file(), (
+        f"{digest_path} is missing: load_registry treats the digest sidecar as mandatory"
+    )
+    assert digest_path.read_text(encoding="ascii").strip() == sha256_file(DEFAULT_REGISTRY_PATH), (
+        "registry digest sidecar does not match the exact registry bytes"
+    )
+
+
 def test_committed_registry_materializes_exact_slots_roles_rates_and_arms():
     registry = load_registry()
     assert len(registry["subjects"]) == 15
