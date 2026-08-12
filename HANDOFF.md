@@ -79,8 +79,8 @@ Initial registry SHA-256:
   Masimo agreement, or reference values to choose DSP or alignment.
 - Packet loss flags the session; the Boolean frame map decides affected radar-NaN windows. It does
   not authorize retry.
-- Natural and paced require the numeric 60-second settle evidence and retain the 60-second command
-  countdown. Recovery explicitly does not; after live Masimo exertion-stop PR reaches 100-120 bpm,
+- Natural and paced require the numeric 60-second settle evidence and retain the 30-second command
+  countdown (the settle window is 60 s; the launch countdown is 30 s — different quantities). Recovery explicitly does not; after live Masimo exertion-stop PR reaches 100-120 bpm,
   record synchronized seating UTC, start with no countdown, and retain the derived seat-to-frame-0
   delay.
 - Low warmup confidence, missing reference, recovery adequacy/yield, radar coverage and agreement

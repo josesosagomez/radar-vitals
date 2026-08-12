@@ -767,7 +767,7 @@ def _parse_args():
 
 
 def _prospective_start_delay_s(metadata: dict | None) -> int:
-    """Legacy countdown duration; recovery capture must begin without a 60 s wait."""
+    """Fixed 30 s natural/paced countdown; recovery capture must begin with no wait."""
     if metadata is not None and metadata.get("arm") == "recovery":
         return 0
     return 30

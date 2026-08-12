@@ -246,8 +246,8 @@ def test_prospective_start_delay_skips_countdown_only_for_recovery():
     helper = getattr(live_demo, "_prospective_start_delay_s", None)
     assert callable(helper), "prospective CLI needs a pure arm-specific countdown helper"
     assert helper(acquisition_metadata("recovery")) == 0
-    assert helper(acquisition_metadata("natural")) == 60
-    assert helper(acquisition_metadata("paced")) == 60
+    assert helper(acquisition_metadata("natural")) == 30
+    assert helper(acquisition_metadata("paced")) == 30
 
 
 def test_live_cli_parses_runtime_recovery_seating_timestamp(monkeypatch):
@@ -259,7 +259,7 @@ def test_live_cli_parses_runtime_recovery_seating_timestamp(monkeypatch):
     assert live_demo._parse_args().recovery_seated_start_utc == 1_700_000_000.25
 
 
-@pytest.mark.parametrize(("arm", "expected_sleeps"), [("recovery", 0), ("natural", 60), ("paced", 60)])
+@pytest.mark.parametrize(("arm", "expected_sleeps"), [("recovery", 0), ("natural", 30), ("paced", 30)])
 def test_main_applies_arm_specific_countdown_before_any_backend_or_hardware(
     monkeypatch, arm, expected_sleeps
 ):

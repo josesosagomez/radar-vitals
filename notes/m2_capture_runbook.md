@@ -123,7 +123,7 @@ C:\ProgramData\anaconda3\Scripts\conda.exe run -n radar-vitals --no-capture-outp
 ```
 
 Do not add `--locked-bin`, `--no-configure`, `--replay`, `--replay-session`, `--replay-fast`, a
-non-default `--config`, or any duration other than 600. Natural and paced have the fixed 60-second
+non-default `--config`, or any duration other than 600. Natural and paced have the fixed 30-second
 countdown; recovery has no countdown and requires `--recovery-seated-start-utc`. The command
 auto-locks the warmup bin, caps the canonical stream at exactly 12,000 frames, and writes the run to
 `results/live_demo/<timestamp>_live_<session_id>/`. Low warmup confidence is recorded; it is not a
