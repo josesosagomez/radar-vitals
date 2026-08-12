@@ -37,9 +37,16 @@ blocker-class items H1/H2/H6 land as described; those are §5 D1, §5 D13 and §
   re-identification keys, PAR-Q+ answers, eligibility reasons, diagnoses, symptoms,
   medication/pregnancy data, or consent/PIS paths.
 
-**Amended boundary.** Milestone A performs a **no-behavior-change constants extraction** inside
-`src/m2/acquisition_metadata.py` (§4). That is the single authorized exception; it adds named
-constants only and changes no validation outcome, in its own commit with its own code review.
+**Amended boundary.** Two authorized exceptions to "do not modify
+`src/m2/acquisition_metadata.py`", each in its own commit with its own independent code review:
+
+1. Milestone A's **no-behavior-change constants extraction** (§4) — named constants only, no
+   validation outcome changed.
+2. **[R4] D-OWN-7's settle-floor change** (§2) — `MIN_SETTLE_S` 60.0 → 120.0. This one **does**
+   change behaviour: it tightens admission. Authorized by the owner directly, not by this plan, and
+   recorded as D-OWN-7 because a behaviour change to the validator is otherwise outside the stop
+   boundary. An earlier draft made this edit without amending the boundary or recording the
+   decision, and the independent review rejected it on exactly that ground.
 
 **[R3] Explicit non-goal.** This tool cannot scaffold the engineering/synthetic dry-run path.
 `synthetic_fixture: true` requires a `T*`/`SYN*` subject
@@ -65,6 +72,15 @@ This is operator tooling. It produces no scientific result and changes no metric
   `notes/m2_capture_runbook.md` §4 must be reworded accordingly (§11).
 - **[R3] D-OWN-6** (2026-08-12). `sit_to_record_delay_s` gets **no bound yet** — observe real values
   first. The tool therefore records the delay and its own seated-stage duration every session (§5 D13).
+- **[R4] D-OWN-7** (2026-08-12). **Natural and paced settle is always at least 120 s**; the
+  participant needs that long to stabilize. `MIN_SETTLE_S` raised 60.0 → 120.0, added to
+  `notes/protocol.md` as SETTLE CRITERION limb 3, and this amends the §1 stop boundary. Three
+  sub-decisions: the 120 s figure is **operator judgement, not measurement-derived**, and the protocol
+  says so explicitly so the paper cannot inherit it as an empirical settling time; the floor binds
+  **natural and paced only**, not diagnostic captures; and for paced the 120 s of metronome pacing
+  **counts toward** the settle, so pre-record time is ~120 s, not 240 s. Recovery is unaffected — it
+  has no settle time at all, since recording starts as the subject sits, and the validator already
+  rejects every settle field for that arm.
 
 ## 3. Milestone 0 — restore the registry and reach a clean, baselined tree
 
@@ -128,13 +144,20 @@ agreement metrics. `tests/test_m2_acquisition_metadata.py` pins them equal so a 
 Beware the near-transposed spellings: M4's `SETTLE_MAX_PR_SPREAD_BPM` is this module's
 `SETTLE_SPREAD_MAX_BPM`.
 
-**[R4] `MIN_SETTLE_S` is derived, not protocol-sourced.** `notes/protocol.md:201` fixes the 60 s
-evidence window and `:210` only requires settle duration to be *recorded*; no independent lower bound
-exists. It equals the window because a continuous 60 s of evidence cannot be demonstrated inside a
-shorter settle. It must never be set below `SETTLE_EVIDENCE_WINDOW_S` — nothing validates
-`settle_duration_s >= settle_evidence_window_s`, so a lower value would admit a criterion the session
-cannot have demonstrated, sealed permanently into the cohort. A test guards the constant; adding the
-input cross-check is a behaviour change for its own commit (§11).
+**[R4, superseded by D-OWN-7] `MIN_SETTLE_S` is now 120.0 and protocol-sourced.** At the time of the
+extraction it was 60.0 and *derived*: `notes/protocol.md` fixed only the 60 s evidence window and
+required settle duration merely to be *recorded*, so the floor equalled the window and a capture whose
+entire settle **was** the evidence window was admissible. D-OWN-7 replaced that with an explicit
+protocol limb 3 at 120 s. Consequences recorded here so the two are not confused later:
+
+- The floor is now stated in `notes/protocol.md` as limb 3, attributed to operator judgement rather
+  than measurement.
+- The `settle_duration_s >= settle_evidence_window_s` cross-check that §11 previously listed as
+  pending is now **unreachable**, since 120.0 > 60.0 and the window is pinned by equality. It is not
+  outstanding work; implementing it would be dead code.
+- A **new** gap takes its place: there is no `MAX_SETTLE_S`, while the protocol aborts a settle that
+  exceeds 5 minutes. Only the lower bound is enforced, so `settle_duration_s: 3600.0` is admitted.
+  Named as a follow-up in §11.
 
 **Validation, met.** M2 subset 333 passed before and after; full suite 3140 passed before and after
 the extraction itself; no comparison operator or literal value changed; every rendered message
@@ -479,9 +502,10 @@ rejected at [:257-259](../src/m2/acquisition_metadata.py#L257-L259).
    which would pass vacuously.
 4. Boundary rejection, one case each: `distance_m` 0.79/1.41; `clock_offset_start_s` ±1.01;
    `settle_pr_spread_bpm` 5.1; `settle_pr_drift_bpm` 3.1; `exertion_stop_pr_bpm` 99.9/120.1;
-   `settle_duration_s` 59.9; `paced_settle_duration_s` 119.9; `br_stability_duration_s` 59.9. Plus the
-   **accepted inclusive** values explicitly: 0.80/1.40, ±1.00, 5.0, 3.0, 60.0, 120.0, 60.0,
-   100.0/120.0. Plus a negative-PR case.
+   `settle_duration_s` 119.9 (**[R4]** the floor is 120 s per D-OWN-7, not 60);
+   `paced_settle_duration_s` 119.9; `br_stability_duration_s` 59.9. Plus the **accepted inclusive**
+   values explicitly: 0.80/1.40, ±1.00, 5.0, 3.0, 60.0 window, 120.0 settle, 120.0 paced settle,
+   60.0 BR stability, 100.0/120.0. Plus a negative-PR case.
 5. A rejected `measure` leaves **no** `acquisition.yaml` on disk (D3).
 6. `settle_evidence_sha256` equals `sha256_file`; a changed byte changes it. Missing, unreadable,
    zero-byte, **extensionless**, `.csv`-suffixed, and `expected_reference_basename`-named evidence each
@@ -565,11 +589,13 @@ review still covers the privacy schema, the staging boundary and the no-bypass p
 4. **Five follow-up diffs named, all outside this stop boundary:** adding the sidecar-vs-config
    cross-check to `_validate_prospective_cli` (D-M5); a CLI for the registry
    `withdrawn`/`recovery_not_cleared` states (§6.3); a retry-record contract before `--attempt`
-   can return (D8); **[R4]** a `settle_duration_s >= settle_evidence_window_s` cross-check (§4); and
-   **[R4]** a decision on whether M2 and M4 should share a protocol-constants module instead of
-   duplicating thresholds (§4). The last is an owner question: the M2/M4 split is deliberate per
-   `src/m2/__init__.py`, and the agreement test in `tests/test_m2_acquisition_metadata.py` holds
-   either way.
+   can return (D8); **[R4]** a `MAX_SETTLE_S` upper bound, since `notes/protocol.md` aborts a settle
+   over 5 minutes but only the lower bound is enforced (§4); and **[R4]** a decision on whether M2 and
+   M4 should share a protocol-constants module instead of duplicating thresholds (§4). The last is an
+   owner question: the M2/M4 split is deliberate per `src/m2/__init__.py`, and the agreement test in
+   `tests/test_m2_acquisition_metadata.py` holds either way — note it does **not** cover
+   `MIN_SETTLE_S`, which is why nothing warned when D-OWN-7 landed in M2 only and left M4's verbatim
+   transcription of the criterion two limbs of three.
 5. **The finalization sidecar has the same placeholder hazard, unfixed.**
    `templates/m2_finalization.yaml` ships `clock_offset_end_s: 0.0`, `final_pr_bpm: 70.0`,
    `post_monitoring_pr_bpm: 74.0` — schema-valid placeholders on the one artifact where a placeholder

@@ -48,6 +48,8 @@ continuous 60-second settle interval; put its relative path and lowercase SHA-25
 ### Natural
 
 - Let the seated subject breathe naturally.
+- Settle for **at least 120 seconds total** before recording. The 60-second evidence interval below
+  must fall inside that settled period, not constitute all of it.
 - Wait until one continuous 60-second Masimo interval has PR spread <=5 bpm and the difference
   between the first and last 20-second PR summaries is <=3 bpm.
 - Record settle duration, start PR, spread, drift, and the bound settle-evidence path/hash.
@@ -57,7 +59,9 @@ continuous 60-second settle interval; put its relative path and lowercase SHA-25
 - Use the subject's registry-assigned rate only: 12, 15, or 18 breaths/min. Set the metronome to
   exactly twice that rate (one beat per inhale/exhale).
 - Pace for at least 120 seconds before recording and confirm Masimo BR stability for at least
-  60 seconds. The same 60-second PR settle gate used for natural must also pass.
+  60 seconds. The same PR settle gate used for natural must also pass: **total settle >= 120 seconds**
+  with a continuous 60-second evidence interval inside it. The 120 seconds of pacing **counts toward**
+  that settle — the subject paces while PR settles, so pre-record time is ~120 seconds total, not 240.
 - Record resting PR and `abs(resting_pr_bpm - 4*commanded_rate_bpm)`. Do not change the assigned
   rate because of this margin.
 

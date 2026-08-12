@@ -83,6 +83,9 @@ def test_scene_notes_at_the_exact_character_limit_are_admitted():
     [
         ("natural", "distance_m", 0.79),
         ("natural", "distance_m", 1.41),
+        ("natural", "settle_duration_s", 119.9),
+        # 59.9 is a legacy pin: it was the admitted boundary while MIN_SETTLE_S was 60.0, before
+        # protocol limb 3 raised the floor to 120 s on 2026-08-12. Kept so a revert is visible.
         ("natural", "settle_duration_s", 59.9),
         ("natural", "settle_evidence_window_s", 60.1),
         ("natural", "settle_evidence_window_s", 59.9),
@@ -144,6 +147,17 @@ def test_threshold_messages_render_exactly(arm, field, value, message):
     with pytest.raises(ContractError) as excinfo:
         validate_acquisition_metadata(_with(arm, **{field: value}))
     assert str(excinfo.value) == message
+
+
+def test_settle_duration_rejection_names_the_120_s_floor():
+    """Pin the settle-floor message, which comes from require_number rather than this module.
+
+    Two reasons this needs its own test. The parametrized rejection above uses a bare `raises`, so
+    it would pass if the rejection came from an unrelated cause. And this message changed when the
+    floor moved from 60 to 120, which is exactly the drift the message pinning exists to catch.
+    """
+    with pytest.raises(ContractError, match=r"settle_duration_s must be >= 120\.0, got 119\.9"):
+        validate_acquisition_metadata(_with("natural", settle_duration_s=119.9))
 
 
 def test_scene_notes_message_renders_exactly():

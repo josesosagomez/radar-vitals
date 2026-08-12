@@ -156,11 +156,20 @@ PACKET_LOSS_FLAG_RATIO = 0.05
 #: Commanded paced rates, frozen by the M3R-31 rotation (12 -> 15 -> 18).
 PACED_RATES_BPM = (12, 15, 18)
 
-#: `notes/protocol.md` SETTLE CRITERION — "mandatory, every arm, no exceptions", transcribed
-#: verbatim (S12R-04). Capture must not start until **BOTH** hold, measured on the live Masimo:
+#: `notes/protocol.md` SETTLE CRITERION, transcribed (S12R-04). Capture must not start until
+#: **ALL THREE** hold:
 #:
-#:   1. **PR spread <= 5 bpm** (max - min) over a **continuous 60 s**; and
-#:   2. **no monotonic drift** — PR in the last 20 s differs from the first 20 s by **<= 3 bpm**.
+#:   1. **PR spread <= 5 bpm** (max - min) over a **continuous 60 s**, on the live Masimo; and
+#:   2. **no monotonic drift** — PR in the last 20 s differs from the first 20 s by **<= 3 bpm**,
+#:      on the live Masimo; and
+#:   3. **total settle >= 120 s** — elapsed seated time, natural and paced only (added 2026-08-12).
+#:
+#: Limb 3 is **not verifiable in this module and deliberately has no constant here**, for the same
+#: reason as the 60 s window below: `settle_duration_s` never reaches the scoring manifest —
+#: `src/m2/capture_artifacts.py` does not copy it into the v3 session record, so it survives only
+#: inside the sealed receipt's embedded acquisition metadata as evidence. Limb 3 is enforced once,
+#: at acquisition time, by `src/m2/acquisition_metadata.py` (`MIN_SETTLE_S`). Only limbs 1-2 are
+#: recomputed here.
 #:
 #: Both limbs are `<=`, so **5.0 and 3.0 exactly are PASSES** — the comparison below is `>`,
 #: and the equality boundary is tested on both sides. A bare operator-supplied
@@ -598,10 +607,14 @@ class SessionManifest:
 def derive_settle_result(fields: dict, session_id: str) -> tuple[bool, tuple[str, ...]]:
     """Derive the SETTLE CRITERION pass/fail from the measured primitives.
 
-    `notes/protocol.md` states both limbs numerically, so M4 recomputes them rather than
+    `notes/protocol.md` states limbs 1-2 numerically, so M4 recomputes them rather than
     accepting a declared verdict — a `settle_criterion_met` boolean would let the operator
     supply both the fact and the disposition it justifies, which is exactly the defect
     S12R-03 removed from `checksum_ok`.
+
+    Limb 3 (total settle >= 120 s) is **not evaluated here**: `settle_duration_s` never reaches
+    the scoring manifest. It is enforced at acquisition time by `src/m2/acquisition_metadata.py`.
+    So a `met` result from this function means limbs 1-2 hold, not the whole criterion.
 
     Returns `(met, failure_reasons)`. Both thresholds are **inclusive** (`<=` in the source),
     so the comparisons here are strict `>` and the boundary values pass.

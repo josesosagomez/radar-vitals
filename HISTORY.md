@@ -11603,6 +11603,54 @@ countdown disagreement found while doing so.
   formulas, and a re-typed *formula* fails later and less obviously than a re-typed threshold — it
   aborts at the serialization round trip after the operator has already answered the paced prompts.
 
+- **Behaviour change: natural/paced settle floor raised 60 s -> 120 s (owner decision D-OWN-7).**
+  `MIN_SETTLE_S` 60.0 -> 120.0, written into `notes/protocol.md` as SETTLE CRITERION **limb 3** and
+  into the runbook for both natural and paced. This **tightened admission**. Nothing was
+  retro-rejected: `data/raw/` and `m2_capture_work/` were empty, and every template and fixture
+  already carried 120.0. Three sub-decisions recorded: the 120 s figure is **operator judgement, not
+  measurement-derived**, and the protocol says so explicitly so the paper cannot inherit it as an
+  empirical settling time; the floor binds **natural and paced only**, not diagnostic captures; and
+  for paced the 120 s of metronome pacing **counts toward** the settle, so pre-record time is ~120 s,
+  not 240 s. Recovery is unaffected - it has no settle time at all, and the validator already rejects
+  every settle field for that arm. Evidence: full suite 3174 passed, 5 skipped; M2 subset green.
+- **The first attempt at that change was independently reviewed and REJECTED, correctly.** Four
+  substantive defects, all mine:
+  1. **Process.** `plans/m2_sidecar_scaffold.md` named milestone A's no-behaviour-change extraction as
+     the *single* authorized exception to modifying `src/m2/acquisition_metadata.py`, and listed an
+     admission-affecting edit to this very constant as a follow-up explicitly **outside** that stop
+     boundary. The change was made anyway, with no owner decision recorded and no boundary amendment.
+     Worse, plan section 4 then asserted the opposite of the code - that `MIN_SETTLE_S` was derived,
+     that no lower bound existed, that it equalled the window - which is what a future reader would
+     have used to revert it. Fixed: section 1 now names two authorized exceptions, section 2 records
+     D-OWN-7, section 4 is rewritten.
+  2. **`notes/protocol.md` still said "until BOTH hold"** with a third condition appended after the
+     list. That bolded sentence is what an operator reads at the chair, and it was false. Now three
+     numbered limbs and "ALL THREE".
+  3. **Runbook section 3 Paced was not updated although paced is gated**, and still said "the same
+     60-second PR settle gate used for natural must also pass" - an understatement of the natural
+     gate. An operator who settled a paced visit for 95 s would have discovered it at launch, mid
+     session, with only re-seat or edit-the-number available; the latter is exactly the fabrication
+     pressure CLAUDE.md section 4 guards against.
+  4. **The protocol change landed in M2 only**, immediately after a comment in that same file warning
+     that a protocol change must be applied in both M2 and M4 or acquisition and scoring disagree
+     silently. `src/m4/manifest.py` transcribed the criterion "verbatim" as exactly two limbs and its
+     `derive_settle_result` docstring said "both limbs"; both were then two-of-three. No behaviour
+     change was needed there - `settle_duration_s` never reaches the scoring manifest, because
+     `capture_artifacts.py` does not copy it into the v3 session record - but the transcription had to
+     say so. Note the M2/M4 agreement test does **not** cover `MIN_SETTLE_S`, which is why nothing
+     warned.
+- **Two things the review found that changed the work rather than just documenting it.** The
+  `settle_duration_s >= settle_evidence_window_s` cross-check previously listed as pending is now
+  **unreachable** (120.0 > 60.0, window pinned by equality), so implementing it would be dead code; it
+  is replaced in the plan by the real remaining gap, that no `MAX_SETTLE_S` exists while the protocol
+  aborts a settle over 5 minutes, so `settle_duration_s: 3600.0` is admitted. And the settle-floor
+  rejection message was unpinned despite that test module's premise being that a threshold change
+  cannot silently reword operator text - the parametrized case used a bare `raises` that would have
+  passed for any unrelated cause. Both addressed.
+- Also removed: the implementation history ("the validator floored it at 60 s") that the first draft
+  put into `notes/protocol.md`. It made the sourcing circular - the code cited the protocol while the
+  protocol cited the code - and per CLAUDE.md section 10.2 that narrative belongs here instead.
+
 **Failed / did not work, and why:**
 
 - **The full suite was red on HEAD before this session's edits**, not caused by them. The three

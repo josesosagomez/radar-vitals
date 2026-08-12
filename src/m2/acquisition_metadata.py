@@ -73,17 +73,33 @@ DISTANCE_MAX_M = 1.4
 #: module can verify it; M4 receives spread/drift already reduced over the window.
 SETTLE_EVIDENCE_WINDOW_S = 60.0
 
-#: DERIVED, not independently protocol-sourced.  A continuous SETTLE_EVIDENCE_WINDOW_S of evidence
-#: cannot be demonstrated inside a shorter total settle, so the minimum reported settle duration
-#: is the window itself.  notes/protocol.md:210 requires settle duration to be *recorded* and
-#: states no separate lower bound.
+#: notes/protocol.md SETTLE CRITERION limb 3: total settle >= 120 s.  Owner decision 2026-08-12
+#: based on operator judgement, NOT derived from measurement - see the protocol, which states this
+#: explicitly so the paper cannot inherit it as an empirical settling time.  Its purpose is that the
+#: SETTLE_EVIDENCE_WINDOW_S window sits inside a settled period rather than constituting all of it.
 #:
-#: MUST NOT be set below SETTLE_EVIDENCE_WINDOW_S.  Nothing checks
+#: Applies to natural and paced only.  Diagnostic captures are not bound by it (protocol limbs 1-2
+#: cover diagnostic, limb 3 does not).  Recovery is exempt from settle evidence entirely - it starts
+#: recording as the subject sits - and the validator rejects every settle field for that arm.  For
+#: paced, the >= 120 s of pacing counts toward this settle; the two are not sequential.
+#:
+#: Was 60.0 until 2026-08-12, derived from the window rather than protocol-sourced since no minimum
+#: was specified anywhere.  That floor admitted a capture whose entire settle *was* the evidence
+#: window.  Raising it tightened admission; no session existed at the time, so nothing was
+#: retro-rejected.
+#:
+#: MUST NOT be set below SETTLE_EVIDENCE_WINDOW_S: nothing checks
 #: settle_duration_s >= settle_evidence_window_s (the two are validated independently below), so a
 #: lower value would admit a sidecar declaring a 60 s continuous evidence window inside a shorter
-#: settle - a criterion it cannot have demonstrated, sealed permanently into the cohort.  Adding
-#: that cross-check is a behaviour change and belongs in its own commit.
-MIN_SETTLE_S = 60.0
+#: settle - a criterion it cannot have demonstrated, sealed permanently into the cohort.  At 120.0
+#: the cross-check is unreachable, so it is not pending work.
+#:
+#: There is deliberately NO MAX_SETTLE_S.  notes/protocol.md bounds settle above as well ("if the
+#: criterion is not met within 5 minutes, abort and re-seat"), so an admissible settle is 120-300 s,
+#: but only the lower bound is enforced here: settle_duration_s = 3600.0 is admitted and would seal a
+#: documented protocol violation into the cohort.  Pre-existing asymmetry; adding the upper bound is
+#: a behaviour change for its own commit.
+MIN_SETTLE_S = 120.0
 
 #: notes/protocol.md:201-202 SETTLE CRITERION, transcribed: PR spread <= 5 bpm over a continuous
 #: 60 s, and last-20 s vs first-20 s drift <= 3 bpm.  Both limbs are <=, so 5.0 and 3.0 exactly

@@ -196,16 +196,30 @@
 > excluded by the comparator — i.e. **an unsettled subject silently destroys the start of the
 > session.** "Confirm PR is stable" was too vague to prevent it.
 
-**Do not start the radar capture until BOTH hold, measured on the live Masimo:**
+**Do not start the radar capture until ALL THREE hold:**
 
-1. **PR spread ≤ 5 bpm** (max − min) over a **continuous 60 s**; and
-2. **no monotonic drift** — the PR in the last 20 s differs from the first 20 s by ≤ 3 bpm.
+1. **PR spread ≤ 5 bpm** (max − min) over a **continuous 60 s**, measured on the live Masimo; and
+2. **no monotonic drift** — the PR in the last 20 s differs from the first 20 s by ≤ 3 bpm, measured
+   on the live Masimo; and
+3. **total settle ≥ 120 s** — elapsed seated time before recording starts. Not a Masimo measurement,
+   and **natural and paced only** (see scope below).
+
+Limb 3 is an **owner decision of 2026-08-12, based on operator judgement — it is not derived from
+measurement.** Limbs 1–2 come from the measured 2026-07-13 failure described above; limb 3 does not,
+and must not be presented in the paper as an empirically determined settling time. Its purpose is
+that the 60 s evidence window sits *inside* a settled period rather than constituting the whole of
+it.
 
 Seated settling typically takes **2–3 minutes**. Budget it. If the criterion is not met within
-5 minutes, **abort and re-seat** — do not record and hope.
+5 minutes, **abort and re-seat** — do not record and hope. So admissible settle is 120–300 s.
 
-**This applies to natural, paced and diagnostic captures alike.** Recovery uses its explicit
-post-exertion start rule below; that is the only study-arm exemption.
+**Scope.** Limbs 1–2 apply to natural, paced and diagnostic captures alike. Limb 3 applies to
+**natural and paced only** — a diagnostic capture is not bound by the 120 s floor. Recovery is
+exempt from this section entirely and uses its explicit post-exertion start rule below; that is the
+only study-arm exemption.
+
+For paced, the ≥ 120 s of metronome pacing required before recording **counts toward** limb 3 — the
+subject paces while PR settles. Paced pre-record time is therefore ~120 s total, not 240 s.
 
 Record in `HISTORY.md`: settle duration, and the PR at the moment recording started.
 
