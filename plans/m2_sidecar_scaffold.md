@@ -103,21 +103,44 @@ The admission thresholds exist only as literals inside `validate_acquisition_met
 (line 361), `>=60.0` BR stability (line 362), 100.0/120.0 (line 392). `MAX_CLOCK_OFFSET_S` (line 46)
 is the only named one. Any range text this tool prints would be a second copy.
 
-Extract `SETTLE_EVIDENCE_WINDOW_S`, `DISTANCE_RANGE_M`, `SETTLE_SPREAD_MAX_BPM`,
-`SETTLE_DRIFT_MAX_BPM`, `MIN_SETTLE_S`, `MIN_PACED_SETTLE_S`, `MIN_BR_STABILITY_S`,
-`EXERTION_STOP_PR_RANGE_BPM`, and have both the validator and this tool read them.
+**[R4] DONE 2026-08-12.** Extracted with scalar min/max names rather than tuples, matching the
+existing precedent at `src/m4/manifest.py:142-143` and making a silent transposition impossible to
+write: `DISTANCE_MIN_M`/`DISTANCE_MAX_M`, `SETTLE_EVIDENCE_WINDOW_S`, `MIN_SETTLE_S`,
+`SETTLE_SPREAD_MAX_BPM`, `SETTLE_DRIFT_MAX_BPM`, `MIN_PACED_SETTLE_S`, `MIN_BR_STABILITY_S`,
+`EXERTION_STOP_PR_MIN_BPM`/`EXERTION_STOP_PR_MAX_BPM`, `MAX_SCENE_NOTES_CHARS`, and the three
+controlled vocabularies (as tuples — set iteration order over `str` is `PYTHONHASHSEED`-dependent and
+prompt order must be reproducible). Error messages are now built from the constants too, so changing
+a threshold cannot leave operator-facing text lying; every rendered message is pinned by test.
 
-**[R3] Additions from the second review:**
+**[R4] The derived formulas were extracted as well** — R3 missed them. §7 has the tool derive
+`metronome_rate_bpm` and compute `harmonic_collision_margin_bpm`, so leaving `2`, `4.0` and `1e-12`
+as bare literals would have left the tool re-typing a *formula*, which fails later and less obviously
+than a re-typed threshold: it aborts at the D3 round trip after the operator has already answered the
+paced prompts. Now `METRONOME_BEATS_PER_BREATH`, `RESPIRATION_HARMONIC_ORDER`,
+`HARMONIC_MARGIN_TOLERANCE_BPM`.
 
-- Also cover what the tool must *print* rather than re-type: the controlled vocabularies
-  `scene_description_category` (line 303), `disturbances_category` (line 314),
-  `stopping_event_category` (line 397), and the 500-character note limit (line 306). Either name them
-  as constants or have the tool import the existing literals' sets directly — never re-type them
-  (CLAUDE.md §2).
-- `MIN_SETTLE_S` (line 330) and `SETTLE_EVIDENCE_WINDOW_S` (line 332) are both `60.0` but are
-  **semantically different** and must not be collapsed into one constant.
-- Validation: `pytest tests/test_m2_*.py -q` gives identical pass counts before and after, and
-  `git diff` shows no changed comparison operator or literal value.
+**[R4] These constants are NOT a project-wide single source of truth**, and the module comment now
+says so explicitly. `src/m4/manifest.py:142-143` and `:174-175` independently define the same
+distance range and 5/3 bpm settle limbs for the offline scoring admissibility gate, and
+`MAX_CLOCK_OFFSET_S` and `PACED_RATES_BPM` are duplicated there too. A protocol change must land in
+both modules or acquisition and scoring disagree silently — and M4 is the path feeding the paper's
+agreement metrics. `tests/test_m2_acquisition_metadata.py` pins them equal so a one-sided edit fails.
+Beware the near-transposed spellings: M4's `SETTLE_MAX_PR_SPREAD_BPM` is this module's
+`SETTLE_SPREAD_MAX_BPM`.
+
+**[R4] `MIN_SETTLE_S` is derived, not protocol-sourced.** `notes/protocol.md:201` fixes the 60 s
+evidence window and `:210` only requires settle duration to be *recorded*; no independent lower bound
+exists. It equals the window because a continuous 60 s of evidence cannot be demonstrated inside a
+shorter settle. It must never be set below `SETTLE_EVIDENCE_WINDOW_S` — nothing validates
+`settle_duration_s >= settle_evidence_window_s`, so a lower value would admit a criterion the session
+cannot have demonstrated, sealed permanently into the cohort. A test guards the constant; adding the
+input cross-check is a behaviour change for its own commit (§11).
+
+**Validation, met.** M2 subset 333 passed before and after; full suite 3140 passed before and after
+the extraction itself; no comparison operator or literal value changed; every rendered message
+byte-identical. The independent code review additionally verified behavioural identity across 2912
+probed inputs, and `tests/test_m2_acquisition_metadata.py` (32 tests) now pins the boundaries,
+messages, formulas and M2/M4 agreement that previously had no coverage at validator level.
 
 ## 5. Frozen design decisions
 
@@ -539,10 +562,14 @@ review still covers the privacy schema, the staging boundary and the no-bypass p
    `$recoverySeatedStartUtc` one-liner is superseded by D13/D-OWN-5, and §1.3's "outside the Git
    checkout" is superseded by D-OWN-3 (must become "outside the checkout **or** under the gitignored
    `m2_capture_work/`"). `HANDOFF.md` §4 carries the same work-root wording.
-4. **Three follow-up diffs named, all outside this stop boundary:** adding the sidecar-vs-config
+4. **Five follow-up diffs named, all outside this stop boundary:** adding the sidecar-vs-config
    cross-check to `_validate_prospective_cli` (D-M5); a CLI for the registry
-   `withdrawn`/`recovery_not_cleared` states (§6.3); and a retry-record contract before `--attempt`
-   can return (D8).
+   `withdrawn`/`recovery_not_cleared` states (§6.3); a retry-record contract before `--attempt`
+   can return (D8); **[R4]** a `settle_duration_s >= settle_evidence_window_s` cross-check (§4); and
+   **[R4]** a decision on whether M2 and M4 should share a protocol-constants module instead of
+   duplicating thresholds (§4). The last is an owner question: the M2/M4 split is deliberate per
+   `src/m2/__init__.py`, and the agreement test in `tests/test_m2_acquisition_metadata.py` holds
+   either way.
 5. **The finalization sidecar has the same placeholder hazard, unfixed.**
    `templates/m2_finalization.yaml` ships `clock_offset_end_s: 0.0`, `final_pr_bpm: 70.0`,
    `post_monitoring_pr_bpm: 74.0` — schema-valid placeholders on the one artifact where a placeholder

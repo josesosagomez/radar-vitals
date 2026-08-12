@@ -11568,6 +11568,41 @@ countdown disagreement found while doing so.
   tool-side plausibility bounds, and the hardware confirmation kept as a real prompt. The second review
   requires no third plan review now that its three blocker-class items have landed.
 
+- **Milestone A done on branch `m2_sidecar_scaffold`: constants extraction, independently reviewed.**
+  Extracted the acquisition admission thresholds, the three controlled vocabularies and the three
+  derived-formula constants from `validate_acquisition_metadata` into named module constants, so the
+  planned operator tool imports them instead of re-typing numbers into prompts (CLAUDE.md section 2).
+  Error messages are now built from the constants too, so a threshold change cannot leave
+  operator-facing text lying. Independent code review returned **APPROVE WITH CHANGES** and verified
+  behavioural identity across 2912 probed inputs with zero differences, plus an AST comparison showing
+  61 comparison sites unchanged on both sides. Evidence: M2 subset 333 passed before and after; full
+  suite 3140 passed before and after the extraction; 3172 passed after adding the new tests
+  (3140 + 32).
+- **The review caught two claims I had asserted rather than checked.** First, my comment called these
+  constants the "single source of truth"; they are not. `src/m4/manifest.py:142-143` and `:174-175`
+  independently define the same distance range and 5/3 bpm settle limbs for the offline scoring
+  admissibility gate, and `MAX_CLOCK_OFFSET_S`/`PACED_RATES_BPM` are duplicated there as well. M4 is
+  the path that feeds the paper's agreement metrics, so a one-sided protocol edit would let
+  acquisition and scoring disagree with nothing failing — and the spellings are near-transposed
+  (M4's `SETTLE_MAX_PR_SPREAD_BPM` vs M2's `SETTLE_SPREAD_MAX_BPM`). Second, my comment said the two
+  coinciding 60.0 constants could "each change without the other". Verified false in one direction:
+  `notes/protocol.md:201` fixes the 60 s evidence window and `:210` only requires settle duration to
+  be *recorded*, so `MIN_SETTLE_S` has no independent protocol source — it is derived from the window.
+  Nothing validates `settle_duration_s >= settle_evidence_window_s`, so lowering `MIN_SETTLE_S` would
+  admit a sidecar declaring a 60 s continuous evidence window inside a shorter settle, a criterion the
+  session cannot have demonstrated, sealed permanently into the cohort. Both comments corrected; both
+  now have guarding tests.
+- **New validator-level coverage that did not previously exist:**
+  `tests/test_m2_acquisition_metadata.py`, 32 tests — inclusive boundaries *admitted* (not merely
+  "same error"), just-outside values rejected, the five rendered messages pinned exactly, the two
+  derived formulas, the M2/M4 agreement on every duplicated threshold, and a guard that `MIN_SETTLE_S`
+  never drops below `SETTLE_EVIDENCE_WINDOW_S`. The review noted M4 has exactly these boundary tests
+  and M2 had none, which is what made the constants unsafe to edit despite a green suite.
+- Also extracted, which plan revision 3 had missed: `METRONOME_BEATS_PER_BREATH`,
+  `RESPIRATION_HARMONIC_ORDER` and `HARMONIC_MARGIN_TOLERANCE_BPM`. The tool must reproduce those two
+  formulas, and a re-typed *formula* fails later and less obviously than a re-typed threshold — it
+  aborts at the serialization round trip after the operator has already answered the paced prompts.
+
 **Failed / did not work, and why:**
 
 - **The full suite was red on HEAD before this session's edits**, not caused by them. The three

@@ -46,6 +46,82 @@ INTENDED_DURATION_S = 600.0
 MAX_CLOCK_OFFSET_S = 1.0
 RECOVERY_SEATED_START_SOURCE = "operator_observed_seated_start_synchronized_pc_utc"
 
+# Acquisition-time admission values, named so operator tooling imports them instead of re-typing
+# the numbers into prompts and checklists (CLAUDE.md section 2, no magic numbers).  This module
+# remains the sole authority on whether a sidecar is admissible: importing a threshold is not
+# permission to re-implement the check.
+#
+# SCOPE, and what these names are NOT.  They cover acquisition-sidecar admission only, and they
+# are not the only definition of these numbers in the project.  src/m4/manifest.py:142-143 and
+# :174-175 independently define DISTANCE_MIN_M/DISTANCE_MAX_M and
+# SETTLE_MAX_PR_SPREAD_BPM/SETTLE_MAX_PR_DRIFT_BPM for the offline scoring admissibility gate, and
+# MAX_CLOCK_OFFSET_S and PACED_RATES_BPM are duplicated there too.  A protocol change must be
+# applied in both modules or acquisition and scoring will silently disagree;
+# tests/test_m2_acquisition_metadata.py pins them equal so a one-sided edit fails.  Beware the
+# near-transposed spellings: M4's SETTLE_MAX_PR_SPREAD_BPM is this module's
+# SETTLE_SPREAD_MAX_BPM.  validate_finalization_metadata is deliberately not covered here - the
+# scaffold tool emits only the acquisition sidecar, so it never prints those values.
+
+#: notes/protocol.md:70 and :177 - chest 0.8-1.4 m from the radar, inclusive at both ends.
+#: Duplicated at src/m4/manifest.py:142-143.
+DISTANCE_MIN_M = 0.8
+DISTANCE_MAX_M = 1.4
+
+#: notes/protocol.md:201 SETTLE CRITERION - PR spread measured over a **continuous 60 s** window.
+#: Checked below by exact equality, so it is a real constant here.  Contrast
+#: src/m4/manifest.py:170-173, which deliberately omits this window because nothing in that
+#: module can verify it; M4 receives spread/drift already reduced over the window.
+SETTLE_EVIDENCE_WINDOW_S = 60.0
+
+#: DERIVED, not independently protocol-sourced.  A continuous SETTLE_EVIDENCE_WINDOW_S of evidence
+#: cannot be demonstrated inside a shorter total settle, so the minimum reported settle duration
+#: is the window itself.  notes/protocol.md:210 requires settle duration to be *recorded* and
+#: states no separate lower bound.
+#:
+#: MUST NOT be set below SETTLE_EVIDENCE_WINDOW_S.  Nothing checks
+#: settle_duration_s >= settle_evidence_window_s (the two are validated independently below), so a
+#: lower value would admit a sidecar declaring a 60 s continuous evidence window inside a shorter
+#: settle - a criterion it cannot have demonstrated, sealed permanently into the cohort.  Adding
+#: that cross-check is a behaviour change and belongs in its own commit.
+MIN_SETTLE_S = 60.0
+
+#: notes/protocol.md:201-202 SETTLE CRITERION, transcribed: PR spread <= 5 bpm over a continuous
+#: 60 s, and last-20 s vs first-20 s drift <= 3 bpm.  Both limbs are <=, so 5.0 and 3.0 exactly
+#: are PASSES - the comparisons below are >.  Duplicated at src/m4/manifest.py:174-175.
+SETTLE_SPREAD_MAX_BPM = 5.0
+SETTLE_DRIFT_MAX_BPM = 3.0
+
+#: notes/m2_capture_runbook.md section 3 "Paced": pace at least 120 s before recording, and
+#: confirm Masimo BR stability for at least 60 s.
+MIN_PACED_SETTLE_S = 120.0
+MIN_BR_STABILITY_S = 60.0
+
+#: notes/m2_capture_runbook.md section 3 "Recovery": stop exertion on the live Masimo reading at
+#: 100-120 bpm, inclusive at both ends.
+EXERTION_STOP_PR_MIN_BPM = 100.0
+EXERTION_STOP_PR_MAX_BPM = 120.0
+
+#: Privacy limit on the sidecar's only free-text field, so a scene note cannot grow into a
+#: narrative.  See _FORBIDDEN_SCENE_NOTE_TERMS for the content rule.
+MAX_SCENE_NOTES_CHARS = 500
+
+#: Paced metronome is one beat per inhale and one per exhale, i.e. twice the commanded breathing
+#: rate (notes/m2_capture_runbook.md section 3 "Paced").  RESPIRATION_HARMONIC_ORDER is the
+#: respiration harmonic whose collision with the cardiac band the margin measures.  Named so
+#: operator tooling deriving metronome_rate_bpm and computing harmonic_collision_margin_bpm
+#: reproduces these formulas instead of re-typing them: a re-typed formula fails later, and less
+#: obviously, than a re-typed threshold.
+METRONOME_BEATS_PER_BREATH = 2
+RESPIRATION_HARMONIC_ORDER = 4.0
+HARMONIC_MARGIN_TOLERANCE_BPM = 1e-12
+
+# Controlled vocabularies.  Operator tooling prompts from these in order; the validator admits
+# only these values.  Tuples rather than sets: iteration order of a set of str is
+# PYTHONHASHSEED-dependent, and prompt order must be reproducible (CLAUDE.md section 3).
+SCENE_DESCRIPTION_CATEGORIES = ("clear_dominant_subject", "controlled_known_reflectors")
+DISTURBANCE_CATEGORIES = ("none", "minor_logged", "protocol_abort")
+STOPPING_EVENT_CATEGORIES = ("target_reached", "participant_stop", "researcher_safety_stop")
+
 _PROSPECTIVE_SUBJECT_RE = re.compile(r"^P\d{3}$")
 _ENGINEERING_SUBJECT_RE = re.compile(r"^(?:T|SYN)[A-Z0-9_-]{1,30}$")
 _SESSION_RE = re.compile(r"^[A-Z][A-Z0-9]{1,15}_[a-z0-9][a-z0-9_-]{1,63}$")
@@ -292,26 +368,30 @@ def validate_acquisition_metadata(metadata: Mapping[str, object]) -> dict[str, A
     if metadata.get("posture") != "seated":
         raise ContractError("posture must be exactly 'seated'")
     distance_m = require_number(metadata, "distance_m")
-    if not 0.8 <= distance_m <= 1.4:
-        raise ContractError("distance_m must be in [0.8, 1.4] metres, inclusive")
+    if not (DISTANCE_MIN_M <= distance_m <= DISTANCE_MAX_M):
+        raise ContractError(
+            f"distance_m must be in [{DISTANCE_MIN_M}, {DISTANCE_MAX_M}] metres, inclusive"
+        )
     for field_name in _COMMON_BOOLEAN_FIELDS:
         require_bool(metadata, field_name)
     for field_name in _TRUE_AT_CAPTURE_FIELDS:
         _require_true(metadata, field_name)
 
     scene_category = require_nonempty_string(metadata, "scene_description_category")
-    if scene_category not in {"clear_dominant_subject", "controlled_known_reflectors"}:
+    if scene_category not in SCENE_DESCRIPTION_CATEGORIES:
         raise ContractError("scene_description_category is not a controlled category")
     scene_notes = require_nonempty_string(metadata, "scene_non_health_notes")
-    if len(scene_notes) > 500:
-        raise ContractError("scene_non_health_notes must be at most 500 characters")
+    if len(scene_notes) > MAX_SCENE_NOTES_CHARS:
+        raise ContractError(
+            f"scene_non_health_notes must be at most {MAX_SCENE_NOTES_CHARS} characters"
+        )
     normalized_scene_notes = " ".join(scene_notes.lower().split())
     if any(term in normalized_scene_notes for term in _FORBIDDEN_SCENE_NOTE_TERMS):
         raise ContractError(
             "scene_non_health_notes violates privacy: health narrative terms are forbidden in free text"
         )
     disturbances = require_nonempty_string(metadata, "disturbances_category")
-    if disturbances not in {"none", "minor_logged", "protocol_abort"}:
+    if disturbances not in DISTURBANCE_CATEGORIES:
         raise ContractError("disturbances_category is not a controlled category")
 
     if require_int(metadata, "configured_chirps_per_frame") != CHIRPS_PER_FRAME:
@@ -327,14 +407,19 @@ def validate_acquisition_metadata(metadata: Mapping[str, object]) -> dict[str, A
         raise ContractError("session_order must equal the fixed visit_number")
 
     if arm in (Arm.NATURAL, Arm.PACED):
-        require_number(metadata, "settle_duration_s", minimum=60.0)
+        require_number(metadata, "settle_duration_s", minimum=MIN_SETTLE_S)
         require_number(metadata, "start_pr_bpm", minimum=0.0)
-        if require_number(metadata, "settle_evidence_window_s") != 60.0:
-            raise ContractError("settle_evidence_window_s must be exactly 60.0 seconds")
+        if require_number(metadata, "settle_evidence_window_s") != SETTLE_EVIDENCE_WINDOW_S:
+            raise ContractError(
+                f"settle_evidence_window_s must be exactly {SETTLE_EVIDENCE_WINDOW_S} seconds"
+            )
         spread = require_number(metadata, "settle_pr_spread_bpm", minimum=0.0)
         drift = require_number(metadata, "settle_pr_drift_bpm", minimum=0.0)
-        if spread > 5.0 or drift > 3.0:
-            raise ContractError("natural/paced settle evidence does not pass <=5/<=3 bpm gates")
+        if spread > SETTLE_SPREAD_MAX_BPM or drift > SETTLE_DRIFT_MAX_BPM:
+            raise ContractError(
+                "natural/paced settle evidence does not pass "
+                f"<={SETTLE_SPREAD_MAX_BPM:g}/<={SETTLE_DRIFT_MAX_BPM:g} bpm gates"
+            )
         require_nonempty_string(metadata, "settle_evidence_path")
         require_sha256(metadata.get("settle_evidence_sha256"), "settle_evidence_sha256")
     else:
@@ -356,15 +441,16 @@ def validate_acquisition_metadata(metadata: Mapping[str, object]) -> dict[str, A
         commanded_rate_bpm = require_int(metadata, "commanded_rate_bpm")
         if commanded_rate_bpm not in PACED_RATES_BPM:
             raise ContractError("commanded_rate_bpm must be one of 12/15/18")
-        if require_int(metadata, "metronome_rate_bpm") != 2 * commanded_rate_bpm:
+        expected_metronome = METRONOME_BEATS_PER_BREATH * commanded_rate_bpm
+        if require_int(metadata, "metronome_rate_bpm") != expected_metronome:
             raise ContractError("metronome_rate_bpm must be exactly twice commanded_rate_bpm")
-        require_number(metadata, "paced_settle_duration_s", minimum=120.0)
-        require_number(metadata, "br_stability_duration_s", minimum=60.0)
+        require_number(metadata, "paced_settle_duration_s", minimum=MIN_PACED_SETTLE_S)
+        require_number(metadata, "br_stability_duration_s", minimum=MIN_BR_STABILITY_S)
         _require_true(metadata, "br_stability_confirmed")
         resting_pr_bpm = require_number(metadata, "resting_pr_bpm", minimum=0.0)
-        expected_margin = abs(resting_pr_bpm - 4.0 * commanded_rate_bpm)
+        expected_margin = abs(resting_pr_bpm - RESPIRATION_HARMONIC_ORDER * commanded_rate_bpm)
         supplied_margin = require_number(metadata, "harmonic_collision_margin_bpm", minimum=0.0)
-        if abs(supplied_margin - expected_margin) > 1e-12:
+        if abs(supplied_margin - expected_margin) > HARMONIC_MARGIN_TOLERANCE_BPM:
             raise ContractError(
                 "harmonic_collision_margin_bpm must equal abs(resting_pr_bpm - 4*commanded_rate_bpm)"
             )
@@ -389,12 +475,15 @@ def validate_acquisition_metadata(metadata: Mapping[str, object]) -> dict[str, A
             raise ContractError("recovery exertion_modality must be self_paced_step_ups")
         require_number(metadata, "pre_exertion_resting_pr_bpm", minimum=0.0)
         stop_pr_bpm = require_number(metadata, "exertion_stop_pr_bpm")
-        if not 100.0 <= stop_pr_bpm <= 120.0:
-            raise ContractError("exertion_stop_pr_bpm must be in [100, 120] bpm")
+        if not (EXERTION_STOP_PR_MIN_BPM <= stop_pr_bpm <= EXERTION_STOP_PR_MAX_BPM):
+            raise ContractError(
+                "exertion_stop_pr_bpm must be in "
+                f"[{EXERTION_STOP_PR_MIN_BPM:g}, {EXERTION_STOP_PR_MAX_BPM:g}] bpm"
+            )
         require_number(metadata, "exertion_duration_s", minimum=0.0)
         require_number(metadata, "seated_pr_t0_bpm", minimum=0.0)
         stopping_event = require_nonempty_string(metadata, "stopping_event_category")
-        if stopping_event not in {"target_reached", "participant_stop", "researcher_safety_stop"}:
+        if stopping_event not in STOPPING_EVENT_CATEGORIES:
             raise ContractError("stopping_event_category is not a controlled category")
 
     allowed_fields = _COMMON_ACQUISITION_FIELDS
