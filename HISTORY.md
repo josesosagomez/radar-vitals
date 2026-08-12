@@ -11466,3 +11466,127 @@ warnings**. The final full repository suite passed **3139 tests, 5 skipped, 1790
 **Final independent review:** PASS on the current bytes, with no remaining blocker, high or other
 material finding. The engineering preflight is ready for the physical-capture boundary; overall M2
 remains pending until the real prospective sessions satisfy the frozen admission and cohort rules.
+
+## 2026-08-12 - Natural/paced launch countdown set to 30 s; sidecar scaffold planned
+
+**Set out to do:** answer how `scripts/live_demo.py` is operated, then plan an operator tool that
+removes file creation/naming/derivation from the M2 capture procedure. Reconcile a 60 s/30 s
+countdown disagreement found while doing so.
+
+**Worked (with evidence):**
+
+- **Countdown protocol change, 60 s -> 30 s, deliberate.** Commit `92d93ab` ("time change") set
+  `_prospective_start_delay_s` to return 30 for natural/paced (its pre-image was `1`). Owner
+  confirmed 2026-08-12 that 30 s is the intended protocol value. Aligned all six places that still
+  said 60: `tests/test_m2_capture_artifacts.py:249-250` and its parametrize at line 262,
+  the `scripts/live_demo.py:770` docstring, `notes/m2_capture_runbook.md:126`, `HANDOFF.md:83`, and
+  `plans/m2_sidecar_scaffold.md` section 8. Effect on the protocol: the quiet dead time between
+  launch and frame 0 is halved, reducing settle margin that sat on top of the already-passed settle
+  gate. Recovery remains 0 s.
+- **Established the countdown has no evidentiary footprint.** It is absent from the `run_metadata`
+  dict (`scripts/live_demo.py:1015-1063`), is not a CLI argument so `exact_cli_invocation` does not
+  capture it, and `start_wall_utc` is stamped at line 1018 *after* the countdown elapses. No
+  artifact records it.
+- **Separated two quantities that were being conflated.** The launch countdown is not
+  `settle_evidence_window_s`, which is validated to be exactly 60.0 at
+  `src/m2/acquisition_metadata.py:332-333` and is unchanged. `HANDOFF.md` now states both explicitly.
+- **Wrote `plans/m2_sidecar_scaffold.md`** for `scripts/m2_scaffold_sidecar.py`: a three-subcommand
+  operator tool (`check` / `init` / `measure`) that derives every mechanical sidecar field from the
+  committed registry, prompts only for measurements and attestations, hashes the settle evidence, and
+  prints the exact launch command. Independent plan review dispatched per CLAUDE.md section 6.
+- Confirmed `m2_capture_work*/` is already gitignored (`.gitignore:14`), so the operator work root
+  can sit inside the checkout without dirtying it. Owner decided 2026-08-12 to keep the work root
+  in-repo on the grounds that the repository is private; the runbook and HANDOFF still say these files
+  must live *outside* the checkout, so that wording is now a recorded conflict to fix.
+- **Cohort registry restored.** Owner confirmed the `a5edecc` deletion was a mistake.
+  `git checkout 92d93ab -- cohort_registry/` recovered both files; the computed SHA-256, the `.sha256`
+  sidecar and the value in `HANDOFF.md` section 2 all agree at
+  `e1bf942ff8bfbdd2b9f4b92e448099142058805bc8d0213576db12d8a3689a7c`.
+  `tests/test_m2_cohort_registry.py` + `tests/test_m2_capture_artifacts.py`: **131 passed**. The
+  restoration is staged but **not yet committed**, and `origin/vital_signs_own_v13` still carries the
+  deletion.
+- **Independent plan review returned REJECT** on revision 1 of `plans/m2_sidecar_scaffold.md`:
+  2 blockers, 9 high, 6 medium. Two findings were substantive design errors, not nitpicks. First, the
+  two-stage `init`/`measure` split could not hold its own invariant: `seated_pr_t0_bpm` and the three
+  at-record-start booleans are only observable at the seating instant, so a single `measure` either
+  pre-attests them (fabrication) or inflates the unbounded `sit_to_record_delay_s` and consumes the
+  recovery HR ramp. Second, validating the in-memory mapping did not prove the YAML *bytes* load — an
+  unquoted `visit_utc` re-parses as `datetime` and is rejected, and
+  `datetime.now(timezone.utc).isoformat()` emits `+00:00` where `_validate_utc` demands `Z`. Revision 2
+  resolves every finding: three recovery stages, a build/validate/serialize/re-parse/re-validate
+  round trip, `planned`-state and registry-chain and config-gate preconditions, settle-evidence
+  resolution rules, a constants-extraction milestone so thresholds are not re-typed, a strict
+  `--answers` whitelist, and a `scaffold_provenance.json`. Sent for second review.
+- **Second independent review: APPROVE WITH CHANGES.** Blocker 1 verified resolved — the reviewer
+  independently reproduced 131 passed, confirmed `validate_registry_history` returns revision 1 with
+  all 45 sessions `planned`, and confirmed the countdown forensics (`git show
+  b7947f1:scripts/live_demo.py` line 773 is `return 1` while the same commit's test asserted 60, so
+  the docs and code were never in agreement). Blocker 2 **partially survived**: revision 2 still
+  prompted four seated-posture booleans (`back_straight`, `both_hands_on_thighs`, `facing_radar`,
+  `sensored_hand_still`) in the recovery main stage, i.e. at exertion stop, before the participant has
+  adopted the posture they attest to — the same fabrication the staging exists to prevent, landing in a
+  promoted artifact. Revision 2's `scene_changed`/`disturbances_category` wording was also
+  self-contradictory for recovery. Other confirmed defects: recovery's main stage cannot pass
+  `validate_acquisition_metadata` at all, so its intermediate artifact had to be named; a single
+  provenance file could not be written twice under no-overwrite and would have failed **at the seating
+  instant**; nothing prevented `settle_evidence_path` pointing at the Masimo session CSV, which would
+  have copied reference bytes into a promoted directory before the label firewall authorized reference
+  access; the "emit absolute paths" fix was wrong twice over (the launch is not cwd-independent
+  regardless, and absolute paths write the operator username into the sealed receipt and promoted
+  manifest, violating CLAUDE.md section 9); `--attempt N` depended on a retry-record contract that does
+  not exist; the `--answers` role gate was vacuous because every registry subject holds one of the two
+  gated roles; and the planned test fixture was incompatible with never emitting `synthetic_fixture`.
+- **Established a hard constraint that had been treated as an open question.**
+  `notes/analysis_prespec.md:314` requires `max(R_s) - min(R_s) >= 20.0` bpm per recovery session and
+  `:321` states a Stage-1 failure "cannot trigger recapture". So seated-stage typing time is not an
+  ergonomics concern: it can permanently forfeit a final-evaluation subject. This now sizes the seated
+  stage rather than sitting in the limitations list.
+- **Owner decisions 2026-08-12:** recovery `distance_m` is measured at seating to the actual chest (so
+  it joins the seated stage, at a known ramp cost); the tool stamps the recovery seating epoch itself
+  as the seated stage's first action, before the distance measurement, so the recorded delay is honest
+  rather than flattering; `sit_to_record_delay_s` gets no bound yet — observe real values first.
+- **Revision 3 written**, applying every second-review finding plus those decisions: the seated stage
+  is now 9 fields collected as 4 inputs, the tool stamps the epoch (which also deletes the PowerShell
+  culture-format workaround and is what makes the recovery launch path testable), per-stage artifacts
+  and per-stage provenance files, `settle_evidence_path` derived and forbidden from being a `.csv` or
+  the expected reference basename, repo-root cwd with repo-relative emitted paths, a `launch_argv`
+  contract separate from the human-readable command, a work-root deny list, `--attempt` dropped,
+  tool-side plausibility bounds, and the hardware confirmation kept as a real prompt. The second review
+  requires no third plan review now that its three blocker-class items have landed.
+
+**Failed / did not work, and why:**
+
+- **The full suite was red on HEAD before this session's edits**, not caused by them. The three
+  countdown tests failed at `da3287d`'s successors because the pre-image `return 1` also contradicted
+  the asserted 60. Observed: `3 failed, 1 passed, 74 deselected` on
+  `tests/test_m2_capture_artifacts.py -k countdown`. The "3139 passed" figure recorded earlier was
+  measured at `da3287d`, before commits `fb83326`, `b7947f1` and `92d93ab`.
+- **I initially asserted the countdown was "part of the settle evidence."** Wrong, and it overstated
+  the stakes of the change. Corrected above with the mechanism.
+
+**Retired / no longer used:**
+
+- The 60 s natural/paced launch countdown, and the word "Legacy" in the
+  `_prospective_start_delay_s` docstring, which wrongly implied the value was a leftover rather than
+  the deliberate protocol setting.
+
+**Next:**
+
+- **The canonical cohort registry is no longer in the repository.** During this session HEAD advanced
+  from `92d93ab` to `a5edecc` ("registry_v001"), a commit whose entire content is the deletion of
+  `cohort_registry/registry_v001.json` and its `.sha256`; it is already pushed to
+  `origin/vital_signs_own_v13`. The bytes remain recoverable from `92d93ab` (blob
+  `77d3c4e0e7c4ce19df549aa83252838deab68203`, digest
+  `e1bf942ff8bfbdd2b9f4b92e448099142058805bc8d0213576db12d8a3689a7c`). Until it is restored, no
+  prospective capture can run (`--cohort-registry` is required at `scripts/live_demo.py:859-860` and
+  `load_registry` demands the mandatory `.sha256` sidecar), and 31 tests in
+  `tests/test_m2_capture_artifacts.py` fail at `_copy_committed_registry` with `FileNotFoundError`.
+  Resolved the same day — see the restoration entry above. Note there is **no committed generator**
+  for a real registry (only the `tests/fixtures/m2/builders.py` synthetic fixture), so the object
+  store was the only recovery route; a guard test asserting `DEFAULT_REGISTRY_PATH.is_file()` is
+  outstanding so this fails one obvious test rather than 68 obscure ones.
+- Act on the independent plan review of `plans/m2_sidecar_scaffold.md`, then implement, test and
+  code-review the scaffold tool.
+- `HANDOFF.md` sections 1 and 4 are stale beyond the countdown line: they still describe HEAD as
+  `da3287d` with uncommitted M2 changes, which the later commits invalidated. A full section 10.1
+  rewrite is outstanding.
