@@ -11651,8 +11651,50 @@ countdown disagreement found while doing so.
   put into `notes/protocol.md`. It made the sourcing circular - the code cited the protocol while the
   protocol cited the code - and per CLAUDE.md section 10.2 that narrative belongs here instead.
 
+- **D-OWN-8: M2 and M4 now share `src/protocol.py`.** Six protocol facts - distance min/max, settle
+  spread/drift limbs, settle evidence window, min settle, clock offset, paced rates - are defined once
+  and **aliased** by both modules, so every existing name and call site is unchanged but there is one
+  editable value per fact. Before this, `src/m2/acquisition_metadata.py` and `src/m4/manifest.py`
+  defined them independently, two of them under near-transposed names, so a one-sided protocol edit
+  would have let acquisition admit a session that offline scoring excluded with nothing failing.
+  Evidence: full suite **3176 passed, 5 skipped**, twice consecutively.
+- **A full duplication scan found two things the review that prompted this had not named.**
+  `FRAME_RATE_HZ = 20.0` exists in three places (`src/m2/acquisition_metadata.py`,
+  `src/m2/time_sensitivity.py`, `src/m4/window_grid.py`) and was **deliberately left unshared**: M2's
+  is a capture parameter the operator attests to configuring, while `src/m4/window_grid.py:30-33`
+  marks its copy FROZEN by `notes/analysis_prespec.md` section 7, where a change is a frozen-analysis
+  amendment rather than a config edit. Merging would couple an acquisition attestation to a frozen
+  analysis decision. But divergence there would be a *silent* scientific error - windows holding 20 s
+  of data while labelled 30 s - so a test asserts the three agree instead. And `src/comparator.py:30`
+  `_HR_STATIONARITY_MAX_BPM = 5.0` is coincidentally equal to the settle spread limit while being an
+  unrelated within-window quantity; folding it in would have been a category error, so a test pins it
+  independent.
+- **The old M2/M4 agreement test would have become vacuous** once these were aliases, since equality
+  is automatic when both sides read the same variable. Rewritten to assert each module's name still
+  *resolves to* the shared definition, which catches the real regression: someone re-introducing a
+  local literal, i.e. the exact pre-D-OWN-8 state.
+
 **Failed / did not work, and why:**
 
+- **An intermittent full-suite failure was observed once and is NOT explained.**
+  `tests/test_m4_estimator_suites.py::test_production_native_payload_equals_a_direct_call` failed on
+  the first full run after the D-OWN-8 change (3175 passed, 1 failed), then passed on two subsequent
+  full runs of byte-identical code (3176 passed each time) and passes in isolation and alongside the
+  changed test file. Ruled out with evidence: import-time side effects in the three modules the new
+  tests import for the first time (none touch `np.seterr`, print options, threadpools or environment);
+  unseeded test input (the `cube` fixture is `np.random.Generator(np.random.PCG64(2026))`,
+  module-scoped); and global-RNG use in any DSP path (no `np.random.seed`/`randn`/`normal` anywhere in
+  `src/`, every generator explicit and seeded). **Unproven hypothesis:** `_assert_nested_exact`
+  compares two separately-computed DSP payloads bit-for-bit, and multithreaded BLAS/FFT under a long
+  run's load can shift thread partitioning and therefore rounding. If that is right the test can fail
+  in any sufficiently loaded run, which matters for CLAUDE.md section 3.1 - a bit-for-bit assertion
+  that holds only under light load weakens the regenerability guarantee. Two green runs are evidence
+  against the D-OWN-8 change having caused it, not proof. Recorded rather than dismissed; needs
+  investigation before it is trusted as noise.
+- **This commit is not independently code-reviewed**, unlike milestone A and D-OWN-7. A review was
+  dispatched but the session was stopped before its verdict arrived, and the commit was then made on
+  request. The diff touches `src/m4/manifest.py`, which is on the scoring path, so a review pass is
+  outstanding work rather than something skipped as unnecessary.
 - **The full suite was red on HEAD before this session's edits**, not caused by them. The three
   countdown tests failed at `da3287d`'s successors because the pre-image `return 1` also contradicted
   the asserted 60. Observed: `3 failed, 1 passed, 74 deselected` on

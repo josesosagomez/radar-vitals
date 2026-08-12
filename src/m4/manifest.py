@@ -35,6 +35,8 @@ from typing import Any
 
 import numpy as np
 
+from .. import protocol as _protocol
+
 # ── Controlled vocabularies ───────────────────────────────────────────────────
 
 
@@ -137,16 +139,18 @@ class RetryReason(str, Enum):
 
 
 
-#: `notes/protocol.md`: the subject "must be within 0.8-1.4 m". Inclusive at both ends
-#: (plan §4.1); Stage 1 pins the equality boundaries.
-DISTANCE_MIN_M = 0.8
-DISTANCE_MAX_M = 1.4
+#: Defined once in `src/protocol.py` (D-OWN-8) and aliased here, because this module and
+#: `src/m2/acquisition_metadata.py` both gate admissibility on it and used to define it separately.
+#: Inclusive at both ends (plan §4.1); Stage 1 pins the equality boundaries.
+DISTANCE_MIN_M = _protocol.DISTANCE_MIN_M
+DISTANCE_MAX_M = _protocol.DISTANCE_MAX_M
 
 #: The estimand fixes posture. A session with any other value is not a member of this design.
 CANONICAL_POSTURE = "seated"
 
 #: `notes/analysis_prespec.md` §6 item 5: NTP-synced, max +/-1 s, re-checked at session end.
-MAX_CLOCK_OFFSET_S = 1.0
+#: Defined once in `src/protocol.py` (D-OWN-8) and aliased here.
+MAX_CLOCK_OFFSET_S = _protocol.MAX_CLOCK_OFFSET_S
 
 #: §6 item 4, frozen tolerance: `n_dropped / n_received > 5 %` **flags** the session
 #: (reported) but "does not by itself exclude it" — the per-frame validity map decides which
@@ -154,7 +158,8 @@ MAX_CLOCK_OFFSET_S = 1.0
 PACKET_LOSS_FLAG_RATIO = 0.05
 
 #: Commanded paced rates, frozen by the M3R-31 rotation (12 -> 15 -> 18).
-PACED_RATES_BPM = (12, 15, 18)
+#: Defined once in `src/protocol.py` (D-OWN-8) and aliased here.
+PACED_RATES_BPM = _protocol.PACED_RATES_BPM
 
 #: `notes/protocol.md` SETTLE CRITERION, transcribed (S12R-04). Capture must not start until
 #: **ALL THREE** hold:
@@ -176,12 +181,17 @@ PACED_RATES_BPM = (12, 15, 18)
 #: `settle_criterion_met` boolean would have been the `checksum_ok` defect again (S12R-04 R2):
 #: the criterion is numerical, so M4 derives it from the measured primitives.
 #:
-#: The criterion's **60 s window** is deliberately not a constant here: nothing in this module
-#: can verify it. `settle_pr_spread_bpm` arrives as a scalar already reduced over that window
-#: by whatever produced the bound evidence, so a `SETTLE_WINDOW_S` would be a value no code
-#: reads and no test could fail on. It is stated above, where it belongs, as documentation.
-SETTLE_MAX_PR_SPREAD_BPM = 5.0
-SETTLE_MAX_PR_DRIFT_BPM = 3.0
+#: The criterion's **60 s window** is deliberately not gated on here: nothing in this module can
+#: verify it. `settle_pr_spread_bpm` arrives as a scalar already reduced over that window by whatever
+#: produced the bound evidence, so a comparison against it would be a check no test could fail. The
+#: value itself lives in `src/protocol.py` as SETTLE_EVIDENCE_WINDOW_S, defined once for the whole
+#: project; this module simply does not consume it.
+#:
+#: Limbs 1-2 below are defined once in `src/protocol.py` (D-OWN-8) and aliased here. Note the
+#: spelling differs from `src/m2/acquisition_metadata.py`, which calls them SETTLE_SPREAD_MAX_BPM and
+#: SETTLE_DRIFT_MAX_BPM; the values can no longer diverge even though the names still do.
+SETTLE_MAX_PR_SPREAD_BPM = _protocol.SETTLE_SPREAD_MAX_BPM
+SETTLE_MAX_PR_DRIFT_BPM = _protocol.SETTLE_DRIFT_MAX_BPM
 
 #: Which §6 exclusion reason a replacement cause must actually be evidenced by on the
 #: superseded record. A stated reason the predecessor's own disposition does not support is an

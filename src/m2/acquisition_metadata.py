@@ -15,6 +15,7 @@ from typing import Any, Mapping
 
 import yaml
 
+from .. import protocol as _protocol
 from .common import (
     ContractError,
     require_bool,
@@ -39,11 +40,9 @@ class DataRole(str, Enum):
 
 
 VISIT_BY_ARM = {Arm.NATURAL: 1, Arm.PACED: 2, Arm.RECOVERY: 3}
-PACED_RATES_BPM = (12, 15, 18)
 FRAME_RATE_HZ = 20.0
 CHIRPS_PER_FRAME = 32
 INTENDED_DURATION_S = 600.0
-MAX_CLOCK_OFFSET_S = 1.0
 RECOVERY_SEATED_START_SOURCE = "operator_observed_seated_start_synchronized_pc_utc"
 
 # Acquisition-time admission values, named so operator tooling imports them instead of re-typing
@@ -51,44 +50,26 @@ RECOVERY_SEATED_START_SOURCE = "operator_observed_seated_start_synchronized_pc_u
 # remains the sole authority on whether a sidecar is admissible: importing a threshold is not
 # permission to re-implement the check.
 #
-# SCOPE, and what these names are NOT.  They cover acquisition-sidecar admission only, and they
-# are not the only definition of these numbers in the project.  src/m4/manifest.py:142-143 and
-# :174-175 independently define DISTANCE_MIN_M/DISTANCE_MAX_M and
-# SETTLE_MAX_PR_SPREAD_BPM/SETTLE_MAX_PR_DRIFT_BPM for the offline scoring admissibility gate, and
-# MAX_CLOCK_OFFSET_S and PACED_RATES_BPM are duplicated there too.  A protocol change must be
-# applied in both modules or acquisition and scoring will silently disagree;
-# tests/test_m2_acquisition_metadata.py pins them equal so a one-sided edit fails.  Beware the
-# near-transposed spellings: M4's SETTLE_MAX_PR_SPREAD_BPM is this module's
-# SETTLE_SPREAD_MAX_BPM.  validate_finalization_metadata is deliberately not covered here - the
-# scaffold tool emits only the acquisition sidecar, so it never prints those values.
+# The protocol facts that :mod:`src.m4.manifest` also gates on now live in src/protocol.py and are
+# aliased below, so there is exactly one editable value per fact (D-OWN-8, 2026-08-12).  They used to
+# be defined here and independently in M4, where a one-sided protocol edit would have let acquisition
+# and scoring disagree silently.  The names below are kept so no call site changes; note M4 spells two
+# of them differently (its SETTLE_MAX_PR_SPREAD_BPM is this module's SETTLE_SPREAD_MAX_BPM).
+#
+# validate_finalization_metadata is deliberately not covered by any of this - the scaffold tool emits
+# only the acquisition sidecar, so it never prints those values.
 
-#: notes/protocol.md:70 and :177 - chest 0.8-1.4 m from the radar, inclusive at both ends.
-#: Duplicated at src/m4/manifest.py:142-143.
-DISTANCE_MIN_M = 0.8
-DISTANCE_MAX_M = 1.4
+DISTANCE_MIN_M = _protocol.DISTANCE_MIN_M
+DISTANCE_MAX_M = _protocol.DISTANCE_MAX_M
+SETTLE_EVIDENCE_WINDOW_S = _protocol.SETTLE_EVIDENCE_WINDOW_S
+SETTLE_SPREAD_MAX_BPM = _protocol.SETTLE_SPREAD_MAX_BPM
+SETTLE_DRIFT_MAX_BPM = _protocol.SETTLE_DRIFT_MAX_BPM
+MAX_CLOCK_OFFSET_S = _protocol.MAX_CLOCK_OFFSET_S
+PACED_RATES_BPM = _protocol.PACED_RATES_BPM
 
-#: notes/protocol.md:201 SETTLE CRITERION - PR spread measured over a **continuous 60 s** window.
-#: Checked below by exact equality, so it is a real constant here.  Contrast
-#: src/m4/manifest.py:170-173, which deliberately omits this window because nothing in that
-#: module can verify it; M4 receives spread/drift already reduced over the window.
-SETTLE_EVIDENCE_WINDOW_S = 60.0
-
-#: notes/protocol.md SETTLE CRITERION limb 3: total settle >= 120 s.  Owner decision 2026-08-12
-#: based on operator judgement, NOT derived from measurement - see the protocol, which states this
-#: explicitly so the paper cannot inherit it as an empirical settling time.  Its purpose is that the
-#: SETTLE_EVIDENCE_WINDOW_S window sits inside a settled period rather than constituting all of it.
+#: Protocol SETTLE CRITERION limb 3, defined in src/protocol.py.  Notes specific to enforcement here:
 #:
-#: Applies to natural and paced only.  Diagnostic captures are not bound by it (protocol limbs 1-2
-#: cover diagnostic, limb 3 does not).  Recovery is exempt from settle evidence entirely - it starts
-#: recording as the subject sits - and the validator rejects every settle field for that arm.  For
-#: paced, the >= 120 s of pacing counts toward this settle; the two are not sequential.
-#:
-#: Was 60.0 until 2026-08-12, derived from the window rather than protocol-sourced since no minimum
-#: was specified anywhere.  That floor admitted a capture whose entire settle *was* the evidence
-#: window.  Raising it tightened admission; no session existed at the time, so nothing was
-#: retro-rejected.
-#:
-#: MUST NOT be set below SETTLE_EVIDENCE_WINDOW_S: nothing checks
+#: MUST NOT be set below SETTLE_EVIDENCE_WINDOW_S.  Nothing checks
 #: settle_duration_s >= settle_evidence_window_s (the two are validated independently below), so a
 #: lower value would admit a sidecar declaring a 60 s continuous evidence window inside a shorter
 #: settle - a criterion it cannot have demonstrated, sealed permanently into the cohort.  At 120.0
@@ -99,13 +80,7 @@ SETTLE_EVIDENCE_WINDOW_S = 60.0
 #: but only the lower bound is enforced here: settle_duration_s = 3600.0 is admitted and would seal a
 #: documented protocol violation into the cohort.  Pre-existing asymmetry; adding the upper bound is
 #: a behaviour change for its own commit.
-MIN_SETTLE_S = 120.0
-
-#: notes/protocol.md:201-202 SETTLE CRITERION, transcribed: PR spread <= 5 bpm over a continuous
-#: 60 s, and last-20 s vs first-20 s drift <= 3 bpm.  Both limbs are <=, so 5.0 and 3.0 exactly
-#: are PASSES - the comparisons below are >.  Duplicated at src/m4/manifest.py:174-175.
-SETTLE_SPREAD_MAX_BPM = 5.0
-SETTLE_DRIFT_MAX_BPM = 3.0
+MIN_SETTLE_S = _protocol.MIN_SETTLE_S
 
 #: notes/m2_capture_runbook.md section 3 "Paced": pace at least 120 s before recording, and
 #: confirm Masimo BR stability for at least 60 s.

@@ -72,6 +72,26 @@ This is operator tooling. It produces no scientific result and changes no metric
   `notes/m2_capture_runbook.md` §4 must be reworded accordingly (§11).
 - **[R3] D-OWN-6** (2026-08-12). `sit_to_record_delay_s` gets **no bound yet** — observe real values
   first. The tool therefore records the delay and its own seated-stage duration every session (§5 D13).
+- **[R5] D-OWN-8** (2026-08-12). **M2 and M4 share a protocol-constants module**, `src/protocol.py`.
+  This does not cut across the deliberate M2/M4 separation: `src/m2/__init__.py` scopes that split to
+  *schema semantics* (v2 historical vs v3 prospective), not to physical protocol facts. Scope rules,
+  so the boundary is not arbitrary:
+  - **Shared:** facts stated in `notes/protocol.md` that more than one module gates on — the distance
+    range, the settle spread/drift limbs, the clock-offset limit, the paced-rate rotation, and the two
+    settle-timing values M4 documents in prose.
+  - **Aliased, not moved.** Both modules keep their existing public names, assigned from
+    `src/protocol.py`. Every existing import keeps working and no value changes; the point is one
+    *editable value* per fact, not one name. Unifying the near-transposed names
+    (`SETTLE_MAX_PR_SPREAD_BPM` vs `SETTLE_SPREAD_MAX_BPM`) is a separate rename.
+  - **Deliberately NOT shared:** `FRAME_RATE_HZ`, duplicated in `src/m2/acquisition_metadata.py`,
+    `src/m2/time_sensitivity.py` and `src/m4/window_grid.py`. M2's is a capture parameter the operator
+    attests to; `window_grid.py:30-33` marks its copy FROZEN by `notes/analysis_prespec.md` §7, where a
+    change is a frozen-analysis amendment. Merging would couple an acquisition attestation to a frozen
+    analysis decision. But a divergence would be a *silent* scientific error — windows of 20 s of data
+    labelled 30 s — so an agreement test covers it instead.
+  - **Never merge coincidentally equal values.** `src/comparator.py:30`
+    `_HR_STATIONARITY_MAX_BPM = 5.0` equals the settle spread limit numerically and is an unrelated
+    within-window quantity.
 - **[R4] D-OWN-7** (2026-08-12). **Natural and paced settle is always at least 120 s**; the
   participant needs that long to stabilize. `MIN_SETTLE_S` raised 60.0 → 120.0, added to
   `notes/protocol.md` as SETTLE CRITERION limb 3, and this amends the §1 stop boundary. Three
@@ -582,10 +602,13 @@ review still covers the privacy schema, the staging boundary and the no-bypass p
    trigger recapture, and §11 of the prespec gates the arm on 8 of 10 final subjects — so seated-stage
    time can permanently forfeit a subject. Per D-OWN-6 no bound is set yet; the tool records the delay
    and its seated-stage duration every session so the decision can be made on real values.
-3. **Two runbook rewrites are now mandatory**, or they become dangling instructions: §4's
-   `$recoverySeatedStartUtc` one-liner is superseded by D13/D-OWN-5, and §1.3's "outside the Git
-   checkout" is superseded by D-OWN-3 (must become "outside the checkout **or** under the gitignored
-   `m2_capture_work/`"). `HANDOFF.md` §4 carries the same work-root wording.
+3. **[DONE at `bf1e51e`] The two runbook rewrites.** §1.3 now permits the gitignored in-repo
+   `m2_capture_work/` per D-OWN-3, and `HANDOFF.md` §4 no longer carries the external-directory
+   instruction. §4's `$recoverySeatedStartUtc` one-liner is **deliberately still there**, with a
+   marked pending-change block: it remains the correct procedure until
+   `scripts/m2_scaffold_sidecar.py` exists, and rewriting it to call a script that does not exist
+   would be the dangling reference this item warned about. That block is written to be deleted when
+   the tool ships — it is not documentation to keep.
 4. **Five follow-up diffs named, all outside this stop boundary:** adding the sidecar-vs-config
    cross-check to `_validate_prospective_cli` (D-M5); a CLI for the registry
    `withdrawn`/`recovery_not_cleared` states (§6.3); a retry-record contract before `--attempt`
@@ -607,8 +630,9 @@ review still covers the privacy schema, the staging boundary and the no-bypass p
    `_FORBIDDEN_SCENE_NOTE_TERMS` catches a participant name typed into `scene_non_health_notes`. The
    `checklist.md` instruction is the only mitigation. Accepted exfiltration residual of the in-repo
    work root is recorded at D-OWN-3.
-7. **`HANDOFF.md` §1/§4 are stale** beyond the countdown line — they describe uncommitted M2 changes
-   and a HEAD of `da3287d`, both false. A §10.1 rewrite is outstanding.
+7. **[DONE at `bf1e51e`] `HANDOFF.md` rewritten** per CLAUDE.md §10.1 — the uncommitted-M2-changes
+   claim, the `da3287d` HEAD and the external-work-directory instruction are gone, and the
+   milestone-0 baseline is recorded at `da9777c`.
 
 ## 12. Resolved: the natural/paced countdown is 30 s
 

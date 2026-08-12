@@ -199,23 +199,77 @@ def test_harmonic_collision_margin_uses_the_named_harmonic_order_and_tolerance()
 
 # ── M2 and M4 must not drift apart ──────────────────────────────────────────
 
-def test_m2_and_m4_agree_on_every_duplicated_protocol_threshold():
-    """A protocol change applied to only one module would let acquisition and scoring disagree.
+def test_m2_and_m4_both_source_every_shared_protocol_fact_from_src_protocol():
+    """Guard against a local literal creeping back into either module.
 
-    M4 is the offline scoring path that feeds the paper's agreement metrics. If acquisition
-    admitted a session that M4's gate then excluded - or the reverse - nothing else in the suite
-    would notice. Note the near-transposed spellings.
+    Since D-OWN-8 these are aliases of `src/protocol.py`, so equality between M2 and M4 is
+    automatic and asserting it alone would be vacuous. What can still go wrong is someone
+    re-introducing a literal in one module - which is exactly the pre-D-OWN-8 state, where M4 is the
+    offline scoring path feeding the paper's agreement metrics and a one-sided protocol edit would
+    have let acquisition admit a session that scoring excluded, with nothing failing. So this
+    asserts each module's name still resolves to the shared definition. Note the spellings still
+    differ between the two modules; only the values are unified.
     """
+    from src import protocol
+    from src.m2 import acquisition_metadata as m2
     from src.m4 import manifest as m4
 
-    assert (DISTANCE_MIN_M, DISTANCE_MAX_M) == (m4.DISTANCE_MIN_M, m4.DISTANCE_MAX_M)
-    assert SETTLE_SPREAD_MAX_BPM == m4.SETTLE_MAX_PR_SPREAD_BPM
-    assert SETTLE_DRIFT_MAX_BPM == m4.SETTLE_MAX_PR_DRIFT_BPM
+    assert (m2.DISTANCE_MIN_M, m2.DISTANCE_MAX_M) == (protocol.DISTANCE_MIN_M, protocol.DISTANCE_MAX_M)
+    assert (m4.DISTANCE_MIN_M, m4.DISTANCE_MAX_M) == (protocol.DISTANCE_MIN_M, protocol.DISTANCE_MAX_M)
 
-    from src.m2.acquisition_metadata import MAX_CLOCK_OFFSET_S, PACED_RATES_BPM
+    assert m2.SETTLE_SPREAD_MAX_BPM == protocol.SETTLE_SPREAD_MAX_BPM
+    assert m4.SETTLE_MAX_PR_SPREAD_BPM == protocol.SETTLE_SPREAD_MAX_BPM
+    assert m2.SETTLE_DRIFT_MAX_BPM == protocol.SETTLE_DRIFT_MAX_BPM
+    assert m4.SETTLE_MAX_PR_DRIFT_BPM == protocol.SETTLE_DRIFT_MAX_BPM
 
-    assert MAX_CLOCK_OFFSET_S == m4.MAX_CLOCK_OFFSET_S
-    assert tuple(PACED_RATES_BPM) == tuple(m4.PACED_RATES_BPM)
+    assert m2.MAX_CLOCK_OFFSET_S == protocol.MAX_CLOCK_OFFSET_S
+    assert m4.MAX_CLOCK_OFFSET_S == protocol.MAX_CLOCK_OFFSET_S
+
+    assert tuple(m2.PACED_RATES_BPM) == tuple(protocol.PACED_RATES_BPM)
+    assert tuple(m4.PACED_RATES_BPM) == tuple(protocol.PACED_RATES_BPM)
+
+    # Settle timing: M2 enforces both, M4 documents them without gating on them.
+    assert m2.MIN_SETTLE_S == protocol.MIN_SETTLE_S
+    assert m2.SETTLE_EVIDENCE_WINDOW_S == protocol.SETTLE_EVIDENCE_WINDOW_S
+
+
+def test_the_three_frame_rate_definitions_agree_although_deliberately_unshared():
+    """`FRAME_RATE_HZ` is duplicated on purpose, so a test must hold the copies together.
+
+    M2's is a capture parameter the operator attests to having configured; `src/m4/window_grid.py`
+    marks its copy FROZEN by `notes/analysis_prespec.md` §7, where a change is an amendment to a
+    frozen analysis decision rather than a config edit. Merging them would couple an acquisition
+    attestation to a frozen analysis decision, so they stay separate - but a divergence would be a
+    *silent* scientific error, windows holding 20 s of data while labelled 30 s, which is why this
+    asserts they agree.
+    """
+    from src.m2 import acquisition_metadata as m2_acq
+    from src.m2 import time_sensitivity as m2_time
+    from src.m4 import window_grid as m4_grid
+
+    assert m2_acq.FRAME_RATE_HZ == m2_time.FRAME_RATE_HZ == m4_grid.FRAME_RATE_HZ
+    assert m2_time.FRAMES_PER_WINDOW == m4_grid.FRAMES_PER_WINDOW
+
+
+def test_a_coincidentally_equal_threshold_is_not_folded_into_the_shared_module():
+    """`comparator.py`'s HR stationarity limit is also 5.0 and must stay independent.
+
+    It is a within-window HR quantity, unrelated to the settle PR spread. If a future protocol
+    amendment moves the settle limb, this must not follow it. Equal numbers are not the same fact.
+    """
+    import inspect
+
+    from src import comparator, protocol
+
+    assert comparator._HR_STATIONARITY_MAX_BPM == 5.0
+    assert protocol.SETTLE_SPREAD_MAX_BPM == 5.0
+
+    # The shared module must not have grown an HR-stationarity constant, and comparator must not
+    # have started sourcing its limit from it. Both are checkable; equality of the values is not.
+    assert not any("STATIONARITY" in name for name in vars(protocol)), (
+        "src/protocol.py holds physical protocol facts; HR stationarity is an analysis quantity"
+    )
+    assert "protocol" not in inspect.getsource(comparator).split("_HR_STATIONARITY_MAX_BPM")[0][-200:]
 
 
 def test_min_settle_is_never_below_the_evidence_window():
