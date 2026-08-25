@@ -17,11 +17,12 @@ prior-work triage and what the venue requires that this project does not yet hav
 
 ## 2. Current state
 
-Branch **`vital_signs_own_v13`**, HEAD `1221bde`, pushed and in sync with
-`origin/vital_signs_own_v13`, working tree clean (verified 2026-08-25 after the push). Landmark
-commits: `e04ae16` restored the cohort registry, `da9777c` recorded the milestone-0 test baseline,
-`5cc49fd` registered the most recent capture (P005 paced), `1221bde` selected the target venue and
-rewrote this file against verified state.
+Branch **`vital_signs_own_v13`**, pushed and in sync with `origin/vital_signs_own_v13`, working tree
+clean as of 2026-08-25. **Check `git status -sb` rather than trusting this line** — a HEAD hash
+written here goes stale the moment anything is committed, which has already happened twice.
+Landmark commits, which do not move: `e04ae16` restored the cohort registry, `da9777c` recorded the
+milestone-0 test baseline, `5cc49fd` registered the most recent capture (P005 paced), `1221bde`
+selected the target venue, `80fa49d` prepared this file for a Track 0 start.
 
 **Physical acquisition has started.** This is the biggest change since the last handoff.
 
