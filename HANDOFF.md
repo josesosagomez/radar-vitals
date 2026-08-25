@@ -17,10 +17,11 @@ prior-work triage and what the venue requires that this project does not yet hav
 
 ## 2. Current state
 
-Branch **`vital_signs_own_v13`**, HEAD `5cc49fd`. **HEAD is 2 commits ahead of
-`origin/vital_signs_own_v13`** — `b807bb0` and `5cc49fd` are unpushed. The working tree carries
-uncommitted work from the 2026-08-25 session: modified `HISTORY.md` and untracked
-`notes/venue_iotj.md`.
+Branch **`vital_signs_own_v13`**, HEAD `1221bde`, pushed and in sync with
+`origin/vital_signs_own_v13`, working tree clean (verified 2026-08-25 after the push). Landmark
+commits: `e04ae16` restored the cohort registry, `da9777c` recorded the milestone-0 test baseline,
+`5cc49fd` registered the most recent capture (P005 paced), `1221bde` selected the target venue and
+rewrote this file against verified state.
 
 **Physical acquisition has started.** This is the biggest change since the last handoff.
 
