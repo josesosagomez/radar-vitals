@@ -63,20 +63,63 @@ funnelling them through one temp parent produced 25 spurious failures.
 
 ## 3. Active task / next steps
 
-Owner-set priority, 2026-08-25: **Track 0 first, then Track 1 in parallel with Track 2.**
+Owner-set priority, 2026-08-25: **Track 0 first, then Track 1 in parallel with Track 2.** The next
+chat starts on Track 0.
 
-**Track 0 — resolve static clutter removal. Do this before other technical work.** Open since
-2026-07-30 (`notes/approach.md` §3 step 3, `HISTORY.md` 2026-07-30): the production path has **no**
-static clutter removal — `src/respiration.py::extract_chest_phase` goes Hann → range FFT → locked
-bin → `delta_before_mean` → cumsum with nothing between, and it is disabled on-chip too
-(`clutterRemoval -1 0`, `calibDcRangeSig -1 0`). `delta_before_mean` cancels static *per-channel
-phase offsets* only; it does **not** cancel additive static clutter in the range bin, which
-compresses the phase excursion and introduces harmonic distortion. That matters here specifically
-because HR rests on AHET second-harmonic verification and ECA on respiration harmonics, and the
-2026-07-28 captures contain static reflectors stronger than the subject (`notes/protocol.md`,
-"Scene behind the subject"). The decision is binary: **justify the omission with a citation, or
-implement it.** Investigate properly and decide — do not default. Whatever is chosen, note that
-changing downstream DSP can move the warmup bin lock.
+| track | what | blocked by |
+|---|---|---|
+| **0** | static clutter removal decision | nothing — startable now |
+| 1 | capture the remaining 36 sessions | participant scheduling and operator time |
+| 2 | sidecar scaffold tool | nothing; plan approved, not started |
+| 3 | live path as a real-time result | route choice, for the scoring half only |
+
+### Track 0 — resolve static clutter removal (START HERE)
+
+**The next chat should open on this.** Open since 2026-07-30 (`notes/approach.md` §3 step 3,
+`HISTORY.md` 2026-07-30). It is a genuine open scientific decision, not a bug to patch — do not
+default either way.
+
+**The situation.** The production path has **no** static clutter removal.
+`src/respiration.py::extract_chest_phase` runs Hann → range FFT → select locked bin →
+`delta_before_mean` → cumsum, with nothing in between, and no MTI or slow-time mean subtraction
+exists anywhere in `src/`. It is disabled on-chip too (`steps/step_1/capture.py` sends
+`clutterRemoval -1 0` and `calibDcRangeSig -1 0`). **Do not conflate `delta_before_mean` with
+clutter removal:** it cancels static *per-channel phase offsets*, which is all its docstring
+claims, and does **not** cancel additive static clutter in the range bin. Uncancelled clutter
+compresses the phase excursion and introduces harmonic distortion, which matters here specifically
+because HR rests on AHET second-harmonic verification and ECA on respiration harmonics.
+
+**Why it is not academic.** `notes/protocol.md` (§"Scene behind the subject", note added
+2026-07-30) records that the five 2026-07-28 captures contain static reflectors at 2.09 m, 2.88 m
+and 4.19 m returning more energy than the subject. The scene drifted from protocol, unrecorded, and
+those captures are development data — so the effect can be measured directly rather than argued.
+
+**The decision is binary:** justify the omission with a citation, or implement removal.
+
+**Data to use — development only.** The 8 development captures (subjects A-D) live under
+`results/live_demo/`, **not** `data/raw/`: `20260713_172042_..._massimo1`,
+`20260713_182002_..._massimo2`, `20260714_180523_..._sweep`, and `massimo3`-`massimo7` from
+2026-07-28/29. They were never promoted, which is why `data/raw/` holds only `prospective/` and
+`data/manifest.local.csv` is header-only — that is expected, not damage. Per-capture SHA-256, the
+subject map and the live-versus-corrected bin table are in `notes/capture_inventory.md`.
+**`P001`-`P006` are off-limits for this work.** Any method fitted, selected or changed using
+`representation_validation` data consumes that cohort and taints it (`notes/analysis_prespec.md`
+§3.1 data-roles table).
+
+**Settle this first — it is unresolved and it decides the blast radius.** Does offline scoring
+**re-derive** the warmup bin from the raw stream, or **reuse** the bin recorded at capture time?
+`notes/analysis_prespec.md` says nothing about it (searched 2026-08-25: no `locked_bin` or bin-lock
+rule anywhere in that file). Each capture records `locked_bin`, `locked_bin_source`,
+`warmup_selected_bin` and `warmup_selection_confidence` in `run_metadata.json` (P001_natural:
+bin 26, `warmup_auto`, high). The stakes: warmup scores candidate bins by running the **entire
+downstream chain** per bin, so adding clutter removal can move the lock. If offline re-derives, the
+9 captured sessions are unaffected and can simply be reprocessed. If offline reuses the recorded
+bin, then a mid-acquisition DSP change splits the cohort into sessions locked under different rules
+— protocol drift under CLAUDE.md §3.6, and a direct conflict with Track 1 running in parallel.
+
+**Prior art in-repo before searching outward:** `notes/approach.md` Part A §3 (pipeline as
+implemented) and Part C (open questions), `plans/bin_drift_diagnostic.md`, and the 2026-07-14
+mislock history in `notes/capture_inventory.md`.
 
 **Track 1 — continue physical acquisition.** Follow `notes/m2_capture_runbook.md` exactly. 36
 sessions remain, including **all 15 recovery sessions**, which are the only source of the HR dynamic
@@ -108,9 +151,12 @@ choice is deliberately still open** — decide it when the work is actually pick
 (a) make the causal/online estimator reproducible from the saved stream and score *that* estimator,
 or (b) keep offline scoring as the headline and separately measure and report the online-versus-
 offline gap. Either way the missing measurements are the same and are needed regardless: per-window
-latency distribution, sustained throughput against the 20 Hz frame budget, peak memory, CPU, the
-edge/host split, and time-to-first-estimate (warmup runs the full downstream chain over 14 candidate
-bins before the first reported estimate). None of that instrumentation exists anywhere in `src/` or
+latency distribution, sustained throughput against the 20 Hz frame budget, peak memory, CPU, and the
+edge/host split. **One timing measurement already exists and should not be rebuilt:**
+`t_warmup_scan_ms` is stamped into every capture's `run_metadata.json` (`scripts/live_demo.py:1033`,
+`:1491`) — P001_natural recorded **4032 ms** — which is the warmup component of
+time-to-first-estimate, since warmup runs the full downstream chain over 14 candidate bins before
+the first reported estimate. Everything else on that list is genuinely absent from `src/` and
 `scripts/`.
 
 ## 4. Recent decisions that matter
@@ -209,6 +255,9 @@ bins before the first reported estimate). None of that instrumentation exists an
 | `notes/protocol.md` | approved three-arm participant protocol |
 | `notes/analysis_prespec.md` | cohorts, timing, validity, retry and dynamic-HR rules |
 | `notes/approach.md` | method, physics, pipeline as implemented, open DSP decisions |
+| `src/respiration.py` | `extract_chest_phase` — the Track 0 target function |
+| `notes/capture_inventory.md` | the 8 development captures: hashes, subject map, bin table |
+| `results/live_demo/` | development capture data (A-D), never promoted to `data/raw/` |
 | `src/m2/acquisition_metadata.py` | sole authority on acquisition-sidecar validity |
 | `cohort_registry/registry_v010.json` | current cohort registry, revision 10 |
 | `templates/m2_acquisition_*.yaml` | arm-specific acquisition sidecars |

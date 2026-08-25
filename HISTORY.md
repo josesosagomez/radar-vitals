@@ -11843,3 +11843,56 @@ commit the session's work.
 - Track 3: instrument the live path; choose the real-time route when the work is picked up.
 - Verify the `notes/venue_iotj.md` §3.1 DOIs and triage the §3.2 quarantine — in particular whether
   Rong et al. induced HR variation.
+
+## 2026-08-25 - Track 0 handoff prepared; timing-instrumentation claim corrected
+
+**Set out to do:** correct an overstated claim committed earlier today, and prepare `HANDOFF.md` so
+a fresh chat can open directly on Track 0 (static clutter removal).
+
+**Worked (with evidence):**
+
+- **Located the development data and confirmed Track 0 is startable.** The 8 development captures
+  (subjects A-D) are under `results/live_demo/`, not `data/raw/`: `20260713_172042_..._massimo1`,
+  `20260713_182002_..._massimo2`, `20260714_180523_..._sweep`, and `massimo3`-`massimo7` from
+  2026-07-28/29, each with `adc_stream.bin` present. They were never promoted, which is why
+  `data/raw/` contains only `prospective/` and `data/manifest.local.csv` is header-only (1 line, no
+  rows). That is expected under CLAUDE.md §4 — a live run's raw mirror becomes a canonical input
+  only by deliberate promotion — not data loss. Recorded in `HANDOFF.md` §3 Track 0 so the next
+  chat does not mistake it for damage.
+- **`HANDOFF.md` §3 restructured for a Track 0 start:** a four-row track/blocker table, then Track 0
+  expanded with the mechanism, the in-repo evidence, the exact target function
+  (`src/respiration.py::extract_chest_phase`), the development-data locations, the
+  `representation_validation` firewall constraint, and the prior art to read first. Pointer rows
+  added for `src/respiration.py`, `notes/capture_inventory.md` and `results/live_demo/`.
+- **Recorded the unresolved question that decides Track 0's blast radius:** whether offline scoring
+  re-derives the warmup bin from raw or reuses the bin recorded at capture time. Searched
+  `notes/analysis_prespec.md` 2026-08-25 for `locked_bin`, "bin lock", "re-derive" and "re-select" —
+  **no matches**, so the prespec is silent. Captures do record it: `P001_natural`'s
+  `run_metadata.json` has `locked_bin = 26`, `locked_bin_source = warmup_auto`,
+  `warmup_selection_confidence = high`. If offline re-derives, the 9 captured sessions are
+  unaffected; if it reuses, a mid-acquisition DSP change splits the cohort across bin-selection
+  rules and collides with Track 1.
+
+**Failed / did not work, and why:**
+
+- **I claimed no latency instrumentation existed anywhere in `src/` or `scripts/`. That was wrong**,
+  and it was committed in `1221bde` to both `HANDOFF.md` §3 Track 3 and `notes/venue_iotj.md` §4.3.
+  `t_warmup_scan_ms` *is* measured and written into every capture's `run_metadata.json`
+  (`scripts/live_demo.py:1033`, `:1491`); `P001_natural` recorded **4032.0 ms**. It covers the
+  warmup component of time-to-first-estimate. The original grep missed it because the field is
+  populated from the warmup evidence dict rather than by a `perf_counter` call in `src/`. Both files
+  corrected; the correction is stated in `notes/venue_iotj.md` §4.3 rather than silently patched.
+  The substantive gap stands: per-window latency, throughput, peak memory, CPU and the edge/host
+  split are still absent.
+
+**Retired / no longer used:**
+
+- The blanket "no latency, throughput, memory or power instrumentation anywhere" phrasing, in both
+  files. Superseded by the qualified version above.
+
+**Next:**
+
+- Open the next session on Track 0. First action is settling the bin re-derivation question, since
+  it determines whether Track 1 can safely continue in parallel.
+- Unchanged: Tracks 1-3 as recorded in `HANDOFF.md` §3, and the `notes/venue_iotj.md` §6 citation
+  verification.

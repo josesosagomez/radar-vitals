@@ -113,12 +113,16 @@ deployment: edge/host split, real-time streaming, measured latency and compute, 
 
 Required before submission:
 
-- **Elevate the live path from demo to measured system component.** Today `scripts/live_demo.py`
-  has *no* latency, throughput, memory or power instrumentation anywhere in `src/` or `scripts/`
-  (verified by search, 2026-08-25). Needed: per-window latency distribution, sustained throughput
-  against the 20 Hz frame budget, peak memory, CPU, and an explicit statement of what runs on the
-  IWR1642 versus the host. Time-to-first-estimate matters too: warmup runs the full downstream
-  chain over 14 candidate bins before the first reported estimate (`notes/approach.md`, §3 step 4).
+- **Elevate the live path from demo to measured system component.** Needed: per-window latency
+  distribution, sustained throughput against the 20 Hz frame budget, peak memory, CPU, and an
+  explicit statement of what runs on the IWR1642 versus the host. None of those exist in `src/` or
+  `scripts/`. **One exception, corrected 2026-08-25:** `t_warmup_scan_ms` *is* already measured and
+  written into every capture's `run_metadata.json` (`scripts/live_demo.py:1033`, `:1491`;
+  P001_natural = 4032 ms). It covers the warmup component of time-to-first-estimate, which matters
+  because warmup runs the full downstream chain over 14 candidate bins before the first reported
+  estimate (`notes/approach.md`, §3 step 4). An earlier draft of this file claimed no timing
+  instrumentation existed at all; that was wrong because the field is populated from the warmup
+  evidence dict rather than by a timing call in `src/`.
 - **Blocking constraint (CLAUDE.md §4).** No live readout and nothing in `live_estimates.csv` is
   paper-grade: the live path uses an online median smoother, and paper metrics come from offline
   reprocessing of the saved `adc_stream.bin`. To claim a validated real-time system we must either
