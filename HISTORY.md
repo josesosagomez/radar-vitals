@@ -11604,3 +11604,242 @@ countdown disagreement found while doing so.
 - `HANDOFF.md` sections 1 and 4 are stale beyond the countdown line: they still describe HEAD as
   `da3287d` with uncommitted M2 changes, which the later commits invalidated. A full section 10.1
   rewrite is outstanding.
+
+## 2026-08-25 - Target venue selected: IEEE IoT-J; external literature report triaged
+
+**Set out to do:** decide the target journal for the vital-signs paper, and turn a commissioned
+external literature report on IoT-J AIoT/healthcare sensing (2023-2026) into a usable, honestly
+sourced record. No experiments, no captures, no processing this session.
+
+**Worked (with evidence):**
+
+- **`notes/venue_iotj.md` written** (new file). Records the decision — IEEE IoT-J regular issue,
+  fallbacks J-BHI then Sensors J./TIM — the prior-work triage, the scope-gate requirements, and
+  six open actions. It contains no results from this project and says so.
+- **Citation quarantine applied.** The external report's own caveats say only two entries had
+  full-text-verified metrics (mmHRV, IoT-J 2021, 11 subjects, ECG reference; ViMo, IoT-J 2020/21,
+  8 subjects, Polar H10) while roughly a dozen further entries were UNVERIFIED. Per CLAUDE.md §4
+  the file splits them into a citable-after-confirmation tier (§3.1) and a non-citable quarantine
+  (§3.2); even §3.1 DOIs are marked UNCONFIRMED pending IEEE Xplore. Nothing from either tier has
+  entered `notes/approach.md` or any manuscript.
+- **Forbidden phrasing caught and rejected.** The external report described our cohort design as
+  "a pre-registered 4-dev / 5-gate / 10-held-out one-shot design". That violates CLAUDE.md §4 and
+  the standing rule of 2026-08-03. `notes/venue_iotj.md` opens with an explicit banner rejecting
+  the phrase and restating the design as a transparency property, not a timing one.
+- **Instrumentation gap verified by search, not assumed.** A search over `src/` and `scripts/` for
+  latency/throughput/memory/power markers returned hits only in
+  `scripts/diagnose_coverage_gaps.py`, `scripts/stage1b_exploratory_motion.py` and
+  `scripts/stage1b_temporal_continuity.py` — none in `src/` and none in `scripts/live_demo.py`.
+  So the deployable-system evidence IoT-J expects does not exist yet, in any form.
+- **Accuracy bar quantified from the verified subset:** ~0.8-1.3 bpm resting HR error
+  (ViMo 0.92 median, 1.29 MAE). Recorded as the reason not to position this paper on accuracy.
+
+**Failed / did not work, and why:**
+
+- **No claim in the external report was independently verified this session.** DOIs were not
+  resolved, no full text was read, the special-issue page was not opened, and the reported IoT-J
+  impact factor (8.9 / 5-yr 9.6) was not checked in JCR. Everything is recorded as UNVERIFIED
+  rather than promoted; this is deferred work, not completed work.
+- **An earlier answer in this session asserted that the 1 Hz Masimo sampling rate limits
+  dynamic-HR validation.** That mechanism is wrong — 1 Hz is adequate to track a recovery ramp.
+  The real and unfixable limits are the device's undisclosed internal averaging window and
+  peripheral pulse-transit lag, both worst where HR changes fastest. `notes/venue_iotj.md` §4.4
+  carries the corrected version.
+- **A `cat` heredoc through the Bash tool failed** with "unexpected EOF while looking for matching
+  quote" on this multi-line Markdown; the file was written with the Write tool instead. Minor, but
+  worth knowing before scripting large Markdown writes here.
+
+**Retired / no longer used:**
+
+- Nothing retired. `HANDOFF.md` §2 remains stale in a way this session did not fix: it still states
+  that no prospective participant has been captured, while the cohort registry has advanced to
+  revision 10 (`cohort_registry/registry_v010.json`) with 9 sessions in state `captured` and 36
+  still `planned`, and commits `c621844` through `5cc49fd` register P001-P006 captures. The
+  registry digest quoted in `HANDOFF.md` is the revision-1 digest and no longer describes HEAD.
+
+**Next:**
+
+- Confirm the §3.1 DOIs on IEEE Xplore; promote or discard each §3.2 item individually. In
+  particular confirm whether Rong et al. (radar acoustics, IoT-J 2024) induced HR variation — if
+  they did, our dynamic-range differentiator is weaker than stated.
+- Decide the live-path question: make the causal/online estimator reproducible from the saved
+  `adc_stream.bin` and score it, or quantify the online-versus-offline gap. Until one of these
+  happens there is no defensible real-time claim, only an unvalidated demo.
+- Add latency/throughput/memory instrumentation and state the edge/host split.
+- Raise the ECG sub-study question with the PI, restricted to development subjects A-D — the 15
+  prospective slots are fully allocated and carry no replacement budget.
+- Still outstanding from 2026-08-12 and untouched here: the sidecar scaffold tool
+  (`plans/m2_sidecar_scaffold.md`) and the full `HANDOFF.md` §10.1 rewrite.
+
+## 2026-08-25 - HANDOFF.md audited against the repository and rewritten
+
+**Set out to do:** re-verify every claim in `HANDOFF.md` against the working tree and rewrite it per
+CLAUDE.md §10.1, after the earlier session entry noted it had gone stale.
+
+**Worked (with evidence):**
+
+- **Full suite re-measured green at HEAD `5cc49fd`: 3140 passed, 5 skipped in 346.89 s, exit 0**,
+  via `conda run -n radar-vitals python -m pytest -q` with no shared `--basetemp`. This reproduces
+  the 2026-08-12 milestone-0 baseline count exactly. Consistent with
+  `git diff da9777c..HEAD -- src/ tests/ scripts/` returning empty: the only changes since the
+  baseline commit are the added `cohort_registry/registry_v00{7,8,9}.json`, `registry_v010.json`
+  and their `.sha256` sidecars (18 files, 18 insertions).
+- **Acquisition state established from the registry, not from prose.**
+  `cohort_registry/registry_v010.json` is revision 10, digest
+  `20604fb49a397e86f82f1e0773d7a152d5664a8af53e5eb80a7511f7b765312f`. Session states are 9
+  `captured` / 36 `planned`: P001 natural+paced, P002 natural+paced, P003 natural, P004 natural,
+  P005 natural+paced, P006 natural. All 15 subjects remain `label_state: sealed`. The same 9
+  sessions are promoted under `data/raw/prospective/`, each carrying `adc_stream.bin`,
+  `session_manifest_v3.json`, `sealed_radar_receipt.json`, `<session>_reference.csv`,
+  `reference_acquisition.json`, `settle_evidence.json` and `frame_validity.npy` — registry and
+  filesystem agree, 9 for 9.
+- **`HANDOFF.md` rewritten in place** to state the above, replacing the previous "no prospective
+  participant has been captured / registry revision 1 / all 45 planned" text, which had been false
+  since at least commit `c621844`.
+- **Gotcha citations re-verified rather than copied forward:** countdown returns 30 (0 for
+  recovery) at `scripts/live_demo.py:769-773`; `settle_evidence_window_s` fixed at exactly 60.0 at
+  `src/m2/acquisition_metadata.py:332-333`; `INTENDED_DURATION_S = 600.0` and
+  `MAX_CLOCK_OFFSET_S = 1.0` at `src/m2/acquisition_metadata.py:45-46`; the 12,000-frame check at
+  `src/m2/capture_artifacts.py:202` and `:391`. Two `notes/analysis_prespec.md` line-number
+  citations in the old file were replaced with section references, since line numbers drift.
+
+**Failed / did not work, and why:**
+
+- **`notes/m2_capture_runbook.md:194` is wrong as written.** It states "After promotion, everything
+  under that new raw directory is read-only." Measured 2026-08-25:
+  `data/raw/prospective/P001_natural/adc_stream.bin` (1,572,864,000 bytes) reports
+  `IsReadOnly = False`, and a search of `src/m2/capture_artifacts.py` and
+  `scripts/m2_finalize_capture.py` for any read-only, `chmod`, `S_IREAD` or `0o444` operation
+  returns no hits — nothing in the promotion path sets the attribute. `HANDOFF.md` had repeated the
+  claim. The rewritten file now records read-only as a project rule enforced by discipline, not by
+  the filesystem. **The runbook itself was left unedited and still carries the false statement** —
+  deliberately, because correcting an operator procedure was outside this task's scope. It needs
+  either a code change that sets the attribute or a wording fix.
+- **`conda` is not on PATH** in either shell of this session; the first two suite invocations died
+  with exit 127 / "term not recognized". It resolves at
+  `C:\ProgramData\anaconda3\Scripts\conda.exe`. Separately, the bare `python` on PATH is MSYS2
+  (`C:/msys64/mingw64/bin/python.exe`) — fine for stdlib JSON reads, and the known matplotlib
+  `savefig` crash still applies to invoking the environment's interpreter by absolute path.
+- **A `cat` heredoc through the Bash tool failed again** on multi-line Markdown; the working route
+  is Write to the scratchpad then `cat >>`.
+
+**Retired / no longer used:**
+
+- The previous `HANDOFF.md` body, in full. Superseded claims worth preserving because they were
+  asserted as true and were not: "M2 is FAIL / pending physical acquisition"; "no prospective
+  participant has been captured, no prospective reference has been opened"; registry "revision 1,
+  digest `e1bf942f...`, all 45 sessions `state: planned`"; and "pushed and in sync with
+  `origin/vital_signs_own_v13`, working tree clean". At the time of the rewrite HEAD was **2 commits
+  ahead of origin** (`b807bb0`, `5cc49fd` unpushed) with `HISTORY.md` modified and
+  `notes/venue_iotj.md` untracked.
+
+**Next:**
+
+- Decide the `notes/m2_capture_runbook.md:194` read-only discrepancy: set the attribute in the
+  promotion path, or correct the sentence. Until then ~1.5 GB of unbacked, untracked raw capture per
+  session is protected by convention only, and `data/` is gitignored (`.gitignore:13`) so no captured
+  session exists anywhere but this machine.
+- Push `b807bb0` and `5cc49fd`; commit or discard the working-tree changes.
+- Capture the remaining 36 sessions, **all 15 recovery sessions among them** — they are the only
+  source of the HR dynamic range an agreement claim requires.
+- Note that `P006_natural` (`final_evaluation`) was captured before the five-subject
+  `representation_validation` cohort completed. Permitted by enrolment-order role assignment, but
+  nothing learned from P006 or later may feed back into the algorithm or thresholds.
+- Milestone A of `plans/m2_sidecar_scaffold.md` is still not started;
+  `scripts/m2_scaffold_sidecar.py` does not exist. Work directories exist for `P003_paced`,
+  `P007_natural` and `P009_natural` but those sessions are not captured or promoted.
+
+## 2026-08-25 - Raw-capture integrity verified end to end; read-only question closed
+
+**Set out to do:** settle whether the missing filesystem read-only attribute on promoted raw
+captures matters for reproducibility or for the paper.
+
+**Worked (with evidence):**
+
+- **The integrity guarantee is a hash chain anchored in git, and it verifies clean.** Chain:
+  committed `cohort_registry/registry_v010.json` → `radar_receipt_sha256` per captured session →
+  `sealed_radar_receipt.json` → `raw_sha256` of `adc_stream.bin`. The receipt additionally seals
+  `run_metadata.json`, `effective_config.json`, `source_config.yaml`, `settle_evidence.json`,
+  `frame_validity.npy`, the acquisition sidecar and the capture git commit, each with its own
+  SHA-256.
+- **Full verification over all 9 captured sessions, 2026-08-25: 9/9 receipts match the committed
+  registry (0 mismatched), and 9/9 `adc_stream.bin` files match their recorded `raw_sha256`.**
+  Sessions checked: P001 natural+paced, P002 natural+paced, P003 natural, P004 natural, P005
+  natural+paced, P006 natural. Example: `P001_natural` raw digest
+  `f31ea873a53cf6f033a24a7a3853dc36aec831fce253275401e6c2f295d48968`.
+- **This satisfies CLAUDE.md §3.1** ("every number traces to ... the input data file's hash")
+  independently of any OS attribute.
+- **Owner confirmed 2026-08-25 that raw captures are backed up to an external hard drive**, so the
+  gitignored `data/` tree is not a single point of failure.
+
+**Failed / did not work, and why:**
+
+- **I overweighted the read-only finding in the previous entry.** The 2026-08-25 entry
+  "HANDOFF.md audited against the repository and rewritten" recorded
+  `notes/m2_capture_runbook.md:194` as a defect and framed promoted raw data as "protected by
+  discipline alone" and existing "nowhere else". Both framings were wrong in emphasis: the hash
+  chain already made corruption detectable, and backups already existed. That entry stands as
+  written (append-only) and is corrected here. The runbook sentence remains factually loose about
+  filesystem state but is harmless given the hash chain; **no code or runbook change is warranted
+  and the question is closed** — do not reopen it.
+
+**Retired / no longer used:**
+
+- The `HANDOFF.md` §5 landmine bullet asserting that read-only is unenforced and that each
+  `adc_stream.bin` "exists nowhere else". Replaced with the verified hash-chain statement and the
+  backup fact.
+
+**Next:**
+
+- Re-run the two-link hash verification after any future promotion; that is the standing integrity
+  check. No action on file permissions.
+
+## 2026-08-25 - Owner decisions: no ECG, live-path focus, static clutter to front of queue
+
+**Set out to do:** record four owner decisions taken at the end of the 2026-08-25 session and
+commit the session's work.
+
+**Worked (with evidence):**
+
+- **Decision — no ECG sub-study. Closed, not deferred.** The Masimo MightySat 1 Hz fingertip pulse
+  rate remains the sole HR reference. Stated reasons: equipment not available, a second reference
+  device would require additional subjects, and an ethics amendment could not clear in a workable
+  timeframe. Mitigation is a Methods reference-error budget (undisclosed internal averaging window,
+  peripheral pulse-transit lag — both worst on the recovery ramp — and the existing PI-based quality
+  gating), with IBI/HRV declared out of scope by design. Recorded in `HANDOFF.md` §4 and
+  `notes/venue_iotj.md` §6 item 5. Consequence accepted: the field's closest competitors (mmHRV,
+  ViMo) use contact ECG, so this will be raised in review and is answered in prose, not with data.
+- **Decision — the live/real-time path is the designated focus area**, but the *route* is
+  deliberately left undecided: either make the causal/online estimator reproducible from the saved
+  `adc_stream.bin` and score that estimator, or keep offline scoring as the headline and separately
+  measure the online-versus-offline gap. Recorded as `HANDOFF.md` §3 Track 3. The latency,
+  throughput, memory, CPU, edge/host-split and time-to-first-estimate measurements are required
+  under either route, so they are not blocked by the open choice.
+- **Decision — static clutter removal goes to the front of the technical queue**, recorded as
+  `HANDOFF.md` §3 Track 0 and `notes/venue_iotj.md` §6 item 7. The open question dates from
+  2026-07-30: the production path has no static clutter removal, on-chip removal is disabled
+  (`clutterRemoval -1 0`, `calibDcRangeSig -1 0`), and `delta_before_mean` cancels only static
+  per-channel phase offsets. Binary decision — cite a justification for the omission, or implement
+  it — to be investigated rather than defaulted.
+- **Owner confirmation on the cohort firewall:** `P006_natural` (`final_evaluation`) will not be
+  touched until the pipeline work is complete. Consistent with the no-feedback rule in
+  `notes/analysis_prespec.md` §3.1.
+
+**Failed / did not work, and why:**
+
+- Nothing attempted and failed this session beyond the items already recorded in the three earlier
+  2026-08-25 entries.
+
+**Retired / no longer used:**
+
+- The ECG sub-study as an open option. It had been carried as an open action since the venue
+  analysis earlier the same day; it is now closed and should not be re-proposed.
+
+**Next:**
+
+- Track 0: investigate and decide static clutter removal.
+- Track 1: capture the remaining 36 sessions, including all 15 recovery sessions.
+- Track 2: Milestone A, then `scripts/m2_scaffold_sidecar.py`.
+- Track 3: instrument the live path; choose the real-time route when the work is picked up.
+- Verify the `notes/venue_iotj.md` §3.1 DOIs and triage the §3.2 quarantine — in particular whether
+  Rong et al. induced HR variation.
