@@ -44,21 +44,31 @@ Standard phase-based chain. Each stage verified in isolation:
    the energy prior) and `src/respiration.py::extract_chest_phase` (the one whose bin
    value becomes phase). The numbering here is logical order, not a data-flow diagram —
    nothing consumes a range profile produced by an earlier step.
-3. ~~Static clutter removal (subtract slow-time mean per bin).~~ **NOT IMPLEMENTED —
-   corrected 2026-07-30.** This step was listed here, and copied from here into
-   `HANDOFF.md`'s method summary, but no such stage exists in the production path.
-   `src/respiration.py::extract_chest_phase` goes Hann window → range FFT → select the
-   locked bin → `delta_before_mean` → cumsum, with nothing in between; there is no
-   slow-time mean subtraction, MTI filter or clutter subtraction anywhere in `src/`.
-   It is disabled on-chip too (`steps/step_1/capture.py` sends `clutterRemoval -1 0`
-   and `calibDcRangeSig -1 0`).
+3. **Static clutter removal — IMPLEMENTED, DEFAULTED OFF, NEVER CONCLUDED.**
+   **Corrected 2026-08-26; the previous "NOT IMPLEMENTED" text here was stale and wrong.**
+   `src/clutter.py` provides `remove_static_clutter()` with `CLUTTER_METHODS = ("none",
+   "slow_time_mean")`, where `slow_time_mean` subtracts the per-(chirp, rx) mean over slow
+   time, estimated per channel independently. It is wired in:
+   `src/respiration.py::extract_chest_phase` takes a `clutter_removal` argument (default
+   `"none"`) and applies it at line ~157, and `src/window_pipeline.py:72` reads
+   `cfg["phase"].get("clutter_removal", "none")`.
+   **The production default is off.** `scripts/live_demo_config.yaml`'s `phase:` block sets
+   only `method` and `impulse_clip_rad` and omits `clutter_removal` entirely, so every
+   capture to date fell through to `"none"`. It is disabled on-chip too
+   (`steps/step_1/capture.py` sends `clutterRemoval -1 0` and `calibDcRangeSig -1 0`).
+   Provenance: commit `fc4bc75`, 2026-07-30, "Add static clutter removal, off by default and
+   not yet shown to help" — landed the same day as the correction it superseded, and this
+   file was never updated to match.
    **Do not conflate this with `delta_before_mean`.** That cancels static *per-channel
    phase offsets* (which is all its docstring claims); it does **not** cancel additive
    static clutter in the range bin, which compresses the phase excursion and introduces
    harmonic distortion — a concern here specifically because HR rests on AHET
    second-harmonic verification and ECA on respiration harmonics.
-   **Open decision:** justify the omission with a citation, or implement it — see
-   `HISTORY.md` 2026-07-30. Relevant evidence: the 2026-07-28 captures contain static
+   **Open decision (unchanged in substance, changed in shape):** the question is not
+   "implement or justify" but **"turn it on or justify leaving it off"**, decided on
+   evidence. `scripts/score_offline.py` already supports `--isolate-fields
+   phase.clutter_removal`, which enforces that two configs differ in that field alone —
+   i.e. the A/B harness exists. Relevant evidence: the 2026-07-28 captures contain static
    reflectors stronger than the subject (`notes/protocol.md`, "Scene behind the subject").
 4. **Range-bin selection (warmup).** Not a post-FFT filter — it runs **the entire
    downstream chain, once per candidate bin**, and picks a winner

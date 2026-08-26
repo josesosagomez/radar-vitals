@@ -11896,3 +11896,117 @@ a fresh chat can open directly on Track 0 (static clutter removal).
   it determines whether Track 1 can safely continue in parallel.
 - Unchanged: Tracks 1-3 as recorded in `HANDOFF.md` §3, and the `notes/venue_iotj.md` §6 citation
   verification.
+
+## 2026-08-26 - Repository cleanup; static clutter removal found to be implemented all along
+
+**Set out to do:** adopt Option B for the development data (read captures in place, do not move
+them), then tidy the repository before any new implementation — erase files that were one-off
+artifacts or point at paths that no longer exist. Owner instruction: erase Tier 1 and Tier 2 from
+the survey, plus `experiments/exp_clutter_removal` in full, and log why.
+
+**Worked (with evidence):**
+
+- **Development-data decision: Option B.** The 8 subject A-D captures stay in
+  `results/live_demo/`; nothing is copied into `data/raw/`. Traceability is already satisfied —
+  per-capture SHA-256 and the subject map are committed in `notes/capture_inventory.md`. What is
+  missing is only tool plumbing, and the alternative (registering them in
+  `data/manifest.local.csv` + `data/raw/<id>.bin`) would have bought access to a toolchain that is
+  itself orphaned (see below), duplicated ~9.5 GB, and required filling manifest columns
+  (`distance_cm`, `posture`) that are genuinely null for these exploratory runs.
+- **Deleted 9 duplicate raw streams, reclaiming 13.5 GB** (`results/live_demo/` 23G → 9.5G). Each
+  prospective capture existed twice: the live mirror and the promoted copy. **Verified before
+  deleting** — all 9 live `adc_stream.bin` files hashed identical to the `raw_sha256` in their
+  session's sealed receipt: `P001_natural f31ea873…`, `P001_paced 1de0bf75…`,
+  `P002_natural 417484b9…`, `P002_paced 7730cd93…`, `P003_natural 49d0b935…`,
+  `P004_natural e3eaa30d…`, `P005_natural b3601213…`, `P005_paced 521fccb3…`,
+  `P006_natural 82958c13…` (9 MATCH, 0 DIFFER). Only `adc_stream.bin` was removed from each live
+  run directory. **`live_estimates.csv`, `live_intermediates.npz` and `warmup_bin_selection.json`
+  were retained** — they were never promoted, exist nowhere else, and `warmup_bin_selection.json`
+  is the chosen-range-bin evidence required by CLAUDE.md §5.4.
+- **Deleted 11 orphaned diagnostic scripts.** All resolved sessions through
+  `data/manifest.local.csv` + `data/raw/<id>.bin` and referenced only `exp001/003/005/008` — the
+  datasets wiped 2026-07-09. The manifest has zero rows, so none of them could run at all; nothing
+  in `tests/`, `src/`, `scripts/`, `steps/` or `figures/` referenced them (searched before
+  deleting). What they did, for the record: `diag_eca_overnotch` (raw/pre-ECA/post-ECA cardiac
+  spectra), `diag_hard_failure_thresholds`, `diag_heart_spectrum` (heart_spectrum intermediates for
+  failing seated sessions), `diag_leakage` (spectral-leakage hypothesis for seated no-back
+  failures), `diag_motion_spike` and `diag_motion_spike_thresholds`, `diag_phase_jump`,
+  `diag_range_bin_check` (whether the manifest locked bin is the true energy peak),
+  `diag_rx_imbalance`, `diag_subject_bin_dropout`, `diag_subject_bin_snr`. Their findings remain in
+  earlier `HISTORY.md` entries; only the tooling is gone.
+- **Deleted 12 one-off process artifacts**, each referenced by nothing in the repository:
+  `plans/m2_claude_review_loop_prompt.md`, `plans/m2_codex_review_prompt.md`,
+  `plans/m3_claude_review_loop_prompt.md`, `plans/m3_codex_review_prompt.md`,
+  `plans/m4_plan_codex_review_prompt.md`, `plans/m4_stage0_codex_review_prompt.md`,
+  `plans/m4_stage12_codex_review_prompt.md`, `plans/m0_preregistration.md`, `notes/cross_review_warmup_veto_prompt.md`,
+  `notes/cross_review_warmup_veto_prompt_2.md`,
+  `notes/cross_review_warmup_veto_review_1_findings.md`. `m0_preregistration.md` in particular was
+  a standing hazard: M0 was removed 2026-08-03 and "pre-registration" is forbidden project-wide
+  (CLAUDE.md §4), so a file by that name invited a future chat to resurrect the language.
+- **Deleted regenerable caches:** all `__pycache__` trees, `.pytest_cache`, `.codex_pytest`, and
+  the empty `.agents` directory (~350 KB).
+- **Deleted `experiments/exp_clutter_removal/`** (`clutter_on.yaml`, `clutter_off.yaml`) on
+  explicit owner instruction to start Track 0 clean. Recorded before deletion: the pair was
+  generated from `scripts/live_demo_config.yaml` with **exactly one intended difference**,
+  `phase.clutter_removal` = `slow_time_mean` (on) versus `none` (off), enforced at run time by
+  `--isolate-fields phase.clutter_removal`. Everything else in both files was identical, including
+  `phase.method: delta_before_mean`, `impulse_clip_rad: 1.5`, `seed: 42`, the 20 Hz / 30 s window /
+  3 s hop timing, `bin_selection.energy_eligibility_min_settled_db: -12.0`, `settle_skip_s: 5.0`,
+  and `heart.eca_mode: skip_forbidden_harmonics_v1`. Recoverable verbatim with
+  `git checkout e6efffe -- experiments/exp_clutter_removal/`.
+
+**Failed / did not work, and why:**
+
+- **`notes/approach.md` was wrong about the central Track 0 fact, and I propagated the error.**
+  Its §3 step 3 stated static clutter removal was "NOT IMPLEMENTED … no such stage exists in the
+  production path … there is no slow-time mean subtraction, MTI filter or clutter subtraction
+  anywhere in `src/`". That is false. `src/clutter.py::remove_static_clutter` exists with
+  `CLUTTER_METHODS = ("none", "slow_time_mean")`; `src/respiration.py::extract_chest_phase` takes a
+  `clutter_removal` argument and applies it; `src/window_pipeline.py:72` reads
+  `cfg["phase"].get("clutter_removal", "none")`. It was added in commit `fc4bc75` on **2026-07-30 —
+  the same day as the "correction" that declared it absent** — and `approach.md` was never updated.
+  I copied the stale claim into `HANDOFF.md` §3 Track 0 on 2026-08-25. Both files corrected today.
+  It surfaced only because deleting `exp_clutter_removal` required reading its configs first, which
+  is precisely why §10.2 requires recording content before deletion.
+- **The true state is subtler than either version:** the capability is implemented and wired, but
+  **has always been off in production**, because `scripts/live_demo_config.yaml`'s `phase:` block
+  omits the `clutter_removal` key entirely and the code default is `"none"`. Every capture to date,
+  development and prospective, ran without clutter removal. On-chip removal is separately disabled
+  (`clutterRemoval -1 0`, `calibDcRangeSig -1 0`).
+- **Track 0's shape therefore changes:** the decision is **"turn it on, or justify leaving it
+  off"**, decided on evidence — not "implement it or cite a justification for the omission". An A/B
+  harness also already exists: `scripts/score_offline.py --isolate-fields phase.clutter_removal`
+  refuses to run unless the two configs differ in that field alone.
+
+**Retired / no longer used:**
+
+- Everything listed above, minus the restored `plans/m8_ahmed_correction_plan.md`. The 11 markdown
+  files and 11 scripts remain in git history, and the 9 raw streams remain in
+  `data/raw/prospective/` with their hash chain intact.
+- The `notes/approach.md` §3 step 3 "NOT IMPLEMENTED" paragraph, superseded by the corrected text.
+
+**Additional failure — the cleanup broke the build and had to be partly reverted.**
+
+- **`plans/m8_ahmed_correction_plan.md` was deleted and had to be restored.** It is not an orphan:
+  its SHA-256 is a recorded provenance dependency. `figures/reproduce_ahmed_fig8.py:51` binds it as
+  `CORRECTION_PLAN_PATH` and writes `correction_plan_sha256` into every figure's provenance record,
+  and `scripts/m8_ahmed_transfer.py:146` lists it among the Layer B authority paths. Deleting it
+  turned the full suite red: **15 failed, 3125 passed, 5 skipped**, all in
+  `tests/test_m8_ahmed_fig8.py` and `tests/test_m8_ahmed_provenance.py`, including
+  `test_canonical_closure_contains_every_correction_plan_dependency_class`. Restored with
+  `git checkout HEAD -- plans/m8_ahmed_correction_plan.md`; those two files then returned
+  **203 passed** in 64 s.
+- **Root cause: my orphan detection was wrong.** I searched for references with
+  `grep -rl "$basename" --include=*.md`, i.e. markdown only, so a plan referenced from Python was
+  invisible to it. Any future prune must search code and tests as well, and must be validated by
+  running the suite **before** committing, not after.
+
+**Next:**
+
+- Start Track 0 from the corrected premise: run the `--isolate-fields phase.clutter_removal` A/B on
+  the development captures (subjects A-D only — `P001`-`P006` are off-limits) and decide the
+  default on evidence.
+- Still unresolved and still first: whether offline scoring re-derives the warmup bin or reuses the
+  recorded one. Turning clutter removal on changes the downstream chain that warmup scores, so this
+  determines whether the 9 captured sessions are affected.
+- Re-run the full suite to confirm the deletions broke nothing.

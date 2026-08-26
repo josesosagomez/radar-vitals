@@ -1,6 +1,6 @@
 # Handoff — M2 physical acquisition under way; 9 of 45 sessions captured
 
-> Read this and `CLAUDE.md` before doing anything. **State verified 2026-08-25.**
+> Read this and `CLAUDE.md` before doing anything. **State verified 2026-08-26.**
 > `HISTORY.md` is append-only; this file is the current resume point.
 
 ## 1. Project snapshot
@@ -18,7 +18,7 @@ prior-work triage and what the venue requires that this project does not yet hav
 ## 2. Current state
 
 Branch **`vital_signs_own_v13`**, pushed and in sync with `origin/vital_signs_own_v13`, working tree
-clean as of 2026-08-25. **Check `git status -sb` rather than trusting this line** — a HEAD hash
+clean as of 2026-08-26. **Check `git status -sb` rather than trusting this line** — a HEAD hash
 written here goes stale the moment anything is committed, which has already happened twice.
 Landmark commits, which do not move: `e04ae16` restored the cohort registry, `da9777c` recorded the
 milestone-0 test baseline, `5cc49fd` registered the most recent capture (P005 paced), `1221bde`
@@ -80,22 +80,35 @@ chat starts on Track 0.
 `HISTORY.md` 2026-07-30). It is a genuine open scientific decision, not a bug to patch — do not
 default either way.
 
-**The situation.** The production path has **no** static clutter removal.
-`src/respiration.py::extract_chest_phase` runs Hann → range FFT → select locked bin →
-`delta_before_mean` → cumsum, with nothing in between, and no MTI or slow-time mean subtraction
-exists anywhere in `src/`. It is disabled on-chip too (`steps/step_1/capture.py` sends
-`clutterRemoval -1 0` and `calibDcRangeSig -1 0`). **Do not conflate `delta_before_mean` with
-clutter removal:** it cancels static *per-channel phase offsets*, which is all its docstring
-claims, and does **not** cancel additive static clutter in the range bin. Uncancelled clutter
-compresses the phase excursion and introduces harmonic distortion, which matters here specifically
-because HR rests on AHET second-harmonic verification and ECA on respiration harmonics.
+**The situation — corrected 2026-08-26, and different from what this file said yesterday.**
+Static clutter removal **is implemented**: `src/clutter.py::remove_static_clutter` supports
+`"none"` and `"slow_time_mean"` (per-(chirp, rx) slow-time mean subtraction), reached through
+`src/respiration.py::extract_chest_phase(clutter_removal=...)` and
+`src/window_pipeline.py:72`. **It has always been off**, because
+`scripts/live_demo_config.yaml`'s `phase:` block omits the `clutter_removal` key and the code
+defaults to `"none"` — so every capture to date ran without it. Added in `fc4bc75` (2026-07-30,
+"off by default and not yet shown to help"); `notes/approach.md` claimed it did not exist until
+this was corrected. Disabled on-chip too (`steps/step_1/capture.py` sends `clutterRemoval -1 0`,
+`calibDcRangeSig -1 0`).
+
+**So the decision is "turn it on or justify leaving it off", decided on evidence** — not
+"implement it". **Do not conflate `delta_before_mean` with clutter removal:** it cancels static
+*per-channel phase offsets* only, and does not cancel additive static clutter in the range bin,
+which compresses the phase excursion and introduces harmonic distortion. That matters here
+specifically because HR rests on AHET second-harmonic verification and ECA on respiration
+harmonics.
+
+**A harness already exists.** `scripts/score_offline.py --isolate-fields phase.clutter_removal`
+enforces that two configs differ in that field alone, and refuses to run if they differ outside
+the allowlist or are identical. A config pair using it (`experiments/exp_clutter_removal/`,
+`clutter_on.yaml` = `slow_time_mean`, `clutter_off.yaml` = `none`) was **deliberately deleted
+2026-08-26** on the owner's instruction to start clean; it is recoverable verbatim with
+`git checkout e6efffe -- experiments/exp_clutter_removal/` if a reference is wanted.
 
 **Why it is not academic.** `notes/protocol.md` (§"Scene behind the subject", note added
 2026-07-30) records that the five 2026-07-28 captures contain static reflectors at 2.09 m, 2.88 m
 and 4.19 m returning more energy than the subject. The scene drifted from protocol, unrecorded, and
 those captures are development data — so the effect can be measured directly rather than argued.
-
-**The decision is binary:** justify the omission with a citation, or implement removal.
 
 **Data to use — development only.** The 8 development captures (subjects A-D) live under
 `results/live_demo/`, **not** `data/raw/`: `20260713_172042_..._massimo1`,
