@@ -175,7 +175,8 @@ They stop being *deposit artifacts* and continue as *engineering specifications*
 frozen-grid invariants in code stay frozen: they exist so results stay comparable across runs,
 which is an engineering property independent of pre-registration.
 
-**Retired with M0:** `plans/m0_preregistration.md` and `plans/m0_b1_evidence_floor_memo.md`
+**Retired with M0:** `plans/m0_preregistration.md` (file **deleted 2026-08-26** — in git history
+only; the name itself invited resurrecting forbidden language) and `plans/m0_b1_evidence_floor_memo.md`
 (both marked RETIRED in place, not deleted — CLAUDE.md §9). The evidence-floor *values* remain
 useful as a design target; they are simply no longer a commitment made in advance.
 

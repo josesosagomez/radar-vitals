@@ -12010,3 +12010,57 @@ the survey, plus `experiments/exp_clutter_removal` in full, and log why.
   recorded one. Turning clutter removal on changes the downstream chain that warmup scores, so this
   determines whether the 9 captured sessions are affected.
 - Re-run the full suite to confirm the deletions broke nothing.
+
+## 2026-08-26 - Documentation swept for dangling references; HANDOFF rewritten for a Track 0 start
+
+**Set out to do:** repair the references the 2026-08-26 cleanup broke in the surviving markdown, and
+rewrite `HANDOFF.md` per §10.1 so a new chat opens directly on Track 0.
+
+**Worked (with evidence):**
+
+- **Swept every tracked markdown file for references to the 23 deleted paths.** Six files carried
+  hits. Three were repaired because they make forward-looking claims a reader could act on:
+  - `notes/plan_eca_forbidden_zone.md` §427-428 promised that creating `experiments/` "revives
+    `diag_eca_overnotch.py`, `diag_heart_spectrum.py` and `diag_leakage.py`". Those are deleted, so
+    the side benefit is now marked **VOID** with the reason and the instruction to write new
+    diagnostic tooling rather than expect a revival.
+  - `notes/capture_inventory.md:62` and `plans/implementation_plan.md:178` both cite
+    `plans/m0_preregistration.md`; each now marks the file as deleted 2026-08-26 and in git history
+    only. `plans/m0_b1_evidence_floor_memo.md`, named alongside it, still exists and was untouched.
+  - Left as-is: `plans/m3_prespec_cross_review.md` and `plans/m4_stage0_refactor_review.md`, which
+    are dated review records describing what was reviewed at the time, not live instructions.
+  - Not a defect: `plans/claude_review_loop_prompt_template.md:5` cites
+    `plans/codex_review_prompt_template.md`, which was never deleted and still exists.
+- **`HANDOFF.md` rewritten** (285 → 265 lines). It now opens on Track 0 with §3 split into what is
+  actually true, why it is not academic, the blast-radius question to settle first, the existing
+  A/B harness, the development-data rule, and the prior art to read. Other tracks demoted to a §4
+  table. Every full path in the Pointers table was verified to exist before writing; the remaining
+  unresolved names in the file are bare filenames in prose or deliberately-absent paths
+  (`experiments/exp_clutter_removal/*.yaml`, `plans/m0_preregistration.md`,
+  `scripts/m2_scaffold_sidecar.py`).
+- **Test-state line updated** to the post-cleanup measurement: 3140 passed, 5 skipped in 208 s at
+  `9a4330c`, replacing the 2026-08-25 figure taken at `5cc49fd`.
+- **Two hard-won lessons promoted into §6 gotchas** so they survive this chat: search code and tests
+  before deleting anything and run the suite before committing (the
+  `plans/m8_ahmed_correction_plan.md` provenance failure), and `conda` is not on PATH here — it is
+  at `C:\ProgramData\anaconda3\Scripts\conda.exe`.
+
+**Failed / did not work, and why:**
+
+- Nothing failed. `HANDOFF.md` could not be overwritten directly because the previous commit
+  normalised its line endings CRLF → LF, so the file differed from the last read; it was written via
+  a scratch file and copied into place.
+
+**Retired / no longer used:**
+
+- The previous `HANDOFF.md` body. Superseded framing worth noting: it presented Track 0 as
+  "justify the omission with a citation, or implement it", which was wrong — clutter removal is
+  implemented and merely switched off.
+
+**Next:**
+
+- Open the next session on Track 0 §3.3: determine whether offline scoring re-derives the warmup bin
+  or reuses the recorded one, because that decides whether Track 1 can safely capture in parallel
+  while the DSP changes.
+- Then build the A/B on `scripts/score_offline.py --isolate-fields phase.clutter_removal` over the
+  development captures only, and decide the default on evidence.

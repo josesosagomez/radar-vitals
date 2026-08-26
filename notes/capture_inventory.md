@@ -59,7 +59,8 @@ not sessions. They contain no `adc_stream.bin`. Used for the A2 coverage charact
 ## 3. What of this inventory is PUBLIC (A6 privacy decision, 2026-07-25)
 
 Approved public participant metadata schema (the A6 privacy decision, recorded in the retired
-`plans/m0_preregistration.md` — the plan is dead, the privacy decision stands; ethics approval
+`plans/m0_preregistration.md` (file **deleted 2026-08-26**; in git history only) — the plan is
+dead, the privacy decision stands; ethics approval
 `24IBEC051`, issuing board **IBEC, KAUST**, covers publication): **subject label, date, duration,
 sex, age, height, cardiac condition, file hashes, class label** — nothing else. No names, no date
 of birth, no raw recordings in the public payload.

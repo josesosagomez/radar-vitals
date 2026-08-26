@@ -424,9 +424,13 @@ yield bought by erasing cardiac power is the `legacy` failure in disguise.
    (CLAUDE.md §3 rule 1: every number traces to the input data file's hash). Do not let the
    offline experiment quietly depend on an untracked live artifact.
 
-   *Side benefit:* creating `experiments/` also revives `diag_eca_overnotch.py`,
-   `diag_heart_spectrum.py` and `diag_leakage.py`, which auto-discover the latest run under
-   `results/<experiment>/` and are currently dead only for want of an experiment.
+   *Side benefit — VOID as of 2026-08-26.* This previously said that creating `experiments/`
+   would revive `diag_eca_overnotch.py`, `diag_heart_spectrum.py` and `diag_leakage.py`. Those
+   three scripts, and eight sibling `diag_*.py`, were **deleted 2026-08-26**: they resolved
+   sessions through `data/manifest.local.csv` (zero rows) and referenced only the
+   `exp001/003/005/008` datasets wiped 2026-07-09, so they could not run at all. Recoverable from
+   git history if wanted; treat any diagnostic tooling this plan needs as something to be written,
+   not revived.
 
 7. **Cardiac-retention check — the over-projection guard** *(second review, finding 4)*. The §5.7
    risk is **not** merely "20 columns vs N=600". It is that projecting many harmonics at a
