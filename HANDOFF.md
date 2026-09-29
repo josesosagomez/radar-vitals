@@ -29,18 +29,21 @@ The complete suite passes **3157 passed, 17 skipped** in 206.46 s. The focused f
 passes **225 tests**. The ignored Ahmed and Kotte source PDFs are present only as hash-verified test
 dependencies and remain untracked.
 
+The pre-fix refinement diagnostic is committed and executed. On 128 development radar-only windows
+it found 39 unsafe fallbacks among 756 calls: 31 legacy offsets exceeded half a bin and 30 legacy
+refined frequencies were outside their permitted band, with overlap. The worst accepted
+fixed-spectrum counterfactual was 26.4794 bpm (`sweep`, k=4, candidate rank 2). The full artifact is
+`reports/peak_refinement_diagnostic_2026-09-29.json`; it is bound to clean commit `4280e34` and
+records no reference access.
+
 ## 3. Active task / next steps
 
-1. Start Milestone 2 with a behavior-preserving, radar-only diagnostic of `refine_freq_hz` over the
-   eight registered development captures. Record call site, legacy offset, safe offset/fallback
-   reason, and potential final bpm difference. Commit this diagnostic before changing peak picking.
-2. Freeze the exact new estimator ID before assigning any changed output. A candidate name is
-   `eca_ahet_safe_refine_v2`; record the final choice in the plan/HISTORY.
-3. After the diagnostic is committed, implement bounded refinement: uniform finite grid, finite
+1. Implement bounded refinement: uniform finite grid, finite
    magnitudes, strict local maximum, finite concave parabola, `abs(delta) <= 0.5`, and in-band
    result; otherwise retain the bin centre with a reason. Persist refinement evidence with every
-   estimate and obtain the required independent DSP review.
-4. Milestone 1 item 5 remains blocked on owner facts for P003 paced, P007 natural, P009 natural,
+   estimate, assign the frozen ID `eca_ahet_safe_refine_v2`, and obtain the required independent
+   DSP review.
+2. Milestone 1 item 5 remains blocked on owner facts for P003 paced, P007 natural, P009 natural,
    and P010 natural. Do not infer their attempt state or inspect their CSVs.
 
 ## 4. Recent decisions that matter

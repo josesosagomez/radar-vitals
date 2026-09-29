@@ -12195,3 +12195,44 @@ preflight; and comparative scoring of M8 `k=0` lock-selection windows.
 **Next:** freeze the new estimator identity, then commit a radar-only dual-calculation diagnostic
 that measures legacy versus safe peak refinement on registered development captures before changing
 `src/vitals.py`. P003 and all other prospective captures remain off-limits for this diagnostic.
+
+## 2026-09-29 - Pre-fix peak-refinement incidence measured on development radar only
+
+**Set out to do:** measure the unsafe interpolation path before changing peak-picking behavior,
+using only hash-bound development radar inputs and returning the legacy estimator result unchanged.
+
+**Worked (with evidence):**
+
+- Froze the corrected estimator identity as `eca_ahet_safe_refine_v2` before assigning any changed
+  output. Committed the behavior-preserving diagnostic at `5bd226e`; after independent review,
+  committed stricter band validation and independent incidence fields at `4280e34`.
+- Ran clean commit `4280e34` over the eight development captures and their 128 recorded-lock
+  windows. The artifact is `reports/peak_refinement_diagnostic_2026-09-29.json`, bound to the
+  capture registry, production config, seed, clean git commit, and every raw
+  ADC/metadata/warmup/config digest. It explicitly records `reference_data_accessed=false`; no
+  Masimo path or P00x input was opened.
+- Observed **756** refinement calls. The proposed checks applied to **717** and fell back safely for
+  **39**: 31 first failed because the selected bin was not a strict full-spectrum local maximum,
+  while 8 additional strict local peaks first failed the band check. Independently of that
+  first-failure categorization, **31** legacy offsets exceeded half a bin and **30** legacy refined
+  frequencies lay outside their permitted harmonic band; the categories overlap.
+- Eleven accepted windows had a complete fixed-spectrum final-rate counterfactual. The worst was
+  development capture `sweep`, window `k=4`, candidate rank 2. The legacy second-harmonic parabola
+  moved **-52.9587 bins** from a point that was not a strict local maximum. Falling back to the bin
+  centre changes the immediate fixed-spectrum final estimate by **26.4794 bpm**. This exceeds the
+  audit's earlier approximately 4.8 bpm example; the full-chain corrected estimate may differ again
+  because safe first-pass refinement can also change ECA and the second-harmonic search.
+
+**Failed / did not work, and why:** the first focused command named a nonexistent historical test
+file (`tests/test_vitals.py`) and therefore collected nothing. The corrected adjacent suite used
+`test_vitals_synthetic.py`, `test_vitals_linalg_free.py`, `test_eca_ahet.py`, the window adapter,
+and M4 runner; it passed **349 tests**. Independent review then found that the initial HISTORY text
+mistook mutually exclusive first-failure reasons for independent incidence. The regenerated v2
+artifact now stores and tests both quantities explicitly.
+
+**Retired / no longer used:** the assumption that unsafe refinement is merely a small theoretical
+bias. It occurs in development data and can materially affect an accepted estimate.
+
+**Next:** implement the structured safe helper in `src/vitals.py`, persist its reason/delta evidence
+with every estimate, assign `eca_ahet_safe_refine_v2`, and obtain the required independent DSP
+correctness review before any recomputation.
