@@ -44,6 +44,18 @@ def test_safe_refinement_rejects_boundary_nonuniform_and_out_of_band():
     assert safe_refine_frequency(spectrum, np.arange(4) * 0.1, 1, (0.2, 0.3)).reason == "refined_frequency_out_of_band"
 
 
+def test_safe_refinement_rejects_malformed_nonfinite_and_inverted_bands():
+    spectrum = np.array([0.0, 1.0, 4.0, 1.0, 0.0])
+    freqs = np.arange(5, dtype=float) * 0.1
+    invalid_bands = ((0.1,), (0.1, 0.3, 0.4), (np.nan, 0.3), (0.1, np.inf), (0.3, 0.1))
+    for band in invalid_bands:
+        result = safe_refine_frequency(spectrum, freqs, 2, band)
+        assert result.applied is False
+        assert result.reason == "invalid_band"
+        assert result.refined_hz == freqs[2]
+        assert result.delta_bins == 0.0
+
+
 def test_corrected_estimator_identity_is_frozen_before_use():
     assert SAFE_REFINEMENT_ESTIMATOR_ID == "eca_ahet_safe_refine_v2"
 

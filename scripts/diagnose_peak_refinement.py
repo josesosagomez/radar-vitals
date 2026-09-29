@@ -35,7 +35,7 @@ from src.window_pipeline import (  # noqa: E402
     run_window_dsp,
 )
 
-SCHEMA = "peak_refinement_dual_calculation_v1"
+SCHEMA = "peak_refinement_dual_calculation_v2"
 WINDOW_FRAMES = 600
 DEFAULT_CONFIG = REPO_ROOT / "scripts" / "live_demo_config.yaml"
 DEFAULT_OUTPUT = REPO_ROOT / "reports" / "peak_refinement_diagnostic_2026-09-29.json"
@@ -68,6 +68,16 @@ def safe_refine_frequency(
     def fallback(reason: str) -> SafeRefinement:
         return SafeRefinement(centre, centre, 0.0, False, reason)
 
+    try:
+        band_values = tuple(float(value) for value in band_hz)
+    except (TypeError, ValueError):
+        return fallback("invalid_band")
+    if len(band_values) != 2:
+        return fallback("invalid_band")
+    lo, hi = band_values
+    if not np.isfinite(lo) or not np.isfinite(hi) or lo > hi:
+        return fallback("invalid_band")
+
     if len(freq_arr) < 3:
         return fallback("grid_too_short")
     if not np.all(np.isfinite(freq_arr)):
@@ -95,7 +105,6 @@ def safe_refine_frequency(
     if abs(delta) > 0.5:
         return fallback("delta_out_of_bounds")
     refined = centre + float(delta) * step
-    lo, hi = map(float, band_hz)
     if not np.isfinite(refined) or refined < lo or refined > hi:
         return fallback("refined_frequency_out_of_band")
     return SafeRefinement(float(refined), centre, float(delta), True, "applied")
@@ -166,6 +175,7 @@ class RefinementRecorder:
             if np.isfinite(step) and step != 0.0
             else float("nan")
         )
+        lo, hi = map(float, band)
         self.rows.append(
             {
                 **self.context,
@@ -175,6 +185,13 @@ class RefinementRecorder:
                 "bin_center_hz": float(freqs[peak_idx]),
                 "legacy_refined_hz": legacy_hz,
                 "legacy_delta_bins": float(legacy_delta),
+                "allowed_band_hz": [lo, hi],
+                "legacy_delta_out_of_bounds": bool(
+                    np.isfinite(legacy_delta) and abs(legacy_delta) > 0.5
+                ),
+                "legacy_refined_out_of_band": bool(
+                    not np.isfinite(legacy_hz) or legacy_hz < lo or legacy_hz > hi
+                ),
                 "safe_refined_hz": safe.refined_hz,
                 "safe_delta_bins": safe.delta_bins,
                 "safe_applied": safe.applied,
@@ -289,6 +306,13 @@ def run_diagnostic(*, capture_root: Path, output: Path, config_path: Path) -> di
         if row["accepted_candidate"] and row["callsite"] == "candidate_second_pass"
         and row["potential_final_bpm_difference"] is not None
     ]
+    safe_fallback_count = sum(not bool(row["safe_applied"]) for row in recorder.rows)
+    legacy_delta_out_of_bounds_count = sum(
+        bool(row["legacy_delta_out_of_bounds"]) for row in recorder.rows
+    )
+    legacy_refined_out_of_band_count = sum(
+        bool(row["legacy_refined_out_of_band"]) for row in recorder.rows
+    )
     artifact = {
         "schema": SCHEMA,
         "created_utc": datetime.now(timezone.utc).isoformat(),
@@ -311,6 +335,9 @@ def run_diagnostic(*, capture_root: Path, output: Path, config_path: Path) -> di
             "window_count": sum(int(item["windows"]) for item in captures),
             "refinement_call_count": len(recorder.rows),
             "safe_reason_counts": reason_counts,
+            "safe_fallback_count": safe_fallback_count,
+            "legacy_delta_out_of_bounds_count": legacy_delta_out_of_bounds_count,
+            "legacy_refined_out_of_band_count": legacy_refined_out_of_band_count,
             "accepted_window_count_with_counterfactual": len(potential),
             "max_abs_potential_final_bpm_difference": max(potential) if potential else None,
         },
