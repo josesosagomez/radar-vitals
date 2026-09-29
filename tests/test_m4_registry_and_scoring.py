@@ -695,7 +695,7 @@ PLAN_LOCK_ESTIMAND_IDS = (
     "current_production_rerun_lock",
 )
 PLAN_ARM_IDS = (
-    "production_eca_ahet_v1",
+    "production_eca_ahet_safe_refine_v2",
     "ahmed_phase_h3_figure_visible_unsuppressed",
     "ahmed_phase_h3_eq26_multiples_suppressed",
     "ahmed_phase_h3_prose_low_or_equal_suppressed",

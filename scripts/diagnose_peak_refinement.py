@@ -31,6 +31,7 @@ from src.m4.capture_registry import DEFAULT_REGISTRY, load_registry  # noqa: E40
 from src.m4.estimator_runner import _validate_capture_inputs  # noqa: E402
 from src.window_pipeline import (  # noqa: E402
     ESTIMATOR_ID,
+    LEGACY_ESTIMATOR_ID,
     SAFE_REFINEMENT_ESTIMATOR_ID,
     run_window_dsp,
 )
@@ -238,6 +239,12 @@ def _git_state() -> tuple[str, bool]:
 
 
 def run_diagnostic(*, capture_root: Path, output: Path, config_path: Path) -> dict:
+    if ESTIMATOR_ID != LEGACY_ESTIMATOR_ID:
+        raise RuntimeError(
+            "this historical diagnostic instruments the legacy estimator only; "
+            "run it from clean commit 4280e34d691537d4465fd3d0a0d50b954692bff1 "
+            "and do not overwrite the committed pre-fix artifact from a later estimator"
+        )
     commit, dirty = _git_state()
     if dirty:
         raise RuntimeError("diagnostic must run from a clean committed checkout")
@@ -322,7 +329,7 @@ def run_diagnostic(*, capture_root: Path, output: Path, config_path: Path) -> di
         "reference_data_accessed": False,
         "git_commit": commit,
         "git_dirty": False,
-        "legacy_estimator_id": ESTIMATOR_ID,
+        "legacy_estimator_id": LEGACY_ESTIMATOR_ID,
         "corrected_estimator_id_reserved": SAFE_REFINEMENT_ESTIMATOR_ID,
         "registry_path": str(DEFAULT_REGISTRY.relative_to(REPO_ROOT)),
         "registry_sha256": sha256_path(DEFAULT_REGISTRY),

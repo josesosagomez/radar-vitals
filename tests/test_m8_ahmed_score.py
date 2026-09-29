@@ -347,14 +347,14 @@ def _canonical_row(capture_id: str, lock_id: str, arm_id: str) -> dict:
         "window_set": "full_k0_diagnostic",
         "window_origin_role": "lock_selection_in_sample",
         "suite_id": (
-            "production_eca_ahet_suite_v1"
+            "production_eca_ahet_safe_refine_suite_v2"
             if arm_id == CANONICAL_ARM_IDS[0]
             else "ahmed_fixed_h_phase_suite_v1"
         ),
         "suite_config_hash": "3" * 64,
         "arm_id": arm_id,
         "estimator_id": (
-            "eca_ahet_v1"
+            "eca_ahet_safe_refine_v2"
             if arm_id == CANONICAL_ARM_IDS[0]
             else "ahmed_fixed_h_phase_v1"
         ),

@@ -109,13 +109,13 @@ def _radar_row(capture: str, lock_index: int, k: int, arm_index: int) -> dict:
         "window_set": "full_k0_diagnostic" if k == 0 else "evaluation_k_ge_1",
         "window_origin_role": "lock_selection_in_sample" if k == 0 else "evaluation",
         "suite_id": (
-            "production_eca_ahet_suite_v1"
+            "production_eca_ahet_safe_refine_suite_v2"
             if suite_is_production
             else "ahmed_fixed_h_phase_suite_v1"
         ),
         "suite_config_hash": ("3" if suite_is_production else "4") * 64,
         "arm_id": arm_id,
-        "estimator_id": "eca_ahet_v1" if suite_is_production else "ahmed_fixed_h_phase_v1",
+        "estimator_id": "eca_ahet_safe_refine_v2" if suite_is_production else "ahmed_fixed_h_phase_v1",
         "arm_config_hash": format(arm_index + 5, "x") * 64,
         "cube_hash": format(10 + list(CAPTURE_WINDOWS).index(capture), "x")[-1] * 64,
         "window_cube_hash": format((k % 5) + 1, "x") * 64,

@@ -540,8 +540,10 @@ dict after construction cannot change hashes or results. Decode geometry remains
 comes only from hash-verified capture metadata. `outcome_classifiers` is keyed exclusively by
 `arm_id`; every mapping entry must match that arm spec's declared classifier ID.
 
-`ProductionEstimatorSuite` wraps `run_window_dsp` as estimator ID `eca_ahet_v1`, arm ID
-`production_eca_ahet_v1`, and is full-native-payload equivalent to a direct call.
+`ProductionEstimatorSuite` wraps `run_window_dsp` as estimator ID
+`eca_ahet_safe_refine_v2`, arm ID `production_eca_ahet_safe_refine_v2`, and is
+full-native-payload equivalent to a direct call. Historical `eca_ahet_v1` artifacts retain
+their original identity and are not rewritten.
 `production_outcome_classifier` is the sole `eca_bindrift_outcome_v1` adapter around
 `src/m4/outcome.py::classify_window_outcome`; it is invoked only for that arm and its scalar result
 is stored outside the unchanged native payload. Move the existing implementation/constants/helpers

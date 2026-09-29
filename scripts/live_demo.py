@@ -1407,8 +1407,26 @@ def main() -> None:
             "candidate_refined_hz": hr_result.get(
                 "candidate_refined_hz", np.array([])
             ),
+            "candidate_initial_refinement_delta_bins": hr_result.get(
+                "candidate_initial_refinement_delta_bins", np.array([])
+            ),
+            "candidate_initial_refinement_reason_code": hr_result.get(
+                "candidate_initial_refinement_reason_code", np.array([], dtype=int)
+            ),
+            "candidate_refinement_delta_bins": hr_result.get(
+                "candidate_refinement_delta_bins", np.array([])
+            ),
+            "candidate_refinement_reason_code": hr_result.get(
+                "candidate_refinement_reason_code", np.array([], dtype=int)
+            ),
             "second_peak_refined_hz": hr_result.get(
                 "second_peak_refined_hz", np.array([])
+            ),
+            "second_peak_refinement_delta_bins": hr_result.get(
+                "second_peak_refinement_delta_bins", np.array([])
+            ),
+            "second_peak_refinement_reason_code": hr_result.get(
+                "second_peak_refinement_reason_code", np.array([], dtype=int)
             ),
             "peak_to_floor_ratio_db": hr_result.get(
                 "peak_to_floor_ratio_db", np.array([])

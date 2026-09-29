@@ -595,9 +595,9 @@ def _f4_persist_bundle(tmp_path: Path):
     class PhaseProduction:
         """Minimal production stand-in that reconstructs the same raw phase."""
 
-        suite_id = "production_eca_ahet_suite_v1"
+        suite_id = "production_eca_ahet_safe_refine_suite_v2"
         suite_config_hash = "p" * 64
-        arm_specs = (EstimatorArmSpec(PRODUCTION_ARM_ID, "eca_ahet_v1", "p" * 64),)
+        arm_specs = (EstimatorArmSpec(PRODUCTION_ARM_ID, "eca_ahet_safe_refine_v2", "p" * 64),)
         outcome_classifiers: dict = {}
 
         def __call__(self, window, locked_bin, fs):
@@ -609,7 +609,7 @@ def _f4_persist_bundle(tmp_path: Path):
                 {
                     PRODUCTION_ARM_ID: {
                         "arm_id": PRODUCTION_ARM_ID,
-                        "estimator_id": "eca_ahet_v1",
+                        "estimator_id": "eca_ahet_safe_refine_v2",
                         "run_config_hash": "p" * 64,
                         "hr_valid": True,
                         "hr_raw": 74.0,

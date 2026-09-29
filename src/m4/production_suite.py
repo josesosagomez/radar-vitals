@@ -24,18 +24,20 @@ from src.m4.estimator_suite import (
     validate_arm_specs,
 )
 from src.m4.outcome import classify_window_outcome
-from src.window_pipeline import run_config_hash, run_window_dsp
+from src.window_pipeline import ESTIMATOR_ID, run_config_hash, run_window_dsp
 
 __all__ = [
     "PRODUCTION_ARM_ID",
     "PRODUCTION_ESTIMATOR_ID",
+    "PRODUCTION_SUITE_ID",
     "EcaBindriftOutcomeClassifier",
     "ProductionEstimatorSuite",
     "STRICT_GATE_MODE",
 ]
 
-PRODUCTION_ESTIMATOR_ID = "eca_ahet_v1"
-PRODUCTION_ARM_ID = "production_eca_ahet_v1"
+PRODUCTION_ESTIMATOR_ID = ESTIMATOR_ID
+PRODUCTION_ARM_ID = "production_eca_ahet_safe_refine_v2"
+PRODUCTION_SUITE_ID = "production_eca_ahet_safe_refine_suite_v2"
 OUTCOME_CLASSIFIER_ID = "eca_bindrift_outcome_v1"
 STRICT_GATE_MODE = "strict_v1"
 
@@ -69,7 +71,7 @@ class ProductionEstimatorSuite:
     hashes or results. Runtime callers cannot pass or substitute a config.
     """
 
-    suite_id = "production_eca_ahet_suite_v1"
+    suite_id = PRODUCTION_SUITE_ID
 
     def __init__(
         self,

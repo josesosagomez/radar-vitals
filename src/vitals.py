@@ -25,7 +25,22 @@ from scipy.signal import butter, find_peaks, freqz
 HEART_BAND_HZ = (0.8, 2.0)
 RESP_BAND_HZ = (0.1, 0.5)
 AHET_MAX_CANDIDATES = 3
-INTERMEDIATE_SCHEMA_VERSION = 1
+INTERMEDIATE_SCHEMA_VERSION = 2
+REFINEMENT_NOT_ATTEMPTED_CODE = -1
+REFINEMENT_REASON_CODES = {
+    "applied": 0,
+    "grid_too_short": 1,
+    "nonfinite_frequency_grid": 2,
+    "nonuniform_frequency_grid": 3,
+    "nonfinite_magnitude": 4,
+    "boundary_peak": 5,
+    "not_strict_local_maximum": 6,
+    "nonconcave_parabola": 7,
+    "nonfinite_delta": 8,
+    "delta_out_of_bounds": 9,
+    "refined_frequency_out_of_band": 10,
+    "invalid_band": 11,
+}
 # Minimum frequency above the cardiac band's lower edge accepted as a cardiac
 # candidate.  The Butterworth rolloff at 0.8 Hz provides insufficient
 # suppression of 2×f_r (0–0.2 Hz below the cutoff), leaving a spurious
@@ -182,6 +197,89 @@ def refine_freq_hz(spectrum: np.ndarray, freqs: np.ndarray, peak_idx: int) -> fl
     shift = 0.5 * (alpha - gamma) / denom      # shift in bins
     bin_width = float(freqs[1] - freqs[0])
     return float(freqs[peak_idx]) + shift * bin_width
+
+
+@dataclass(frozen=True)
+class PeakRefinement:
+    """Structured evidence for one bounded parabolic interpolation attempt."""
+
+    refined_hz: float
+    bin_center_hz: float
+    delta_bins: float
+    applied: bool
+    reason: str
+    reason_code: int
+
+
+def refine_peak_hz_safe(
+    spectrum: np.ndarray,
+    freqs: np.ndarray,
+    peak_idx: int,
+    band_hz: tuple[float, float],
+) -> PeakRefinement:
+    """Refine a strict spectral peak, otherwise retain its FFT-bin centre.
+
+    The local parabola is accepted only on a finite, increasing, uniform grid; at a
+    strict full-spectrum local maximum; with finite concave curvature and a vertex no
+    farther than half a bin; and when the result remains inside ``band_hz``. Every
+    fallback has a stable numeric reason code so NPZ evidence remains object-free.
+    """
+    spectrum_arr = np.asarray(spectrum)
+    freq_arr = np.asarray(freqs, dtype=np.float64)
+    if spectrum_arr.ndim != 1 or freq_arr.ndim != 1 or len(spectrum_arr) != len(freq_arr):
+        raise ValueError("spectrum and frequency grid must be equal-length one-dimensional arrays")
+    if type(peak_idx) is not int or not 0 <= peak_idx < len(freq_arr):
+        raise ValueError("peak_idx must identify a frequency-grid element")
+    centre = float(freq_arr[peak_idx])
+
+    def result(refined: float, delta: float, applied: bool, reason: str) -> PeakRefinement:
+        return PeakRefinement(
+            float(refined), centre, float(delta), applied, reason,
+            REFINEMENT_REASON_CODES[reason],
+        )
+
+    def fallback(reason: str) -> PeakRefinement:
+        return result(centre, 0.0, False, reason)
+
+    try:
+        band_values = tuple(float(value) for value in band_hz)
+    except (TypeError, ValueError):
+        return fallback("invalid_band")
+    if len(band_values) != 2:
+        return fallback("invalid_band")
+    lo, hi = band_values
+    if not np.isfinite(lo) or not np.isfinite(hi) or lo > hi:
+        return fallback("invalid_band")
+    if len(freq_arr) < 3:
+        return fallback("grid_too_short")
+    if not np.all(np.isfinite(freq_arr)):
+        return fallback("nonfinite_frequency_grid")
+    steps = np.diff(freq_arr)
+    step = float(steps[0])
+    if step <= 0.0 or not np.allclose(steps, step, rtol=1e-12, atol=1e-15):
+        return fallback("nonuniform_frequency_grid")
+    magnitudes = np.abs(spectrum_arr).astype(np.float64, copy=False)
+    if not np.all(np.isfinite(magnitudes)):
+        return fallback("nonfinite_magnitude")
+    if peak_idx == 0 or peak_idx == len(magnitudes) - 1:
+        return fallback("boundary_peak")
+    alpha = float(magnitudes[peak_idx - 1])
+    beta = float(magnitudes[peak_idx])
+    gamma = float(magnitudes[peak_idx + 1])
+    if not (beta > alpha and beta > gamma):
+        return fallback("not_strict_local_maximum")
+    denominator = alpha - 2.0 * beta + gamma
+    if not np.isfinite(denominator) or denominator >= 0.0:
+        return fallback("nonconcave_parabola")
+    delta = 0.5 * (alpha - gamma) / denominator
+    if not np.isfinite(delta):
+        return fallback("nonfinite_delta")
+    if abs(delta) > 0.5:
+        return fallback("delta_out_of_bounds")
+    refined = centre + float(delta) * step
+    if not np.isfinite(refined) or refined < lo or refined > hi:
+        return fallback("refined_frequency_out_of_band")
+    return result(refined, delta, True, "applied")
 
 
 def parabolic_interpolate_peak(
@@ -558,15 +656,31 @@ def estimate_rate_from_phase(
             "accepted_candidate_initial_hz": float("nan"),
             "accepted_candidate_refined_hz": float("nan"),
             "accepted_second_harmonic_refined_hz": float("nan"),
+            "accepted_candidate_refinement_delta_bins": float("nan"),
+            "accepted_candidate_refinement_reason_code": REFINEMENT_NOT_ATTEMPTED_CODE,
+            "accepted_second_harmonic_refinement_delta_bins": float("nan"),
+            "accepted_second_harmonic_refinement_reason_code": REFINEMENT_NOT_ATTEMPTED_CODE,
             "candidate_attempted": np.zeros(AHET_MAX_CANDIDATES, dtype=bool),
             "candidate_peak_bin_index": np.full(AHET_MAX_CANDIDATES, -1, dtype=int),
             "candidate_initial_hz": np.full(AHET_MAX_CANDIDATES, np.nan, dtype=float),
             "candidate_refined_hz": np.full(AHET_MAX_CANDIDATES, np.nan, dtype=float),
+            "candidate_initial_refinement_delta_bins": np.full(AHET_MAX_CANDIDATES, np.nan),
+            "candidate_initial_refinement_reason_code": np.full(
+                AHET_MAX_CANDIDATES, REFINEMENT_NOT_ATTEMPTED_CODE, dtype=int
+            ),
+            "candidate_refinement_delta_bins": np.full(AHET_MAX_CANDIDATES, np.nan),
+            "candidate_refinement_reason_code": np.full(
+                AHET_MAX_CANDIDATES, REFINEMENT_NOT_ATTEMPTED_CODE, dtype=int
+            ),
             "candidate_peak_magnitude": np.full(AHET_MAX_CANDIDATES, np.nan, dtype=float),
             "candidate_prominence": np.full(AHET_MAX_CANDIDATES, np.nan, dtype=float),
             "candidate_argmax_fallback": np.zeros(AHET_MAX_CANDIDATES, dtype=bool),
             "second_peak_bin_hz": np.full(AHET_MAX_CANDIDATES, np.nan, dtype=float),
             "second_peak_refined_hz": np.full(AHET_MAX_CANDIDATES, np.nan, dtype=float),
+            "second_peak_refinement_delta_bins": np.full(AHET_MAX_CANDIDATES, np.nan),
+            "second_peak_refinement_reason_code": np.full(
+                AHET_MAX_CANDIDATES, REFINEMENT_NOT_ATTEMPTED_CODE, dtype=int
+            ),
             "second_peak_magnitude": np.full(AHET_MAX_CANDIDATES, np.nan, dtype=float),
             "comparison_floor": np.full(AHET_MAX_CANDIDATES, np.nan, dtype=float),
             "peak_to_floor_ratio": np.full(AHET_MAX_CANDIDATES, np.nan, dtype=float),
@@ -729,11 +843,23 @@ def estimate_rate_from_phase(
     candidate_peak_bin_index  = np.full(AHET_MAX_CANDIDATES, -1, dtype=int)
     candidate_initial_hz      = np.full(AHET_MAX_CANDIDATES, np.nan, dtype=float)
     candidate_refined_hz      = np.full(AHET_MAX_CANDIDATES, np.nan, dtype=float)
+    candidate_initial_refinement_delta_bins = np.full(AHET_MAX_CANDIDATES, np.nan)
+    candidate_initial_refinement_reason_code = np.full(
+        AHET_MAX_CANDIDATES, REFINEMENT_NOT_ATTEMPTED_CODE, dtype=int
+    )
+    candidate_refinement_delta_bins = np.full(AHET_MAX_CANDIDATES, np.nan)
+    candidate_refinement_reason_code = np.full(
+        AHET_MAX_CANDIDATES, REFINEMENT_NOT_ATTEMPTED_CODE, dtype=int
+    )
     candidate_peak_magnitude  = np.full(AHET_MAX_CANDIDATES, np.nan, dtype=float)
     candidate_prominence      = np.full(AHET_MAX_CANDIDATES, np.nan, dtype=float)
     candidate_argmax_fallback = np.zeros(AHET_MAX_CANDIDATES, dtype=bool)
     second_peak_bin_hz        = np.full(AHET_MAX_CANDIDATES, np.nan, dtype=float)
     second_peak_refined_hz    = np.full(AHET_MAX_CANDIDATES, np.nan, dtype=float)
+    second_peak_refinement_delta_bins = np.full(AHET_MAX_CANDIDATES, np.nan)
+    second_peak_refinement_reason_code = np.full(
+        AHET_MAX_CANDIDATES, REFINEMENT_NOT_ATTEMPTED_CODE, dtype=int
+    )
     second_peak_magnitude     = np.full(AHET_MAX_CANDIDATES, np.nan, dtype=float)
     comparison_floor          = np.full(AHET_MAX_CANDIDATES, np.nan, dtype=float)
     peak_to_floor_ratio       = np.full(AHET_MAX_CANDIDATES, np.nan, dtype=float)
@@ -760,11 +886,17 @@ def estimate_rate_from_phase(
             "candidate_peak_bin_index": candidate_peak_bin_index,
             "candidate_initial_hz": candidate_initial_hz,
             "candidate_refined_hz": candidate_refined_hz,
+            "candidate_initial_refinement_delta_bins": candidate_initial_refinement_delta_bins,
+            "candidate_initial_refinement_reason_code": candidate_initial_refinement_reason_code,
+            "candidate_refinement_delta_bins": candidate_refinement_delta_bins,
+            "candidate_refinement_reason_code": candidate_refinement_reason_code,
             "candidate_peak_magnitude": candidate_peak_magnitude,
             "candidate_prominence": candidate_prominence,
             "candidate_argmax_fallback": candidate_argmax_fallback,
             "second_peak_bin_hz": second_peak_bin_hz,
             "second_peak_refined_hz": second_peak_refined_hz,
+            "second_peak_refinement_delta_bins": second_peak_refinement_delta_bins,
+            "second_peak_refinement_reason_code": second_peak_refinement_reason_code,
             "second_peak_magnitude": second_peak_magnitude,
             "comparison_floor": comparison_floor,
             "peak_to_floor_ratio": peak_to_floor_ratio,
@@ -807,6 +939,18 @@ def estimate_rate_from_phase(
             "accepted_candidate_initial_hz": float(candidate_initial_hz[rank]),
             "accepted_candidate_refined_hz": f_h_ref,
             "accepted_second_harmonic_refined_hz": f_h2_ref,
+            "accepted_candidate_refinement_delta_bins": float(
+                candidate_refinement_delta_bins[rank]
+            ),
+            "accepted_candidate_refinement_reason_code": int(
+                candidate_refinement_reason_code[rank]
+            ),
+            "accepted_second_harmonic_refinement_delta_bins": float(
+                second_peak_refinement_delta_bins[rank]
+            ),
+            "accepted_second_harmonic_refinement_reason_code": int(
+                second_peak_refinement_reason_code[rank]
+            ),
             "all_candidates_rejected": False,
             **_common_fields(),
         }
@@ -816,10 +960,17 @@ def estimate_rate_from_phase(
         zip(candidates_global, sorted_prominences)
     ):
         cand_global = int(cand_global)
-        cand_hz = refine_freq_hz(spec1, freqs, cand_global)
+        initial_refinement = refine_peak_hz_safe(spec1, freqs, cand_global, band)
+        cand_hz = initial_refinement.refined_hz
         candidate_attempted[candidate_rank] = True
         candidate_peak_bin_index[candidate_rank] = cand_global
         candidate_initial_hz[candidate_rank] = cand_hz
+        candidate_initial_refinement_delta_bins[candidate_rank] = (
+            initial_refinement.delta_bins
+        )
+        candidate_initial_refinement_reason_code[candidate_rank] = (
+            initial_refinement.reason_code
+        )
         candidate_peak_magnitude[candidate_rank] = float(spec1[cand_global])
         candidate_prominence[candidate_rank] = float(prominence)
         candidate_argmax_fallback[candidate_rank] = used_argmax_fallback
@@ -835,7 +986,10 @@ def estimate_rate_from_phase(
         candidate_n_cols_retained[candidate_rank] = diag2["n_cols_retained"]
         spec2, _ = _spec(x_eca2)
         ahet_attempt_spectrum[candidate_rank] = spec2
-        candidate_refined_hz[candidate_rank] = refine_freq_hz(spec2, freqs, cand_global)
+        candidate_refinement = refine_peak_hz_safe(spec2, freqs, cand_global, band)
+        candidate_refined_hz[candidate_rank] = candidate_refinement.refined_hz
+        candidate_refinement_delta_bins[candidate_rank] = candidate_refinement.delta_bins
+        candidate_refinement_reason_code[candidate_rank] = candidate_refinement.reason_code
 
         # AHET: local 2nd harmonic search [2×cand_hz ± ahet_deviation_hz]
         # Local window, not global to 4.0 Hz (OpenAI cross-review finding #3)
@@ -853,8 +1007,13 @@ def estimate_rate_from_phase(
         peak2_global = int(np.where(mask2)[0][peak2_local])
         peak2_magnitude = float(region2[peak2_local])
         second_peak_bin_hz[candidate_rank] = float(freqs[peak2_global])
-        f_h2_ref = refine_freq_hz(spec2, freqs, peak2_global)
+        second_refinement = refine_peak_hz_safe(
+            spec2, freqs, peak2_global, (lo2, hi2)
+        )
+        f_h2_ref = second_refinement.refined_hz
         second_peak_refined_hz[candidate_rank] = f_h2_ref
+        second_peak_refinement_delta_bins[candidate_rank] = second_refinement.delta_bins
+        second_peak_refinement_reason_code[candidate_rank] = second_refinement.reason_code
         second_peak_magnitude[candidate_rank] = peak2_magnitude
 
         # Noise floor from the cardiac band of the second-pass ECA spectrum
@@ -926,6 +1085,18 @@ def estimate_rate_from_phase(
                     "accepted_candidate_initial_hz": cand_hz,
                     "accepted_candidate_refined_hz": f_h_ref,
                     "accepted_second_harmonic_refined_hz": f_h2_ref,
+                    "accepted_candidate_refinement_delta_bins": float(
+                        candidate_refinement_delta_bins[candidate_rank]
+                    ),
+                    "accepted_candidate_refinement_reason_code": int(
+                        candidate_refinement_reason_code[candidate_rank]
+                    ),
+                    "accepted_second_harmonic_refinement_delta_bins": float(
+                        second_peak_refinement_delta_bins[candidate_rank]
+                    ),
+                    "accepted_second_harmonic_refinement_reason_code": int(
+                        second_peak_refinement_reason_code[candidate_rank]
+                    ),
                     "all_candidates_rejected": False,
                     **_common_fields(),
                 }
@@ -956,6 +1127,10 @@ def estimate_rate_from_phase(
             "accepted_candidate_initial_hz": float("nan"),
             "accepted_candidate_refined_hz": float("nan"),
             "accepted_second_harmonic_refined_hz": float("nan"),
+            "accepted_candidate_refinement_delta_bins": float("nan"),
+            "accepted_candidate_refinement_reason_code": REFINEMENT_NOT_ATTEMPTED_CODE,
+            "accepted_second_harmonic_refinement_delta_bins": float("nan"),
+            "accepted_second_harmonic_refinement_reason_code": REFINEMENT_NOT_ATTEMPTED_CODE,
             "all_candidates_rejected": True,
             **_common_fields(),
         }
@@ -981,15 +1156,25 @@ def estimate_rate_from_phase(
         "accepted_candidate_initial_hz": float("nan"),
         "accepted_candidate_refined_hz": float("nan"),
         "accepted_second_harmonic_refined_hz": float("nan"),
+        "accepted_candidate_refinement_delta_bins": float("nan"),
+        "accepted_candidate_refinement_reason_code": REFINEMENT_NOT_ATTEMPTED_CODE,
+        "accepted_second_harmonic_refinement_delta_bins": float("nan"),
+        "accepted_second_harmonic_refinement_reason_code": REFINEMENT_NOT_ATTEMPTED_CODE,
         "candidate_attempted": candidate_attempted,
         "candidate_peak_bin_index": candidate_peak_bin_index,
         "candidate_initial_hz": candidate_initial_hz,
         "candidate_refined_hz": candidate_refined_hz,
+        "candidate_initial_refinement_delta_bins": candidate_initial_refinement_delta_bins,
+        "candidate_initial_refinement_reason_code": candidate_initial_refinement_reason_code,
+        "candidate_refinement_delta_bins": candidate_refinement_delta_bins,
+        "candidate_refinement_reason_code": candidate_refinement_reason_code,
         "candidate_peak_magnitude": candidate_peak_magnitude,
         "candidate_prominence": candidate_prominence,
         "candidate_argmax_fallback": candidate_argmax_fallback,
         "second_peak_bin_hz": second_peak_bin_hz,
         "second_peak_refined_hz": second_peak_refined_hz,
+        "second_peak_refinement_delta_bins": second_peak_refinement_delta_bins,
+        "second_peak_refinement_reason_code": second_peak_refinement_reason_code,
         "second_peak_magnitude": second_peak_magnitude,
         "comparison_floor": comparison_floor,
         "peak_to_floor_ratio": peak_to_floor_ratio,
@@ -1184,16 +1369,46 @@ def run_pipeline_locked(
             "accepted_second_harmonic_refined_hz": heart[
                 "accepted_second_harmonic_refined_hz"
             ],
+            "accepted_candidate_refinement_delta_bins": heart[
+                "accepted_candidate_refinement_delta_bins"
+            ],
+            "accepted_candidate_refinement_reason_code": heart[
+                "accepted_candidate_refinement_reason_code"
+            ],
+            "accepted_second_harmonic_refinement_delta_bins": heart[
+                "accepted_second_harmonic_refinement_delta_bins"
+            ],
+            "accepted_second_harmonic_refinement_reason_code": heart[
+                "accepted_second_harmonic_refinement_reason_code"
+            ],
             # Fixed-width AHET attempt evidence
             "candidate_attempted": heart["candidate_attempted"],
             "candidate_peak_bin_index": heart["candidate_peak_bin_index"],
             "candidate_initial_hz": heart["candidate_initial_hz"],
             "candidate_refined_hz": heart["candidate_refined_hz"],
+            "candidate_initial_refinement_delta_bins": heart[
+                "candidate_initial_refinement_delta_bins"
+            ],
+            "candidate_initial_refinement_reason_code": heart[
+                "candidate_initial_refinement_reason_code"
+            ],
+            "candidate_refinement_delta_bins": heart[
+                "candidate_refinement_delta_bins"
+            ],
+            "candidate_refinement_reason_code": heart[
+                "candidate_refinement_reason_code"
+            ],
             "candidate_peak_magnitude": heart["candidate_peak_magnitude"],
             "candidate_prominence": heart["candidate_prominence"],
             "candidate_argmax_fallback": heart["candidate_argmax_fallback"],
             "second_peak_bin_hz": heart["second_peak_bin_hz"],
             "second_peak_refined_hz": heart["second_peak_refined_hz"],
+            "second_peak_refinement_delta_bins": heart[
+                "second_peak_refinement_delta_bins"
+            ],
+            "second_peak_refinement_reason_code": heart[
+                "second_peak_refinement_reason_code"
+            ],
             "second_peak_magnitude": heart["second_peak_magnitude"],
             "comparison_floor": heart["comparison_floor"],
             "peak_to_floor_ratio": heart["peak_to_floor_ratio"],

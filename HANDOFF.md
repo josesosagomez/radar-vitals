@@ -25,9 +25,10 @@ reference admission gate is applied before error scoring. Step 5/6 are radar-onl
 per-session exact registered development capture is configured. No sealed prospective reference
 was opened and no historical result was rewritten.
 
-The complete suite passes **3157 passed, 17 skipped** in 206.46 s. The focused final firewall suite
-passes **225 tests**. The ignored Ahmed and Kotte source PDFs are present only as hash-verified test
-dependencies and remain untracked.
+The last clean baseline suite passed **3157 passed, 17 skipped**. After the refinement change, the
+full suite reached **3171 passed, 17 skipped** with one line-ending-only failure; after normalizing
+the diagnostic JSON to LF, the closure subset passed **10 tests**. The ignored Ahmed and Kotte
+source PDFs are present only as hash-verified test dependencies and remain untracked.
 
 The pre-fix refinement diagnostic is committed and executed. On 128 development radar-only windows
 it found 39 unsafe fallbacks among 756 calls: 31 legacy offsets exceeded half a bin and 30 legacy
@@ -36,14 +37,19 @@ fixed-spectrum counterfactual was 26.4794 bpm (`sweep`, k=4, candidate rank 2). 
 `reports/peak_refinement_diagnostic_2026-09-29.json`; it is bound to clean commit `4280e34` and
 records no reference access.
 
+Production heart refinement now uses bounded, structured interpolation at all three ECA+AHET call
+sites and emits fixed-width delta/reason evidence. New output identity is
+`eca_ahet_safe_refine_v2`; the M4 production arm/suite are versioned consistently. Independent
+DSP/provenance review is READY. The old real-data authorization remains immutable and does not
+authorize this new estimator.
+
 ## 3. Active task / next steps
 
-1. Implement bounded refinement: uniform finite grid, finite
-   magnitudes, strict local maximum, finite concave parabola, `abs(delta) <= 0.5`, and in-band
-   result; otherwise retain the bin centre with a reason. Persist refinement evidence with every
-   estimate, assign the frozen ID `eca_ahet_safe_refine_v2`, and obtain the required independent
-   DSP review.
-2. Milestone 1 item 5 remains blocked on owner facts for P003 paced, P007 natural, P009 natural,
+1. Preserve current ECA behavior/numbers, describe production in-band ECA as inactive, and add an
+   explicit reference-free no-ECA comparison mode. Do not promote `guard_cardiac_candidate_v1`.
+2. Then repair the Step-6 tracker contract while preserving AHET rows and Viterbi segments across
+   restarts.
+3. Milestone 1 item 5 remains blocked on owner facts for P003 paced, P007 natural, P009 natural,
    and P010 natural. Do not infer their attempt state or inspect their CSVs.
 
 ## 4. Recent decisions that matter

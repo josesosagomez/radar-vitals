@@ -39,7 +39,10 @@ from src.m4.estimator_runner import (  # noqa: E402
     verify_gate_bundle,
     verify_repository_authorization,
 )
-from src.m4.production_suite import ProductionEstimatorSuite  # noqa: E402
+from src.m4.production_suite import (  # noqa: E402
+    PRODUCTION_ARM_ID,
+    ProductionEstimatorSuite,
+)
 from src.m4.estimator_scoring import (  # noqa: E402
     CLAIM_STATUS,
     EVALUATION_STATUS,
@@ -84,6 +87,11 @@ def _authority_payload(source_manifest) -> dict:
     """Exact M2 authority/profile identity, without touching capture or reference data."""
     profile_path = REPO_ROOT / "experiments" / "m8_ahmed_transfer" / "layer_b_profiles.yaml"
     document = yaml.safe_load(profile_path.read_text(encoding="utf-8"))
+    if document.get("production_arm") != PRODUCTION_ARM_ID:
+        raise ValueError(
+            f"Layer B production arm {document.get('production_arm')!r} does not match "
+            f"code authority {PRODUCTION_ARM_ID!r}"
+        )
     configured_arm_ids = tuple(row["arm_id"] for row in document["ahmed_arms"])
     if configured_arm_ids != APPROVED_ARM_IDS:
         raise ValueError(
@@ -162,7 +170,7 @@ def _authority_payload(source_manifest) -> dict:
             for path in authority_paths
         },
         "lock_ids": ["recorded_lock_as_captured", "current_production_rerun_lock"],
-        "production_arm_id": "production_eca_ahet_v1",
+        "production_arm_id": PRODUCTION_ARM_ID,
         "ahmed_arm_ids": list(APPROVED_ARM_IDS),
         "harmonic_counts": list(APPROVED_HARMONIC_COUNTS),
         "frequency_mapping_id": FREQUENCY_MAPPING_ID,

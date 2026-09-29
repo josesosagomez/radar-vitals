@@ -5,7 +5,9 @@ import ast
 from pathlib import Path
 
 import numpy as np
+import pytest
 
+from scripts import diagnose_peak_refinement
 from scripts.diagnose_peak_refinement import safe_refine_frequency
 from src.window_pipeline import SAFE_REFINEMENT_ESTIMATOR_ID
 
@@ -70,3 +72,14 @@ def test_diagnostic_source_has_no_reference_access_or_masimo_parser():
         elif isinstance(node, ast.ImportFrom):
             imported.append(node.module or "")
     assert not any("reference_access" in name or "masimo" in name for name in imported)
+
+
+def test_historical_diagnostic_fails_closed_after_estimator_transition(tmp_path):
+    output = tmp_path / "must_not_exist.json"
+    with pytest.raises(RuntimeError, match="clean commit 4280e34"):
+        diagnose_peak_refinement.run_diagnostic(
+            capture_root=tmp_path,
+            output=output,
+            config_path=diagnose_peak_refinement.DEFAULT_CONFIG,
+        )
+    assert not output.exists()

@@ -41,7 +41,11 @@ from src.m4.estimator_runner import (
     verify_preflight,
 )
 from src.m4.evidence_serialization import deserialize_native_tree
-from src.m4.production_suite import PRODUCTION_ARM_ID
+from src.m4.production_suite import (
+    PRODUCTION_ARM_ID,
+    PRODUCTION_ESTIMATOR_ID,
+    PRODUCTION_SUITE_ID,
+)
 from src.m8.ahmed_provenance import (
     SourceManifest,
     build_source_manifest,
@@ -523,7 +527,7 @@ def production_audit_summary(
 
     return {
         "schema_version": 1,
-        "estimator_id": "eca_ahet_v1",
+        "estimator_id": PRODUCTION_ESTIMATOR_ID,
         "arm_id": PRODUCTION_ARM_ID,
         "vital": "hr",
         "lock_estimand_id": PRODUCTION_LOCK_ESTIMAND_ID,
@@ -893,12 +897,14 @@ def validate_radar_rows(
             )
 
         expected_suite = (
-            "production_eca_ahet_suite_v1"
+            PRODUCTION_SUITE_ID
             if arm_id == PRODUCTION_ARM_ID
             else "ahmed_fixed_h_phase_suite_v1"
         )
         expected_estimator = (
-            "eca_ahet_v1" if arm_id == PRODUCTION_ARM_ID else "ahmed_fixed_h_phase_v1"
+            PRODUCTION_ESTIMATOR_ID
+            if arm_id == PRODUCTION_ARM_ID
+            else "ahmed_fixed_h_phase_v1"
         )
         if row["suite_id"] != expected_suite or row["estimator_id"] != expected_estimator:
             raise ScoreContractError(f"{key}: suite/estimator identity is not canonical")

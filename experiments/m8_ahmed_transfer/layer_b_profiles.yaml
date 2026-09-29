@@ -15,7 +15,7 @@ signal:
 locks:
   - recorded_lock_as_captured
   - current_production_rerun_lock
-production_arm: production_eca_ahet_v1
+production_arm: production_eca_ahet_safe_refine_v2
 ahmed_arms:
   - arm_id: ahmed_phase_h3_figure_visible_unsuppressed
     layer_a_profile_id: a_fixed_h3_non_dc_mean_magnitude_unsuppressed_v1

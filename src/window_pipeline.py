@@ -43,13 +43,14 @@ REJECTION_CODE_NAMES = {
     7: "low_candidate_floor_db_low",
 }
 
+#: Immutable identity of the superseded unsafe-refinement estimator.
+LEGACY_ESTIMATOR_ID = "eca_ahet_v1"
+#: Frozen before the refinement behavior changed; now assigned because the safe
+#: implementation and its per-call evidence contract are the executed path.
+SAFE_REFINEMENT_ESTIMATOR_ID = "eca_ahet_safe_refine_v2"
 #: Identifier for the production ECA+AHET window estimator implemented below.
 #: M8/M9/M10 estimators declare their own ID and reuse `WindowEstimate`.
-ESTIMATOR_ID = "eca_ahet_v1"
-# Frozen before the refinement behavior changes.  Do not assign this ID to an
-# output until safe refinement is the executed implementation and its evidence
-# contract is present.
-SAFE_REFINEMENT_ESTIMATOR_ID = "eca_ahet_safe_refine_v2"
+ESTIMATOR_ID = SAFE_REFINEMENT_ESTIMATOR_ID
 
 
 def run_window_dsp(

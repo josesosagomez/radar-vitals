@@ -12236,3 +12236,40 @@ bias. It occurs in development data and can materially affect an accepted estima
 **Next:** implement the structured safe helper in `src/vitals.py`, persist its reason/delta evidence
 with every estimate, assign `eca_ahet_safe_refine_v2`, and obtain the required independent DSP
 correctness review before any recomputation.
+
+## 2026-09-29 - Unsafe heart-peak interpolation replaced under a new estimator identity
+
+**Set out to do:** replace the measured unsafe refinement path without assigning changed estimates
+to the legacy estimator, and retain enough numeric evidence to diagnose every interpolation.
+
+**Worked (with evidence):**
+
+- Added a structured bounded refinement helper requiring a finite uniform grid, finite magnitudes,
+  a strict full-spectrum local maximum, a finite concave parabola, `abs(delta) <= 0.5`, and an
+  in-band result. Every failure retains the FFT-bin centre and a stable numeric reason code.
+- Routed all three ECA+AHET refinement sites through it: first-pass candidate, second-pass
+  fundamental, and dynamic-band second harmonic. Accepted, rejected, and no-ECA outputs carry
+  fixed-width delta/reason evidence; `REFINEMENT_NOT_ATTEMPTED_CODE=-1` is explicit.
+- Assigned the pre-frozen estimator ID `eca_ahet_safe_refine_v2`. Versioned the M4 production arm
+  as `production_eca_ahet_safe_refine_v2` and suite as
+  `production_eca_ahet_safe_refine_suite_v2`; direct, offline, M4, scoring, transfer authority, and
+  the Layer-B register now agree. The old real-data authorization is intentionally unchanged and
+  therefore cannot authorize the new estimator.
+- Froze the pre-fix diagnostic as historical-only: after the estimator transition it fails before
+  any capture or output I/O and directs reproduction to clean commit `4280e34`.
+- Independent DSP/provenance review returned **READY** with no material findings. Its final subset
+  passed **24 tests**. The local focused identity/evidence run passed **288 tests, 1 skipped**; the
+  full suite reached **3171 passed, 17 skipped** with one EOL-only failure, then the JSON artifact
+  was normalized to LF and the closure rerun passed **10 tests**.
+
+**Failed / did not work, and why:** the first full-suite run materialized the already committed
+diagnostic JSON as CRLF, violating the clean-clone hash policy. No scientific test failed. The file
+was converted to LF and `git ls-files --eol` now reports `i/lf w/lf`. One exact native-payload test
+transiently differed by about 1.3e-7 bpm in an earlier process, then passed in isolated and combined
+reruns; independent review found no path drift.
+
+**Retired / no longer used:** `eca_ahet_v1` as an identity for newly computed production outputs,
+and the ability to rerun the pre-fix monkeypatch diagnostic against post-fix code.
+
+**Next:** preserve current ECA numbers while correcting its semantic contract and adding an explicit
+reference-free no-ECA comparison mode. Do not promote `guard_cardiac_candidate_v1`.

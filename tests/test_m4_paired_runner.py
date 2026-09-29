@@ -175,7 +175,7 @@ def _native(
 ):
     return {
         "arm_id": arm_id,
-        "estimator_id": "eca_ahet_v1" if arm_id == PRODUCTION_ARM_ID else "ahmed_fixed_h_phase_v1",
+        "estimator_id": "eca_ahet_safe_refine_v2" if arm_id == PRODUCTION_ARM_ID else "ahmed_fixed_h_phase_v1",
         "run_config_hash": config_hash,
         "hr_valid": evidence is not None,
         "hr_raw": 48.0 if evidence is not None else None,
@@ -191,9 +191,9 @@ def _native(
 
 
 class FakeProduction:
-    suite_id = "production_eca_ahet_suite_v1"
+    suite_id = "production_eca_ahet_safe_refine_suite_v2"
     suite_config_hash = "p" * 64
-    arm_specs = (EstimatorArmSpec(PRODUCTION_ARM_ID, "eca_ahet_v1", "p" * 64),)
+    arm_specs = (EstimatorArmSpec(PRODUCTION_ARM_ID, "eca_ahet_safe_refine_v2", "p" * 64),)
     outcome_classifiers = {}
 
     def __init__(self, seen):
@@ -745,7 +745,10 @@ def test_unexpected_decode_and_suite_failures_abort(tmp_path):
         def __call__(self, frames, locked_bin, fs):
             raise RuntimeError("injected DSP fault")
 
-    with pytest.raises(RunnerContractError, match="unexpected production_eca_ahet_suite"):
+    with pytest.raises(
+        RunnerContractError,
+        match="unexpected production_eca_ahet_safe_refine_suite_v2",
+    ):
         _run_with(tmp_path / "suite", production=BrokenProduction([]))
 
 
