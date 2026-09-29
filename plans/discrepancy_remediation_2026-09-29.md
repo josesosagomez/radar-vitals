@@ -97,7 +97,8 @@ HANDOFF at the checkpoint.
    centre with a reason. Persist that evidence wherever an estimate is emitted.
 
    The corrected behavior receives a new immutable estimator ID; historical
-   `production_eca_ahet_v1` artifacts remain unchanged.
+   `production_eca_ahet_v1` artifacts remain unchanged. The corrected ID was frozen on
+   2026-09-29 as **`eca_ahet_safe_refine_v2`** before any changed output was assigned.
 2. Preserve current ECA behavior and numbers but correct its semantic description: in-band ECA is
    inactive under production mode. Add an explicit no-ECA comparison mode and reference-free tests
    pinning projected harmonic orders. Do not promote `guard_cardiac_candidate_v1`.

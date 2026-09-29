@@ -46,6 +46,10 @@ REJECTION_CODE_NAMES = {
 #: Identifier for the production ECA+AHET window estimator implemented below.
 #: M8/M9/M10 estimators declare their own ID and reuse `WindowEstimate`.
 ESTIMATOR_ID = "eca_ahet_v1"
+# Frozen before the refinement behavior changes.  Do not assign this ID to an
+# output until safe refinement is the executed implementation and its evidence
+# contract is present.
+SAFE_REFINEMENT_ESTIMATOR_ID = "eca_ahet_safe_refine_v2"
 
 
 def run_window_dsp(
