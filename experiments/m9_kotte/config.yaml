@@ -297,7 +297,7 @@ scoring:
   window_interval: half_open
   comparative_windows_start_k: 1
   reuse_existing_pi_and_stationarity_gates: true
-  metrics: [coverage, mae_bpm, rmse_bpm, bias_bpm, bland_altman_limits]
+  metrics: [coverage, mae_bpm, rmse_bpm, bias_bpm, pooled_window_interval_descriptive]
   summaries: [capture, subject, protocol, lock_estimand]
   constant_session_median_hr_comparator: true
   approximate_origin_label: exploratory_non_frozen

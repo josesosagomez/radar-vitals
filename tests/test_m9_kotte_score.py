@@ -153,7 +153,10 @@ def _fixture(tmp_path: Path, *, duplicate_row: bool = False) -> tuple[Path, Path
             "window_interval": "half_open",
             "comparative_windows_start_k": 1,
             "reuse_existing_pi_and_stationarity_gates": True,
-            "metrics": ["coverage", "mae_bpm", "rmse_bpm", "bias_bpm", "bland_altman_limits"],
+            "metrics": [
+                "coverage", "mae_bpm", "rmse_bpm", "bias_bpm",
+                "pooled_window_interval_descriptive",
+            ],
             "summaries": ["capture", "subject", "protocol", "lock_estimand"],
             "constant_session_median_hr_comparator": True,
             "approximate_origin_label": "exploratory_non_frozen",
@@ -206,7 +209,7 @@ def test_half_open_alignment_and_k0_exclusion(tmp_path: Path) -> None:
     assert all(row["window_universe"] == "evaluation_k_ge_1" for row in rows[1:])
 
 
-def test_hand_derived_metrics_bias_rmse_and_bland_altman(tmp_path: Path) -> None:
+def test_hand_derived_metrics_bias_rmse_and_descriptive_interval(tmp_path: Path) -> None:
     result = _execute(tmp_path)
     summary = next(
         row for row in result.summaries
@@ -221,8 +224,13 @@ def test_hand_derived_metrics_bias_rmse_and_bland_altman(tmp_path: Path) -> None
     assert summary["rmse_bpm"] == pytest.approx(np.sqrt(10.0))
     assert summary["bias_bpm"] == -1.0
     sd = np.std(np.asarray([2.0, -4.0]), ddof=1)
-    assert summary["bland_altman_loa_low_bpm"] == pytest.approx(-1.0 - 1.96 * sd)
-    assert summary["bland_altman_loa_high_bpm"] == pytest.approx(-1.0 + 1.96 * sd)
+    assert summary["pooled_window_interval_descriptive_low_bpm"] == pytest.approx(
+        -1.0 - 1.96 * sd
+    )
+    assert summary["pooled_window_interval_descriptive_high_bpm"] == pytest.approx(
+        -1.0 + 1.96 * sd
+    )
+    assert not any("bland_altman" in key for key in summary)
 
 
 def test_metric_summary_nan_coverage_and_single_pair_loa() -> None:
@@ -231,7 +239,7 @@ def test_metric_summary_nan_coverage_and_single_pair_loa() -> None:
     assert one["n_joint_scored"] == 1
     assert one["mae_bpm"] == 2.0
     assert one["algorithmic_coverage"] == pytest.approx(2 / 3)
-    assert one["bland_altman_loa_low_bpm"] is None
+    assert one["pooled_window_interval_descriptive_low_bpm"] is None
     empty = scoring.metric_summary([], n_total=2, n_radar_valid=0, n_reference_admitted=1)
     assert empty["joint_coverage"] == 0.0
     assert empty["mae_bpm"] is None

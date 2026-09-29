@@ -357,6 +357,44 @@ def test_regression_old_mode_cancels_nothing_in_band():
     assert abs(removed_db) < 0.01, f"expected ~0 dB removed, got {removed_db:+.2f} dB"
 
 
+def test_production_mode_projects_no_harmonics_inside_the_cardiac_band():
+    """Production only projects k=1,2 here; every in-band order k=3..6 is spared."""
+    f_r, f_h = 0.30, 65 / 60
+    out = _run_g(_phase_g(f_r, f_h), f_r, "skip_forbidden_harmonics_v1")
+    skipped = set((np.flatnonzero(out["eca_skipped_harmonics"]) + 1).tolist())
+    assert skipped == {3, 4, 5, 6}
+    assert out["n_eca_projected"] == 2
+    assert out["eca_applied"] is True
+
+
+def test_explicit_no_eca_mode_is_reference_free_and_projects_nothing(monkeypatch):
+    f_r, f_h = 0.30, 65 / 60
+    phase = _phase_g(f_r, f_h)
+    expected = vitals.bandpass_filter(
+        phase - np.mean(phase), FS_G, BAND_G[0], min(2.0 * BAND_G[1], FS_G * 0.45), order=4
+    )
+
+    def projection_must_not_run(*_args, **_kwargs):
+        raise AssertionError("eca_mode='none' called eca_project")
+
+    monkeypatch.setattr(vitals, "eca_project", projection_must_not_run)
+    out = _run_g(phase, f_r, "none")
+    assert out["eca_applied"] is False
+    assert out["k_max_eff"] == 0
+    assert out["n_eca_projected"] == 0
+    assert out["n_eca_cols_selected"] == 0
+    assert out["n_eca_cols_retained"] == 0
+    assert not out["eca_skipped_harmonics"].any()
+    assert not out["candidate_eca_skipped"].any()
+    assert not out["candidate_eca_retained_ks"].any()
+    np.testing.assert_array_equal(out["phase_eca"], expected)
+
+
+def test_unknown_eca_mode_is_rejected_instead_of_falling_back_to_legacy():
+    with pytest.raises(ValueError, match="unknown eca_mode"):
+        _run_g(_phase_g(0.30, 65 / 60), 0.30, "typo_mode")
+
+
 def test_new_mode_cancels_noncolliding_harmonics_in_band():
     """§8.3 — the regression the bug caused: in-band harmonics must actually be removed."""
     f_r, f_h = 0.30, 65 / 60          # |4·f_r − f_h| = 0.117 Hz — no collision

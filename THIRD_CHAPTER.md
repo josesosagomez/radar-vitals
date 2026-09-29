@@ -70,8 +70,8 @@
 | Evaluation methodology (comparator) | **Yes** | — |
 | Failure-mode analysis | **Yes** — this is a genuine strength | — |
 | Ahmed HA real-data comparison | **Yes, exploratory** | Complete two-lock × seven-arm M8 evaluation; approximate timing prevents final agreement claims |
-| Headline agreement results | **No** | 10-subject study not started; n=4 subjects exist |
-| Bland–Altman (subject-clustered), per-subject breakdown | **No** | Same; and the repeated-measures model is not implemented yet (§7.5) |
+| Headline agreement results | **No** | 10-subject study not started; the existing n=4 subjects are development-only |
+| Bland–Altman (subject-clustered), per-subject breakdown | **Implementation only** | `src/agreement.py::arm_loa` implements the frozen estimator; final prospective data are not yet available (§7.5) |
 | Published-method comparison | **Partial** | Ahmed HA and Kotte joint-Doppler are complete; TI on-chip comparison remains |
 | Conclusions | **Partially** | Method conclusions yes; performance conclusions no |
 
@@ -90,7 +90,7 @@ enough to track a clinical pulse-oximeter reference?
 **Claimed contributions**, ordered by how well the evidence currently supports them:
 
 1. **A real-data evaluation of two published, simulation-only methods** — Ahmed's harmonic
-   accumulation [R1] and Kotte's joint high-amplitude-difference Doppler [R21] — scored against a
+   accumulation [R22] and Kotte's joint high-amplitude-difference Doppler [R21] — scored against a
    clinical reference on identical windows under one common comparator, with coverage reported.
    Ahmed accumulates harmonic evidence to suppress respiratory interference, whereas Kotte
    jointly estimates two high-amplitude-difference Dopplers to separate or mask dominant lines;
@@ -109,7 +109,8 @@ enough to track a clinical pulse-oximeter reference?
 4. **A characterisation of the respiratory-harmonic coincidence limit** (4·f_r ≈ HR) as an
    *identifiability* problem rather than a resolution or tuning problem, with a documented
    chain of four failed attempts to engineer around it [VERIFIED as negative results, §12].
-5. **An implementation and evaluation of ECA + AHET** [Tang 2025] on hardware and at a window
+5. **An implementation and evaluation of a nominal ECA + AHET pipeline** [Tang 2025] on hardware and at a window
+   configuration whose frozen production skip policy leaves ECA inactive inside the cardiac band,
    length different from the original paper (30 s at 20 Hz vs 20 s at 100 Hz).
 6. **Agreement with a clinical reference across subjects** [PENDING — this is the contribution
    the thesis examiner will look for, and it does not exist yet]. **Across subjects, not
@@ -289,7 +290,7 @@ its arXiv ID. Summarised by *strategy*:
 | **[R14] Zhang et al. 2023** — Pi-ViMo | Time-domain template matching with physiological models (RC respiration, Van der Pol heart) | 11.9% error stationary | ~4.3 s compute per 15 s window — not real time |
 
 **Gap this work addresses.** Two published simulation methods — Ahmed's harmonic accumulation
-[R1] and Kotte's joint high-amplitude-difference Doppler [R21] — are evaluated on these real
+[R22] and Kotte's joint high-amplitude-difference Doppler [R21] — are evaluated on these real
 radar captures. They address interference differently: Ahmed accumulates harmonic evidence,
 whereas Kotte jointly estimates two dominant Doppler lines. Neither paper's simulation result
 should be read as human-data validation.
@@ -309,8 +310,9 @@ than the differences between the methods in this table.
    resolution — precisely the mechanism in §2.4 and §12.1.
 2. **It works at our window length and frame rate.** [R3] and [R4] require 60 s windows; we need
    a live readout, and a 60 s window makes the warmup unusable.
-3. **ECA is a linear projection** — invertible, information-preserving, and diagnosable. We can
-   log exactly how much power was removed at each harmonic and show it in the chapter.
+3. **ECA is a linear projection** — it is diagnosable but not invertible: projected subspace
+   components are removed. We can log which harmonic columns survive basis construction and how
+   much power changes. In the frozen production skip mode, no in-band harmonic is projected.
 4. **Implementable in NumPy/SciPy** with no new dependencies, unlike the MUSIC and VMD families.
 5. **AHET is the principled form of an idea we had already tried and failed with.** We first
    implemented a fixed 0.08 Hz "exclude peaks near respiratory harmonics" proximity rule; it
@@ -357,7 +359,10 @@ Input: unwrapped phase θ[n], N = 600 (30 s × 20 Hz).
 **K_b selection.** Production mode is `skip_forbidden_harmonics_v1`: include harmonic k unless
 k·f_r falls inside the cardiac band. The reason is §12.2 — the previous mode unconditionally
 projected out k = 1…4, which *erased the cardiac signal itself* whenever 4·f_r landed on the
-heart rate.
+heart rate. Consequently, the configured production ECA stage performs **no cancellation at any
+respiratory harmonic inside the heart-rate band**; the production heart estimate is therefore
+best described as AHET after cardiac bandpass, with below-band projection only. The explicit
+`eca_mode: none` comparison runs AHET with no projection at all and requires no reference data.
 
 ### 6.2 Phase 2 — cardiac peak search and AHET verification
 
@@ -372,6 +377,11 @@ Additional production gates [VERIFIED — `live_demo_config.yaml`]: `candidate_m
 `candidate_min_peak_to_floor_db: 2.0` (4.0 for low candidates below 1.20 Hz),
 `candidate_min_second_harmonic_ratio_db: 1.0`, `k_max: 6` with an adaptive per-window
 `k_max_eff = min(10, ⌊band_hi / f_r⌋)`.
+
+These gates are **reference-informed legacy settings**, not independently validated thresholds:
+the 2.0/4.0 dB floor gates descend from a Masimo-scored grid sweep on development sessions whose
+raw data were later deleted. They remain frozen for lineage and will not be retuned; any agreement
+claim requires held-out prospective participants.
 
 ### 6.3 Mandatory diagnostics (a methodological commitment, worth a paragraph)
 
@@ -472,18 +482,19 @@ standard for method-comparison studies, and explicitly *not* a correlation coeff
 reported alongside accuracy, always** — accuracy computed only on surviving windows is selection
 bias, and given our coverage (§10.2) this is not a hypothetical concern.
 
-**Bland–Altman must account for repeated measurements** [CRITICAL — the current implementation
-does not]. The study design is 10 subjects × 2 sessions × ~19 windows: those window-level
+**Bland–Altman must account for repeated measurements.** The study design is 10 subjects × 3
+sessions × ~19 windows: those window-level
 differences are **nested within subject** and are not independent pairs. The only implementation in
-the repo, `scripts/plot_bland_altman.py`, pools every window as if independent
+the repo before the 2026-09-29 remediation, `scripts/plot_bland_altman.py`, pooled every window as if independent
 (`bias ± 1.96·SD`, `se_loa = sqrt(3·SD²/n)` with `n` = pooled window count, no subject or session
 term), which will produce **falsely narrow limits of agreement and confidence intervals**. This is
 wrong for the study, and it was never right for the n=1 pilot either — windows from one subject do
 not become independent by being non-overlapping, and a single subject carries no between-subject
 variance, so population limits of agreement are unidentifiable from it. **Treat every number that
-script has produced as descriptive only.** The chapter must use a subject-clustered
-repeated-measures model specified in `notes/analysis_prespec.md` §1
-[PENDING implementation — see `plans/implementation_plan.md` M4].
+script produced as descriptive only.** The retired script now fails closed. The chapter must use
+`src/agreement.py::arm_loa`, which implements the subject-clustered unbalanced-ANOVA estimator and
+fixed whole-subject bootstrap specified in `notes/analysis_prespec.md` §1. A reportable final-study
+result remains pending prospective subjects and the count-based estimability conditions.
 
 ---
 
@@ -580,32 +591,13 @@ coverage discussion in §10.2. One session (`massimo1`) still locks a mediocre b
 
 > **Read the status tags.** Nothing in §10 is a defensible headline result yet.
 
-### 10.1 Agreement, at the corrected bin, under the stated comparator [PRELIMINARY]
+### 10.1 Agreement [PENDING — prior pilot table withdrawn]
 
-All three Masimo-referenced sessions re-processed end-to-end at current HEAD and scored strictly
-under `notes/comparator_prespec.md`:
-
-| Session | AHET-accepted | Excluded (reference non-stationary) | Scorable | MAE | Severe (>5 bpm) |
-|---|---|---|---|---|---|
-| natural | 5 / 50 | 4 | 1 | 0.19 bpm | **0** |
-| paced-16 | 23 / 50 | 2 | 21 | 0.50 bpm | **0** |
-| sweep | 30 / 150 | 11 | 19 | 0.53 bpm | **0** |
-
-All 17 excluded windows were checked individually: **every one is a real reference instability**
-(in-window spread 5.1–26.0 bpm) at a settling transient or a paced-rate transition — legitimate
-stationarity-gate exclusions, not radar error being hidden by the gate. *(Say this in the
-chapter. The obvious reviewer question about an exclusion gate is "what did it hide?", and we
-checked.)*
-
-**Why these are not citable as a result:**
-- **n = 4 subjects** across the eight sessions (corrected 2026-08-03; previously recorded as one — see `notes/capture_inventory.md` "Subject map").
-- These sessions **informed the design** of the harmonic-veto work, so they are exploratory, not
-  held-out validation.
-- `natural`'s MAE rests on a **single** scorable window.
-- Coverage is 10–20%, so the accuracy figure describes a small, self-selected minority of windows.
-
-**The correct framing for these numbers:** "when the pipeline accepts a window, it is accurate;
-it accepts few windows." Both halves must be reported together.
+The previous table is withdrawn. It used overlapping live-demo windows from three sessions
+belonging to only two people (subjects A and B), mislabeled the sample as n=4, and lacked a
+committed regeneration script. Those values are not paper-grade and must not be quoted. This
+section remains pending until the canonical non-overlapping, admission-gated analysis is
+regenerated under the new estimator identity and summarized with subject-aware agreement methods.
 
 ### 10.2 Coverage — the actual bottleneck [PRELIMINARY]
 
@@ -615,7 +607,7 @@ headline of the current state of the system and should be stated as such.
 
 ### 10.3 Ahmed harmonic accumulation on real FMCW data [VERIFIED IMPLEMENTATION; EXPLORATORY AGREEMENT]
 
-Ahmed et al.'s Section III-C harmonic-accumulation method was corrected and evaluated as a
+Ahmed et al.'s Section III-C harmonic-accumulation method [R22] was corrected and evaluated as a
 paired comparison on the same decoded cubes, windows, locks, and run identity as the production
 estimator. The canonical design contains the production arm and six Ahmed profiles: H=3/H=5
 crossed with figure-visible unsuppressed, Eq. 26 multiples-suppressed, and prose
@@ -741,7 +733,7 @@ seconds were recorded in the scoring artifact; they were not radar tuning.
 
 **Protocol-stratified exploratory summaries (current-production rerun lock):**
 
-| Vital / protocol | Loading arm | Scored / total | Joint coverage | MAE (bpm) | RMSE (bpm) | Bias (bpm) | Bland–Altman LoA (bpm) |
+| Vital / protocol | Loading arm | Scored / total | Joint coverage | MAE (bpm) | RMSE (bpm) | Bias (bpm) | Descriptive pooled-window interval (bpm) |
 |---|---:|---:|---:|---:|---:|---:|---:|
 | HR / natural | `1e-2` | 53 / 100 | 0.53 | 29.434 | 30.608 | −29.434 | [−46.047, −12.821] |
 | HR / natural | `1e-4` | 53 / 100 | 0.53 | 29.368 | 30.911 | −29.368 | [−48.450, −10.286] |
@@ -758,6 +750,10 @@ seconds were recorded in the scoring artifact; they were not radar tuning.
 
 The constant-session-median comparator is reported beside HR because these approximate-origin
 captures have low within-session HR dynamic range; it is descriptive, not a radar result.
+The final column is the historical pooled-window `bias ± 1.96·SD` display. It is retained only to
+describe this exploratory M9 run; it is **not** a repeated-measures Bland–Altman limit and cannot
+support a population agreement claim. Final-study limits must come from the subject-clustered
+`src/agreement.py::arm_loa` estimator specified in §7.5.
 Minimum pair margins were approximately `1.8e-5 dB`, so the selected pairs are weakly
 separated. All outputs are exploratory and ineligible for promotion or a final agreement
 claim. The conservative conclusion is that this fixed-range, 4-RX, loaded adaptation of Kotte
@@ -980,6 +976,9 @@ submission — do not invent them.
 - **[R21]** Kotte, V.V., Ahmed, S., Alouini, M.-S., and Al-Naffouri, T.Y., "Joint Estimation of
   Single Target's High Amplitude Difference Doppler Frequencies in FMCW Radar," *IEEE
   Transactions on Radar Systems*, vol. 2, 2024, DOI: 10.1109/TRS.2024.3352189.
+- **[R22]** Ahmed, S., Kotte, V.V., Alouini, M.-S., and Al-Naffouri, T.Y., "Discovering the
+  Unseen: Harmonic Accumulation for Vital-Sign Estimation," *IEEE Transactions on Radar
+  Systems*, vol. 2, 2024, DOI: 10.1109/TRS.2024.3412915.
 
 **Comparison methods**
 - **[R2]** Hsieh et al., "Harmonic MUSIC Method for mmWave Radar-based Vital Sign Estimation,"
@@ -1037,7 +1036,7 @@ submission — do not invent them.
 **Also in `literature/ref_papers/`** (surveyed, not yet placed in the argument), both IEEE Trans.
 Radar Systems vol. 2 (2024), both simulation-only:
 
-- **Ahmed et al., "Discovering the Unseen"** (DOI 10.1109/TRS.2024.3412915). Its **Harmonic
+- **[R22] Ahmed et al., "Discovering the Unseen"** (DOI 10.1109/TRS.2024.3412915). Its **Harmonic
   Accumulation is already the primary BR estimator** in `src/respiration.py`, but **adapted**: the
   paper's model is a **pulse radar with a single TX and single RX** (its Fig. 1) built on **2f_h
   and 2f_b and their harmonics** — the even-harmonic structure is intrinsic to its demodulated
@@ -1077,7 +1076,9 @@ Per the reproducibility rules, each must come from a committed script in `figure
 7. ECA before/after spectra with cancelled harmonics annotated.
 8. AHET verification illustration — f_h1, the 2·f_h1 search region, accept and reject cases.
 9. **Comparator comparison figure** — the same hops scored both ways, showing the 17× gap.
-10. **Bland–Altman** — `scripts/plot_bland_altman.py` is the only implementation.
+10. **Bland–Altman** — `src/agreement.py::arm_loa` implements the subject-clustered primary
+    estimator. The older `scripts/plot_bland_altman.py` is retired pooled-window provenance and
+    must not be used for agreement claims.
 11. Radar HR vs Masimo PR time series with rejected windows shaded.
 12. Coverage vs accuracy trade-off across gate settings.
 13. Coincidence failure figure — the 18 bpm arm, |HR − 4·f_r| against error.

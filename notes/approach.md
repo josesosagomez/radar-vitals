@@ -487,7 +487,8 @@ Rationale:
 - Directly addresses our documented failure mode (4th harmonic / intermodulation).
 - Works at our window length and 20 Hz frame rate (no 60 s-window requirement).
 - Implementable in scipy/numpy without new dependencies.
-- ECA is a linear projection — invertible, no information destroyed, diagnosable.
+- ECA is a linear orthogonal-complement projection — diagnosable but not invertible;
+  components in the projected subspace are deliberately destroyed.
 - The AHET consistency check (2×f_h verification) is the principled version of the
   "harmonic proximity" idea that failed with a fixed threshold (§4.1).
 
@@ -527,12 +528,16 @@ Input: unwrapped phase vector θ[n] for one window (N = 600 at 30 s × 20 Hz).
   the common 4·f_r collision. This is the B.5 root cause. Retained only for comparison.
 - `skip_forbidden_harmonics_v1` **(live)** — additionally skip any k whose k·f_r falls
   inside the cardiac band (± `eca_forbidden_guard_hz`), including k ≤ 4.
+- `none` **(reference-free comparison only)** — apply no projection and run the same AHET
+  candidate/gate path. It is not the live production setting.
 
 Skipping a colliding harmonic prevents ECA from erasing the cardiac peak, but it leaves
 respiratory energy inside the cardiac band competing with the true HR. The coincidence is
 therefore still an identifiability problem (§4.2) — the mode changes the failure from
 silent cancellation to detectable contamination; it does not recover the signal when the
-two genuinely coincide. See B.5.
+two genuinely coincide. In the live mode every harmonic inside [0.8, 2.0] Hz is skipped,
+so production ECA projects only below-band orders and performs no in-band cancellation.
+See B.5.
 
 ### 7.2 Phase 2 — Cardiac peak search + AHET consistency
 

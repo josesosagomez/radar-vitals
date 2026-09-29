@@ -9,6 +9,11 @@ Amendment request to approval `24IBEC051`
 > it may be repeated in any manuscript, talk or spec. The criteria themselves are real and
 > unchanged: `notes/comparator_prespec.md` §2.2 (HR stationarity/coverage gates).
 > *Submission status was recorded on the user's authority 2026-08-04.*
+>
+> **Approved-scope clarification recorded 2026-09-29:** the actually approved scope was **15 new
+> prospective participants**, not “a third session for the existing 10 participants.” The
+> as-submitted body below is preserved verbatim as a historical record and is not the operative
+> enrollment authority.
 ---
 
 ## 1. Administrative

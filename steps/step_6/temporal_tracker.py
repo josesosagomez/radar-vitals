@@ -333,6 +333,8 @@ def viterbi_track(
         return []
 
     all_states: list[list[_VState]] = [[] for _ in range(n)]
+    path: list[Optional[dict]] = [None] * n
+    segment_start = 0
 
     def _init(wi: int) -> None:
         """Seed fresh-segment states for window wi (no jump constraint)."""
@@ -349,7 +351,24 @@ def viterbi_track(
 
     _init(0)
 
+    def _finish_segment(end: int, start: int) -> None:
+        """Backtrack one completed segment without erasing earlier decisions."""
+        if end < start or not all_states[end]:
+            return
+        state = max(all_states[end], key=lambda item: item.score)
+        w = end
+        while w >= start:
+            path[w] = state.cand_info
+            if state.back < 0:
+                break
+            state = all_states[w - 1][state.back]
+            w -= 1
+
     for w in range(1, n):
+        if not all_states[w - 1]:
+            segment_start = w
+            _init(w)
+            continue
         # Collect all candidate transitions, then deduplicate by (last_real_bpm, n_consec_gaps).
         # Without deduplication, state count grows as ~4^n_windows (4^33 ≈ 73 trillion for
         # these sessions). Dedup caps it at ~12 states per window regardless of session length.
@@ -380,21 +399,11 @@ def viterbi_track(
         all_states[w] = list(best_map.values())
 
         if not all_states[w]:
+            _finish_segment(w - 1, segment_start)
+            segment_start = w
             _init(w)
 
-    if not all_states[n - 1]:
-        return [None] * n
-
-    best = max(all_states[n - 1], key=lambda s: s.score)
-    path: list[Optional[dict]] = [None] * n
-    w = n - 1
-    state = best
-    while w >= 0:
-        path[w] = state.cand_info
-        if state.back < 0:
-            break
-        state = all_states[w - 1][state.back]
-        w -= 1
+    _finish_segment(n - 1, segment_start)
 
     return path
 
@@ -439,7 +448,7 @@ def apply_tracker(
     heart_band_hz: tuple[float, float],
     resp_harmonic_guard_hz: float,
 ) -> tuple[dict, dict]:
-    """Apply the temporal tracker to Step 6 per-window rows (modifies rows in-place).
+    """Emit a separate non-causal tracker estimate without changing AHET fields.
 
     Caller must have already set default tracker evidence columns and pre_tracker_*
     backup columns on all rows before calling this function.
@@ -527,12 +536,19 @@ def apply_tracker(
 
     for wi, (row, decision) in enumerate(zip(rows, path)):
         blocked = _blocked_reason(row)
+        row["tracker_non_causal"] = True
+        row["tracker_hr_bpm"] = _nan
+        row["tracker_hr_valid"] = False
+        row["tracker_hr_confidence"] = "none"
+        row["tracker_invalid_reason"] = ""
+        row["tracker_hr_error_bpm"] = _nan
+        row["tracker_hr_abs_error_bpm"] = _nan
 
         if blocked:
             n_forced_blk += 1
             decision_code[wi] = _CODE_FORCED_BLOCKED
             row["tracker_decision_type"] = "forced_blocked"
-            # primary fields and hr_source unchanged
+            row["tracker_invalid_reason"] = blocked
 
         elif decision is not None:
             n_selected += 1
@@ -561,18 +577,13 @@ def apply_tracker(
                 err_bpm = _nan
                 abs_err = _nan
 
-            # Update primary
-            row["radar_hr_bpm"]   = radar_hr
-            row["heart_peak_hz"]  = decision["candidate_refined_hz"]
-            row["hr_valid"]       = True
-            row["hr_confidence"]  = "high"
-            row["invalid_reason"] = ""
-            row["hr_source"]      = "temporal_tracker"
-            row["hr_error_bpm"]     = err_bpm
-            row["hr_abs_error_bpm"] = abs_err
-
             # Tracker evidence
             row["tracker_decision_type"]                 = "candidate"
+            row["tracker_hr_bpm"]                        = radar_hr
+            row["tracker_hr_valid"]                      = True
+            row["tracker_hr_confidence"]                 = "tracker"
+            row["tracker_hr_error_bpm"]                  = err_bpm
+            row["tracker_hr_abs_error_bpm"]              = abs_err
             row["tracker_selected_candidate_rank"]       = decision["candidate_rank"]
             row["tracker_selected_candidate_refined_hz"] = decision["candidate_refined_hz"]
             row["tracker_node_score"]                    = decision[score_key]
@@ -587,15 +598,7 @@ def apply_tracker(
             n_gap_dp += 1
             decision_code[wi] = _CODE_GAP
             row["tracker_decision_type"] = "gap"
-            row["hr_source"] = ""
-            row["radar_hr_bpm"] = _nan
-            row["heart_peak_hz"] = _nan
-            row["hr_valid"] = False
-            row["hr_confidence"] = "none"
-            row["hr_error_bpm"] = _nan
-            row["hr_abs_error_bpm"] = _nan
-            if not row.get("invalid_reason", ""):
-                row["invalid_reason"] = "temporal_tracker_gap"
+            row["tracker_invalid_reason"] = "temporal_tracker_gap"
 
     tracker_npz = {
         "candidate_fundamental_ratio_db": fund_db_arr,
@@ -612,6 +615,7 @@ def apply_tracker(
         "n_tracker_gap":                         n_gap_dp,
         "n_tracker_forced_blocked":              n_forced_blk,
         "n_tracker_selected_from_ahet_failed":   n_rescued_ahet,
+        "tracker_non_causal":                    True,
     }
 
     return tracker_npz, tracker_stats

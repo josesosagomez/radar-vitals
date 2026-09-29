@@ -236,6 +236,22 @@ stated honestly:** it addresses **proportional bias only**; it uses a **constant
 **remains a declared limitation**, not something this sensitivity removes. Choosing a
 transform *as the new primary* after final evaluation is **forbidden**.
 
+**Regression-sensitivity fit contract (implementation clarification 2026-09-29).** The random-
+intercept regression is fitted by **REML**, not ML, with fixed effects `[intercept,
+pair_mean − observed_pooled_pair_mean]`. The implementation profiles the variance ratio
+`λ = σ²_b,reg/σ²_e,reg` using the analytic compound-symmetry block inverse and determinant, compares
+the optimized solution with the exact `λ=0` boundary, and uses a bounded scalar optimization on
+`log(λ) ∈ [−20, 20]` (`xatol=1e-10`, `maxiter=500`). A singular fixed-effect system, zero residual
+quadratic, fewer than two subject clusters, no pair-mean variation, or insufficient residual degrees
+of freedom yields an explicit unavailable point sensitivity; it never falls back to an
+unclustered regression. The fitted line and both variance components are authoritative; the
+5th/25th/50th/75th/95th observed pair-mean percentiles are a fixed display grid, not separate
+estimands or tuning points. Uncertainty resamples whole subjects with the same seed, replicate
+count, duplicate-cluster semantics, percentile method, and `>5%` failure disposition as the
+primary. If its bootstrap fails that rule, the fitted regression sensitivity remains point-only
+and its CI is unavailable. This clarification fixes implementation/convergence behavior; it does
+not change the primary ANOVA estimator or its gates.
+
 - **References (verified 2026-07-25):**
   - Bland & Altman, *Lancet* 1986; **1**(8476):307–310 — original limits of agreement.
   - Bland & Altman, *J. Biopharm. Stat.* 2007; **17**(4):571–582 — agreement with multiple

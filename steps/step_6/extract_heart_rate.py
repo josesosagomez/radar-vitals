@@ -121,6 +121,9 @@ _CONTRACT_COLS = [
     "tracker_candidate_prominence",
     "tracker_distance_to_resp_harmonic_bpm",
     "tracker_within_resp_harmonic_guard",
+    "tracker_hr_bpm", "tracker_hr_valid", "tracker_hr_confidence",
+    "tracker_invalid_reason", "tracker_hr_error_bpm", "tracker_hr_abs_error_bpm",
+    "tracker_non_causal",
     # Pre-tracker AHET backup
     "pre_tracker_radar_hr_bpm",
     "pre_tracker_hr_valid",
@@ -1324,6 +1327,13 @@ def _process_session(
         row["tracker_candidate_prominence"]          = _nan
         row["tracker_distance_to_resp_harmonic_bpm"] = _nan
         row["tracker_within_resp_harmonic_guard"]    = False
+        row["tracker_hr_bpm"]                        = _nan
+        row["tracker_hr_valid"]                      = False
+        row["tracker_hr_confidence"]                 = "none"
+        row["tracker_invalid_reason"]                = "tracker_not_run"
+        row["tracker_hr_error_bpm"]                  = _nan
+        row["tracker_hr_abs_error_bpm"]              = _nan
+        row["tracker_non_causal"]                    = False
 
     # -- Pre-tracker snapshot for summary --
     pre_n_valid = sum(1 for r in rows if r.get("hr_valid", False))
@@ -1355,11 +1365,12 @@ def _process_session(
             "n_tracker_gap":                         0,
             "n_tracker_forced_blocked":              0,
             "n_tracker_selected_from_ahet_failed":   0,
+            "tracker_non_causal":                    False,
         }
 
     df = pd.DataFrame(rows)
 
-    # -- Summary metrics (reflect post-tracker primary output) --
+    # -- AHET summary metrics. The tracker is a separate non-causal estimator. --
     valid_mask = df["hr_valid"].astype(bool)
     n_total    = len(df)
     n_valid    = int(valid_mask.sum())
@@ -1384,6 +1395,21 @@ def _process_session(
     ir_counts = df["invalid_reason"].value_counts().to_dict()
 
     conf_counts = df["hr_confidence"].value_counts().to_dict()
+
+    tracker_valid_mask = df["tracker_hr_valid"].astype(bool)
+    tracker_paired = df[
+        tracker_valid_mask
+        & df["masimo_pr_bpm"].notna()
+        & ~df["masimo_low_quality"].astype(bool)
+        & df["tracker_hr_abs_error_bpm"].notna()
+    ]
+    tracker_n_paired = len(tracker_paired)
+    if tracker_n_paired:
+        tracker_mae = float(tracker_paired["tracker_hr_abs_error_bpm"].mean())
+        tracker_rmse = float(math.sqrt((tracker_paired["tracker_hr_error_bpm"] ** 2).mean()))
+        tracker_bias = float(tracker_paired["tracker_hr_error_bpm"].mean())
+    else:
+        tracker_mae = tracker_rmse = tracker_bias = _nan
 
     print(f"  Windows: {n_total} total | {n_valid} valid HR | "
           f"{flag_counts['quality_gated']} quality-gated | "
@@ -1424,6 +1450,16 @@ def _process_session(
         "bias_bpm":                 bias if math.isfinite(bias) else None,
         "invalid_reason_counts":    ir_counts,
         "confidence_counts":        conf_counts,
+        "ahet_n_valid_hr":          n_valid,
+        "ahet_n_paired_for_metrics": n_paired,
+        "ahet_mae_bpm":             mae if math.isfinite(mae) else None,
+        "ahet_rmse_bpm":            rmse if math.isfinite(rmse) else None,
+        "ahet_bias_bpm":            bias if math.isfinite(bias) else None,
+        "tracker_n_valid_hr":       int(tracker_valid_mask.sum()),
+        "tracker_n_paired_for_metrics": tracker_n_paired,
+        "tracker_mae_bpm":          tracker_mae if math.isfinite(tracker_mae) else None,
+        "tracker_rmse_bpm":         tracker_rmse if math.isfinite(tracker_rmse) else None,
+        "tracker_bias_bpm":         tracker_bias if math.isfinite(tracker_bias) else None,
         "frame_rate_hz":            frame_rate_hz,
         "window_s":                 window_s,
         "hop_s":                    hop_s,

@@ -12273,3 +12273,151 @@ and the ability to rerun the pre-fix monkeypatch diagnostic against post-fix cod
 
 **Next:** preserve current ECA numbers while correcting its semantic contract and adding an explicit
 reference-free no-ECA comparison mode. Do not promote `guard_cardiac_candidate_v1`.
+
+## 2026-09-29 - Production ECA semantics made explicit without changing its configuration
+
+**Set out to do:** stop describing the frozen production estimator as performing in-band ECA when
+its skip policy spares every respiratory harmonic inside the cardiac band, while preserving the
+existing production configuration and numbers.
+
+**Worked (with evidence):**
+
+- Kept production `eca_mode: skip_forbidden_harmonics_v1` unchanged and pinned its actual harmonic
+  selection at f_r=0.30 Hz: orders 3–6 in the cardiac band are skipped, while only below-band
+  orders 1–2 are projected.
+- Added explicit `eca_mode: none` for reference-free comparisons. It applies no projection, reports
+  `eca_applied=false`, zero projected/retained columns, and no skipped harmonics, while leaving AHET
+  candidate selection and gates intact. Unknown mode strings now fail closed instead of silently
+  falling back to legacy behavior.
+- Corrected manuscript/chapter wording: the production heart estimator is AHET after cardiac
+  bandpass with below-band projection only, not active in-band ECA. Also removed the false claim
+  that an orthogonal-complement projection is invertible/information-preserving.
+- Focused reference-free DSP regression suite passed **311 tests**.
+
+**Failed / did not work, and why:** none. The non-promoted
+`guard_cardiac_candidate_v1` comparison remains available but is not selected by production.
+
+**Retired / no longer used:** the claim that production cancels respiratory harmonics inside the
+heart-rate band, and implicit fallback of misspelled ECA mode names to `legacy`.
+
+**Next:** independently review the comparison-mode semantics, then repair the Step-6 non-causal
+tracker contract without relabelling AHET rejections.
+
+## 2026-09-29 - Step-6 tracker separated from the causal AHET result
+
+**Set out to do:** prevent the offline non-causal temporal tracker from converting an AHET
+rejection into a valid primary estimate, without deleting the tracker as an exploratory diagnostic.
+
+**Worked (with evidence):**
+
+- The tracker now writes only `tracker_*` estimate, validity, confidence, reason, and error fields.
+  Primary `radar_hr_bpm`, `hr_valid`, `hr_confidence`, `invalid_reason`, `hr_source`, and primary
+  error fields remain the causal AHET decision.
+- Summary output now reports explicit `ahet_*` and `tracker_*` coverage/error families. Legacy
+  generic metrics remain AHET metrics, so enabling the tracker cannot silently improve the
+  headline coverage or accuracy.
+- Tracker outputs and summaries are labelled `tracker_non_causal=true`. Disabled mode retains a
+  stable null tracker schema.
+- Fixed the Viterbi restart path so a gap beyond `max_gap_windows` closes and retains the completed
+  segment before starting another; it no longer discards earlier selections.
+- Added rescue, forced-blocked, gap, disabled, AHET-valid cross-case, summary-separation, and
+  segment-restart regressions. Independent review returned **READY** and directly confirmed that
+  every primary AHET field is invariant across AHET-valid, AHET-failed, and forced-blocked rows.
+  The complete Step-6 test file passed **140 tests** during review.
+
+**Failed / did not work, and why:** the first extra summary-hardening assertion expected paired
+tracker error metrics in a fixture with no admitted reference pairs. It was corrected to assert the
+actual contract: tracker coverage can differ from AHET coverage, but neither path invents accuracy
+metrics without an admitted pair.
+
+**Retired / no longer used:** tracker-selected candidates as replacements for AHET primary rows,
+and summary fields whose meaning changed when the tracker was enabled.
+
+**Next:** keep the tracker exploratory/non-causal; any future promotion requires a new estimator
+identity, prospective authorization, and a separate evidence chain.
+
+## 2026-09-29 - Manuscript and protocol claims corrected to the available evidence
+
+**Set out to do:** remove the serious claim/record discrepancies that could be fixed without
+opening sealed prospective references or fabricating operator facts.
+
+**Worked (with evidence):**
+
+- Withdrew the paper and chapter pilot agreement table. Its three sessions belonged to only two
+  people (A and B), used overlapping live-demo windows, and had no committed regeneration script;
+  the former `n=4` label was false for that table.
+- Added Ahmed et al., "Discovering the Unseen" as `[R22]` in both reference lists and routed its
+  citations to `[R22]`. `[R1]` remains Tang et al. and is used only for the ECA+AHET method.
+- Recorded the owner's approved-scope clarification above the immutable amendment submission:
+  **15 new prospective participants** is the operative authority. The contradictory submitted body
+  remains verbatim and is explicitly historical, not enrollment authority.
+- Disclosed that the production confidence/consistency gates came from a Masimo-scored sweep on
+  deleted development captures. The values remain frozen for lineage and require held-out
+  prospective validation; the manuscripts no longer imply clean validation.
+- Corrected production ECA wording to below-band projection plus AHET, not active cancellation in
+  the cardiac band. The explicit `none` comparison mode and fail-closed unknown-mode handling were
+  independently reviewed **READY**; the reviewer ran **329 focused tests** and reproduced the
+  production harmonic selection on seeded windows.
+
+**Failed / did not work, and why:** the four unregistered capture-attempt dispositions remain
+unknown for P003 paced, P007 natural, P009 natural, and P010 natural. No attempt state or recapture
+eligibility was inferred, and none of their reference CSVs was inspected. Owner facts are still
+required before those records can be corrected.
+
+**Retired / no longer used:** the withdrawn pilot numbers; Ahmed-as-`[R1]`; the submitted
+"existing 10 participants" sentence as operative scope; and the claim that the frozen production
+configuration performs in-band ECA.
+
+**Next:** obtain owner dispositions for the four capture attempts, then record stage, reason,
+evidence, and policy-grounded recapture eligibility as separate fields.
+
+## 2026-09-29 - Subject-clustered limits of agreement implemented; pooled-window labels retired
+
+**Set out to do:** implement the repeated-measures agreement estimator frozen in
+`notes/analysis_prespec.md` section 1 and prevent exploratory pooled-window intervals from being
+reported as population Bland--Altman limits.
+
+**Worked (with evidence):**
+
+- Added `src/agreement.py::arm_loa`. It requires explicit arm, subject, session, and window identity;
+  rejects mixed arms, duplicates, and non-finite pairs; and emits the exact unbalanced one-way
+  ANOVA components (`MSW`, `MSB`, `n0`, within-subject variance, truncated between-subject variance)
+  with subject-weighted bias.
+- Enforced the frozen estimability rules (`S >= 2`, `N > S`) and the fixed 10,000-replicate
+  whole-subject bootstrap (seed 20260725, linear 2.5/97.5 percentiles, duplicate draws as distinct
+  clusters, failed-replicate accounting, and the >5% descriptive-only disposition). Unavailable
+  population quantities serialize as null rather than a misleading number.
+- Persisted the required per-window difference/pair-mean rows and transparent proportional-bias,
+  residual-spread, tail/QQ, and within-session lag-1 diagnostics. These diagnostics do not switch
+  or tune the frozen primary estimator.
+- Added the mandatory descriptive proportional-bias sensitivity: a deterministic REML
+  subject-random-intercept regression with both between-subject and residual variance, population
+  limit lines, and whole-subject bootstrap endpoint intervals (or an explicit point-only/unavailable
+  disposition). The exact optimizer, boundary, tolerance, display grid, and failure contract are
+  recorded in `notes/analysis_prespec.md`.
+- The analysis boundary now requires caller-supplied authoritative subject identities, accepts only
+  natural/paced/recovery, and rejects more than one session for any subject-arm.
+- Added a hand-derived unequal-size three-subject regression and deterministic/failure-path tests.
+  The M9 scorer now calls its historical `bias +/- 1.96 SD` values
+  `pooled_window_interval_descriptive_*`; the chapter column says the same.
+- `scripts/plot_bland_altman.py` is retained for provenance but now fails closed with a direction to
+  `arm_loa`; it can no longer generate a falsely labelled agreement plot.
+- Independent math/contract review found and closed missing regression sensitivity, unknown-identity
+  acceptance, multi-session pooling, and all-one-window REML non-identifiability. The final verdict
+  was **READY** with no material findings. The focused agreement suite passed **13 tests**.
+- The complete pinned suite passed **3189 passed, 17 skipped** in 252.94 s. `git diff --check` and
+  the tracked line-ending check were clean.
+
+**Failed / did not work, and why:** the first complete run had two closure failures. One legacy
+tracker test expected the discarded-segment bug and was updated to require segment preservation.
+Comments added to the hash-pinned live config invalidated the historical refinement artifact's
+config digest; those comments were removed and the disclosure remains in manuscripts/HISTORY.
+Both exact failures then passed before the clean complete rerun. No final prospective population
+LoA can be generated now because the required subject cohort has not been collected. Historical
+M9 values remain descriptive and were not recomputed or promoted.
+
+**Retired / no longer used:** pooled-window `bias +/- 1.96 SD` as a Bland--Altman population LoA,
+and `scripts/plot_bland_altman.py` as an executable analysis route.
+
+**Next:** use `arm_loa` only after admission-gated prospective scoring supplies authoritative
+subject/session mappings; report each natural, paced, and recovery arm separately.

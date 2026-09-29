@@ -391,8 +391,8 @@ class TestViterbiTrack:
                              max_gap_windows=1, resp_harmonic_mode="exclude")
         assert path[1] is None, "window with no eligible candidates must be a gap"
 
-    def test_jump_threshold_not_scaled_by_gap_length(self):
-        """The jump check across a gap uses max_jump_bpm_per_hop regardless of gap span."""
+    def test_jump_break_restarts_without_discarding_completed_segment(self):
+        """An excessive jump starts a new segment and preserves the completed one."""
         # w0: 80 bpm, w1: forced gap, w2: 90 bpm (jump=10 from w0)
         # max_jump=6 → w2 cannot connect to w0 even though gap spans 1 window
         w0 = [_make_cand(0, 0, 80.0, fund_db=5.0)]
@@ -401,16 +401,19 @@ class TestViterbiTrack:
 
         path6 = viterbi_track([w0, w1, w2], max_jump_bpm_per_hop=6.0,
                               max_gap_windows=1, resp_harmonic_mode="exclude")
-        # Jump 10 bpm > 6 → w2 cannot connect to w0; fresh start at w2
-        # path[0] will be None (fresh-start at w2 has no backpointer to w0)
-        assert path6[0] is None, \
-            "jump of 10 bpm (> max 6) must prevent connection even across a gap"
+        # Jump 10 bpm > 6 → w2 cannot connect to w0, so it starts a new
+        # segment. The completed w0 segment must not be discarded.
+        assert [None if item is None else item["bpm"] for item in path6] == [
+            80.0, None, 90.0
+        ]
 
         path12 = viterbi_track([w0, w1, w2], max_jump_bpm_per_hop=12.0,
                                max_gap_windows=1, resp_harmonic_mode="exclude")
-        # Jump 10 bpm ≤ 12 → w2 can connect to w0 through the gap
-        assert path12[0] is not None and path12[0]["bpm"] == 80.0, \
-            "jump of 10 bpm (≤ max 12) must allow connection across a gap"
+        # Jump 10 bpm ≤ 12 → w2 can connect to w0 through the gap; the
+        # visible path is the same, but no restart is required.
+        assert [None if item is None else item["bpm"] for item in path12] == [
+            80.0, None, 90.0
+        ]
 
     def test_masimo_not_used_in_path_selection(self):
         """viterbi_track has no masimo parameter; selection is purely score-based."""

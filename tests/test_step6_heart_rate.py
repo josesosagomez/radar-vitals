@@ -2416,8 +2416,7 @@ class TestStep63Tracker:
     # --- enabled tracker: candidate selection ---
 
     def test_enabled_selects_ahet_accepted_candidates(self, tmp_path, monkeypatch):
-        """Tracker enabled (min_fund_db=0.0) → selects AHET-accepted candidates,
-        sets hr_source='temporal_tracker' for all non-blocked windows."""
+        """Tracker selections are separate and never relabel AHET primary rows."""
         import steps.step_6.extract_heart_rate as s6_mod
         monkeypatch.setattr(s6_mod, "estimate_rate_from_phase", _fake_estimate)
 
@@ -2432,14 +2431,15 @@ class TestStep63Tracker:
         df = pd.read_csv(out_dir / "heart_windows.csv")
         selected = df[df["tracker_decision_type"] == "candidate"]
         assert len(selected) > 0, "Tracker must select at least one window"
-        assert (selected["hr_source"] == "temporal_tracker").all()
-        assert (selected["hr_valid"].astype(bool)).all()
-        assert (selected["hr_confidence"] == "high").all()
+        assert selected["tracker_hr_valid"].astype(bool).all()
+        assert selected["tracker_hr_confidence"].eq("tracker").all()
+        assert selected["tracker_non_causal"].astype(bool).all()
+        assert not selected["hr_valid"].astype(bool).any()
         assert selected["tracker_selected_candidate_rank"].notna().all()
         assert selected["tracker_fundamental_ratio_db"].notna().all()
 
-    def test_enabled_pre_tracker_backup_preserved(self, tmp_path, monkeypatch):
-        """Tracker enabled → pre_tracker_* columns hold the AHET-first decision.
+    def test_ahet_valid_tracker_candidate_preserves_primary_fields(self, tmp_path, monkeypatch):
+        """An AHET-valid row stays the primary result when the tracker selects a candidate.
 
         Uses reject_resp_harmonic_coincidence=False so AHET accepts all windows
         pre-tracker (RR=15 bpm hits 5th harmonic at HR=75 bpm otherwise).
@@ -2464,6 +2464,13 @@ class TestStep63Tracker:
             "pre_tracker_hr_valid must reflect AHET decision (True here)"
         assert selected["pre_tracker_hr_confidence"].eq("high").all()
         assert selected["pre_tracker_radar_hr_bpm"].notna().all()
+        assert selected["hr_valid"].astype(bool).all()
+        assert selected["hr_confidence"].eq("high").all()
+        assert selected["hr_source"].eq("ahet").all()
+        assert selected["invalid_reason"].fillna("").eq("").all()
+        assert np.allclose(
+            selected["radar_hr_bpm"], selected["pre_tracker_radar_hr_bpm"], equal_nan=True
+        )
 
     def test_enabled_rescues_ahet_failed_window(self, tmp_path, monkeypatch):
         """Tracker enabled (min_fund_db=0.0) rescues windows where AHET failed
@@ -2501,18 +2508,25 @@ class TestStep63Tracker:
         assert len(rescued) > 0, \
             "Tracker must have rescued at least one AHET-failed window"
         assert (rescued["pre_tracker_invalid_reason"] == "ahet_failed").all()
-        assert (rescued["hr_source"] == "temporal_tracker").all()
-        assert (rescued["hr_valid"].astype(bool)).all()
-        assert (rescued["hr_confidence"] == "high").all()
-        # pandas read_csv converts "" to NaN; cleared invalid_reason round-trips as NaN
-        assert (rescued["invalid_reason"].fillna("") == "").all()
+        assert rescued["tracker_hr_valid"].astype(bool).all()
+        assert rescued["tracker_hr_confidence"].eq("tracker").all()
+        assert rescued["tracker_non_causal"].astype(bool).all()
+        assert not rescued["hr_valid"].astype(bool).any()
+        assert rescued["invalid_reason"].eq("ahet_failed").all()
 
         import json
         summary = json.loads((out_dir / "summary.json").read_text())
         assert summary["n_tracker_selected_from_ahet_failed"] > 0
+        assert summary["n_valid_hr"] == summary["ahet_n_valid_hr"] == 0
+        assert summary["mae_bpm"] is summary["ahet_mae_bpm"] is None
+        assert summary["tracker_n_valid_hr"] > summary["ahet_n_valid_hr"]
+        # This fixture has no admitted reference pairs; the tracker must not
+        # synthesize an error metric merely because it produced candidates.
+        assert summary["tracker_n_paired_for_metrics"] == 0
+        assert summary["tracker_mae_bpm"] is None
 
-    def test_tracker_gap_clears_pre_tracker_ahet_primary_hr(self):
-        """DP gap over an AHET-valid row clears primary HR but keeps backup fields."""
+    def test_tracker_gap_preserves_pre_tracker_ahet_primary_hr(self):
+        """A tracker gap must not invalidate an AHET-valid primary row."""
         from steps.step_6.temporal_tracker import apply_tracker
 
         freqs = np.fft.rfftfreq(400, d=1.0 / FS)
@@ -2525,18 +2539,42 @@ class TestStep63Tracker:
         row = rows[0]
 
         assert row["tracker_decision_type"] == "gap"
-        assert row["hr_source"] == ""
-        assert row["hr_valid"] is False
-        assert row["hr_confidence"] == "none"
-        assert not np.isfinite(row["radar_hr_bpm"])
-        assert not np.isfinite(row["heart_peak_hz"])
-        assert not np.isfinite(row["hr_error_bpm"])
-        assert not np.isfinite(row["hr_abs_error_bpm"])
-        assert row["invalid_reason"] == "temporal_tracker_gap"
+        assert row["hr_source"] == "ahet"
+        assert row["hr_valid"] is True
+        assert row["hr_confidence"] == "high"
+        assert row["radar_hr_bpm"] == pytest.approx(HR_TRUE)
+        assert row["invalid_reason"] == ""
+        assert row["tracker_hr_valid"] is False
+        assert not np.isfinite(row["tracker_hr_bpm"])
+        assert row["tracker_hr_confidence"] == "none"
+        assert row["tracker_invalid_reason"] == "temporal_tracker_gap"
+        assert row["tracker_non_causal"] is True
         assert row["pre_tracker_hr_valid"] is True
         assert row["pre_tracker_radar_hr_bpm"] == pytest.approx(HR_TRUE)
         assert stats["n_tracker_gap"] == 1
         assert stats["n_tracker_selected_windows"] == 0
+
+    def test_viterbi_restart_preserves_completed_segments(self):
+        from steps.step_6.temporal_tracker import viterbi_track
+
+        def candidate(window, bpm):
+            return {
+                "window_index": window,
+                "candidate_rank": 0,
+                "bpm": bpm,
+                "node_score_exclude": 2.0,
+                "node_score_penalty": 2.0,
+            }
+
+        path = viterbi_track(
+            [[candidate(0, 60.0)], [], [candidate(2, 90.0)]],
+            max_jump_bpm_per_hop=6.0,
+            max_gap_windows=0,
+            resp_harmonic_mode="score_penalty",
+        )
+        assert [None if item is None else item["bpm"] for item in path] == [
+            60.0, None, 90.0
+        ]
 
     def test_tracker_ahet_failed_counter_ignores_other_pre_invalid_reasons(self):
         """The AHET rescue counter counts only pre_tracker_invalid_reason=ahet_failed."""
@@ -2662,8 +2700,12 @@ class TestStep63Tracker:
         contract_path = tmp_path / "hr" / f"{sid}.csv"
         assert contract_path.exists(), f"Step 7 contract CSV not found at {contract_path}"
         ct = pd.read_csv(contract_path)
-        for col in ("hr_source", "tracker_decision_type",
-                    "pre_tracker_hr_valid", "pre_tracker_radar_hr_bpm"):
+        for col in (
+            "hr_source", "tracker_decision_type", "tracker_hr_bpm",
+            "tracker_hr_valid", "tracker_hr_confidence", "tracker_invalid_reason",
+            "tracker_hr_error_bpm", "tracker_hr_abs_error_bpm", "tracker_non_causal",
+            "pre_tracker_hr_valid", "pre_tracker_radar_hr_bpm",
+        ):
             assert col in ct.columns, f"Contract CSV missing column: {col!r}"
 
     # --- Summary ---
@@ -2690,6 +2732,9 @@ class TestStep63Tracker:
         assert "n_tracker_selected_from_ahet_failed" in summary
         assert "pre_tracker_n_valid_hr" in summary
         assert summary["n_tracker_selected_windows"] > 0
+        assert summary["tracker_non_causal"] is True
+        assert "ahet_mae_bpm" in summary
+        assert "tracker_mae_bpm" in summary
 
 
 # ─────────────────────────────────────────────────────────────────────────────

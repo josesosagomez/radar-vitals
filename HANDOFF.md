@@ -25,10 +25,10 @@ reference admission gate is applied before error scoring. Step 5/6 are radar-onl
 per-session exact registered development capture is configured. No sealed prospective reference
 was opened and no historical result was rewritten.
 
-The last clean baseline suite passed **3157 passed, 17 skipped**. After the refinement change, the
-full suite reached **3171 passed, 17 skipped** with one line-ending-only failure; after normalizing
-the diagnostic JSON to LF, the closure subset passed **10 tests**. The ignored Ahmed and Kotte
-source PDFs are present only as hash-verified test dependencies and remain untracked.
+The final complete pinned suite passed **3189 passed, 17 skipped** in 252.94 s. Independent reviews
+of the reference boundary, refinement, ECA semantics, tracker separation, and agreement mathematics
+all returned READY. The ignored Ahmed and Kotte source PDFs are present only as hash-verified test
+dependencies and remain untracked.
 
 The pre-fix refinement diagnostic is committed and executed. On 128 development radar-only windows
 it found 39 unsafe fallbacks among 756 calls: 31 legacy offsets exceeded half a bin and 30 legacy
@@ -43,13 +43,23 @@ sites and emits fixed-width delta/reason evidence. New output identity is
 DSP/provenance review is READY. The old real-data authorization remains immutable and does not
 authorize this new estimator.
 
+Production `skip_forbidden_harmonics_v1` semantics are now explicit: it projects only harmonics
+below the cardiac band and performs no in-band ECA. A separate reference-free `none` mode performs
+no projection; unknown modes fail closed. Independent review is READY. The Step-6 temporal tracker
+is now a separately labelled non-causal diagnostic: it cannot relabel AHET rejection rows, generic
+summary metrics remain AHET-only, and Viterbi restarts preserve completed segments. Independent
+tracker review is READY.
+
+The incorrect pilot agreement table is withdrawn, the Ahmed citation points to new `[R22]`, the
+approved ethics scope is recorded as 15 new prospective participants, and the reference-informed
+legacy gate origin is disclosed. M9 pooled-window intervals are now explicitly descriptive.
+`src/agreement.py::arm_loa` implements the subject-clustered unbalanced-ANOVA estimator, fixed
+whole-subject bootstrap, mandatory diagnostics, and the REML random-intercept proportional-bias
+sensitivity. The retired pooled-window plotting script fails closed.
+
 ## 3. Active task / next steps
 
-1. Preserve current ECA behavior/numbers, describe production in-band ECA as inactive, and add an
-   explicit reference-free no-ECA comparison mode. Do not promote `guard_cardiac_candidate_v1`.
-2. Then repair the Step-6 tracker contract while preserving AHET rows and Viterbi segments across
-   restarts.
-3. Milestone 1 item 5 remains blocked on owner facts for P003 paced, P007 natural, P009 natural,
+1. Milestone 1 item 5 remains blocked on owner facts for P003 paced, P007 natural, P009 natural,
    and P010 natural. Do not infer their attempt state or inspect their CSVs.
 
 ## 4. Recent decisions that matter
@@ -86,7 +96,8 @@ authorize this new estimator.
 | `src/reference_access.py` | single development/prospective reference boundary |
 | `reference_registry/development_references_v1.json` | exact development reference identities/hashes |
 | `src/m2/label_firewall.py` | prospective capability and single-read byte guard |
-| `src/vitals.py` | next target: peak refinement and ECA semantics |
+| `src/vitals.py` | bounded peak refinement and explicit ECA modes |
+| `src/agreement.py` | subject-clustered LoA, bootstrap, diagnostics and regression sensitivity |
 | `experiments/m8_ahmed_transfer/capture_registry.yaml` | development ADC identities/hashes for diagnostic |
 | `notes/analysis_prespec.md` | admission, retry, cohort-role, repeated-measures rules |
 | `HISTORY.md` | append-only decisions and evidence |

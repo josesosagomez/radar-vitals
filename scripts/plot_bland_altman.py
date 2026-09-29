@@ -1,5 +1,8 @@
-"""
-Bland-Altman agreement plot for the working sessions.
+"""RETIRED pooled-window plot retained only as historical provenance.
+
+This script treats windows as independent and therefore cannot produce the
+repeated-measures limits of agreement required by ``notes/analysis_prespec.md``.
+Use ``src.agreement.arm_loa`` for the final study.  Execution now fails closed.
 
 Excludes:
   - quality_gated == True  (radar quality mask rejected window)
@@ -55,6 +58,10 @@ def _ba_stats(diff: np.ndarray) -> dict:
 
 
 def main() -> None:
+    raise SystemExit(
+        "RETIRED: pooled-window intervals are not repeated-measures Bland-Altman limits; "
+        "use src.agreement.arm_loa"
+    )
     ap = argparse.ArgumentParser()
     ap.add_argument("--results_dir", required=True)
     ap.add_argument("--sessions", nargs="+", default=["exp006", "exp008", "exp009"])

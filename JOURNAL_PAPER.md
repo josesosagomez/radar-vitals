@@ -55,7 +55,7 @@
 | Requirement for any credible venue | Status |
 |---|---|
 | Multi-subject dataset | **WEAK** — n = 4 subjects, 8 sessions (corrected 2026-08-03; previously recorded as n = 1) |
-| Agreement vs reference (MAE/RMSE/Bland–Altman) | **MISSING** — pilot numbers only, n = 4 subjects |
+| Agreement vs reference (MAE/RMSE/Bland–Altman) | **MISSING** — prior table withdrawn: three overlapping live-demo sessions from only two subjects, with no regeneration script |
 | Comparison against ≥1 published method | **PARTIAL** — Ahmed HA and Kotte joint-Doppler complete; TI on-chip comparison remains |
 | Coverage at a defensible level | **WEAK** — 10–46% of windows produce an estimate |
 | Ethics approval / informed consent for human subjects | **OBTAINED** (confirmed 2026-07-23) — record the reference number for the Methods section (§10) |
@@ -68,7 +68,7 @@
 
 1. Run a **live hardware smoke test** — the live capture path has not been exercised since
    2026-07-14, and the study cannot afford to discover a broken chain on subject 1.
-2. Run the **10-subject × 2-session study**. Ethics approval is in hand; nothing algorithmic
+2. Run the **10-subject × 3-session study**. Ethics approval is in hand; nothing algorithmic
    blocks it.
 3. Take **one collision-provoking capture** (4·f_r ≈ HR) to give the central limitation direct
    evidence.
@@ -157,10 +157,15 @@ although a multi-subject demonstration makes it far harder to dismiss.
 
 ### 3.3 What is *not* novel — do not claim it
 
-ECA + AHET is [R1]'s method, not ours. We implement it at a different frame rate (20 Hz vs
+ECA + AHET is [R1]'s method, not ours. We implement its structure at a different frame rate (20 Hz vs
 100 Hz) and window (30 s vs 20 s), on different hardware. Claiming the algorithm as a
 contribution invites an easy rejection. **Our contributions are the failure analysis, the
 evaluation methodology, and the bin-selection fix.**
+
+The production AHET gates are reference-informed legacy settings. The 2.0/4.0 dB floor thresholds
+were selected in a Masimo-scored development sweep whose source sessions were later deleted, so
+that tuning is not reproducible and the gates are not independently validated. They are frozen,
+not retuned, and may be evaluated only on held-out prospective participants.
 
 ### 3.4 Two possible papers
 
@@ -202,19 +207,13 @@ argument. It is stated in full and applied uniformly to every estimator compared
 makes the comparison meaningful; it is **not** a pre-registration, and must not be described as
 one. Report exclusion sensitivity at 3 / 5 / 8 bpm so the choice is auditable.
 
-### 4.2 Pilot agreement [PRELIMINARY — report with every caveat attached]
+### 4.2 Pilot agreement [WITHDRAWN]
 
-| Session | AHET-accepted | Excluded (non-stationary reference) | Scorable | MAE | Severe |
-|---|---|---|---|---|---|
-| natural | 5 / 50 | 4 | 1 | 0.19 bpm | 0 |
-| paced-16 | 23 / 50 | 2 | 21 | 0.50 bpm | 0 |
-| sweep | 30 / 150 | 11 | 19 | 0.53 bpm | 0 |
-
-Mandatory accompanying statements: **n = 4 subjects**; these sessions **informed the method's
-design** (exploratory, not held-out); `natural` rests on **one** scorable window; coverage is
-10–46%. All 17 excluded windows were individually checked and every one is a real reference
-instability (spread 5.1–26.0 bpm) — pre-empt the "what did your exclusion gate hide?" question,
-because it is the first thing a reviewer will ask about a gate.
+The previous table is withdrawn. It pooled overlapping live-demo windows from three sessions
+belonging to only two people (subjects A and B), mislabeled them as n=4, and had no committed
+regeneration script. It is not paper-grade evidence. No replacement agreement number will appear
+here until the canonical non-overlapping, admission-gated analysis is regenerated under the new
+estimator identity with subject-aware agreement statistics.
 
 ### 4.3 The mislock case study [VERIFIED — the most persuasive single figure]
 
@@ -244,7 +243,7 @@ contribution, and it is general even where the threshold is not.
 
 ### 4.4 Ahmed harmonic accumulation: real-data transfer result [EXPLORATORY]
 
-Ahmed et al.'s Section III-C method was evaluated as six declared profiles—H=3/H=5 crossed
+Ahmed et al.'s Section III-C method [R22] was evaluated as six declared profiles—H=3/H=5 crossed
 with visible-unsuppressed, Eq. 26 multiples-suppressed, and prose low-or-equal-suppressed
 interpretations—alongside the production estimator on the same cubes, windows, locks, and run
 identity. The canonical experiment comprised eight captures, two locks, seven arms, 1,792
@@ -365,7 +364,7 @@ Assumes a ~9,000-word JBHI/TBME-style paper; compress for IEEE Sensors J.
 | **I. Introduction** | Contactless monitoring motivation [R7, R11]; harmonic interference problem; the gaps (two published simulation-only methods; unreported comparators; unreported coverage); contribution list | 1000 | CH §1 |
 | **II. Related work** | Table of the six harmonic-interference approaches; foundations [R5–R8]; original Ahmed and Kotte evidence was simulation-only; declare the project's Ahmed FMCW adaptation and its pulse-radar claim boundary | 1200 | CH §4, §10.3 |
 | **III. Signal model and system** | FMCW ranging, phase-displacement relation (3.2 rad/mm at 77 GHz), the harmonic sum model, hardware and chirp table, protocol | 1500 | CH §2, §3 |
-| **IV. Method** | ECA + AHET spec with equations; deviations from [R1] declared; **warmup bin selection with the energy-eligibility rule**; diagnostics commitment | 1800 | CH §5, §6, §9 |
+| **IV. Method** | Nominal ECA + AHET spec with equations; disclose that the frozen production skip policy performs no cancellation inside the cardiac band; deviations from [R1] declared; **warmup bin selection with the energy-eligibility rule**; diagnostics commitment | 1800 | CH §5, §6, §9 |
 | **V. Evaluation methodology** | The comparator problem; the explicit comparator specification applied uniformly to every estimator; why 5 bpm is derived from FFT resolution; non-overlapping windows; coverage-with-accuracy rule; Bland–Altman [R16] | 1300 | CH §7 |
 | **VI. Results** | Comparator demonstration; Ahmed two-lock/six-profile real-data result; per-subject agreement + Bland–Altman [PENDING]; coverage; mislock case study; remaining baselines [PENDING] | 1800 | CH §10 |
 | **VII. Discussion** | Coincidence identifiability limit; why harmonic verification cannot reject a respiratory harmonic; accuracy–coverage trade-off; what this implies for reading the literature | 1200 | CH §12 |
@@ -398,10 +397,10 @@ of methodology papers look for it there.
 > Contactless heart-rate estimation from millimetre-wave radar is limited by respiratory
 > harmonics that fall inside the cardiac band. Reported accuracies across the literature are
 > difficult to compare, and two published simulation methods — Ahmed's harmonic accumulation
-> [R1] and Kotte's joint high-amplitude-difference Doppler [R21] — were originally evaluated
+> [R22] and Kotte's joint high-amplitude-difference Doppler [R21] — were originally evaluated
 > **only in simulation**.
-> We evaluate harmonic accumulation and joint Doppler on real FMCW radar data, alongside an extensive-cancellation and
-> harmonic-verification pipeline, on a 77 GHz FMCW radar for seated subjects at 0.8–1.4 m,
+> We evaluate harmonic accumulation and joint Doppler on real FMCW radar data, alongside a nominal extensive-cancellation
+> and harmonic-verification pipeline whose frozen cancellation policy is inactive inside the cardiac band, on a 77 GHz FMCW radar for seated subjects at 0.8–1.4 m,
 > validated against a fingertip pulse oximeter. All estimators are scored on identical
 > non-overlapping windows under a single explicitly stated comparator, with coverage reported
 > alongside accuracy. [Headline finding: which methods transfer to real data and which do not.]
@@ -433,10 +432,11 @@ Each must come from a committed script in `figures/` — no hand-edited figures.
    annotated. *Most persuasive single figure in the paper; the data already exists.*
 5. ECA before/after spectra with cancelled harmonics annotated.
 6. **The comparator figure** — same hops scored two ways; the 17× gap made visual.
-7. **Bland–Altman** — bias and 95% limits of agreement, **subject-clustered (repeated
-   measurements)**. `scripts/plot_bland_altman.py` may be reused for *plotting only*: its
-   statistics pool every window as an independent pair (`se_loa = sqrt(3·SD²/n)`, no subject or
-   session term), which for 10 subjects × 2 sessions × ~19 windows yields falsely narrow limits.
+7. **Bland–Altman** — bias and 95% limits of agreement from
+   `src/agreement.py::arm_loa`, **subject-clustered (repeated
+   measurements)**. The retired `scripts/plot_bland_altman.py` must not be reused: its statistics
+   pool every window as an independent pair (`se_loa = sqrt(3·SD²/n)`, no subject or session term),
+   which for 10 subjects × 3 sessions × ~19 windows yields falsely narrow limits.
    The model is specified in `notes/analysis_prespec.md` §1 (an internal engineering spec, not a
    registration) and must be stated in the Methods.
 8. Radar HR vs Masimo PR time series, rejected windows shaded.
@@ -545,6 +545,9 @@ annotated versions with the role each plays in the argument are in
 - **[R21]** Kotte, V.V., Ahmed, S., Alouini, M.-S., and Al-Naffouri, T.Y., "Joint Estimation of
   Single Target's High Amplitude Difference Doppler Frequencies in FMCW Radar," *IEEE
   Transactions on Radar Systems*, vol. 2, 2024, DOI: 10.1109/TRS.2024.3352189.
+- **[R22]** Ahmed, S., Kotte, V.V., Alouini, M.-S., and Al-Naffouri, T.Y., "Discovering the
+  Unseen: Harmonic Accumulation for Vital-Sign Estimation," *IEEE Transactions on Radar
+  Systems*, vol. 2, 2024, DOI: 10.1109/TRS.2024.3412915.
 
 **Foundations**
 - **[R5]** Droitcour, A.D., et al., "Range correlation and I/Q performance benefits in single-chip

@@ -559,6 +559,8 @@ def estimate_rate_from_phase(
     consistency check (arXiv:2503.07062, OpenAI cross-review findings #1-#4).
 
     eca_mode:
+      "none"                        -- explicit reference-free comparison: do not build or
+                                       apply an ECA projection; AHET still runs unchanged.
       "legacy"                      -- existing behavior (hard floor k=1..4 always projected).
                                        BROKEN: erases the cardiac peak when 4*f_r ~= HR.
       "skip_forbidden_harmonics_v1" -- skip any k where k*f_r falls in
@@ -605,6 +607,16 @@ def estimate_rate_from_phase(
     _GATE_LO_HZ = 0.15   # 9 bpm  — below this is not real respiration
     _GATE_HI_HZ = 0.60   # 36 bpm — above this is not real respiration
     f_r_is_outlier = (f_r_hz is not None) and not (_GATE_LO_HZ <= f_r_hz <= _GATE_HI_HZ)
+    supported_eca_modes = {
+        "none",
+        "legacy",
+        "skip_forbidden_harmonics_v1",
+        "guard_cardiac_candidate_v1",
+    }
+    if eca_mode not in supported_eca_modes:
+        raise ValueError(
+            f"unknown eca_mode {eca_mode!r}; expected one of {sorted(supported_eca_modes)}"
+        )
 
     x = np.asarray(phase, dtype=float)
     x = x - x.mean()
@@ -739,7 +751,11 @@ def estimate_rate_from_phase(
 
     # ── ECA harmonic-selection parameters, per mode ─────────────────────────────
     eca_skipped_harmonics = np.zeros(_skip_len, dtype=bool)
-    if eca_mode == "guard_cardiac_candidate_v1":
+    if eca_mode == "none":
+        k_max_eff = 0
+        guard_hz = 0.0
+        hard_floor = 0
+    elif eca_mode == "guard_cardiac_candidate_v1":
         # Derive k_max per window: a fixed k_max=6 does not span the cardiac band at
         # f_r <= 0.267 Hz (16 bpm), leaving the 7th harmonic in-band and uncancellable.
         k_max_eff   = derive_k_max_eff(f_r_hz, band[1], k_max_cap)
@@ -771,6 +787,8 @@ def estimate_rate_from_phase(
         return frozenset()
 
     def _eca(sig: np.ndarray, cand_hz: float | None) -> tuple[np.ndarray, frozenset, dict]:
+        if eca_mode == "none":
+            return sig.copy(), frozenset(), _empty_eca_diagnostics(_skip_len)
         sk = _skip_set_for(cand_hz)
         out, diag = eca_project(
             sig, f_r_hz, fs, k_max=k_max_eff, cardiac_candidate_hz=cand_hz,
@@ -799,13 +817,17 @@ def estimate_rate_from_phase(
     candidate_n_cols_retained = np.zeros(AHET_MAX_CANDIDATES, dtype=int)
 
     # Report what ECA actually did, from the same selector it used (no drift possible).
-    projected_ks = eca_harmonic_ks(
-        f_r_hz, k_max_eff, band_hi=band[1], cardiac_candidate_hz=prov_cand_hz,
-        skip_ks=skip_ks_set, cardiac_guard_hz=guard_hz, hard_floor_k=hard_floor,
+    projected_ks = (
+        []
+        if eca_mode == "none"
+        else eca_harmonic_ks(
+            f_r_hz, k_max_eff, band_hi=band[1], cardiac_candidate_hz=prov_cand_hz,
+            skip_ks=skip_ks_set, cardiac_guard_hz=guard_hz, hard_floor_k=hard_floor,
+        )
     )
     n_eca_projected = len(projected_ks)
     # "Skipped" = in-band (within k_max_eff) but deliberately NOT projected.
-    for k in range(1, k_max_eff + 1):
+    for k in (range(1, k_max_eff + 1) if eca_mode != "none" else ()):
         if k * f_r_hz > band[1] + _CEIL_EPS:
             break
         if k not in projected_ks and k <= _skip_len:
@@ -881,7 +903,7 @@ def estimate_rate_from_phase(
             "band": band,
             "f_r_hz_used": f_r_hz,
             "f_r_outlier": False,
-            "eca_applied": True,
+            "eca_applied": eca_mode != "none",
             "candidate_attempted": candidate_attempted,
             "candidate_peak_bin_index": candidate_peak_bin_index,
             "candidate_initial_hz": candidate_initial_hz,
@@ -1150,7 +1172,7 @@ def estimate_rate_from_phase(
         "harmonic_suspect": True,
         "f_r_hz_used": f_r_hz,
         "f_r_outlier": False,
-        "eca_applied": True,
+        "eca_applied": eca_mode != "none",
         "phase_eca": x_eca1,
         "accepted_candidate_rank": -1,
         "accepted_candidate_initial_hz": float("nan"),

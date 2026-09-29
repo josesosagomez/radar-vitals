@@ -354,7 +354,10 @@ def validate_scoring_config(scoring: Mapping[str, object]) -> None:
         "window_interval": "half_open",
         "comparative_windows_start_k": 1,
         "reuse_existing_pi_and_stationarity_gates": True,
-        "metrics": ["coverage", "mae_bpm", "rmse_bpm", "bias_bpm", "bland_altman_limits"],
+        "metrics": [
+            "coverage", "mae_bpm", "rmse_bpm", "bias_bpm",
+            "pooled_window_interval_descriptive",
+        ],
         "summaries": ["capture", "subject", "protocol", "lock_estimand"],
         "constant_session_median_hr_comparator": True,
         "approximate_origin_label": CLASSIFICATION,
@@ -555,8 +558,10 @@ def metric_summary(errors: Sequence[float], *, n_total: int, n_radar_valid: int,
         "rmse_bpm": float(np.sqrt(np.mean(values ** 2))) if n_scored else None,
         "bias_bpm": bias,
         "error_sd_bpm": standard_deviation,
-        "bland_altman_loa_low_bpm": loa_low,
-        "bland_altman_loa_high_bpm": loa_high,
+        # These values pool windows and therefore are not repeated-measures
+        # Bland--Altman limits.  The final study must use src.agreement.arm_loa.
+        "pooled_window_interval_descriptive_low_bpm": loa_low,
+        "pooled_window_interval_descriptive_high_bpm": loa_high,
     }
 
 
