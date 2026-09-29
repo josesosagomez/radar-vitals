@@ -36,6 +36,7 @@ sys.path.insert(0, str(REPO_ROOT))
 from src import masimo  # noqa: E402
 from src.comparator import br_reference, hr_reference  # noqa: E402
 from src.m4.window_grid import window_reference_span  # noqa: E402
+from src.reference_access import load_reference as load_guarded_reference  # noqa: E402
 
 
 CONFIG_PATH = REPO_ROOT / "experiments" / "m9_kotte" / "config.yaml"
@@ -490,6 +491,11 @@ def load_reference_strict(path: Path) -> pd.DataFrame:
     if diagnostics != expected:
         raise ScoreContractError("Masimo parser diagnostics disagree with the raw reference")
     return parsed
+
+
+def load_registered_reference_strict(path: Path) -> pd.DataFrame:
+    """Official loader: committed registry/hash guard before normalization."""
+    return load_guarded_reference(path.parent, reference_override=path).frame
 
 
 def resolve_frame0_epoch(metadata: Mapping[str, object]) -> tuple[float, str, bool]:
@@ -960,8 +966,15 @@ def execute_score(
         metadata_paths[capture_id] = metadata_path
         origins[capture_id] = resolve_frame0_epoch(metadata)
         reference_path = references_by_id[capture_id]
-        reference_hashes[capture_id] = sha256_file(reference_path)
-        reference = reference_loader(reference_path)
+        if official:
+            loaded_reference = load_guarded_reference(
+                reference_path.parent, reference_override=reference_path
+            )
+            reference_hashes[capture_id] = loaded_reference.source.sha256
+            reference = loaded_reference.frame
+        else:
+            reference_hashes[capture_id] = sha256_file(reference_path)
+            reference = reference_loader(reference_path)
         parser_diagnostics = _normalized_reference_diagnostics(reference)
         references[capture_id] = reference
         reference_duplicate_diagnostics[capture_id] = {
@@ -986,7 +999,9 @@ def execute_score(
     margins = margin_diagnostics(radar_rows)
 
     for capture_id, path in references_by_id.items():
-        if sha256_file(path) != reference_hashes[capture_id]:
+        # Official execution records the digest of the exact bytes returned by the
+        # single guarded read.  Fixture execution retains the legacy mutation check.
+        if not official and sha256_file(path) != reference_hashes[capture_id]:
             raise ScoreContractError(f"reference changed during scoring: {capture_id}")
         if sha256_file(metadata_paths[capture_id]) != metadata_hashes[capture_id]:
             raise ScoreContractError(f"capture metadata changed during scoring: {capture_id}")

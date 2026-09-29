@@ -102,8 +102,12 @@ def validate_preflight(
         _verify_binding(artifact_root, session, path_key, hash_key)
     if session["arm"] in {"natural", "paced"}:
         _verify_binding(artifact_root, session, "settle_evidence_path", "settle_evidence_sha256")
+    # Reference payload identity is declared here but deliberately not opened or
+    # hashed.  Capability-free preflight validates only its metadata binding;
+    # authorized reference_access.load_reference performs the first payload read.
     if session.get("reference_acquired"):
-        _verify_binding(artifact_root, session, "reference_path", "reference_sha256")
+        require_nonempty_string(session, "reference_path")
+        require_sha256(session.get("reference_sha256"), "reference_sha256")
     stages.append("artifact_hash_bindings")
 
     # 5. Packet counters, exact frame origin, map shape/count, and duration grid.

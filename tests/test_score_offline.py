@@ -380,6 +380,24 @@ def test_score_window_hr_error_only_when_admitted_and_valid():
     assert np.isnan(row2["hr_error_bpm"])
 
 
+def test_supplementary_pairing_cannot_see_nonadmitted_reference_value():
+    from src.window_pipeline import WindowEstimate
+
+    estimate = WindowEstimate(
+        estimator_id="e",
+        run_config_hash="h",
+        hr_bpm=72.0,
+        hr_valid=True,
+        br_bpm=float("nan"),
+        br_valid=False,
+    )
+    reference = _hr_ref_admitted()
+    reference["admitted"] = False
+    cell = so._paired_condition_cell(estimate, reference)
+    assert np.isnan(cell["masimo_pr"])
+    assert np.isnan(cell["error"])
+
+
 # ── Masimo CSV auto-discovery (OSR-11) ───────────────────────────────────────
 
 @_REQUIRE_REAL_DATA

@@ -12150,3 +12150,48 @@ as LF.
 **Next:** implement Milestone 1 items 1–4, beginning with separate new-capture and historical-load
 settle contracts. Use synthetic fixtures for 60 s compatibility and never scoring-mode-load a real
 prospective manifest during this work.
+
+## 2026-09-29 - Settle, reference-firewall, and admission-gate remediation completed
+
+**Set out to do:** implement discrepancy-remediation Milestone 1 items 1–4 without opening a
+sealed prospective reference or changing a historical artifact.
+
+**Worked (with evidence):**
+
+- Introduced a shared 120 s settle contract. New natural/paced captures below 120 s are rejected;
+  historical 60 s records remain structurally loadable but carry
+  `protocol_compliant=false` / `settle_below_120s` and are rejected before primary scoring touches
+  bound artifacts. Recovery is unchanged.
+- Added one guarded reference boundary. Development reads require an exact path and SHA-256 from
+  `reference_registry/development_references_v1.json`; prospective reads require a complete
+  `ScoringAuthorization`, perform one payload open, hash those exact bytes, and parse them in
+  memory. Capability-free preflight and manifest validation do not open or hash the sealed payload.
+- Routed production scripts, canonical M8/M9 scorers, and legacy Step 5/6 entry points through the
+  boundary. Step 5/6 are radar-only by default; optional development comparisons require a
+  per-session mapping to an exact registered capture and reject an identity mismatch.
+- Applied the canonical reference admission gate before error scoring, corrected bin-policy
+  reference filtering to use `admitted`, and excluded M8 `k=0` lock-selection windows from the
+  comparative table.
+- Independent correctness review initially found direct Step 5/6 bypasses, preflight payload
+  hashing, scorer pre-hashing, a double-open prospective path, and unsafe multi-session reference
+  reuse. Each finding was fixed and re-reviewed; the final verdict was **READY** with no material
+  Milestone 1 findings.
+- The focused final boundary suite passed **225 tests**. The complete suite passed
+  **3157 passed, 17 skipped** in 206.46 s through the pinned Conda environment. `git diff --check`
+  was clean. The ignored Kotte source PDF needed by provenance tests was copied into this worktree
+  only after its SHA-256 matched the original checkout:
+  `4D2C99F9C1A6FD71E4100FBA610E0297CC1A54A0EF6A7558C37A6F0135FC1DDD`.
+
+**Failed / did not work, and why:** the first full-suite attempt reported six M9 test failures
+because the managed worktree lacked that ignored source-paper dependency. No production behavior
+failed; after the hash-matched PDF was restored, those six tests and the complete suite passed.
+Several first-pass firewall implementations also failed independent review; the specific bypasses
+and double-read were corrected rather than waived.
+
+**Retired / no longer used:** 60 s as a compliant future natural/paced settle; unrestricted flat
+`data/raw/<session>_masimo.csv` discovery in Step 5/6; reference hashing in capability-free
+preflight; and comparative scoring of M8 `k=0` lock-selection windows.
+
+**Next:** freeze the new estimator identity, then commit a radar-only dual-calculation diagnostic
+that measures legacy versus safe peak refinement on registered development captures before changing
+`src/vitals.py`. P003 and all other prospective captures remain off-limits for this diagnostic.

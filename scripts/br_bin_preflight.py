@@ -53,7 +53,7 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 from src import br_bin_search as bbs                                    # noqa: E402
 from src import br_features as brf                                      # noqa: E402
-from src import masimo as masimo_mod                                    # noqa: E402
+from src.reference_access import load_reference as load_guarded_reference  # noqa: E402
 
 import diagnose_bin_drift as bindrift                                   # noqa: E402
 from score_offline import resolve_frame0_epoch                          # noqa: E402
@@ -189,8 +189,7 @@ def build_table(sweep_run: Path, presence_run: Path, gate: str, verbose: bool = 
         capture_dir = REPO_ROOT / "results" / "live_demo" / cid
         meta = json.loads((capture_dir / "run_metadata.json").read_text(encoding="utf-8"))
         frame0, origin_source, is_approx, _caveat = resolve_frame0_epoch(meta)
-        csv_path = [p for p in capture_dir.glob("*.csv") if p.name != "live_estimates.csv"][0]
-        masimo_df = masimo_mod.load_masimo(csv_path)
+        masimo_df = load_guarded_reference(capture_dir).frame
         n_windows = int(g["k"].nunique())
         lab = brf.window_labels(masimo_df, frame0, n_windows)
         labels_by_capture[cid] = lab

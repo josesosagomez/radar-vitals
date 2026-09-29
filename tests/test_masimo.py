@@ -1,7 +1,7 @@
 """Tests for src/masimo.py — half-open window interval [start, end)."""
 import pytest
 import pandas as pd
-from src.masimo import load_masimo, window, reference_pr, reference_br
+from src.masimo import load_masimo, load_masimo_bytes, window, reference_pr, reference_br
 
 
 def _make_df(epochs, pr_bpm=None, pi=None):
@@ -100,6 +100,20 @@ def test_load_masimo_coverage_attrs(tmp_path):
     df = load_masimo(csv)
     assert df.attrs["n_duplicates_merged"] == 1
     assert df.attrs["n_missing_seconds"] == 1
+
+
+def test_guarded_bytes_parser_matches_path_parser(tmp_path):
+    csv = tmp_path / "test.csv"
+    csv.write_text(
+        _CSV_HEADER
+        + "0,1,1000,1/1/25,12:00:00 PM,98,70,1.5,15,15\n"
+        + "0,2,1001,1/1/25,12:00:01 PM,97,72,1.6,16,16\n",
+        encoding="utf-8",
+    )
+    from_path = load_masimo(csv)
+    from_bytes = load_masimo_bytes(csv.read_bytes(), source_name=csv.name)
+    pd.testing.assert_frame_equal(from_path, from_bytes)
+    assert from_path.attrs == from_bytes.attrs
 
 
 def test_reference_br_mean():

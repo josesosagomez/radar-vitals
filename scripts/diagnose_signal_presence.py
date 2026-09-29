@@ -82,7 +82,6 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
-from src import masimo as masimo_mod  # noqa: E402
 from src.comparator import br_reference, hr_reference  # noqa: E402
 from src.m4.window_grid import (  # noqa: E402
     FRAMES_PER_WINDOW,
@@ -90,6 +89,10 @@ from src.m4.window_grid import (  # noqa: E402
     n_complete_windows,
 )
 from src.respiration import extract_chest_phase  # noqa: E402
+from src.reference_access import (  # noqa: E402
+    list_development_capture_dirs,
+    load_reference as load_guarded_reference,
+)
 from src.vitals import refine_freq_hz, remove_impulse_noise  # noqa: E402
 from src.warmup_select import derive_candidate_bins  # noqa: E402
 
@@ -222,10 +225,7 @@ def audit_capture(
     chirp_cfg = validate_decode_geometry(cfg, run_metadata, capture_id)
     fs = float(chirp_cfg.frame_rate_hz)
 
-    csv = [p for p in capture_dir.glob("*.csv") if p.name != "live_estimates.csv"]
-    if len(csv) != 1:
-        raise FileNotFoundError(f"{capture_id}: expected exactly one Masimo CSV, found {csv}")
-    ref_df = masimo_mod.load_masimo(csv[0])
+    ref_df = load_guarded_reference(capture_dir).frame
 
     bytes_per_frame = words_per_frame(chirp_cfg) * 2
     n_frames = raw_path.stat().st_size // bytes_per_frame
@@ -726,7 +726,7 @@ def main(argv: list[str] | None = None) -> None:
 
     captures = list(args.captures)
     if args.all:
-        captures = sorted((REPO_ROOT / "results" / "live_demo").glob("*"))
+        captures = list(list_development_capture_dirs())
     if not captures:
         ap.error("give --captures or --all")
 
@@ -747,8 +747,7 @@ def main(argv: list[str] | None = None) -> None:
         audit = audit_capture(
             capture_dir, cfg, tol_hz=args.tol_hz, max_windows=args.max_windows, seed=seed
         )
-        csv = [p for p in capture_dir.glob("*.csv") if p.name != "live_estimates.csv"][0]
-        ref_df = masimo_mod.load_masimo(csv)
+        ref_df = load_guarded_reference(capture_dir).frame
         cid = audit["capture_id"]
         audits.append(audit)
         all_rows.extend(audit["rows"])

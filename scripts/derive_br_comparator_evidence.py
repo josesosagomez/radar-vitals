@@ -43,7 +43,7 @@ import numpy as np
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
-from src.masimo import load_masimo  # noqa: E402  (reference parser only)
+from src.reference_access import load_reference as load_guarded_reference  # noqa: E402
 
 WINDOW_S = 30
 MIN_FINITE = 24
@@ -124,7 +124,9 @@ def main() -> None:
     print(hdr)
     for label, folder, paced in SESSIONS:
         d = BASE / folder
-        df = load_masimo(d / CSV_NAME[folder])
+        df = load_guarded_reference(
+            d, reference_override=d / CSV_NAME[folder]
+        ).frame
         t0 = start_epoch(d)
         rr_all = df["rr_bpm"].to_numpy(dtype=float)
         pi_all = df["pi"].to_numpy(dtype=float)

@@ -70,7 +70,7 @@ def acquisition_metadata(
                 "settle_evidence_window_s": 60.0,
                 "settle_pr_spread_bpm": 5.0,
                 "settle_pr_drift_bpm": 3.0,
-                "settle_evidence_path": "settle.json",
+                "settle_evidence_path": f"evidence/{subject_id}_{arm}_settle.json",
                 "settle_evidence_sha256": SHA_A,
             }
         )

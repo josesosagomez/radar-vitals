@@ -5,6 +5,11 @@ paths:
   processed_dir: data/processed/breathing_rate
   results_dir: results
 
+# Null means radar-only: reference/error columns are NaN.  Development
+# comparisons require an exact capture directory from the committed registry.
+reference_access:
+  development_capture_dirs: {}  # session_id: results/live_demo/<registered-capture>
+
 input_policy:
   require_step3_confidence: medium   # string enum: low | medium | high
   reject_step3_review_required: true

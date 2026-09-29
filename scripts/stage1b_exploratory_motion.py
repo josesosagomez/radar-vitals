@@ -64,7 +64,7 @@ import pandas as pd
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
-from src import masimo  # noqa: E402
+from src.reference_access import load_reference as load_guarded_reference  # noqa: E402
 
 WINDOW_S     = 30.0      # radar analysis window — Masimo is averaged over the SAME span
 PI_GATE      = 0.5       # CLAUDE.md: below this the Masimo PR is not trustworthy
@@ -112,8 +112,7 @@ def load_run(run_dir: Path) -> pd.DataFrame:
     # The Masimo export filename is user-chosen (demo_massimo1.csv, demo_sweep.csv, ...) — match
     # by ELIMINATION (the only other CSV in a run folder is live_estimates.csv), not by a
     # "massimo" substring, which silently failed to find e.g. demo_sweep.csv.
-    csv = next(p for p in run_dir.glob("*.csv") if p.name != "live_estimates.csv")
-    m = masimo.load_masimo(csv)
+    m = load_guarded_reference(run_dir).frame
     d = pd.read_csv(run_dir / "live_estimates.csv")
     z = np.load(run_dir / "live_intermediates.npz", allow_pickle=True)
     d["f_r_hz"] = z["f_r_hz"]

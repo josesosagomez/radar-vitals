@@ -9,7 +9,7 @@ Reads:
   - Quality mask from Step 4 (inside HDF5)
   - Breathing-rate contract CSV from Step 5
   - Manifest for session metadata (locked_bin, locked_range_m, stationary_intervals)
-  - Masimo CSV for ground-truth HR comparison
+  - Optional registered development Masimo reference for HR comparison
 
 Writes:
   - results/<session_id>/step_6/heart_windows.csv      (full per-window diagnostics)
@@ -51,6 +51,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
 from src import masimo as masimo_mod                  # noqa: E402
+from src import reference_access                      # noqa: E402
 from src.respiration import extract_chest_phase        # noqa: E402
 from src.vitals import (                               # noqa: E402
     AHET_MAX_CANDIDATES,
@@ -968,13 +969,13 @@ def _process_session(
 
     # -- Input files --
     h5_path   = cubes_dir / f"{session_id}.h5"
-    mas_path  = data_raw  / f"{session_id}_masimo.csv"
+    # Retained in the call signature for the historical Step 6 API.  Reference
+    # access no longer derives a CSV path from this unrestricted directory.
+    _ = data_raw
     resp_path = breathing_rate_dir / f"{session_id}.csv"
 
     if not h5_path.exists():
         raise FileNotFoundError(f"HDF5 not found: {h5_path} — run Step 2 first")
-    if not mas_path.exists():
-        raise FileNotFoundError(f"Masimo CSV not found: {mas_path}")
     if not resp_path.exists():
         raise FileNotFoundError(
             f"Step 5 contract not found: {resp_path} — run Step 5 first"
@@ -1074,8 +1075,31 @@ def _process_session(
     # Precompute heart-band FFT frequency axis (same for all windows)
     heart_freqs_hz = np.fft.rfftfreq(window_frames, d=1.0 / frame_rate_hz)
 
-    # -- Load Masimo --
-    mas_df = masimo_mod.load_masimo(mas_path)
+    # -- Optional registered development reference --
+    reference_cfg = cfg.get("reference_access", {})
+    capture_map = reference_cfg.get("development_capture_dirs", {})
+    if type(capture_map) is not dict:
+        raise ValueError("reference_access.development_capture_dirs must be a mapping")
+    registered_capture = capture_map.get(session_id)
+    if registered_capture:
+        capture_dir = Path(str(registered_capture))
+        if not capture_dir.is_absolute():
+            capture_dir = REPO_ROOT / capture_dir
+        loaded_reference = reference_access.load_reference(capture_dir)
+        if loaded_reference.source.capture_id != capture_dir.resolve().name:
+            raise ValueError(
+                f"{session_id}: loaded reference identity does not match declared capture"
+            )
+        mas_df = loaded_reference.frame
+    else:
+        mas_df = pd.DataFrame(
+            {
+                "epoch_utc": pd.Series(dtype="int64"),
+                "pr_bpm": pd.Series(dtype="float64"),
+                "pi": pd.Series(dtype="float64"),
+                "rr_bpm": pd.Series(dtype="float64"),
+            }
+        )
 
     # -- Per-window loop --
     rows:           list[dict]  = []

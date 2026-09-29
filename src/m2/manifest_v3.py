@@ -16,10 +16,12 @@ from typing import Any, Mapping
 import numpy as np
 
 from .acquisition_metadata import (
+    AcquisitionValidationPurpose,
     Arm,
     DataRole,
     FRAME_RATE_HZ,
     INTENDED_DURATION_S,
+    assess_protocol_compliance,
     validate_acquisition_metadata,
     validate_finalization_metadata,
     validate_recovery_runtime_timing,
@@ -71,6 +73,8 @@ class ProspectiveSession:
     visit_number: int
     disposition: SessionDisposition
     acquisition_metadata: Mapping[str, object]
+    protocol_compliant: bool
+    protocol_deviation_reasons: tuple[str, ...]
     frame0_epoch: float
     frame0_event_source: str
     clock_offset_start_s: float
@@ -100,6 +104,7 @@ class ProspectiveSession:
             self.mode is Mode.SCORING
             and self.data_role in SCORING_ROLES
             and self.disposition is SessionDisposition.ADMITTED
+            and self.protocol_compliant
             and self.reference_acquired
         )
 
@@ -169,8 +174,15 @@ def _validate_reference_record(
     if acquired:
         if not has_path:
             raise ManifestError("acquired reference is not bound by path and SHA-256")
-        reference_path = _verify_hash_binding(fields, root, "reference_path", "reference_sha256")
-        if reference_path.name != acquisition_metadata["expected_reference_basename"]:
+        # A manifest describes the reference binding but is not authority to touch
+        # sealed reference bytes.  The only payload read occurs later through
+        # reference_access.load_reference with a ScoringAuthorization; that read
+        # verifies the capability-bound digest.  Keep this check purely lexical.
+        require_sha256(fields.get("reference_sha256"), "reference_sha256")
+        relative_reference = Path(require_nonempty_string(fields, "reference_path"))
+        if relative_reference.is_absolute() or ".." in relative_reference.parts:
+            raise ManifestError("reference_path must be a repository-relative bound path")
+        if relative_reference.name != acquisition_metadata["expected_reference_basename"]:
             raise ManifestError("reference filename differs from expected_reference_basename")
     elif has_path:
         raise ManifestError("unacquired reference must not carry a file binding")
@@ -189,7 +201,10 @@ def parse_session_v3(
     if type(metadata_raw) is not dict:
         raise ManifestError(f"session {session_id!r}: acquisition_metadata must be an object")
     try:
-        metadata = validate_acquisition_metadata(metadata_raw)
+        metadata = validate_acquisition_metadata(
+            metadata_raw,
+            purpose=AcquisitionValidationPurpose.HISTORICAL_RECORD,
+        )
     except ContractError as exc:
         raise ManifestError(f"session {session_id!r}: {exc}") from exc
     if (
@@ -219,6 +234,12 @@ def parse_session_v3(
     if parsed_mode is Mode.SCORING and role not in SCORING_ROLES:
         raise ManifestError(
             f"session {session_id!r}: data_role={role.value!r} is never scoring-loadable"
+        )
+    protocol_compliant, protocol_deviation_reasons = assess_protocol_compliance(metadata)
+    if parsed_mode is Mode.SCORING and not protocol_compliant:
+        raise ManifestError(
+            f"session {session_id!r}: protocol deviation(s) "
+            f"{list(protocol_deviation_reasons)!r} are excluded from primary scoring"
         )
 
     frame0_epoch = require_number(fields, "frame0_epoch")
@@ -504,6 +525,8 @@ def parse_session_v3(
         visit_number=visit_number,
         disposition=disposition,
         acquisition_metadata=metadata,
+        protocol_compliant=protocol_compliant,
+        protocol_deviation_reasons=protocol_deviation_reasons,
         frame0_epoch=frame0_epoch,
         frame0_event_source=FRAME0_EVENT_SOURCE,
         clock_offset_start_s=start_offset,

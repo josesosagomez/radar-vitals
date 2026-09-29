@@ -1011,7 +1011,6 @@ def test_complete_synthetic_dry_run_has_frozen_order_and_nan_materialization(tmp
         "effective_config.json",
         "run_metadata.json",
         "frame_validity.npy",
-        "T001_recovery_reference.csv",
         "cohort_registry.json",
         "sealed_radar_receipt.json",
         "reference_acquisition.json",
@@ -1028,3 +1027,23 @@ def test_preflight_fails_after_one_byte_tampering_of_every_bound_class(tmp_path,
             bundle / "session_manifest_v3.json", root=bundle,
             reference_sensitivity_path=bundle / "reference_time_sensitivity.json",
         )
+
+
+def test_capability_free_preflight_never_opens_reference_payload(tmp_path, monkeypatch):
+    bundle = tmp_path / "reference_not_opened"
+    build_synthetic_dry_run(bundle)
+    reference = (bundle / "T001_recovery_reference.csv").resolve()
+    original_open = Path.open
+
+    def guarded_open(self, *args, **kwargs):
+        if self.resolve() == reference:
+            raise AssertionError("capability-free preflight opened reference payload")
+        return original_open(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", guarded_open)
+    report = validate_preflight(
+        bundle / "session_manifest_v3.json",
+        root=bundle,
+        reference_sensitivity_path=bundle / "reference_time_sensitivity.json",
+    )
+    assert report["status"] == "pass"

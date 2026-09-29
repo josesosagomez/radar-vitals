@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(Path(__file__).parent / "fixtures" / "m2"))
 
-from builders import acquisition_metadata  # noqa: E402
+from builders import acquisition_metadata, finalization_metadata  # noqa: E402
 from src.m2.acquisition_metadata import (  # noqa: E402
     Arm,
     ContractError,
@@ -27,6 +27,7 @@ from src.m2.manifest_v3 import (  # noqa: E402
     Mode,
     parse_session_v3,
 )
+import src.m2.manifest_v3 as manifest_v3  # noqa: E402
 from src.m2.preflight import build_synthetic_dry_run  # noqa: E402
 from src.m2.common import canonical_json_bytes, sha256_file  # noqa: E402
 
@@ -72,6 +73,31 @@ def _session(bundle: Path) -> dict:
     ][0]
 
 
+def _historical_natural_session(bundle: Path, *, settle_duration_s: float) -> dict:
+    """Convert the synthetic recovery row into a metadata-only natural row."""
+    session = _session(bundle)
+    metadata = acquisition_metadata("natural")
+    metadata["settle_duration_s"] = settle_duration_s
+    finalization = finalization_metadata("natural")
+    session.update(
+        {
+            "session_id": metadata["session_id"],
+            "subject_id": metadata["subject_id"],
+            "cohort_slot": metadata["cohort_slot"],
+            "data_role": metadata["data_role"],
+            "arm": metadata["arm"],
+            "visit_number": metadata["visit_number"],
+            "acquisition_metadata": metadata,
+            "clock_offset_start_s": metadata["clock_offset_start_s"],
+            "clock_offset_end_s": finalization["clock_offset_end_s"],
+            "finalization_metadata": finalization,
+        }
+    )
+    for key in RECOVERY_RUNTIME_REQUIRED:
+        session.pop(key, None)
+    return session
+
+
 def _load_changed(bundle: Path, tmp_path: Path, session: dict):
     manifest = tmp_path / "manifest.json"
     manifest.write_text(
@@ -88,6 +114,33 @@ def test_complete_v3_scoring_manifest_loads_and_preserves_start_assignment(bundl
     assert session.frame0_epoch == 1_900_000_000.0
     assert session.data_role is DataRole.REPRESENTATION_VALIDATION
     assert session.arm is Arm.RECOVERY
+    assert session.protocol_compliant
+    assert session.protocol_deviation_reasons == ()
+
+
+def test_historical_60_second_manifest_loads_metadata_only_with_deviation(bundle):
+    session = parse_session_v3(
+        _historical_natural_session(bundle, settle_duration_s=60.0),
+        Mode.DEVELOPMENT,
+    )
+    assert not session.protocol_compliant
+    assert session.protocol_deviation_reasons == ("settle_below_120s",)
+    assert not session.is_scorable
+
+
+def test_historical_settle_deviation_fails_before_any_bound_artifact_open(
+    bundle, monkeypatch
+):
+    def forbidden_open(*args, **kwargs):
+        raise AssertionError("a protocol deviation reached bound-artifact access")
+
+    monkeypatch.setattr(manifest_v3, "_verify_hash_binding", forbidden_open)
+    with pytest.raises(ManifestError, match="settle_below_120s.*primary scoring"):
+        parse_session_v3(
+            _historical_natural_session(bundle, settle_duration_s=60.0),
+            Mode.SCORING,
+            root=bundle,
+        )
 
 
 def test_recovery_manifest_binds_runtime_seating_event_and_exact_derived_delay(bundle):

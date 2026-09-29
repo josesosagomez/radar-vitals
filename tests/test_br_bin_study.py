@@ -31,8 +31,14 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 from src import br_bin_search as bbs  # noqa: E402
 from src import br_features as brf  # noqa: E402
+import simulate_bin_policy as sbp  # noqa: E402
 
 BINS = list(range(19, 33))
+
+
+def test_bin_policy_requires_reference_admission_not_just_finite_value():
+    assert sbp.admitted_br_value({"median_rr_bpm": 15.0, "admitted": False}) is None
+    assert sbp.admitted_br_value({"median_rr_bpm": 15.0, "admitted": True}) == 15.0
 
 
 def _sweep_frame(capture="20260713_172042_live_demo_massimo1", n_windows=6, seed=0):

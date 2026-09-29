@@ -6,6 +6,9 @@ paths:
   processed_dir: data/processed/heart_rate_hop1_safe
   results_dir: results_hop1_safe
 
+reference_access:
+  development_capture_dirs: {}  # session_id: exact registered capture; empty is radar-only
+
 input_policy:
   require_step3_confidence: medium   # string enum: low | medium | high
   reject_step3_review_required: true

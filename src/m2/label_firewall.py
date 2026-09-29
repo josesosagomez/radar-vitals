@@ -202,7 +202,7 @@ def guarded_reference_bytes(
             raise ContractError("reference capability session does not match reference path")
         if capability.arm and f"_{capability.arm}_" not in basename:
             raise ContractError("reference capability arm does not match reference path")
-        require_scoring_authorization(
+        _require_scoring_authorization(
             capability,
             subject_id=subject_id,
             session_id=capability.session_id,
@@ -214,6 +214,7 @@ def guarded_reference_bytes(
             registry_path=registry_path,
             audit_path=capability.audit_path,
             allowed_operations=frozenset({parsed_operation}),
+            verify_reference_payload=False,
         )
     # Deliberately first filesystem access to the reference: all guards above have passed.
     content = requested_path.read_bytes()
@@ -584,7 +585,7 @@ def write_transition_audit(
     return write_new_json(output_path, document)
 
 
-def require_scoring_authorization(
+def _require_scoring_authorization(
     authorization: ScoringAuthorization,
     *,
     subject_id: str,
@@ -597,6 +598,7 @@ def require_scoring_authorization(
     registry_path: str | Path | None = None,
     audit_path: str | Path | None = None,
     allowed_operations: frozenset[ReferenceOperation] | None = None,
+    verify_reference_payload: bool = True,
 ) -> None:
     """Validate a scoring capability against this exact invocation and current files."""
     if (
@@ -707,9 +709,10 @@ def require_scoring_authorization(
                 or active_atomic.get("to_state") != "final_scored"
             ):
                 raise ContractError("provisional scoring authority disagrees with registry state")
-            if not resolved_reference.is_file() or sha256_file(
-                resolved_reference
-            ) != authorization.reference_sha256:
+            if not resolved_reference.is_file() or (
+                verify_reference_payload
+                and sha256_file(resolved_reference) != authorization.reference_sha256
+            ):
                 raise ContractError("provisional scoring reference hash is not current")
             return
         if sha256_file(registry_file) != authorization.registry_sha256:
@@ -803,5 +806,39 @@ def require_scoring_authorization(
 
         if not resolved_reference.is_file():
             raise ContractError("scoring capability reference path is not a current file")
-        if sha256_file(resolved_reference) != authorization.reference_sha256:
+        if (
+            verify_reference_payload
+            and sha256_file(resolved_reference) != authorization.reference_sha256
+        ):
             raise ContractError("scoring capability reference hash is not current")
+
+
+def require_scoring_authorization(
+    authorization: ScoringAuthorization,
+    *,
+    subject_id: str,
+    session_id: str | None = None,
+    arm: str | None = None,
+    reference_path: str | Path | None = None,
+    reference_sha256: str | None = None,
+    config_sha256: str | None = None,
+    scorer_sha256: str | None = None,
+    registry_path: str | Path | None = None,
+    audit_path: str | Path | None = None,
+    allowed_operations: frozenset[ReferenceOperation] | None = None,
+) -> None:
+    """Validate a capability and the current reference payload identity."""
+    _require_scoring_authorization(
+        authorization,
+        subject_id=subject_id,
+        session_id=session_id,
+        arm=arm,
+        reference_path=reference_path,
+        reference_sha256=reference_sha256,
+        config_sha256=config_sha256,
+        scorer_sha256=scorer_sha256,
+        registry_path=registry_path,
+        audit_path=audit_path,
+        allowed_operations=allowed_operations,
+        verify_reference_payload=True,
+    )

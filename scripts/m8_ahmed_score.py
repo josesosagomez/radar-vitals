@@ -46,12 +46,12 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
-from src import masimo as masimo_mod                                    # noqa: E402
 from src.br_features import SUBJECT_BY_CAPTURE, capture_suffix          # noqa: E402
 from src.comparator import br_reference, hr_reference                   # noqa: E402
 from src.m4.window_grid import (                                        # noqa: E402
     FRAMES_PER_WINDOW, build_window_grid,
 )
+from src.reference_access import load_reference as load_guarded_reference  # noqa: E402
 
 import diagnose_bin_drift as bindrift                                   # noqa: E402
 from score_offline import resolve_frame0_epoch                          # noqa: E402
@@ -75,8 +75,7 @@ def window_references(capture_dir: Path, n_windows: int) -> pd.DataFrame:
     """Per-window HR and BR reference on the frozen grid, with both admissibility gates."""
     meta = json.loads((capture_dir / "run_metadata.json").read_text(encoding="utf-8"))
     frame0, origin, approx, _c = resolve_frame0_epoch(meta)
-    csv_path = [p for p in capture_dir.glob("*.csv") if p.name != "live_estimates.csv"][0]
-    df = masimo_mod.load_masimo(csv_path)
+    df = load_guarded_reference(capture_dir).frame
     rows = []
     for w in build_window_grid(n_windows * FRAMES_PER_WINDOW, frame0,
                                fs=20.0, frames_per_win=FRAMES_PER_WINDOW):
@@ -91,6 +90,13 @@ def window_references(capture_dir: Path, n_windows: int) -> pd.DataFrame:
     out.attrs["frame0_origin"] = origin
     out.attrs["frame0_is_approximate"] = bool(approx)
     return out
+
+
+def comparative_k_ge_1(table: pd.DataFrame) -> pd.DataFrame:
+    """The legacy comparison excludes the in-sample lock-selection window."""
+    if "k" not in table:
+        raise ValueError("comparative table requires a k column")
+    return table[pd.to_numeric(table["k"], errors="coerce") >= 1].copy()
 
 
 def _score(err: np.ndarray, n_windows: int, n_emitted: int, hit_bands) -> dict:
@@ -222,14 +228,17 @@ def main(argv: list[str] | None = None) -> int:
     rows, locks, origins = [], {}, {}
     for cid, g in ahmed.groupby("capture_id", sort=True):
         capture_dir = REPO_ROOT / "results" / "live_demo" / cid
-        n_windows = int(g["k"].nunique())
-        refs = window_references(capture_dir, n_windows)
+        n_complete_windows = int(g["k"].max()) + 1
+        refs = comparative_k_ge_1(
+            window_references(capture_dir, n_complete_windows)
+        )
+        g = comparative_k_ge_1(g)
         origins[cid] = {"origin": refs.attrs["frame0_origin"],
                         "approximate": refs.attrs["frame0_is_approximate"]}
         lock = current_code_lock(capture_dir, cfg)
         locks[cid] = int(lock)
         subject = SUBJECT_BY_CAPTURE[capture_suffix(cid)]
-        pg = prod[prod["capture_id"] == cid]
+        pg = comparative_k_ge_1(prod[prod["capture_id"] == cid])
 
         # ── baseline: ignores the radar entirely ────────────────────────────
         for vital, hit in (("hr", (HR_HIT_BPM,)), ("br", BR_HIT_BPM)):

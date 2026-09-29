@@ -17,6 +17,7 @@ Key facts (do not "fix" these elsewhere):
 """
 from __future__ import annotations
 
+from io import BytesIO
 from pathlib import Path
 import pandas as pd
 
@@ -33,26 +34,14 @@ _COLUMN_MAP = {
 }
 
 
-def load_masimo(csv_path: str | Path) -> pd.DataFrame:
-    """Load a Masimo CSV into a tidy DataFrame indexed by UTC datetime.
-
-    Duplicate Timestamp rows (Masimo clock glitches) are merged: numeric
-    columns take the mean rounded to 1 dp; non-numeric columns keep first.
-    Coverage stats are stored in df.attrs:
-        n_raw_rows, n_unique_epochs, n_duplicates_merged, n_missing_seconds.
-
-    Returns a frame with columns:
-        epoch_utc (int s), pr_bpm, spo2, pi, pvi, rr_bpm
-    and a UTC DatetimeIndex named 'time_utc'. The integer `epoch_utc` column is kept
-    for exact, timezone-free alignment with radar capture timestamps.
-    """
-    csv_path = Path(csv_path)
-    raw = pd.read_csv(csv_path)
+def _parse_masimo(raw: pd.DataFrame, *, source_name: str) -> pd.DataFrame:
+    """Validate and normalize a DataFrame already decoded from CSV bytes."""
+    source_basename = Path(source_name).name
 
     missing = [c for c in _COLUMN_MAP if c not in raw.columns]
     if missing:
         raise ValueError(
-            f"{csv_path.name} is missing expected Masimo columns: {missing}. "
+            f"{source_basename} is missing expected Masimo columns: {missing}. "
             f"Found: {list(raw.columns)}"
         )
 
@@ -60,9 +49,9 @@ def load_masimo(csv_path: str | Path) -> pd.DataFrame:
     # Numeric columns: mean rounded to 1 dp. Non-numeric: keep first.
     # Coerce numeric columns first — raw exports may contain '--' outside the
     # recording window, which would make pandas read them as object/str dtype.
-    n_raw    = len(raw)
+    n_raw = len(raw)
     _numeric = ["O2 Saturation", "Beats / min", "Perfusion Index", "Pleth Variability", "Breaths / min"]
-    _first   = ["Session", "Index", "Date", "Time"]
+    _first = ["Session", "Index", "Date", "Time"]
     for col in _numeric:
         if col in raw.columns:
             raw[col] = pd.to_numeric(raw[col], errors="coerce")
@@ -73,8 +62,8 @@ def load_masimo(csv_path: str | Path) -> pd.DataFrame:
         if col in raw.columns:
             raw[col] = raw[col].round(1)
 
-    n_unique  = len(raw)
-    n_merged  = n_raw - n_unique
+    n_unique = len(raw)
+    n_merged = n_raw - n_unique
     ts_min, ts_max = int(raw["Timestamp"].min()), int(raw["Timestamp"].max())
     n_missing = (ts_max - ts_min + 1) - n_unique
     print(f"Masimo: {n_raw} rows -> {n_unique} epochs ({n_merged} merged, {n_missing} missing seconds)")
@@ -91,11 +80,35 @@ def load_masimo(csv_path: str | Path) -> pd.DataFrame:
     df.index = pd.to_datetime(df["epoch_utc"], unit="s", utc=True)
     df.index.name = "time_utc"
 
-    df.attrs["n_raw_rows"]          = n_raw
-    df.attrs["n_unique_epochs"]     = n_unique
+    df.attrs["n_raw_rows"] = n_raw
+    df.attrs["n_unique_epochs"] = n_unique
     df.attrs["n_duplicates_merged"] = n_merged
-    df.attrs["n_missing_seconds"]   = n_missing
+    df.attrs["n_missing_seconds"] = n_missing
     return df
+
+
+def load_masimo_bytes(content: bytes, *, source_name: str) -> pd.DataFrame:
+    """Parse guarded CSV bytes without reopening their source path."""
+    if type(content) is not bytes:
+        raise TypeError("Masimo CSV content must be exact bytes")
+    return _parse_masimo(pd.read_csv(BytesIO(content)), source_name=source_name)
+
+
+def load_masimo(csv_path: str | Path) -> pd.DataFrame:
+    """Load a Masimo CSV into a tidy DataFrame indexed by UTC datetime.
+
+    Duplicate Timestamp rows (Masimo clock glitches) are merged: numeric
+    columns take the mean rounded to 1 dp; non-numeric columns keep first.
+    Coverage stats are stored in df.attrs:
+        n_raw_rows, n_unique_epochs, n_duplicates_merged, n_missing_seconds.
+
+    Returns a frame with columns:
+        epoch_utc (int s), pr_bpm, spo2, pi, pvi, rr_bpm
+    and a UTC DatetimeIndex named 'time_utc'. The integer `epoch_utc` column is kept
+    for exact, timezone-free alignment with radar capture timestamps.
+    """
+    csv_path = Path(csv_path)
+    return load_masimo_bytes(csv_path.read_bytes(), source_name=csv_path.name)
 
 
 def window(df: pd.DataFrame, start_epoch: float, end_epoch: float) -> pd.DataFrame:

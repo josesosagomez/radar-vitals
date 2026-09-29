@@ -6,79 +6,78 @@
 ## 1. Project snapshot
 
 The project estimates seated heart rate from a TI IWR1642BOOST/DCA1000 76–81 GHz FMCW radar at
-0.8–1.4 m. The reference is Masimo MightySat `Beats / min` aligned only by integer Unix-epoch
-`Timestamp`; `Perfusion Index` controls reference admission. Paper-grade outputs require a
-reproducible script, config, seed, data hash, intermediate estimator evidence, and subject-aware
-agreement analysis.
+0.8–1.4 m. The Masimo MightySat `Beats / min` column is the heart-rate reference and is aligned only
+by integer Unix-epoch `Timestamp`; `Perfusion Index` controls reference admission. Paper-grade
+outputs require script, config, seed, input hashes, intermediate estimator evidence, and
+subject-aware agreement analysis.
 
 ## 2. Current state
 
-Audit remediation is being implemented on branch **`codex/discrepancy-remediation`**, in a managed
-worktree created from integration branch **`vital_signs_own_v13`** at `e6d055c`. The original
-checkout contains unrelated uncommitted MATLAB/export work and must not be overwritten or cleaned.
+Audit remediation is on branch **`codex/discrepancy-remediation`** in the managed worktree
+`C:\Users\josemsosag\.codex\worktrees\discrepancy-remediation\vitals_radar_3`, based on integration
+branch **`vital_signs_own_v13`**. The original checkout contains unrelated uncommitted MATLAB/export
+work and must not be overwritten or cleaned.
 
-The authoritative discrepancy report is `reports/discrepancy_audit_2026-09-29.md`; the independently
-reviewed implementation plan is `plans/discrepancy_remediation_2026-09-29.md`. The plan is revision
-3. Independent review cleared Milestone 0 and Milestone 1 items 1–4 with its safety clarifications
-incorporated. The remaining milestones still require their specified code or math reviews.
+Milestone 1 is implemented and independently reviewed READY: new natural/paced captures require
+120 s settle; historical 60 s records remain loadable as explicit protocol deviations and cannot
+enter primary scoring; all production reference reads use the central guarded boundary; and the
+reference admission gate is applied before error scoring. Step 5/6 are radar-only unless a
+per-session exact registered development capture is configured. No sealed prospective reference
+was opened and no historical result was rewritten.
 
-The last full-suite evidence before this remediation was supplied as **3144 passed, 5 skipped**.
-Milestone 0 is green: the managed checkout has no tracked CRLF/mixed files and the EOL plus M8
-provenance set passed **204 tests in 65.29 s**. No new full-suite result has yet been measured on
-this branch. No sealed prospective reference has been opened, no raw capture has been modified,
-and no reported result has been recomputed.
+The complete suite passes **3157 passed, 17 skipped** in 206.46 s. The focused final firewall suite
+passes **225 tests**. The ignored Ahmed and Kotte source PDFs are present only as hash-verified test
+dependencies and remain untracked.
 
 ## 3. Active task / next steps
 
-1. Implement Milestone 1 items 1–4:
-   - reject new natural/paced captures below 120 s while metadata-only historical loading derives
-     `protocol_compliant=false` / `settle_below_120s`;
-   - exclude protocol deviations from primary scoring;
-   - create one guarded, hash-bound, in-memory reference loader and route all production reads
-     through it;
-   - reject prospective paths from MATLAB examples and TI-config generation by default.
-2. Do not test historical compatibility in scoring mode. Use synthetic 60 s fixtures; any real
-   manifest check must be metadata-only and prove failure before a reference path can be opened.
-3. Milestone 1 item 5 awaits the owner's factual dispositions for P003 paced, P007 natural, P009
-   natural, and P010 natural. Do not infer their state or inspect their CSVs.
+1. Start Milestone 2 with a behavior-preserving, radar-only diagnostic of `refine_freq_hz` over the
+   eight registered development captures. Record call site, legacy offset, safe offset/fallback
+   reason, and potential final bpm difference. Commit this diagnostic before changing peak picking.
+2. Freeze the exact new estimator ID before assigning any changed output. A candidate name is
+   `eca_ahet_safe_refine_v2`; record the final choice in the plan/HISTORY.
+3. After the diagnostic is committed, implement bounded refinement: uniform finite grid, finite
+   magnitudes, strict local maximum, finite concave parabola, `abs(delta) <= 0.5`, and in-band
+   result; otherwise retain the bin centre with a reason. Persist refinement evidence with every
+   estimate and obtain the required independent DSP review.
+4. Milestone 1 item 5 remains blocked on owner facts for P003 paced, P007 natural, P009 natural,
+   and P010 natural. Do not infer their attempt state or inspect their CSVs.
 
 ## 4. Recent decisions that matter
 
-- Future natural/paced sessions require **120 s** settle. P001–P006 natural remain immutable 60 s
-  protocol deviations and are excluded from the primary per-protocol analysis.
-- The approved recovery scope is **15 new prospective participants**, not a third session for the
-  existing 10 participants.
-- The 2026-07-30 clutter-removal A/B is accepted as the negative Track 0 result. Static clutter
-  removal remains off and P003 was not viewed.
-- `vital_signs_own_v13` is the integration branch. There is no `main` target.
-- A changed heart-rate estimator needs a new immutable estimator ID and a completely new clean
-  provenance chain; historical estimator artifacts are not rewritten.
+- Future natural/paced sessions require **120 s** settle. P001–P006 natural are immutable 60 s
+  protocol deviations excluded from the primary per-protocol analysis.
+- Approved recovery scope is **15 new prospective participants**.
+- The 2026-07-30 clutter-removal A/B is the accepted negative result; static clutter removal stays
+  off. P003 animation/output was not viewed.
+- `vital_signs_own_v13` is the integration branch; there is no `main` target.
+- Any estimator behavior change needs a new immutable estimator ID and a new clean provenance
+  chain. Historical artifacts are labelled/superseded, never rewritten.
 
 ## 5. Gotchas / landmines
 
-- Never open sealed P00x references while developing or testing the firewall. Prospective bytes may
-  be parsed only after the atomic capability transition, through `guarded_reference_bytes`, and
-  must be parsed in memory without reopening the path.
-- `parse_session_v3(..., Mode.SCORING)` verifies bound artifacts and can open/hash a reference.
-  It is forbidden for the historical-settle compatibility test.
-- Do not change files in `data/raw/`, immutable manifests, receipts, or historical HISTORY entries.
-- The original checkout's CRLF observations do not justify rewriting this managed worktree; verify
-  its committed materialization first.
-- M8 figure tests require the gitignored Ahmed source PDF. This worktree's copy was verified at
-  SHA-256 `2D13BCA3FDFCBF249A500622DAC0BE9AD37E35A6AA880C440FF0C12EB4F8689F`.
-- Attempt stage is not retry permission. The future ledger must separately record disposition,
-  evidence, retry permission, and its exact policy basis.
+- Never open P00x references during estimator development. The refinement diagnostic is radar-only
+  and may use only the development ADC identities bound by the M8 capture registry.
+- Prospective reference bytes may be parsed only through `src/reference_access.py` after an atomic
+  firewall capability transition. Capability-free preflight validates metadata, not payload bytes.
+- Step 5/6 `reference_access.development_capture_dirs` is a per-session mapping. An empty mapping is
+  intentionally radar-only; never restore flat `data/raw` discovery.
+- Do not edit `data/raw/`, immutable manifests/receipts, or previous HISTORY entries.
 - MATLAB source may be written but not executed (`MATLAB_CLI = false`).
+- The managed worktree needs the pinned Conda launcher; direct environment Python can reproduce a
+  Windows Matplotlib loader failure.
 
 ## 6. Pointers
 
 | File | Purpose |
 |---|---|
-| `reports/discrepancy_audit_2026-09-29.md` | evidence, severity, affected results, and owner addendum |
+| `reports/discrepancy_audit_2026-09-29.md` | evidence, severity, affected results, owner addendum |
 | `plans/discrepancy_remediation_2026-09-29.md` | reviewed milestone plan and acceptance criteria |
-| `src/m2/acquisition_metadata.py` | current shared acquisition-metadata validator |
-| `src/m2/manifest_v3.py` | historical/session parsing; scoring mode can verify reference artifacts |
-| `src/m2/label_firewall.py` | existing atomic prospective-reference byte guard |
-| `notes/analysis_prespec.md` | admission, retry, cohort-role, and repeated-measures rules |
-| `cohort_registry/registry_v010.json` | current immutable cohort registry revision |
+| `src/protocol.py` | shared 120 s protocol constants |
+| `src/reference_access.py` | single development/prospective reference boundary |
+| `reference_registry/development_references_v1.json` | exact development reference identities/hashes |
+| `src/m2/label_firewall.py` | prospective capability and single-read byte guard |
+| `src/vitals.py` | next target: peak refinement and ECA semantics |
+| `experiments/m8_ahmed_transfer/capture_registry.yaml` | development ADC identities/hashes for diagnostic |
+| `notes/analysis_prespec.md` | admission, retry, cohort-role, repeated-measures rules |
 | `HISTORY.md` | append-only decisions and evidence |

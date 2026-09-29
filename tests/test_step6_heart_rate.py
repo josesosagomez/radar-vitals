@@ -35,6 +35,7 @@ from __future__ import annotations
 import os
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 os.environ.setdefault("MPLBACKEND", "Agg")
 
@@ -61,6 +62,21 @@ from steps.step_6.extract_heart_rate import (   # noqa: E402
     _STAGE_TO_STR,
     _write_npz,
 )
+from src.masimo import load_masimo as _load_test_masimo  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _synthetic_reference_boundary(monkeypatch):
+    """Keep synthetic fixtures explicit while production remains fail-closed."""
+    def load_fixture_reference(_capture_dir, *, reference_override=None, **_kwargs):
+        assert reference_override is None
+        reference = next(Path(_capture_dir).glob("*_masimo.csv"))
+        return SimpleNamespace(
+            frame=_load_test_masimo(reference),
+            source=SimpleNamespace(capture_id=Path(_capture_dir).resolve().name),
+        )
+
+    monkeypatch.setattr("src.reference_access.load_reference", load_fixture_reference)
 
 
 # ---------------------------------------------------------------------------
@@ -684,6 +700,9 @@ def session_dir(tmp_path: Path):
 
     # Config
     cfg = {
+        "reference_access": {
+            "development_capture_dirs": {sid: str(raw_dir)},
+        },
         "paths": {
             "manifest":           "data/manifest.local.csv",
             "cubes_dir":          str(h5_dir),
@@ -756,6 +775,33 @@ def test_integration_produces_outputs(session_dir, mock_estimator):
     assert "invalid_reason" in df.columns
     assert "heart_spectrum_stage" in df.columns
     assert "hr_confidence" in df.columns
+
+
+def test_declared_capture_identity_mismatch_is_rejected(
+    session_dir, mock_estimator, monkeypatch
+):
+    s = session_dir
+    reference = s["raw"] / f"{s['sid']}_masimo.csv"
+
+    def wrong_identity(_capture_dir, **_kwargs):
+        return SimpleNamespace(
+            frame=_load_test_masimo(reference),
+            source=SimpleNamespace(capture_id="different_capture"),
+        )
+
+    monkeypatch.setattr("src.reference_access.load_reference", wrong_identity)
+    with pytest.raises(ValueError, match="identity"):
+        _process_session(
+            s["sid"],
+            s["row"],
+            s["cfg"],
+            cubes_dir=s["cubes"],
+            data_raw=s["raw"],
+            breathing_rate_dir=s["br_dir"],
+            out_dir=s["out_dir"],
+            commit="test",
+            no_plots=True,
+        )
 
 
 def test_every_nan_has_invalid_reason(session_dir, mock_estimator):

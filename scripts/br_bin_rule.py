@@ -62,6 +62,7 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 from src import br_bin_search as bbs                                    # noqa: E402
 from src import br_features as brf                                      # noqa: E402
+from src.reference_access import load_reference as load_guarded_reference  # noqa: E402
 
 import diagnose_bin_drift as bindrift                                   # noqa: E402
 from br_bin_preflight import (                                          # noqa: E402
@@ -301,7 +302,6 @@ def _relabel(table, offset_s: float):
         return table
     import json as _json
 
-    from src import masimo as masimo_mod
     from score_offline import resolve_frame0_epoch
 
     out = []
@@ -309,9 +309,10 @@ def _relabel(table, offset_s: float):
         capture_dir = REPO_ROOT / "results" / "live_demo" / cid
         meta = _json.loads((capture_dir / "run_metadata.json").read_text(encoding="utf-8"))
         frame0, _src, _approx, _c = resolve_frame0_epoch(meta)
-        csv_path = [p for p in capture_dir.glob("*.csv") if p.name != "live_estimates.csv"][0]
         lab = brf.window_labels(
-            masimo_mod.load_masimo(csv_path), frame0 + offset_s, int(g["k"].max()) + 1
+            load_guarded_reference(capture_dir).frame,
+            frame0 + offset_s,
+            int(g["k"].max()) + 1,
         )
         g2 = g.drop(columns=[c for c in ("ref_bpm", "n_finite_rr", "spread_bpm",
                                          "availability_ok", "stationarity_ok", "admitted",

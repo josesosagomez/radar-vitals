@@ -22,7 +22,7 @@ import numpy as np
 import yaml
 
 from src.comparator import br_reference, hr_reference
-from src.masimo import load_masimo
+from src.reference_access import load_reference as load_guarded_reference
 from src.m4.bundle import (
     BundleWriter,
     StageBundle,
@@ -49,6 +49,11 @@ from src.m8.ahmed_provenance import (
     verify_exact_authorization_transition,
     verify_source_manifest,
 )
+
+
+def _registered_development_reference_loader(path: Path):
+    """Production default: registry/hash guard before Masimo parsing."""
+    return load_guarded_reference(path.parent, reference_override=path).frame
 
 __all__ = [
     "COMPARATIVE_UNIVERSE",
@@ -1460,10 +1465,16 @@ def execute_score(
     *,
     radar_rows: Sequence[Mapping[str, object]],
     reference: ReferenceScope,
+    official: bool = False,
     file_hash: Callable[[Path], str] = sha256_path,
-    masimo_loader: Callable[[Path], object] = load_masimo,
+    masimo_loader: Callable[[Path], object] = _registered_development_reference_loader,
 ) -> ScoreResult:
     """Hash/load Masimo and score rows after caller-completed parent preflight."""
+    if official and (
+        file_hash is not sha256_path
+        or masimo_loader is not _registered_development_reference_loader
+    ):
+        raise ScoreContractError("official scoring forbids injected reference readers")
     captures = sorted({str(row["capture_id"]) for row in radar_rows})
     if tuple(captures) != tuple(sorted(EXPECTED_CAPTURE_WINDOWS)):
         raise ScoreContractError("radar rows do not contain the exact eight reference captures")
@@ -1472,13 +1483,21 @@ def execute_score(
     reference_files: dict[str, dict[str, str]] = {}
     for capture_id in captures:
         path = reference.csv_path(capture_id)
-        actual_hash = file_hash(path)
         expected_hash = reference.digest(capture_id)
+        if official:
+            loaded_reference = load_guarded_reference(
+                path.parent, reference_override=path
+            )
+            actual_hash = loaded_reference.source.sha256
+            frame = loaded_reference.frame
+        else:
+            actual_hash = file_hash(path)
         if actual_hash != expected_hash:
             raise ScoreContractError(
                 f"{capture_id}: Masimo SHA-256 {actual_hash} != registry {expected_hash}"
             )
-        frame = masimo_loader(path)
+        if not official:
+            frame = masimo_loader(path)
         if "epoch_utc" not in frame or not np.issubdtype(frame["epoch_utc"].dtype, np.integer):
             raise ScoreContractError(f"{capture_id}: parser did not preserve integer Timestamp")
         epochs = frame["epoch_utc"].to_numpy(dtype=np.int64)
@@ -1978,7 +1997,7 @@ def run_score_stage(
     authorization_validator: Callable[[Path, Authorization], None] | None = None,
     require_scientific_gate: bool = False,
     file_hash: Callable[[Path], str] = sha256_path,
-    masimo_loader: Callable[[Path], object] = load_masimo,
+    masimo_loader: Callable[[Path], object] = _registered_development_reference_loader,
     production_input_identity: Mapping[str, object] | None = None,
     require_production_provenance: bool = False,
 ) -> ScoreResult | StageBundle:
@@ -2064,6 +2083,7 @@ def run_score_stage(
     result = execute_score(
         radar_rows=radar_rows,
         reference=reference,
+        official=require_production_provenance,
         file_hash=file_hash,
         masimo_loader=masimo_loader,
     )

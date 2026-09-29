@@ -35,7 +35,11 @@ from src.m8.ahmed_provenance import (
 )
 from src.m4.production_suite import PRODUCTION_ARM_ID
 from scripts.score_production import require_clean_tree_commit
-from scripts.m8_ahmed_score import pool_score_rows, write_and_display_pooled
+from scripts.m8_ahmed_score import (
+    comparative_k_ge_1,
+    pool_score_rows,
+    write_and_display_pooled,
+)
 
 
 REFERENCE_ADMITTED_K = {
@@ -58,6 +62,12 @@ RADAR_VALID_K = {
     "m6": {1, 2},
     "m7": {0},
 }
+
+
+def test_legacy_m8_comparison_excludes_k0_lock_selection_window():
+    table = pd.DataFrame({"k": [0, 1, 2], "value": [100.0, 70.0, 71.0]})
+    comparative = comparative_k_ge_1(table)
+    assert comparative["k"].tolist() == [1, 2]
 
 
 def _audit_rows() -> list[ScoredRow]:

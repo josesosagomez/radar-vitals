@@ -74,7 +74,7 @@ import pandas as pd
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
-from src import masimo  # noqa: E402
+from src.reference_access import load_reference as load_guarded_reference  # noqa: E402
 
 # ── Fixed constants (do not tune) ──────────────────────────────────────────────────────────
 TOL_BPM      = 3.0
@@ -96,8 +96,7 @@ RUNS = {
 def load_run(run_dir: Path) -> pd.DataFrame:
     meta = json.loads((run_dir / "run_metadata.json").read_text(encoding="utf-8"))
     t0 = datetime.fromisoformat(meta["start_wall_utc"]).timestamp()
-    csv = next(p for p in run_dir.glob("*.csv") if "massimo" in p.name.lower())
-    m = masimo.load_masimo(csv).set_index("epoch_utc")
+    m = load_guarded_reference(run_dir).frame.set_index("epoch_utc")
     d = pd.read_csv(run_dir / "live_estimates.csv")
     z = np.load(run_dir / "live_intermediates.npz", allow_pickle=True)
 

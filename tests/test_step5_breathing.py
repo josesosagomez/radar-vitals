@@ -12,6 +12,7 @@ import os
 import shutil
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 # Must be set before any matplotlib import to avoid GUI crashes in headless CI
 os.environ.setdefault("MPLBACKEND", "Agg")
@@ -24,6 +25,21 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from steps.step_5.extract_breathing_rate import _process_session  # noqa: E402
+from src.masimo import load_masimo as _load_test_masimo  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _synthetic_reference_boundary(monkeypatch):
+    """Keep synthetic fixtures explicit while production remains fail-closed."""
+    def load_fixture_reference(_capture_dir, *, reference_override=None, **_kwargs):
+        assert reference_override is None
+        reference = next(Path(_capture_dir).glob("*_masimo.csv"))
+        return SimpleNamespace(
+            frame=_load_test_masimo(reference),
+            source=SimpleNamespace(capture_id=Path(_capture_dir).resolve().name),
+        )
+
+    monkeypatch.setattr("src.reference_access.load_reference", load_fixture_reference)
 
 
 # ---------------------------------------------------------------------------
@@ -128,6 +144,9 @@ def _make_manifest_row(session_id: str, t0: float) -> dict:
 
 def _make_cfg(tmp_root: Path, session_id: str) -> dict:
     return {
+        "reference_access": {
+            "development_capture_dirs": {session_id: str(tmp_root / "raw")},
+        },
         "paths": {
             "manifest":       str(tmp_root / "manifest.csv"),
             "cubes_dir":      str(tmp_root / "cubes"),
@@ -202,6 +221,46 @@ def session_env(tmp_path: Path):
 # ---------------------------------------------------------------------------
 
 class TestProcessSession:
+    def test_declared_capture_identity_mismatch_is_rejected(
+        self, session_env, monkeypatch
+    ):
+        cfg, row, sid, tmp = session_env
+        reference = tmp / "raw" / f"{sid}_masimo.csv"
+
+        def wrong_identity(_capture_dir, **_kwargs):
+            return SimpleNamespace(
+                frame=_load_test_masimo(reference),
+                source=SimpleNamespace(capture_id="different_capture"),
+            )
+
+        monkeypatch.setattr("src.reference_access.load_reference", wrong_identity)
+        with pytest.raises(ValueError, match="identity"):
+            _process_session(
+                sid,
+                row,
+                cfg,
+                cubes_dir=tmp / "cubes",
+                data_raw=tmp / "raw",
+                out_dir=tmp / "results" / sid / "step_5",
+                commit="test",
+                no_plots=True,
+            )
+
+    def test_empty_reference_mapping_runs_radar_only(self, session_env):
+        cfg, row, sid, tmp = session_env
+        cfg["reference_access"]["development_capture_dirs"] = {}
+        summary = _process_session(
+            sid,
+            row,
+            cfg,
+            cubes_dir=tmp / "cubes",
+            data_raw=tmp / "raw",
+            out_dir=tmp / "results" / sid / "step_5",
+            commit="test",
+            no_plots=True,
+        )
+        assert summary["mae_bpm"] is None
+
     def test_produces_correct_rr_from_synthetic_cube(self, session_env):
         """Radar RR estimates should be close to the known synthetic breathing rate."""
         cfg, row, sid, tmp = session_env

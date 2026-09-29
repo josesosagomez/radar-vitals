@@ -11,7 +11,9 @@ estimates breathing rate per 30 s sliding window using three methods:
   B. Harmonic accumulation (primary)
   C. STFT subwindow stability (confidence check)
 
-Compares radar RR against Masimo Breaths/min (evaluation only).
+Compares radar RR against Masimo Breaths/min only when config supplies an exact
+registered development capture directory.  Otherwise it runs radar-only and emits
+NaN reference/error fields; prospective scoring belongs in the authorized lane.
 Writes a Step 6 contract CSV to data/processed/breathing_rate/<session_id>.csv.
 
 Run from repo root:
@@ -42,6 +44,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
 from src import masimo as masimo_mod          # noqa: E402
+from src import reference_access              # noqa: E402
 from src.respiration import (                 # noqa: E402
     extract_chest_phase,
     fft_estimate_rr,
@@ -301,9 +304,9 @@ def _process_session(
     if not h5_path.exists():
         raise FileNotFoundError(f"HDF5 not found: {h5_path} — run Step 2 first")
 
-    mas_path = data_raw / f"{session_id}_masimo.csv"
-    if not mas_path.exists():
-        raise FileNotFoundError(f"Masimo CSV not found: {mas_path}")
+    # Retained in the call signature for the historical Step 5 API.  Reference
+    # access no longer derives a CSV path from this unrestricted directory.
+    _ = data_raw
 
     # --- Parse manifest fields ---
     locked_bin    = int(float(str(row["locked_bin"]).strip()))
@@ -405,8 +408,29 @@ def _process_session(
 
     print(f"  Windows: {len(windows)} (absolute frames {windows[0][0]}–{windows[-1][1]})")
 
-    # --- Load Masimo ---
-    mas_df = masimo_mod.load_masimo(mas_path)
+    # --- Optional registered development reference ---
+    reference_cfg = cfg.get("reference_access", {})
+    capture_map = reference_cfg.get("development_capture_dirs", {})
+    if type(capture_map) is not dict:
+        raise ValueError("reference_access.development_capture_dirs must be a mapping")
+    registered_capture = capture_map.get(session_id)
+    if registered_capture:
+        capture_dir = Path(str(registered_capture))
+        if not capture_dir.is_absolute():
+            capture_dir = REPO_ROOT / capture_dir
+        loaded_reference = reference_access.load_reference(capture_dir)
+        if loaded_reference.source.capture_id != capture_dir.resolve().name:
+            raise ValueError(
+                f"{session_id}: loaded reference identity does not match declared capture"
+            )
+        mas_df = loaded_reference.frame
+    else:
+        mas_df = pd.DataFrame(
+            {
+                "epoch_utc": pd.Series(dtype="int64"),
+                "rr_bpm": pd.Series(dtype="float64"),
+            }
+        )
 
     # --- Per-window estimation ---
     rows:     list[dict]  = []

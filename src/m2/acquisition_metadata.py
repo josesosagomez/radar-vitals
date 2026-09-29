@@ -15,6 +15,7 @@ from typing import Any, Mapping
 
 import yaml
 
+from .. import protocol as _protocol
 from .common import (
     ContractError,
     require_bool,
@@ -38,13 +39,27 @@ class DataRole(str, Enum):
     FINAL_EVALUATION = "final_evaluation"
 
 
+class AcquisitionValidationPurpose(str, Enum):
+    """Select whether metadata is admitting a new capture or reading history."""
+
+    NEW_CAPTURE = "new_capture"
+    HISTORICAL_RECORD = "historical_record"
+
+
 VISIT_BY_ARM = {Arm.NATURAL: 1, Arm.PACED: 2, Arm.RECOVERY: 3}
-PACED_RATES_BPM = (12, 15, 18)
+DISTANCE_MIN_M = _protocol.DISTANCE_MIN_M
+DISTANCE_MAX_M = _protocol.DISTANCE_MAX_M
+SETTLE_EVIDENCE_WINDOW_S = _protocol.SETTLE_EVIDENCE_WINDOW_S
+SETTLE_SPREAD_MAX_BPM = _protocol.SETTLE_SPREAD_MAX_BPM
+SETTLE_DRIFT_MAX_BPM = _protocol.SETTLE_DRIFT_MAX_BPM
+MIN_SETTLE_S = _protocol.MIN_SETTLE_S
+PACED_RATES_BPM = _protocol.PACED_RATES_BPM
 FRAME_RATE_HZ = 20.0
 CHIRPS_PER_FRAME = 32
 INTENDED_DURATION_S = 600.0
-MAX_CLOCK_OFFSET_S = 1.0
+MAX_CLOCK_OFFSET_S = _protocol.MAX_CLOCK_OFFSET_S
 RECOVERY_SEATED_START_SOURCE = "operator_observed_seated_start_synchronized_pc_utc"
+PROTOCOL_DEVIATION_SETTLE_BELOW_120S = "settle_below_120s"
 
 _PROSPECTIVE_SUBJECT_RE = re.compile(r"^P\d{3}$")
 _ENGINEERING_SUBJECT_RE = re.compile(r"^(?:T|SYN)[A-Z0-9_-]{1,30}$")
@@ -236,8 +251,39 @@ def load_sidecar(path: str | Path) -> dict[str, Any]:
     return validate_acquisition_metadata(document)
 
 
-def validate_acquisition_metadata(metadata: Mapping[str, object]) -> dict[str, Any]:
-    """Validate capture-time metadata and return a plain normalized dictionary."""
+def _validation_purpose(
+    purpose: AcquisitionValidationPurpose | str,
+) -> AcquisitionValidationPurpose:
+    try:
+        return (
+            purpose
+            if isinstance(purpose, AcquisitionValidationPurpose)
+            else AcquisitionValidationPurpose(purpose)
+        )
+    except ValueError:
+        raise ContractError(
+            "validation purpose must be 'new_capture' or 'historical_record'"
+        ) from None
+
+
+def assess_protocol_compliance(metadata: Mapping[str, object]) -> tuple[bool, tuple[str, ...]]:
+    """Derive current protocol compliance from already validated metadata."""
+    arm = _enum(Arm, metadata.get("arm"), "arm")
+    reasons: list[str] = []
+    if arm in (Arm.NATURAL, Arm.PACED):
+        settle_duration_s = require_number(metadata, "settle_duration_s", minimum=0.0)
+        if settle_duration_s < MIN_SETTLE_S:
+            reasons.append(PROTOCOL_DEVIATION_SETTLE_BELOW_120S)
+    return not reasons, tuple(reasons)
+
+
+def validate_acquisition_metadata(
+    metadata: Mapping[str, object],
+    *,
+    purpose: AcquisitionValidationPurpose | str = AcquisitionValidationPurpose.NEW_CAPTURE,
+) -> dict[str, Any]:
+    """Validate metadata under the new-capture or immutable-history contract."""
+    parsed_purpose = _validation_purpose(purpose)
     if type(metadata) is not dict:
         raise ContractError("acquisition metadata must be a JSON/YAML object")
     _reject_private_fields(metadata)
@@ -292,8 +338,10 @@ def validate_acquisition_metadata(metadata: Mapping[str, object]) -> dict[str, A
     if metadata.get("posture") != "seated":
         raise ContractError("posture must be exactly 'seated'")
     distance_m = require_number(metadata, "distance_m")
-    if not 0.8 <= distance_m <= 1.4:
-        raise ContractError("distance_m must be in [0.8, 1.4] metres, inclusive")
+    if not DISTANCE_MIN_M <= distance_m <= DISTANCE_MAX_M:
+        raise ContractError(
+            f"distance_m must be in [{DISTANCE_MIN_M}, {DISTANCE_MAX_M}] metres, inclusive"
+        )
     for field_name in _COMMON_BOOLEAN_FIELDS:
         require_bool(metadata, field_name)
     for field_name in _TRUE_AT_CAPTURE_FIELDS:
@@ -327,15 +375,37 @@ def validate_acquisition_metadata(metadata: Mapping[str, object]) -> dict[str, A
         raise ContractError("session_order must equal the fixed visit_number")
 
     if arm in (Arm.NATURAL, Arm.PACED):
-        require_number(metadata, "settle_duration_s", minimum=60.0)
+        # Historical records must still be structurally coherent: the declared
+        # 60 s evidence window cannot fit inside a shorter total settle.  The
+        # current 120 s protocol is enforced separately below so old records
+        # remain readable without being reclassified as compliant.
+        require_number(
+            metadata, "settle_duration_s", minimum=SETTLE_EVIDENCE_WINDOW_S
+        )
         require_number(metadata, "start_pr_bpm", minimum=0.0)
-        if require_number(metadata, "settle_evidence_window_s") != 60.0:
-            raise ContractError("settle_evidence_window_s must be exactly 60.0 seconds")
+        if (
+            require_number(metadata, "settle_evidence_window_s")
+            != SETTLE_EVIDENCE_WINDOW_S
+        ):
+            raise ContractError(
+                "settle_evidence_window_s must be exactly "
+                f"{SETTLE_EVIDENCE_WINDOW_S} seconds"
+            )
         spread = require_number(metadata, "settle_pr_spread_bpm", minimum=0.0)
         drift = require_number(metadata, "settle_pr_drift_bpm", minimum=0.0)
-        if spread > 5.0 or drift > 3.0:
-            raise ContractError("natural/paced settle evidence does not pass <=5/<=3 bpm gates")
-        require_nonempty_string(metadata, "settle_evidence_path")
+        if spread > SETTLE_SPREAD_MAX_BPM or drift > SETTLE_DRIFT_MAX_BPM:
+            raise ContractError(
+                "natural/paced settle evidence does not pass "
+                f"<={SETTLE_SPREAD_MAX_BPM:g}/<={SETTLE_DRIFT_MAX_BPM:g} bpm gates"
+            )
+        settle_evidence_path = require_nonempty_string(metadata, "settle_evidence_path")
+        if parsed_purpose is AcquisitionValidationPurpose.NEW_CAPTURE:
+            expected_settle_path = f"evidence/{session_id}_settle.json"
+            if Path(settle_evidence_path).as_posix() != expected_settle_path:
+                raise ContractError(
+                    "settle_evidence_path must be exactly "
+                    f"{expected_settle_path!r} for this session"
+                )
         require_sha256(metadata.get("settle_evidence_sha256"), "settle_evidence_sha256")
     else:
         forbidden_settle = {
@@ -405,6 +475,12 @@ def validate_acquisition_metadata(metadata: Mapping[str, object]) -> dict[str, A
     else:
         allowed_fields |= _RECOVERY_FIELDS
     _reject_unknown_fields(metadata, allowed_fields, where=f"{arm.value} acquisition metadata")
+    protocol_compliant, reasons = assess_protocol_compliance(metadata)
+    if parsed_purpose is AcquisitionValidationPurpose.NEW_CAPTURE and not protocol_compliant:
+        raise ContractError(
+            f"settle_duration_s must be >= {MIN_SETTLE_S}, got "
+            f"{metadata['settle_duration_s']}"
+        )
     return dict(metadata)
 
 

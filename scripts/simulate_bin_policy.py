@@ -51,10 +51,11 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
-from src import masimo as masimo_mod  # noqa: E402
 from src.comparator import br_reference  # noqa: E402
 from src.m4.window_grid import FRAMES_PER_WINDOW, build_window_grid  # noqa: E402
 from src.warmup_select import derive_candidate_bins, run_warmup_selection  # noqa: E402
+from src.reference_access import load_reference as load_guarded_reference  # noqa: E402
+from score_offline import resolve_frame0_epoch  # noqa: E402
 
 import diagnose_bin_drift as bindrift  # noqa: E402
 from diagnose_bin_sweep import decode_frame_range, words_per_frame  # noqa: E402
@@ -94,20 +95,28 @@ TRAIN_CAPTURES = ("massimo1", "massimo2", "massimo3", "sweep")
 TEST_CAPTURES = ("massimo4", "massimo5", "massimo6", "massimo7")
 
 
+def admitted_br_value(reference: dict) -> float | None:
+    """Return a numeric label only after the canonical admission gate passes."""
+    value = reference.get("median_rr_bpm", float("nan"))
+    if not reference.get("admitted", False) or not np.isfinite(value):
+        return None
+    return float(value)
+
+
 def load_reference(capture_dir: Path, n_windows: int) -> dict[int, float]:
     """Masimo RR per window `k`, on the frozen grid. Scoring only — never a policy input."""
     meta = json.loads((capture_dir / "run_metadata.json").read_text(encoding="utf-8"))
-    csv_path = [p for p in capture_dir.glob("*.csv") if p.name != "live_estimates.csv"][0]
-    df = masimo_mod.load_masimo(csv_path)
-    frame0 = datetime.fromisoformat(meta["start_wall_utc"]).timestamp()
+    df = load_guarded_reference(capture_dir).frame
+    frame0, _source, _approximate, _caveat = resolve_frame0_epoch(meta)
     windows = build_window_grid(
         n_windows * FRAMES_PER_WINDOW, frame0, fs=20.0, frames_per_win=FRAMES_PER_WINDOW
     )
     out = {}
     for w in windows:
-        rr = br_reference(df, w.epoch_start, w.epoch_end).get("median_rr_bpm", float("nan"))
-        if np.isfinite(rr):
-            out[w.k] = float(rr)
+        reference = br_reference(df, w.epoch_start, w.epoch_end)
+        rr = admitted_br_value(reference)
+        if rr is not None:
+            out[w.k] = rr
     return out
 
 

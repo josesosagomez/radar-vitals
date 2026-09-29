@@ -57,11 +57,11 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
-from src import masimo  # noqa: E402
 from src.comparator import br_metronome_concordance, br_reference, hr_reference  # noqa: E402
 from src.compare import coverage_table, paired_metrics  # noqa: E402
 from src.m4.window_grid import FRAMES_PER_WINDOW, FRAME_RATE_HZ, Window, build_window_grid  # noqa: E402
 from src.radar_io import read_adc_bin  # noqa: E402
+from src.reference_access import load_reference as load_guarded_reference  # noqa: E402
 from src.warmup_select import derive_candidate_bins, run_warmup_selection  # noqa: E402
 from src.window_pipeline import (  # noqa: E402
     ESTIMATOR_ID,
@@ -258,32 +258,9 @@ def lookup_commanded_rate(schedule: PacedSchedule, t_start_s: float, t_end_s: fl
 # ─────────────────────────────────────────────────────────────────────────────
 
 def discover_masimo_csv(capture_dir: Path, override: Optional[str]) -> Path:
-    """Exactly one *.csv in `capture_dir` must parse as a Masimo export, excluding
-    `live_estimates.csv` by name (belt-and-suspenders even if a future radar output
-    file accidentally had compatible-looking headers)."""
-    if override is not None:
-        p = Path(override)
-        if not p.exists():
-            raise ValueError(f"--masimo-csv override {p} does not exist.")
-        return p
-    all_csvs = sorted(capture_dir.glob("*.csv"))
-    candidates = []
-    for csv_path in all_csvs:
-        if csv_path.name == "live_estimates.csv":
-            continue
-        try:
-            masimo.load_masimo(csv_path)
-        except Exception:
-            continue
-        candidates.append(csv_path)
-    if len(candidates) != 1:
-        raise ValueError(
-            f"Masimo CSV auto-discovery for {capture_dir} found {len(candidates)} "
-            f"candidate(s) (expected exactly 1): {[c.name for c in candidates]}. "
-            f"All *.csv present: {[c.name for c in all_csvs]}. Use "
-            f"--masimo-csv {capture_dir}=<path> to disambiguate (OSR-11)."
-        )
-    return candidates[0]
+    """Resolve only the hash-bound reference registered for this capture."""
+    loaded = load_guarded_reference(capture_dir, reference_override=override)
+    return Path(loaded.source.resolved_path)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1025,6 +1002,25 @@ def main(argv: Optional[list[str]] = None) -> None:
     print(f"Artifacts: {out_dir}")
 
 
+def _paired_condition_cell(est: WindowEstimate, reference: dict) -> dict:
+    """Build a comparison cell without leaking an excluded reference value."""
+    admitted = bool(reference.get("admitted", False))
+    reference_value = (
+        float(reference["median_pr_bpm"]) if admitted else float("nan")
+    )
+    error = (
+        float(est.hr_bpm) - reference_value
+        if admitted and np.isfinite(est.hr_bpm)
+        else float("nan")
+    )
+    return {
+        "radar_hr": est.hr_bpm,
+        "masimo_pr": reference_value,
+        "error": error,
+        "ahet_verified": est.hr_valid,
+    }
+
+
 def run_capture(
     *, capture_dir: Path, capture_id: str, configs: dict[str, Path],
     requested_estimands: list[str], pinned_lock_source: dict[str, str],
@@ -1041,7 +1037,9 @@ def run_capture(
     raw_sha256 = sha256_file(raw_path)
 
     masimo_csv_path = discover_masimo_csv(capture_dir, masimo_csv_override)
-    masimo_df = masimo.load_masimo(masimo_csv_path)
+    masimo_df = load_guarded_reference(
+        capture_dir, reference_override=masimo_csv_path
+    ).frame
 
     frame0_epoch, origin_source, origin_is_approximate, origin_caveat = resolve_frame0_epoch(
         capture_run_metadata
@@ -1204,12 +1202,7 @@ def run_capture(
         for config_label in config_labels:
             estimates_by_k = estimates_by_config_estimand[(config_label, estimand)]
             conditions[config_label] = {
-                k: {
-                    "radar_hr": est.hr_bpm,
-                    "masimo_pr": hr_refs_by_k[k]["median_pr_bpm"],
-                    "error": est.hr_bpm - hr_refs_by_k[k]["median_pr_bpm"],
-                    "ahet_verified": est.hr_valid,
-                }
+                k: _paired_condition_cell(est, hr_refs_by_k[k])
                 for k, est in estimates_by_k.items()
             }
         paired = paired_metrics(conditions, reference_condition=config_labels[0])
