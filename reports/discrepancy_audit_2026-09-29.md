@@ -295,6 +295,16 @@ the canonical M1 scoring chain is hash-bound. The discrepancies are concentrated
 | M-9 | No HISTORY entry records the P001–P006 capture sessions (08-12 → 08-18). CLAUDE.md §3.6 requires settle, duration, posture and distance per session. | Append an entry built from the manifests |
 | M-10 | 20 tracked files have CRLF line endings in the working tree against `.gitattributes eol=lf` (Verified). They include `tests/test_m4_evidence_serialization.py`, which is in the M8 attested set (`ahmed_provenance.py:122, 157`), and all `figures/generated/m8_ahmed_fig8/*/bundle.json`, `metrics.json` and `provenance.json`. Hashes of working-tree bytes differ from the committed ones, so a manifest built here will not verify from a clean clone. `HISTORY.md` in the working copy has mixed endings. | For each file, confirm `git diff` is empty, then delete and `git checkout --`; renormalize `HISTORY.md` before committing |
 
+**M-8 owner disposition — 2026-09-30.** The owner confirmed that all four directories were
+preparation placeholders only: files were created in advance, but no capture was started for
+`P003_paced`, `P007_natural`, `P009_natural`, or `P010_natural`. They therefore are not aborted or
+completed attempts, consume no attempt/retry, and correctly remain `planned` in the cohort
+registry. The initial planned capture remains available; calling it a recapture would be false.
+No attempt/scoring evidence exists to register. The `P001_natural_settle.json` name under the P010
+preparation area is a misnamed placeholder with no evidentiary status; it must never be promoted as
+P010 settle evidence. Prospective validation already requires the exact
+`evidence/P010_natural_settle.json` identity before a real P010 natural capture can register.
+
 ### Signal processing
 
 | ID | Discrepancy | Fix | Changes numbers |
@@ -417,4 +427,3 @@ the canonical M1 scoring chain is hash-bound. The discrepancies are concentrated
 - Whether the recovery arm's chest velocity exceeds the impulse clip (M-13a).
 - The contents of `m2_capture_work/*` beyond file names (sealed).
 - The skip count on a clean clone (M-24 is a static estimate).
-

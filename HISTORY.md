@@ -12421,3 +12421,36 @@ and `scripts/plot_bland_altman.py` as an executable analysis route.
 
 **Next:** use `arm_loa` only after admission-gated prospective scoring supplies authoritative
 subject/session mappings; report each natural, paced, and recovery arm separately.
+
+## 2026-09-30 - Four preparation directories confirmed not to be capture attempts
+
+**Set out to do:** resolve the owner-fact blocker for `P003_paced`, `P007_natural`,
+`P009_natural`, and `P010_natural` without inferring attempt state from gitignored preparation
+files.
+
+**Worked (with evidence):**
+
+- The owner confirmed on 2026-09-30 that files were created only to prepare for future capture and
+  **none of the four sessions was ever started**.
+- Each session therefore remains `planned` in `cohort_registry/registry_v010.json`. There is no
+  aborted/completed attempt to append, no attempt has been consumed, and no retry/recapture policy
+  applies. The future session is the initial planned capture.
+- The file named `P001_natural_settle.json` in the P010 preparation area is not capture or settle
+  evidence. It is a misnamed placeholder and must not be registered or used to support P010.
+  Prospective acquisition metadata already fails closed unless the path is exactly
+  `evidence/P010_natural_settle.json` for `P010_natural`.
+- No gitignored capture/reference contents were opened to make this disposition; it rests on the
+  owner's direct operational statement and the tracked registry's unchanged `planned` state.
+- The focused cohort-registry and acquisition-metadata suite passed **64 tests**; the exact
+  session-matching settle-evidence rule and registry chain both remain enforced.
+
+**Failed / did not work, and why:** the 2026-09-29 audit called these “unregistered capture
+attempts” based on prepared work directories. That inference was too strong. Creating scaffolding
+does not establish that acquisition started, so no synthetic aborted attempt was added to the
+immutable registry chain.
+
+**Retired / no longer used:** the assumption that these four preparation directories consumed an
+attempt, and the P010-area misnamed settle placeholder as possible evidence.
+
+**Next:** when any of the four sessions actually begins, create fresh session-matching evidence and
+follow the normal planned-to-captured transaction. Do not rename or promote the old P010 placeholder.

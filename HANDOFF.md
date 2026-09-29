@@ -59,8 +59,12 @@ sensitivity. The retired pooled-window plotting script fails closed.
 
 ## 3. Active task / next steps
 
-1. Milestone 1 item 5 remains blocked on owner facts for P003 paced, P007 natural, P009 natural,
-   and P010 natural. Do not infer their attempt state or inspect their CSVs.
+No audit-remediation item is waiting on an owner disposition. On 2026-09-30 the owner confirmed
+that the P003 paced, P007 natural, P009 natural, and P010 natural work directories were preparation
+placeholders only; none was started. Their registry state remains `planned`, no attempt was
+consumed, and their future acquisition is the initial capture rather than a recapture. The misnamed
+P010-area `P001_natural_settle.json` placeholder has no evidentiary status and must not be reused;
+generate correctly named settle evidence when P010 natural actually starts.
 
 ## 4. Recent decisions that matter
 
