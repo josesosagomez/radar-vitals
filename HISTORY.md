@@ -12064,3 +12064,89 @@ rewrite `HANDOFF.md` per §10.1 so a new chat opens directly on Track 0.
   while the DSP changes.
 - Then build the A/B on `scripts/score_offline.py --isolate-fields phase.clutter_removal` over the
   development captures only, and decide the default on evidence.
+
+## 2026-09-29 - Discrepancy-audit owner decisions resolved
+
+**Set out to do:** resolve the five owner decisions identified as blockers by
+`reports/discrepancy_audit_2026-09-29.md`, before starting any audit remediation.
+
+**Worked (with evidence):** the owner made and recorded the following decisions on 2026-09-29:
+
+1. **The natural/paced settle floor is 120 s.** The six natural sessions P001–P006 whose manifests
+   record 60 s settle remain captured records but are classified as protocol deviations. They do
+   not satisfy the 120 s rule and therefore are not 120 s-compliant primary per-protocol sessions;
+   any later analytical use must disclose the deviation. This decision preserves D-OWN-7 from
+   commit `df437b9` rather than withdrawing it. The relevant semantics from the divergent
+   `m2_sidecar_scaffold` branch must be reconciled into the current integration branch and verified
+   there; the sidecar branch is not itself the integration target and can be retired after that
+   port is complete.
+2. **The approved ethics scope was 15 new prospective participants** in addition to the existing
+   development subjects. The 2026-08-09 owner attestation is the operative scope. The sentence
+   "a third session for the existing 10 participants" in
+   `notes/ethics_amendment_hr_recovery.md` is conflicting in-repository text, not the approved
+   scope, and must not drive recruitment, Methods wording or cohort accounting.
+3. **The 2026-07-30 static-clutter-removal A/B is accepted as the Track 0 result.** Its recorded
+   pinned coverage was 12% off versus 12% on; its re-selected-lock coverage was 13% off versus 7%
+   on, with the lock moving in 4/8 captures. Static clutter removal remains off. A current-code
+   rerun is not a blocker and must not be presented as though the earlier negative result never
+   happened.
+4. **P003 was not viewed.** The MATLAB export and animation scripts were written, but neither the
+   P003 animation nor any generated animation output was inspected. P003 therefore did not inform
+   the Track 0 method decision. This statement concerns viewing/exposure; the source files and
+   static code checks remain truthfully recorded in the 2026-08-31 entries above.
+5. **`vital_signs_own_v13` is the current integration branch.** The local exp002-era `master` is
+   not a target for these fixes, and the absence of a branch named `main` does not block the audit
+   remediation.
+
+The same dispositions were added as a post-audit addendum to
+`reports/discrepancy_audit_2026-09-29.md`. No sealed reference CSV was opened, no result was
+recomputed, and no implementation or admission behavior was changed in recording these decisions.
+
+**Failed / did not work, and why:** nothing. The decisions resolve the audit's owner-decision gate;
+the underlying code and documentation discrepancies are still present until implemented.
+
+**Retired / no longer used:** Track 0 as an open question; the claim that the approved ethics scope
+was the existing 10 participants; 60 s as a compliant total settle for future natural or paced
+captures; and `master` as a possible integration target.
+
+**Next:** start audit fix-order step 2 on `vital_signs_own_v13`: first integrate and enforce the
+120 s settle rule while preserving the six recorded deviations, then implement one guarded path for
+reference-file access. Do not start by rerunning Track 0 or viewing P003.
+
+## 2026-09-29 - Discrepancy remediation Milestone 0 established
+
+**Set out to do:** create a clean, reproducible implementation boundary for the discrepancy-audit
+fixes without disturbing the original checkout's uncommitted MATLAB/export work.
+
+**Worked (with evidence):**
+
+- Created managed branch `codex/discrepancy-remediation` from integration branch
+  `vital_signs_own_v13` at `e6d055c`, and imported only the audit, independently reviewed plan,
+  owner decisions, and current handoff.
+- The independent plan reviewer judged revision 2 **READY WITH MINOR CHANGES** for Milestone 0 and
+  Milestone 1 items 1–4. Revision 3 incorporates the required fail-before-open historical-manifest
+  test boundary, separates attempt stage from retry permission, and names the existing M2 tests.
+- Verified `git ls-files --eol` reports no `w/crlf` or `w/mixed` tracked paths in the managed
+  checkout. Added `tests/test_repository_eol.py` so later Windows checkouts fail if tracked text is
+  materialized with non-LF endings.
+- Restored the ignored Ahmed source-paper dependency into this worktree only after matching its
+  SHA-256 to the original checkout:
+  `2D13BCA3FDFCBF249A500622DAC0BE9AD37E35A6AA880C440FF0C12EB4F8689F`. This is a published paper,
+  not participant data, and remains gitignored.
+- The Milestone 0 test set passed through the required Conda launcher: **204 passed** in 65.29 s
+  (`tests/test_repository_eol.py`, `tests/test_m8_ahmed_provenance.py`, and
+  `tests/test_m8_ahmed_fig8.py`).
+
+**Failed / did not work, and why:** the first sandboxed runs could not finish because pytest writes
+caches and temporary repositories while the managed worktree sits outside the ordinary writable
+root. A direct-environment run also reproduced the known Windows Matplotlib loader exception. The
+approved Conda invocation completed correctly. Before the ignored paper was copied, the same suite
+truthfully reported 13 missing-file failures; after hash-matched setup it passed.
+
+**Retired / no longer used:** the stale HANDOFF framing that Track 0 is active, and the plan's
+initial instruction to mechanically normalize files that this managed checkout already materializes
+as LF.
+
+**Next:** implement Milestone 1 items 1–4, beginning with separate new-capture and historical-load
+settle contracts. Use synthetic fixtures for 60 s compatibility and never scoring-mode-load a real
+prospective manifest during this work.
