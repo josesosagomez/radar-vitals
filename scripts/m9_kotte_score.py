@@ -876,7 +876,7 @@ def execute_score(
     official: bool = True,
     run_id: str | None = None,
     created_utc: str | None = None,
-    reference_loader: Callable[[Path], pd.DataFrame] = load_reference_strict,
+    reference_loader: Callable[[Path], pd.DataFrame] = load_registered_reference_strict,
 ) -> ScoreResult:
     """Score an immutable artifact.  Non-official arguments exist only for fixtures."""
     if official:
@@ -886,7 +886,11 @@ def execute_score(
             raise ScoreContractError("official scorer must use canonical config/repository paths")
         if output_root.resolve() != OUTPUT_ROOT.resolve():
             raise ScoreContractError("official scorer must use the canonical output root")
-        if run_id is not None or created_utc is not None or reference_loader is not load_reference_strict:
+        if (
+            run_id is not None
+            or created_utc is not None
+            or reference_loader is not load_registered_reference_strict
+        ):
             raise ScoreContractError("official scorer rejects fixture provenance/loader overrides")
         dirty = _official_dirty_paths(repo_root)
         if dirty:
@@ -971,13 +975,15 @@ def execute_score(
         metadata_paths[capture_id] = metadata_path
         origins[capture_id] = resolve_frame0_epoch(metadata)
         reference_path = references_by_id[capture_id]
-        if official:
+        if reference_loader is load_registered_reference_strict:
+            # Default reader, official or not: one guarded read, hash checked before parsing.
             loaded_reference = load_guarded_reference(
                 reference_path.parent, reference_override=reference_path
             )
             reference_hashes[capture_id] = loaded_reference.source.sha256
             reference = loaded_reference.frame
         else:
+            # Injected readers exist only for synthetic fixtures (refused when official).
             reference_hashes[capture_id] = sha256_file(reference_path)
             reference = reference_loader(reference_path)
         parser_diagnostics = _normalized_reference_diagnostics(reference)

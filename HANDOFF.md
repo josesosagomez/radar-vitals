@@ -8,7 +8,7 @@
 >
 > **`HISTORY.md` differs between checkouts until integration.** The worktree copy is authoritative
 > for the remediation entries. The original-checkout copy holds the entries the worktree lacks
-> (§3 step 2).
+> (§3 step 1).
 
 ## 1. Project snapshot
 
@@ -116,30 +116,31 @@ L-7 regressed (there are now five parabolic interpolators).
     mismatch;
   - every section-numbered "HANDOFF §N" reference repointed to a durable owner;
   - `tests/test_documentation_claims.py`.
+- **Firewall gaps closed (2026-09-30), independently reviewed:**
+  - M4, M9 and `score_offline` read every reference through `src/reference_access.py` with the
+    default readers, official or not; injected readers are fixture-only;
+  - `diagnose_signal_presence.py` uses `refine_peak_hz_safe`;
+  - v2 manifests naming a P-subject are refused (`src/m2/manifest.py`);
+  - minting a scoring capability requires the session's registry-bound sealed radar receipt, and
+    refuses a protocol deviation before the reference is hashed or anything is staged
+    (`src/m2/label_firewall.py`);
+  - a wider bypass audit plus a symlink/junction test (`tests/test_reference_access.py`).
+
+  Remaining blind spots are listed in HISTORY 2026-09-30 (firewall entry).
 
 ### Tests
 
 | Where | Result | Source |
 |---|---|---|
-| Worktree | **3202 passed, 17 skipped** | after the 2026-09-30 records clean-up (HISTORY 2026-09-30). The 13 tests beyond the earlier 3189 are `tests/test_documentation_claims.py` |
+| Worktree | **3217 passed, 17 skipped** | after the 2026-09-30 firewall step (HISTORY 2026-09-30) |
 | Original checkout | 3144 passed | `reports/discrepancy_audit_2026-09-29.md`. The 2026-09-29 audit run also observed 5 skipped, and the 4 passes beyond the tracked 3140 are the untracked TI-generator test; neither detail is recorded in HISTORY. Fewer skips than the worktree because local `results/` artifacts exist |
 
 ## 3. Active task / next steps
 
-Do these in order. Item 1 is on the **worktree branch**; commit and push each step with a HISTORY
-append. The 2026-09-30 verification, config-pin fix and records clean-up are recorded in HISTORY.
+Do these in order; commit and push each step with a HISTORY append. The 2026-09-30 verification,
+config-pin fix, records clean-up and firewall step are recorded in HISTORY.
 
-1. **Close the firewall gaps.**
-   - `scripts/m8_ahmed_transfer.py:430` calls `run_score_stage` without
-     `require_production_provenance`. That defaults to False (`src/m4/estimator_scoring.py:2008`)
-     and is passed on as `official=`. With `official=False`, the reference is hashed and loaded
-     outside `reference_access` (`:1500-1506`). Route it through the guard.
-   - Widen `tests/test_reference_access.py` beyond its 9 named scripts and `load_masimo`, and add a
-     symlink/junction test.
-   - Migrate `scripts/diagnose_signal_presence.py:143`, which still calls unsafe `refine_freq_hz`.
-   - Reject v2 manifests for `P\d{3}` sessions, and check `protocol_compliant` when a scoring
-     capability is minted.
-2. **Integrate into `vital_signs_own_v13`.** The git merge is a clean fast-forward; the original
+1. **Integrate into `vital_signs_own_v13`.** The git merge is a clean fast-forward; the original
    checkout's working tree is what blocks it.
    1. In the original checkout, move aside the untracked `reports/discrepancy_audit_2026-09-29.md`,
       `plans/discrepancy_remediation_2026-09-29.md` and `reports/remediation_verification_2026-09-30.md`.
@@ -156,7 +157,7 @@ append. The 2026-09-30 verification, config-pin fix and records clean-up are rec
    6. Before committing the MATLAB work, do plan item M1.4, the M-22 fixes, and an independent
       range-FFT review (CLAUDE.md §6).
    7. Push `vital_signs_own_v13`.
-3. **Milestone 5 — recompute under `eca_ahet_safe_refine_v2`.**
+2. **Milestone 5 — recompute under `eca_ahet_safe_refine_v2`.**
    - Build a new synthetic gate, a **new authorization filename**, and a reference-blind radar
      parent. Make `--gate`, `--authorization` and `--radar-parent` required and digest-checked.
    - Add an explicit `subject` field to the new capture-registry revision, and relax the
@@ -165,8 +166,10 @@ append. The 2026-09-30 verification, config-pin fix and records clean-up are rec
    - Wire `arm_loa` into the canonical summaries, and null its LoA when `descriptive_only`.
    - Add a constant-median null baseline to `estimator_scoring`.
    - Add a scoring path for the labelled deviation-inclusive sensitivity analysis, if one is wanted.
-     None exists: SCORING-mode parsing rejects every deviating session.
-4. **Record each open DSP choice as a decision or a deferral.** None is currently recorded:
+     None exists: SCORING-mode parsing and capability minting both reject deviating sessions.
+   - The production scoring caller that mints prospective capabilities must pass each session's
+     registry-bound `radar_receipt_path`; none exists yet.
+3. **Record each open DSP choice as a decision or a deferral.** None is currently recorded:
    - AHET codes 2 and 6 test the same `ratio_db`;
    - impulse clip 1.5 rad/frame;
    - absolute prominence;
@@ -176,7 +179,7 @@ append. The 2026-09-30 verification, config-pin fix and records clean-up are rec
    - whether a non-peak second harmonic (refinement reason 6) should reject AHET.
 
    None may be tuned on Masimo.
-5. **Remaining record hygiene** (lower priority; none changes a result):
+4. **Remaining hygiene** (lower priority; none changes a result):
    - stale notes: `notes/approach.md:633` "physical acquisition pending";
      `notes/capture_inventory.md:146, 158` "E/F/G"; `notes/dca1000_protocol.md:310` names
      `scripts/capture.py` (now `steps/step_1/capture.py`); `notes/note_candidate_ranking.md:3`
@@ -187,15 +190,15 @@ append. The 2026-09-30 verification, config-pin fix and records clean-up are rec
      headers (`plans/m4_offline_harness.md`, `plans/m8_step1b_ahmed_transfer.md`,
      `plans/m4_stage12_review.md`);
    - in the original checkout, record `scripts/export_session_to_ti_mat.m` and
-     `scripts/view_recording_2.m` in HISTORY.
-6. **Owner questions** (answers go in HISTORY):
-   - how were the clock offsets obtained? All nine prospective manifests record exactly 0.000 s at
-     both ends (HISTORY 2026-09-30 capture record);
-   - is `JOURNAL_PAPER.md` §4.1 (MAE 0.16 vs 2.72 bpm, from 2026-07-14 live hops) paper-grade? No
-     regeneration script was found.
+     `scripts/view_recording_2.m` in HISTORY;
+   - firewall blind spots (HISTORY 2026-09-30 firewall entry): guard `src.m4.manifest.load_manifest`
+     directly, extend the bypass audit to `sha256_file`/`read_bytes`/`open` on reference paths, and
+     retire the unsafe refinement in the dead `vitals.run_pipeline_locked`;
+   - write a regeneration script for `JOURNAL_PAPER.md` §4.1 (MAE 0.16 vs 2.72 bpm), or withdraw
+     it, before submission (CLAUDE.md §3.1). The owner keeps it as a claim for now.
 
 **Do not:**
-- resume acquisition (Track 1) until items 1–2 land;
+- resume acquisition (Track 1) until item 1 lands;
 - start codex-M3 or any prospective scoring before Milestone 5;
 - rerun Track 0;
 - implement the IoT/WST plans before owner acceptance and independent plan review.

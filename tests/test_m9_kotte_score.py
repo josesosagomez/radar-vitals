@@ -311,6 +311,7 @@ def test_conflicting_raw_timestamp_is_normalized_and_persisted(tmp_path: Path) -
     result = scoring.execute_score(
         radar_input=radar, config_path=config, output_root=tmp_path / "out",
         repo_root=tmp_path, official=False, run_id="raw_duplicate",
+        reference_loader=scoring.load_reference_strict,
         created_utc="2030-01-02T03:04:05+00:00",
     )
     evidence = json.loads(
@@ -664,7 +665,7 @@ def test_source_identity_change_between_snapshots_fails_before_output(
             config_path=config,
             output_root=tmp_path / "outputs",
             repo_root=tmp_path,
-            official=False,
+            official=False, reference_loader=scoring.load_reference_strict,
             run_id="source_race",
             created_utc="2030-01-02T03:04:05+00:00",
         )
@@ -695,7 +696,7 @@ def test_source_disappearance_at_second_snapshot_fails_before_output(
             config_path=config,
             output_root=tmp_path / "outputs",
             repo_root=tmp_path,
-            official=False,
+            official=False, reference_loader=scoring.load_reference_strict,
             run_id="source_disappeared",
             created_utc="2030-01-02T03:04:05+00:00",
         )

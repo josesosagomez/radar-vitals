@@ -204,6 +204,27 @@ def test_reference_hash_mismatch_stops_before_parser_open(tmp_path):
     assert opened["count"] == 0
 
 
+def test_default_readers_reach_the_guarded_boundary_before_any_raw_read(tmp_path, monkeypatch):
+    """Non-official scoring with default readers must not hash the reference outside the guard.
+
+    The scope's reference files do not exist, so any raw read outside the guard would fail
+    with an OS error before the sentinel guard is reached.
+    """
+    guarded_paths: list[Path] = []
+
+    class GuardReached(Exception):
+        pass
+
+    def sentinel_guard(capture_dir, *, reference_override):
+        guarded_paths.append(Path(reference_override))
+        raise GuardReached
+
+    monkeypatch.setattr("src.m4.estimator_scoring.load_guarded_reference", sentinel_guard)
+    with pytest.raises(GuardReached):
+        execute_score(radar_rows=_minimal_radar_rows(), reference=_reference_scope(tmp_path))
+    assert len(guarded_paths) == 1
+
+
 def test_score_preflight_rejection_occurs_before_any_reference_path_access(tmp_path):
     class BombReference:
         def csv_path(self, capture_id):

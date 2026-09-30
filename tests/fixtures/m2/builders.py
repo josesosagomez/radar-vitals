@@ -110,6 +110,43 @@ def acquisition_metadata(
     return metadata
 
 
+def bind_sealed_receipt(
+    registry_document: dict[str, Any],
+    directory: Path,
+    session_id: str,
+    *,
+    settle_duration_s: float | None = None,
+) -> Path:
+    """Mark `session_id` captured in a registry document, bound to a synthetic sealed receipt.
+
+    Call before the registry revision is written. Scoring transitions read the session's
+    acquisition metadata from this receipt (never from the reference) and check its hash
+    against the registry. `settle_duration_s` overrides the compliant 120 s default.
+    """
+    subject_id, arm = session_id.split("_", 1)
+    subject = next(s for s in registry_document["subjects"] if s["subject_id"] == subject_id)
+    metadata = acquisition_metadata(
+        arm,
+        subject_id=subject_id,
+        cohort_slot=subject["cohort_slot"],
+        data_role=subject["data_role"],
+        synthetic_fixture=not subject_id.startswith("P"),
+    )
+    if settle_duration_s is not None:
+        metadata["settle_duration_s"] = settle_duration_s
+    receipt = {
+        "schema": "m2_sealed_radar_receipt_v1",
+        "receipt_state": "sealed_radar_only",
+        "acquisition_metadata": metadata,
+    }
+    path = directory / f"{session_id}_sealed_radar_receipt.json"
+    path.write_bytes(canonical_json_bytes(receipt))
+    session = next(s for s in subject["sessions"] if s["session_id"] == session_id)
+    session["state"] = "captured"
+    session["radar_receipt_sha256"] = sha256_bytes(path.read_bytes())
+    return path
+
+
 def finalization_metadata(
     arm: str = "recovery", *, reference_acquired: bool = True
 ) -> dict[str, Any]:

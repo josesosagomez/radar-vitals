@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(Path(__file__).parent / "fixtures" / "m2"))
 
-from builders import retry_pair  # noqa: E402
+from builders import bind_sealed_receipt, retry_pair, write_registry  # noqa: E402
 from src.m2.cohort_registry import (  # noqa: E402
     Arm,
     DataRole,
@@ -168,7 +168,9 @@ def test_nonacquisition_outcome_rejects_underlying_health_reason_fields(private_
 
 
 def test_revision_chain_accepts_genuine_atomic_one_step_label_transitions(tmp_path):
-    rev1 = _copy_initial(tmp_path)
+    document = copy.deepcopy(load_registry())
+    bind_sealed_receipt(document, tmp_path, "P001_natural")
+    rev1 = write_registry(tmp_path / "registry_v001.json", document)
     rev2, audit1, reference, _stage1_capability = _atomic_stage1(tmp_path, rev1)
     rev3 = tmp_path / "registry_v003.json"
     audit2 = tmp_path / "validation_audit.json"
@@ -188,6 +190,7 @@ def test_revision_chain_accepts_genuine_atomic_one_step_label_transitions(tmp_pa
         arm="natural",
         reference_path=reference,
         reference_sha256=sha256_file(reference),
+        radar_receipt_path=tmp_path / "P001_natural_sealed_radar_receipt.json",
         previous_audit_path=audit1,
     )
     assert len(validate_registry_chain([rev1, rev2, rev3])) == 3

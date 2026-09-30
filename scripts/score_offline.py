@@ -1037,9 +1037,9 @@ def run_capture(
     raw_sha256 = sha256_file(raw_path)
 
     masimo_csv_path = discover_masimo_csv(capture_dir, masimo_csv_override)
-    masimo_df = load_guarded_reference(
-        capture_dir, reference_override=masimo_csv_path
-    ).frame
+    loaded_reference = load_guarded_reference(capture_dir, reference_override=masimo_csv_path)
+    masimo_df = loaded_reference.frame
+    masimo_csv_sha256 = loaded_reference.source.sha256  # hashed inside the guard; never re-read
 
     frame0_epoch, origin_source, origin_is_approximate, origin_caveat = resolve_frame0_epoch(
         capture_run_metadata
@@ -1156,7 +1156,7 @@ def run_capture(
                 "parsed_args_normalized": parsed_args_normalized,
                 "capture_id": capture_id, "config_label": config_label, "estimand": estimand,
                 "raw_path": str(raw_path), "raw_sha256": raw_sha256,
-                "masimo_csv_path": str(masimo_csv_path), "masimo_csv_sha256": sha256_file(masimo_csv_path),
+                "masimo_csv_path": str(masimo_csv_path), "masimo_csv_sha256": masimo_csv_sha256,
                 "run_metadata_path": str(capture_run_metadata_path),
                 "run_metadata_sha256": sha256_file(capture_run_metadata_path),
                 "capture_time_git_commit": capture_run_metadata.get("git_commit"),

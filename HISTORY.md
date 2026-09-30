@@ -12787,3 +12787,104 @@ accordingly, with a test.
   found) paper-grade?
 
 **Next:** HANDOFF step "close the firewall gaps".
+
+## 2026-09-30 - Owner answers recorded; reference-firewall gaps closed and independently reviewed
+
+**Set out to do:**
+- record the owner's answers to the two open questions in the records entry above;
+- complete HANDOFF step "close the firewall gaps".
+
+**Owner answers (2026-09-30):**
+1. **The clock offsets were measured.** The uniformly 0.000 s `clock_offset_start_s` /
+   `clock_offset_end_s` values in the nine prospective manifests are measured values, not
+   defaults. That closes the "unverified" flag in the capture-protocol record above.
+2. **`JOURNAL_PAPER.md` §4.1 (MAE 0.16 vs 2.72 bpm) stays as a paper claim for now.** No committed
+   regeneration script for it was found. CLAUDE.md §3.1 requires one before any number reaches a
+   submitted manuscript, so the claim must get a script, or be withdrawn, before submission.
+
+**Worked (with evidence):**
+- **M8 scoring route through the guard.** `src/m4/estimator_scoring.py` `execute_score` with the
+  default readers now reads every reference through `load_guarded_reference` in one read (registry
+  and hash checked before parsing), official or not. Previously the non-official path, used by the
+  M8 score command at `scripts/m8_ahmed_transfer.py:430`, raw-hashed the reference first. Injected
+  readers remain only for synthetic fixtures. New test
+  `test_default_readers_reach_the_guarded_boundary_before_any_raw_read` fails on the previous code
+  with a `FileNotFoundError` from the raw pre-hash, and passes now.
+- **Same pattern closed in M9 and the offline scorer.** In `scripts/m9_kotte_score.py` the default
+  loader is now `load_registered_reference_strict` (guarded) for all runs; raw
+  `load_reference_strict` is used only when a fixture injects it (three fixture tests now say so
+  explicitly). `scripts/score_offline.py` records the hash computed inside the guard instead of
+  re-reading the reference with `sha256_file`.
+- **Last unsafe refinement caller in a live script.**
+  `scripts/diagnose_signal_presence.py::band_metrics` now uses `refine_peak_hz_safe`: the analysis
+  band for the band argmax, the ±tol window for the oracle peak. The new test reproduces the audited
+  (1, 2, 2.9) edge case: the old code returned 2.317 Hz, the new code keeps the 2.0 Hz bin centre.
+- **v2 manifests refused for P-subjects.** `src/m2/manifest.py` rejects, before v2 loading, any v2
+  manifest whose `subject_id`/`session_id` names a P-subject (case-insensitive), because v2 has no
+  settle or protocol-compliance contract. Four tests.
+- **Protocol compliance at capability minting.** `src/m2/label_firewall.py`
+  `transition_label_access_atomically` now requires `radar_receipt_path` for VALIDATION_SCORING and
+  FINAL_SCORING. It checks that:
+  - the session is `captured` in the validated cohort registry;
+  - the receipt's SHA-256 equals the registry's `radar_receipt_sha256`, so a caller cannot
+    substitute a compliant copy;
+  - it is a sealed radar receipt, not the reference file;
+  - its acquisition metadata validates (historical-record mode) and names the same
+    subject/session/arm.
+
+  A protocol deviation (for example the 60 s settle of P001–P006 natural) is refused **before the
+  reference is hashed and before any registry revision or audit is staged**. Four tests (deviation,
+  missing receipt, substituted receipt, foreign identity) use a non-existent reference file to prove
+  the ordering. Fixture helper: `tests/fixtures/m2/builders.py::bind_sealed_receipt`.
+- **Wider bypass audit.** `tests/test_reference_access.py` now scans every tracked
+  `src/`, `scripts/`, `steps/` and `figures/` module for:
+  - Masimo parser imports or calls outside an explicit, reasoned allowlist;
+  - `glob`/`rglob` patterns ending in `.csv`;
+  - `read_csv` of reference- or Masimo-named arguments.
+
+  A self-test confirms each pattern is caught. A new symlink/junction test links a development
+  capture into `data/raw/prospective/`; the link has the capture's own folder name, so only the
+  protected-path check can refuse it.
+- **Independent correctness review** (CLAUDE.md §6) found no blocking issue and confirmed every
+  claimed ordering. Its main finding was that the first version read metadata from a caller-supplied,
+  un-bound manifest: that was replaced by the registry-bound sealed receipt described above.
+  Also applied from the review:
+  - the M9 and `score_offline` raw reads;
+  - the symlink test now fails only for the intended reason;
+  - case-insensitive P-matching;
+  - an identity-mismatch test;
+  - readability fixes.
+- **Full suite: 3217 passed, 17 skipped, 0 failed.** `git diff --check` is clean and all tracked
+  files are LF. (One insertion script had written CRLF; it was caught by
+  `tests/test_repository_eol.py` and fixed.)
+
+**Failed / did not work, and why:**
+- My first compliance check read acquisition metadata from a caller-chosen manifest with no hash
+  binding. That made it depend on caller honesty. It was replaced before commit, and is recorded
+  here rather than hidden.
+
+**Still open (recorded, not fixed):**
+- **Audit blind spots.** The bypass audit cannot see `sha256_file`, `read_bytes` or `open` on
+  reference paths, f-string or `iterdir` discovery, or untracked files. Known legitimate direct
+  reads: `src/m2/capture_artifacts.py:623` (promotion hashing, the intended entry point) and
+  `src/m2/preflight.py` (a synthetic reference it writes itself).
+- **Unguarded v2 loader.** `src.m4.manifest.load_manifest` is public and not guarded; only the M2
+  dispatcher is. No production code calls it directly.
+- **Dead unsafe refinement.** `src/vitals.py` `run_pipeline_locked` (dead, pinned by tests) still
+  calls the unsafe `refine_freq_hz`.
+- **Pre-fix diagnostic outputs.** Earlier `diagnose_signal_presence.py` outputs (for example run
+  `20260731T155946Z` behind the 2026-07-31 signal-presence entry) were produced with the unsafe
+  refinement. They were not re-run.
+- **No production caller yet.** Nothing in production mints a prospective scoring capability, so
+  the compliance check is enforced but not yet exercised by a real scoring path (Milestone 5).
+- **Source-closure identity.** Edits to `src/m4/estimator_scoring.py` and `src/m2/label_firewall.py`
+  change the M8 source-closure identity of gates built from now on. That is intended: Milestone 5
+  builds a new gate.
+
+**Retired / no longer used:**
+- Raw pre-hashing of references in non-official M4/M9 scoring.
+- Re-reading the reference to record its hash in `score_offline`.
+- The unsafe refinement in `diagnose_signal_presence`.
+- The narrow nine-script / `load_masimo`-only bypass audit.
+
+**Next:** HANDOFF step "integrate into `vital_signs_own_v13`".

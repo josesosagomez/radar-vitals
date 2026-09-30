@@ -61,6 +61,24 @@ def test_band_metrics_without_a_reference_reports_no_oracle():
     assert m["oracle_snr_db"] is None and m["argmax_hz"] is not None
 
 
+def test_band_metrics_keeps_the_bin_centre_when_the_band_argmax_is_not_a_peak():
+    """The audited failure: an in-band argmax on a rising edge must not be extrapolated.
+
+    Neighbours (1, 2, 2.9) at the band edge made the old unguarded parabola move the
+    estimate 9.5 bins out of the band; the bounded refinement keeps the bin centre.
+    """
+    freqs = np.fft.rfftfreq(N, d=1.0 / FS)
+    edge = int(np.flatnonzero(np.isclose(freqs, 2.0))[0])
+    spec = np.full(len(freqs), 0.1)
+    spec[edge - 1: edge + 2] = (1.0, 2.0, 2.9)
+    m = dsp.band_metrics(spec, freqs, (0.8, 2.0), 2.0, 0.05)
+    assert m["argmax_hz"] == pytest.approx(2.0)
+    # Inside the ±0.05 Hz oracle window the 2.9 bin is a genuine peak, so a sub-bin
+    # refinement is legitimate there, but it must stay within half a bin of that peak.
+    bin_width = freqs[1] - freqs[0]
+    assert abs(m["oracle_peak_hz"] - freqs[edge + 1]) <= 0.5 * bin_width
+
+
 def test_band_metrics_handles_an_empty_band():
     spec, freqs = _spectrum(np.zeros(N))
     assert dsp.band_metrics(spec, freqs, (50.0, 60.0), 55.0, 0.05)["argmax_hz"] is None

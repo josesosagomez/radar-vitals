@@ -94,7 +94,7 @@ from src.reference_access import (  # noqa: E402
     list_development_capture_dirs,
     load_reference as load_guarded_reference,
 )
-from src.vitals import refine_freq_hz, remove_impulse_noise  # noqa: E402
+from src.vitals import refine_peak_hz_safe, remove_impulse_noise  # noqa: E402
 from src.warmup_select import derive_candidate_bins  # noqa: E402
 
 import diagnose_bin_drift as bindrift  # noqa: E402
@@ -141,7 +141,9 @@ def band_metrics(
     floor = float(np.median(sub))
 
     peak_local = int(np.argmax(sub))
-    argmax_hz = refine_freq_hz(spec, freqs, int(idx[peak_local]))
+    # Bounded refinement: a window argmax that is not a true peak keeps its bin centre.
+    argmax = refine_peak_hz_safe(spec, freqs, int(idx[peak_local]), band)
+    argmax_hz = argmax.refined_hz
     peak_snr_db = _db(float(sub[peak_local]), floor)
 
     oracle_snr_db = None
@@ -152,7 +154,9 @@ def band_metrics(
             oidx = np.where(omask)[0]
             osub = spec[oidx]
             opeak = int(np.argmax(osub))
-            oracle_peak_hz = refine_freq_hz(spec, freqs, int(oidx[opeak]))
+            oracle_window = (f_ref_hz - tol_hz, f_ref_hz + tol_hz)
+            oracle_peak = refine_peak_hz_safe(spec, freqs, int(oidx[opeak]), oracle_window)
+            oracle_peak_hz = oracle_peak.refined_hz
             oracle_snr_db = _db(float(osub[opeak]), floor)
 
     return {

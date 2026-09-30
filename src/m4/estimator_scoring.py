@@ -1475,11 +1475,16 @@ def execute_score(
     file_hash: Callable[[Path], str] = sha256_path,
     masimo_loader: Callable[[Path], object] = _registered_development_reference_loader,
 ) -> ScoreResult:
-    """Hash/load Masimo and score rows after caller-completed parent preflight."""
-    if official and (
-        file_hash is not sha256_path
-        or masimo_loader is not _registered_development_reference_loader
-    ):
+    """Hash/load Masimo and score rows after caller-completed parent preflight.
+
+    With the default readers every reference goes through the guarded boundary in one read
+    (registry and hash checked before parsing), whether or not the run is official. Injected
+    readers exist only for synthetic test fixtures and are refused for official runs.
+    """
+    uses_default_readers = (
+        file_hash is sha256_path and masimo_loader is _registered_development_reference_loader
+    )
+    if official and not uses_default_readers:
         raise ScoreContractError("official scoring forbids injected reference readers")
     captures = sorted({str(row["capture_id"]) for row in radar_rows})
     if tuple(captures) != tuple(sorted(EXPECTED_CAPTURE_WINDOWS)):
@@ -1490,7 +1495,7 @@ def execute_score(
     for capture_id in captures:
         path = reference.csv_path(capture_id)
         expected_hash = reference.digest(capture_id)
-        if official:
+        if uses_default_readers:
             loaded_reference = load_guarded_reference(
                 path.parent, reference_override=path
             )
@@ -1502,7 +1507,7 @@ def execute_score(
             raise ScoreContractError(
                 f"{capture_id}: Masimo SHA-256 {actual_hash} != registry {expected_hash}"
             )
-        if not official:
+        if not uses_default_readers:
             frame = masimo_loader(path)
         if "epoch_utc" not in frame or not np.issubdtype(frame["epoch_utc"].dtype, np.integer):
             raise ScoreContractError(f"{capture_id}: parser did not preserve integer Timestamp")

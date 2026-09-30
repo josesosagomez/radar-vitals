@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(Path(__file__).parent / "fixtures" / "m2"))
 
-from builders import synthetic_registry, write_registry  # noqa: E402
+from builders import synthetic_registry, write_registry, bind_sealed_receipt  # noqa: E402
 from src.m2.cohort_registry import DEFAULT_REGISTRY_PATH, load_registry, write_registry_revision  # noqa: E402
 from src.m2.common import ContractError, sha256_file  # noqa: E402
 from src.m2.label_firewall import (  # noqa: E402
@@ -131,6 +131,7 @@ def _authorization(tmp_path):
 def _prospective_agreement_context(tmp_path):
     registry1 = tmp_path / "registry_v001.json"
     document = load_registry(DEFAULT_REGISTRY_PATH)
+    bind_sealed_receipt(document, tmp_path, "P001_recovery")
     write_registry(registry1, document)
     reference = tmp_path / "P001_recovery_reference.csv"
     reference.write_text("epoch_utc,pr_bpm\n100,70\n", encoding="utf-8")
@@ -167,6 +168,7 @@ def _prospective_agreement_context(tmp_path):
         capture_git_dirty=False, config_sha256=config_sha256,
         scorer_sha256=scorer_sha256, session_id="P001_recovery", arm="recovery",
         reference_path=reference, reference_sha256=sha256_file(reference),
+        radar_receipt_path=tmp_path / "P001_recovery_sealed_radar_receipt.json",
         previous_audit_path=stage1_audit,
     )
     rows = [

@@ -6,10 +6,16 @@ import ast
 import copy
 import dataclasses
 import json
+import re
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
+sys.path.insert(0, str(Path(__file__).parent / "fixtures" / "m2"))
+
+from builders import bind_sealed_receipt  # noqa: E402
 from src.m2.cohort_registry import DEFAULT_REGISTRY_PATH, load_registry
 from src.m2.common import ContractError, canonical_json_bytes, sha256_bytes, sha256_file
 from src.m2.label_firewall import ReferenceOperation, transition_label_access_atomically
@@ -121,9 +127,9 @@ def _write_registry_fixture(path: Path, document: dict) -> Path:
 def test_authorized_prospective_reference_is_read_once_and_parsed_in_memory(
     tmp_path, monkeypatch
 ):
-    registry1 = _write_registry_fixture(
-        tmp_path / "registry_v001.json", copy.deepcopy(load_registry(DEFAULT_REGISTRY_PATH))
-    )
+    document = copy.deepcopy(load_registry(DEFAULT_REGISTRY_PATH))
+    bind_sealed_receipt(document, tmp_path, "P001_natural")
+    registry1 = _write_registry_fixture(tmp_path / "registry_v001.json", document)
     reference = tmp_path / "P001_natural_reference.csv"
     reference.write_bytes(CSV_BYTES)
     digest = sha256_file(reference)
@@ -165,6 +171,7 @@ def test_authorized_prospective_reference_is_read_once_and_parsed_in_memory(
         arm="natural",
         reference_path=reference,
         reference_sha256=digest,
+        radar_receipt_path=tmp_path / "P001_natural_sealed_radar_receipt.json",
         previous_audit_path=stage1_audit,
     )
 
@@ -247,33 +254,135 @@ def test_audited_entry_points_have_no_csv_discovery_or_direct_masimo_open():
     assert failures == []
 
 
-def test_no_other_production_module_imports_load_masimo_directly():
-    allowed = {
-        reference_access.REPO_ROOT / "src" / "masimo.py",
-        # Legacy strict parser retained for fixture/provenance tests; official M9
-        # execution selects load_registered_reference_strict instead.
-        reference_access.REPO_ROOT / "scripts" / "m9_kotte_score.py",
-    }
+MASIMO_PARSERS = {"load_masimo", "load_masimo_bytes"}
+# Modules allowed to call a Masimo parser directly, and why.
+PARSER_ALLOWLIST = {
+    "src/masimo.py": "defines the parsers",
+    "src/reference_access.py": "the guarded boundary itself",
+    # Its default non-official loader exists only for synthetic fixtures; the command line
+    # always runs officially, which uses load_registered_reference_strict.
+    "scripts/m9_kotte_score.py": "fixture-only strict loader",
+}
+REFERENCE_NAME = re.compile(r"masimo|reference", re.IGNORECASE)
+
+
+def _tracked_production_modules() -> list[str]:
+    result = subprocess.run(
+        ["git", "ls-files", "--", "src/*.py", "scripts/*.py", "steps/*.py", "figures/*.py"],
+        cwd=reference_access.REPO_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return result.stdout.splitlines()
+
+
+def _called_name(node: ast.Call) -> str:
+    func = node.func
+    if isinstance(func, ast.Attribute):
+        return func.attr
+    return func.id if isinstance(func, ast.Name) else ""
+
+
+def _reference_read_violations(relative_path: str, source: str) -> list[str]:
+    """Direct Masimo parsing, CSV discovery, or read_csv of a reference-named path."""
+    found: list[str] = []
+    for node in ast.walk(ast.parse(source)):
+        where = f"{relative_path}:{getattr(node, 'lineno', '?')}"
+        if isinstance(node, ast.ImportFrom) and any(a.name in MASIMO_PARSERS for a in node.names):
+            if relative_path not in PARSER_ALLOWLIST:
+                found.append(f"{where}: imports a Masimo parser")
+        if not isinstance(node, ast.Call):
+            continue
+        name = _called_name(node)
+        if name in MASIMO_PARSERS and relative_path not in PARSER_ALLOWLIST:
+            found.append(f"{where}: calls {name}")
+        if name in {"glob", "rglob"} and node.args:
+            pattern = node.args[0]
+            if isinstance(pattern, ast.Constant) and str(pattern.value).lower().endswith(".csv"):
+                found.append(f"{where}: CSV discovery {pattern.value!r}")
+        if name == "read_csv" and node.args and relative_path not in PARSER_ALLOWLIST:
+            argument = ast.get_source_segment(source, node.args[0]) or ""
+            if REFERENCE_NAME.search(argument):
+                found.append(f"{where}: read_csv({argument})")
+    return found
+
+
+def test_no_production_module_reads_a_reference_outside_the_boundary():
     failures: list[str] = []
-    for base in (
-        reference_access.REPO_ROOT / "src",
-        reference_access.REPO_ROOT / "scripts",
-        reference_access.REPO_ROOT / "steps",
-    ):
-        for path in base.rglob("*.py"):
-            if path in allowed:
-                continue
-            source = path.read_text(encoding="utf-8")
-            tree = ast.parse(source)
-            for node in ast.walk(tree):
-                if isinstance(node, ast.ImportFrom) and any(
-                    alias.name == "load_masimo" for alias in node.names
-                ):
-                    failures.append(f"{path.relative_to(reference_access.REPO_ROOT)}:{node.lineno}")
-                if (
-                    isinstance(node, ast.Call)
-                    and isinstance(node.func, ast.Attribute)
-                    and node.func.attr == "load_masimo"
-                ):
-                    failures.append(f"{path.relative_to(reference_access.REPO_ROOT)}:{node.lineno}")
+    for relative_path in _tracked_production_modules():
+        source = (reference_access.REPO_ROOT / relative_path).read_text(encoding="utf-8")
+        failures.extend(_reference_read_violations(relative_path, source))
     assert failures == []
+
+
+@pytest.mark.parametrize(
+    "snippet",
+    [
+        "from src.masimo import load_masimo",
+        "import src.masimo as m\nm.load_masimo_bytes(b'', source_name='x')",
+        "from pathlib import Path\nPath('.').rglob('*_masimo.csv')",
+        "import pandas as pd\npd.read_csv(capture / 'reference.csv')",
+    ],
+)
+def test_reference_read_audit_catches_each_bypass_pattern(snippet):
+    assert _reference_read_violations("scripts/new_tool.py", snippet)
+
+
+def _link_directory(link: Path, target: Path) -> None:
+    """Create a directory symlink, or a Windows junction when symlinks need privileges."""
+    try:
+        link.symlink_to(target, target_is_directory=True)
+        return
+    except OSError:
+        pass
+    try:
+        import _winapi
+
+        _winapi.CreateJunction(str(target), str(link))
+    except (ImportError, AttributeError, OSError):
+        pytest.skip("this platform can create neither a directory symlink nor a junction")
+
+
+def test_registered_capture_linked_into_a_protected_tree_fails_before_reading(
+    tmp_path, monkeypatch
+):
+    """A development capture that is really a link into the sealed tree must be refused."""
+    # Same folder name as the capture, so only the protected-path check can refuse it.
+    sealed = tmp_path / "data" / "raw" / "prospective" / "development_capture"
+    sealed.mkdir(parents=True)
+    (sealed / "reference.csv").write_bytes(CSV_BYTES)
+    live_demo = tmp_path / "results" / "live_demo"
+    live_demo.mkdir(parents=True)
+    capture = live_demo / "development_capture"
+    _link_directory(capture, sealed)
+    registry_dir = tmp_path / "reference_registry"
+    registry_dir.mkdir()
+    registry = registry_dir / "development_references_v1.json"
+    registry.write_text(
+        json.dumps(
+            {
+                "schema": "development_reference_registry_v1",
+                "entries": [
+                    {
+                        "capture_id": capture.name,
+                        "subject_id": "A",
+                        "repository_relative_path": (
+                            "results/live_demo/development_capture/reference.csv"
+                        ),
+                        "sha256": sha256_bytes(CSV_BYTES),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(reference_access, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(reference_access, "DEVELOPMENT_REGISTRY_PATH", registry)
+
+    def forbidden_read_bytes(self):
+        raise AssertionError("reference bytes were opened through a protected link")
+
+    monkeypatch.setattr(Path, "read_bytes", forbidden_read_bytes)
+    with pytest.raises(ContractError, match="prospective/sealed"):
+        reference_access.load_reference(capture)

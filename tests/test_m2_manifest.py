@@ -347,6 +347,22 @@ def test_v2_dispatch_retains_historical_m4_semantics(tmp_path):
     assert not hasattr(session, "cohort_slot")
 
 
+@pytest.mark.parametrize("mode", [Mode.SCORING, Mode.DEVELOPMENT])
+@pytest.mark.parametrize(
+    "identity", [{"subject_id": "P001"}, {"session_id": "P006_natural"}]
+)
+def test_v2_dispatch_rejects_prospective_sessions(tmp_path, mode, identity):
+    """P-subjects must go through v3, which carries the 120 s settle/compliance contract."""
+    from test_m4_manifest import admissible, manifest_doc, materialise
+
+    fields = materialise(tmp_path, admissible())
+    fields.update(identity)
+    path = tmp_path / "v2.json"
+    path.write_text(json.dumps(manifest_doc(fields)), encoding="utf-8")
+    with pytest.raises(ManifestError, match="must use manifest v3"):
+        load_manifest(path, mode, root=tmp_path)
+
+
 @pytest.mark.parametrize("version", [None, 0, 1, 4, "3", True])
 def test_dispatch_is_exact_and_rejects_unknown_or_noninteger_versions(tmp_path, version):
     path = tmp_path / "manifest.json"

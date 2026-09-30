@@ -7,6 +7,12 @@ from pathlib import Path
 from typing import Callable, Mapping
 from uuid import uuid4
 
+from .acquisition_metadata import (
+    AcquisitionValidationPurpose,
+    assess_protocol_compliance,
+    validate_acquisition_metadata,
+)
+from .capture_artifacts import SEALED_RECEIPT_SCHEMA
 from .cohort_registry import (
     LABEL_TRANSITIONS,
     _write_prospective_label_revision,
@@ -32,6 +38,51 @@ class ReferenceOperation(str, Enum):
 
 _SCORING_TOKEN = object()
 _ACTIVE_ATOMIC_SCORING: dict[str, Mapping[str, object]] = {}
+_SCORING_OPERATIONS = frozenset(
+    {ReferenceOperation.VALIDATION_SCORING, ReferenceOperation.FINAL_SCORING}
+)
+
+
+def _require_protocol_compliant_capture(
+    radar_receipt_path: str | Path,
+    *,
+    subject: Mapping[str, object],
+    session_id: str,
+    arm: str,
+    reference_path: str | Path,
+) -> None:
+    """Refuse a scoring capability for a protocol-deviating session.
+
+    Deviating sessions are excluded from primary scoring (`notes/analysis_prespec.md` §6
+    item 3a), and no deviation-inclusive scoring path exists. The acquisition metadata comes
+    from the session's sealed radar receipt, whose SHA-256 must equal the hash the validated
+    cohort registry binds for that session, so a caller cannot substitute a compliant copy.
+    The reference file is never opened here.
+    """
+    receipt_path = Path(radar_receipt_path).resolve()
+    if receipt_path == Path(reference_path).resolve():
+        raise ContractError("the radar receipt path must not be the reference file")
+    registered = [s for s in subject["sessions"] if s.get("session_id") == session_id]
+    if len(registered) != 1 or registered[0].get("state") != "captured":
+        raise ContractError(f"{session_id} is not a captured session in the cohort registry")
+    if sha256_file(receipt_path) != registered[0].get("radar_receipt_sha256"):
+        raise ContractError(f"{session_id}: radar receipt does not match its registry binding")
+    receipt = read_json_object(receipt_path)
+    if receipt.get("schema") != SEALED_RECEIPT_SCHEMA:
+        raise ContractError(f"{session_id}: file is not a sealed radar receipt")
+    metadata = validate_acquisition_metadata(
+        receipt.get("acquisition_metadata"),
+        purpose=AcquisitionValidationPurpose.HISTORICAL_RECORD,
+    )
+    requested = (str(subject["subject_id"]), session_id, arm)
+    if (metadata["subject_id"], metadata["session_id"], metadata["arm"]) != requested:
+        raise ContractError("radar receipt identity differs from the requested capability")
+    compliant, reasons = assess_protocol_compliance(metadata)
+    if not compliant:
+        raise ContractError(
+            f"{session_id}: protocol deviation(s) {list(reasons)} are excluded from primary "
+            "scoring; no deviation-inclusive scoring path exists"
+        )
 
 
 @dataclass(frozen=True)
@@ -248,8 +299,14 @@ def transition_label_access_atomically(
     score_artifact_sha256: str = "",
     score_artifact_builder: Callable[[ScoringAuthorization, Path], object] | None = None,
     failure_injector: Callable[[str], None] | None = None,
+    radar_receipt_path: str | Path | None = None,
 ) -> ScoringAuthorization:
-    """Stage and publish one registry revision and matching audit as one transaction."""
+    """Stage and publish one registry revision and matching audit as one transaction.
+
+    Scoring operations also require `radar_receipt_path`, the registry-bound sealed receipt: a
+    protocol-deviating session is refused before its reference is hashed and before any
+    registry revision is staged.
+    """
     history = validate_registry_history(registry_path)
     current = history[-1]
     subject = next(
@@ -288,6 +345,16 @@ def transition_label_access_atomically(
             "successful transition capability requires session, arm, reference path and hash"
         )
     require_sha256(reference_sha256, "reference_sha256")
+    if parsed_operation in _SCORING_OPERATIONS:
+        if radar_receipt_path is None:
+            raise ContractError("scoring capabilities require the session's radar receipt path")
+        _require_protocol_compliant_capture(
+            radar_receipt_path,
+            subject=subject,
+            session_id=session_id,
+            arm=arm,
+            reference_path=reference_path,
+        )
     reference_file = Path(reference_path).resolve()
     if not reference_file.is_file() or sha256_file(reference_file) != reference_sha256:
         raise ContractError("transition reference path/hash binding failed")

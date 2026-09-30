@@ -14,7 +14,12 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(Path(__file__).parent / "fixtures" / "m2"))
 
-from builders import acquisition_metadata, synthetic_registry, write_registry  # noqa: E402
+from builders import (  # noqa: E402
+    acquisition_metadata,
+    synthetic_registry,
+    write_registry,
+    bind_sealed_receipt,
+)
 from src.m2.acquisition_metadata import ContractError, validate_acquisition_metadata  # noqa: E402
 from src.m2.cohort_registry import DEFAULT_REGISTRY_PATH, load_registry  # noqa: E402
 from src.m2.common import canonical_json_bytes, sha256_file  # noqa: E402
@@ -32,12 +37,14 @@ def _real_state_registry(tmp_path: Path, *, subject_index: int, state: str) -> t
     document = copy.deepcopy(load_registry(DEFAULT_REGISTRY_PATH))
     subject = document["subjects"][subject_index]
     subject_id = subject["subject_id"]
+    arm = "natural" if state == "validation_opened" else "recovery"
+    session_id = f"{subject_id}_{arm}"
+    if state != "sealed":
+        bind_sealed_receipt(document, tmp_path, session_id)
     registry1 = write_registry(tmp_path / f"registry_{subject_id}_v001.json", document)
     if state == "sealed":
         return registry1, subject_id
 
-    arm = "natural" if state == "validation_opened" else "recovery"
-    session_id = f"{subject_id}_{arm}"
     reference = tmp_path / f"{session_id}_reference.csv"
     reference.write_bytes(b"reference")
     registry2 = tmp_path / f"registry_{subject_id}_v002.json"
@@ -81,6 +88,7 @@ def _real_state_registry(tmp_path: Path, *, subject_index: int, state: str) -> t
             arm=arm,
             reference_path=reference,
             reference_sha256=sha256_file(reference),
+            radar_receipt_path=tmp_path / f"{session_id}_sealed_radar_receipt.json",
             previous_audit_path=audit1,
         )
     elif state == "final_scored":
@@ -117,6 +125,7 @@ def _real_state_registry(tmp_path: Path, *, subject_index: int, state: str) -> t
             arm=arm,
             reference_path=reference,
             reference_sha256=sha256_file(reference),
+            radar_receipt_path=tmp_path / f"{session_id}_sealed_radar_receipt.json",
             previous_audit_path=audit1,
             score_artifact_path=score,
             score_artifact_builder=build_score,
@@ -193,8 +202,99 @@ def test_stage1_state_allows_only_reference_only_real_reads(tmp_path, operation)
         )
 
 
+def _stage1_opened_p001(tmp_path: Path, document: dict) -> tuple[Path, Path]:
+    """Write `document` as revision 1, then move P001 to stage1 (revision 2) with its audit."""
+    registry1 = write_registry(tmp_path / "registry_v001.json", document)
+    stage1_reference = tmp_path / "stage1_reference.csv"
+    stage1_reference.write_bytes(b"stage1")
+    registry2 = tmp_path / "registry_v002.json"
+    stage1_audit = tmp_path / "stage1_audit.json"
+    label_firewall.transition_label_access_atomically(
+        registry_path=registry1, next_registry_path=registry2, audit_path=stage1_audit,
+        subject_id="P001", next_state="stage1_reference_only",
+        operation=ReferenceOperation.REFERENCE_TIME_SENSITIVITY,
+        utc="2030-01-01T00:00:00Z", capture_git_commit="abc123",
+        capture_git_dirty=False, config_sha256="b" * 64, scorer_sha256="c" * 64,
+        session_id="P001_natural", arm="natural", reference_path=stage1_reference,
+        reference_sha256=sha256_file(stage1_reference),
+    )
+    return registry2, stage1_audit
+
+
+def _open_p001_validation(tmp_path: Path, document: dict, receipt: Path | None) -> None:
+    """Attempt validation scoring for P001_natural against a reference that does not exist.
+
+    A missing reference proves the receipt check runs before the reference is touched.
+    """
+    registry2, stage1_audit = _stage1_opened_p001(tmp_path, document)
+    label_firewall.transition_label_access_atomically(
+        registry_path=registry2, next_registry_path=tmp_path / "registry_v003.json",
+        audit_path=tmp_path / "validation_audit.json",
+        subject_id="P001", next_state="validation_opened",
+        operation=ReferenceOperation.VALIDATION_SCORING,
+        utc="2030-01-01T00:00:01Z", capture_git_commit="abc123",
+        capture_git_dirty=False, config_sha256="b" * 64, scorer_sha256="c" * 64,
+        session_id="P001_natural", arm="natural",
+        reference_path=tmp_path / "missing_reference.csv", reference_sha256="d" * 64,
+        previous_audit_path=stage1_audit, radar_receipt_path=receipt,
+    )
+
+
+def _genesis_registry() -> dict:
+    return copy.deepcopy(load_registry(DEFAULT_REGISTRY_PATH))
+
+
+def _assert_nothing_published(tmp_path: Path) -> None:
+    assert not (tmp_path / "registry_v003.json").exists()
+    assert not (tmp_path / "validation_audit.json").exists()
+
+
+def test_scoring_capability_is_refused_for_a_settle_deviation(tmp_path):
+    """P001-P006 natural recorded 60 s settle: excluded from primary scoring (spec §6 3a)."""
+    document = _genesis_registry()
+    receipt = bind_sealed_receipt(document, tmp_path, "P001_natural", settle_duration_s=60.0)
+    with pytest.raises(ContractError, match="protocol deviation"):
+        _open_p001_validation(tmp_path, document, receipt)
+    _assert_nothing_published(tmp_path)
+
+
+def test_scoring_capability_requires_the_radar_receipt(tmp_path):
+    document = _genesis_registry()
+    bind_sealed_receipt(document, tmp_path, "P001_natural")
+    with pytest.raises(ContractError, match="radar receipt path"):
+        _open_p001_validation(tmp_path, document, None)
+    _assert_nothing_published(tmp_path)
+
+
+def test_scoring_capability_rejects_a_receipt_the_registry_does_not_bind(tmp_path):
+    """A compliant-looking receipt substituted by the caller fails the registry hash binding."""
+    document = _genesis_registry()
+    bind_sealed_receipt(document, tmp_path, "P001_natural", settle_duration_s=60.0)
+    substitute = tmp_path / "substitute"
+    substitute.mkdir()
+    compliant_copy = bind_sealed_receipt(_genesis_registry(), substitute, "P001_natural")
+    with pytest.raises(ContractError, match="registry binding"):
+        _open_p001_validation(tmp_path, document, compliant_copy)
+    _assert_nothing_published(tmp_path)
+
+
+def test_scoring_capability_rejects_a_receipt_for_another_identity(tmp_path):
+    """The registry binds this receipt to P001_natural, but it describes P002_natural."""
+    document = _genesis_registry()
+    receipt = tmp_path / "P001_natural_sealed_radar_receipt.json"
+    foreign = bind_sealed_receipt(_genesis_registry(), tmp_path, "P002_natural")
+    foreign.rename(receipt)
+    p001 = next(s for s in document["subjects"] if s["subject_id"] == "P001")
+    session = next(s for s in p001["sessions"] if s["session_id"] == "P001_natural")
+    session.update(state="captured", radar_receipt_sha256=sha256_file(receipt))
+    with pytest.raises(ContractError, match="identity differs"):
+        _open_p001_validation(tmp_path, document, receipt)
+    _assert_nothing_published(tmp_path)
+
+
 def test_validation_opened_allows_validation_scoring_only(tmp_path):
     document = copy.deepcopy(load_registry(DEFAULT_REGISTRY_PATH))
+    bind_sealed_receipt(document, tmp_path, "P001_natural")
     registry1 = write_registry(tmp_path / "registry_v001.json", document)
     reference = tmp_path / "P001_natural_reference.csv"
     reference.write_bytes(b"validation")
@@ -219,6 +319,7 @@ def test_validation_opened_allows_validation_scoring_only(tmp_path):
         capture_git_dirty=False, config_sha256="b" * 64, scorer_sha256="c" * 64,
         session_id="P001_natural", arm="natural", reference_path=reference,
         reference_sha256=sha256_file(reference), previous_audit_path=stage1_audit,
+        radar_receipt_path=tmp_path / "P001_natural_sealed_radar_receipt.json",
     )
     assert guarded_reference_bytes(
         registry, "P001", ReferenceOperation.VALIDATION_SCORING, reference,
@@ -260,6 +361,7 @@ def test_final_scored_allows_final_scoring_only(tmp_path):
         capture_git_dirty=False, config_sha256="a" * 64, scorer_sha256="b" * 64,
         session_id="P006_recovery", arm="recovery", reference_path=reference,
         reference_sha256=sha256_file(reference), previous_audit_path=prior_audit,
+        radar_receipt_path=tmp_path / "P006_recovery_sealed_radar_receipt.json",
         score_artifact_path=score, score_artifact_builder=build_score,
     )
     assert guarded_reference_bytes(
@@ -305,10 +407,9 @@ def test_direct_registry_revision_and_caller_fabricated_audit_cannot_authorize_s
 
 def test_forged_public_stage1_revision_and_minimal_audit_cannot_enter_validation(tmp_path):
     """Hash chaining alone must not substitute for atomic label-firewall provenance."""
-    registry1 = write_registry(
-        tmp_path / "registry_v001.json",
-        copy.deepcopy(load_registry(DEFAULT_REGISTRY_PATH)),
-    )
+    document = copy.deepcopy(load_registry(DEFAULT_REGISTRY_PATH))
+    bind_sealed_receipt(document, tmp_path, "P001_natural")
+    registry1 = write_registry(tmp_path / "registry_v001.json", document)
     forged = copy.deepcopy(load_registry(registry1))
     forged["revision"] = 2
     forged["previous_registry_sha256"] = sha256_file(registry1)
@@ -349,6 +450,7 @@ def test_forged_public_stage1_revision_and_minimal_audit_cannot_enter_validation
             arm="natural",
             reference_path=reference,
             reference_sha256=sha256_file(reference),
+            radar_receipt_path=tmp_path / "P001_natural_sealed_radar_receipt.json",
             previous_audit_path=fabricated_audit,
         )
     assert not registry3.exists()
@@ -499,6 +601,7 @@ def test_final_scored_uses_in_transaction_score_builder_not_caller_supplied_hash
 
 def _stage1_final_subject(tmp_path):
     document = copy.deepcopy(load_registry(DEFAULT_REGISTRY_PATH))
+    bind_sealed_receipt(document, tmp_path, "P006_recovery")
     registry1 = write_registry(tmp_path / "registry_v001.json", document)
     reference = tmp_path / "P006_recovery_reference.csv"
     reference.write_bytes(b"reference")
@@ -537,6 +640,7 @@ def test_final_score_builder_failure_rolls_back_registry_audit_digest_and_score(
             capture_git_dirty=False, config_sha256="a" * 64, scorer_sha256="b" * 64,
             session_id="P006_recovery", arm="recovery", reference_path=reference,
             reference_sha256=sha256_file(reference), previous_audit_path=prior_audit,
+            radar_receipt_path=tmp_path / "P006_recovery_sealed_radar_receipt.json",
             score_artifact_path=score, score_artifact_builder=fail_builder,
         )
     assert not next_registry.exists()
@@ -562,14 +666,15 @@ def test_final_scored_rejects_preexisting_caller_fabricated_placeholder(tmp_path
             capture_git_dirty=False, config_sha256="a" * 64, scorer_sha256="b" * 64,
             session_id="P006_recovery", arm="recovery", reference_path=reference,
             reference_sha256=sha256_file(reference), previous_audit_path=prior_audit,
+            radar_receipt_path=tmp_path / "P006_recovery_sealed_radar_receipt.json",
             score_artifact_path=score, score_artifact_sha256=sha256_file(score),
         )
 
 
 def test_atomic_transition_rejects_semantically_invalid_prior_audit_without_publication(tmp_path):
-    registry = write_registry(
-        tmp_path / "registry_v001.json", synthetic_registry("stage1_reference_only")
-    )
+    document = synthetic_registry("stage1_reference_only")
+    bind_sealed_receipt(document, tmp_path, "T001_recovery")
+    registry = write_registry(tmp_path / "registry_v001.json", document)
     bogus_prior = tmp_path / "prior_audit.json"
     bogus_prior.write_text('{"schema":"not_a_transition_audit"}\n', encoding="utf-8")
     reference = tmp_path / "T001_recovery_reference.csv"
@@ -585,6 +690,7 @@ def test_atomic_transition_rejects_semantically_invalid_prior_audit_without_publ
             capture_git_dirty=False, config_sha256="a" * 64, scorer_sha256="b" * 64,
             session_id="T001_recovery", arm="recovery", reference_path=reference,
             reference_sha256=sha256_file(reference), previous_audit_path=bogus_prior,
+            radar_receipt_path=tmp_path / "T001_recovery_sealed_radar_receipt.json",
         )
     assert not next_registry.exists()
     assert not audit.exists()
