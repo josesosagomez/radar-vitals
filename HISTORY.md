@@ -12888,3 +12888,181 @@ accordingly, with a test.
 - The narrow nine-script / `load_masimo`-only bypass audit.
 
 **Next:** HANDOFF step "integrate into `vital_signs_own_v13`".
+
+## 2026-09-30 - Integration: three entries late-recorded from the original checkout follow
+
+**Set out to do:** keep HISTORY append-only while merging `codex/discrepancy-remediation` into
+`vital_signs_own_v13`.
+
+**Worked (with evidence):** three entries existed only as uncommitted text in the original
+checkout's `HISTORY.md`. They are appended **verbatim immediately below**, in their original
+order, even though their dates precede entries above:
+1. 2026-08-31 MATLAB time-domain export and TI configuration generator;
+2. 2026-08-31 two-panel MATLAB range-profile animation;
+3. 2026-09-30 WST collision-abstention planning (written by a concurrent session in the original
+   checkout).
+
+The 2026-09-29 "Discrepancy-audit owner decisions resolved" entry above refers to "the 2026-08-31
+entries above"; those are the first two entries below. The original checkout also held a
+duplicate of that 2026-09-29 entry; it was identical after whitespace normalization, so it was
+dropped rather than recorded twice. Nothing in the three entries was edited.
+
+**Failed / did not work, and why:** nothing.
+
+**Retired / no longer used:** nothing.
+
+**Next:** see the integration entry that follows the three late-recorded entries.
+
+## 2026-08-31 - Metadata-driven MATLAB time-domain export and TI configuration generator
+
+**Set out to do:** convert each recorded `adc_stream.bin` plus its metadata into a MATLAB v7.3
+time-domain cube shaped `(frames, chirps, rx_channels, fast_time_samples)`, retain the radar RF
+configuration, and supply the setup/config JSON pair required by TI's `rawDataReader.m`.
+
+**Worked (with evidence):**
+
+- Inspected the supplied `rawDataReader.m`, `mmWaveConfig.setup.json` and its referenced
+  `mmStudioConfig.mmwave.json`. The supplied Studio profile is not the profile used for these data:
+  it describes two TX chirps and 128 loops (256 chirps/frame), whereas the recorded metadata and
+  capture command path establish TX0 only, 32 loops (32 chirps/frame), four RX, 256 samples,
+  20 Hz and SDK SampleSwap=1.
+- Added `scripts/export_session_to_mat.m`. It reads each session's own `run_metadata.json`, refuses
+  non-whole frames or manifest disagreement, decodes two-lane SampleSwap=1 packets, and writes a
+  numeric complex-single v7.3 `timeDomainCube` incrementally through `matfile`. It embeds the
+  verbatim metadata/manifest and a `radarConfig` struct containing the recorded profile plus both
+  sampled-sweep and full-ramp bandwidths.
+- Added `scripts/generate_rawdatareader_config.py`. It produces a TI-compatible
+  `mmWaveConfig.setup.json` + `mmStudioConfig.mmwave.json` pair without modifying `data/raw/`.
+  Generated local pairs for all nine prospective sessions under gitignored
+  `matlab_exports/configs/<session>/`.
+- Real-input validation on P001 natural: 12,000 frames, 131,072 bytes/frame, frame configuration
+  `chirp 0 only / 32 loops / 50 ms`, profile `77 GHz / 70.006 MHz/us / 256 samples @ 5209 ksps`,
+  `iqSwapSel=1`, `chInterleave=1`. Derived sampled sweep bandwidth is 3.440494529 GHz, full ramp
+  bandwidth 3.990342 GHz, and exact range spacing using `c=299792458 m/s` is 0.0435682 m (the
+  recorded rounded value remains 0.0436 m).
+- Added four deterministic generator failure/success tests and ran them together with the three
+  established bit-exact LVDS/IQ layout tests: **7 passed** in 0.16 s using an explicit writable
+  `--basetemp`. `git diff --check` passed. Usage and storage implications are documented in
+  `notes/matlab_export.md`; one full 12,000-frame complex-single cube is about 2.93 GiB before HDF5
+  overhead.
+
+**Failed / did not work, and why:** the first focused pytest invocation allowed pytest to use the
+host temp directory; four new tests passed but three existing `tmp_path` tests errored because that
+directory is inaccessible in this sandbox. Re-running with a verified writable in-repo basetemp
+gave 7/7 passing. MATLAB was not executed and no MAT-file was claimed as runtime-verified: project
+rule §2 requires agents only to write `.m` files and print the command for the human to run.
+
+**Retired / no longer used:** the supplied May 2026 mmWave Studio JSON pair as a description of
+these July/August Python-acquired streams. The files were not deleted; they remain appropriate only
+for the older capture whose geometry they actually describe.
+
+**Next:** run a 10-frame MATLAB trial (`'NumFrames', 10`), inspect `size`, class and one range FFT,
+then export a complete session if the trial passes. Track 0 remains the project's main scientific
+task; this export utility does not authorize analysis of the sealed prospective reference values.
+
+## 2026-08-31 - Two-panel all-frame MATLAB range-profile animation
+
+**Set out to do:** animate P003 range amplitude from 0-5 m in one figure with a normal profile and
+a DC/static-removed profile, use every frame, and play/save at twice the recorded rate.
+
+**Worked (with evidence):** added `scripts/animate_range_profiles.m`, which consumes the numeric
+v7.3 cube produced by `export_session_to_mat.m`. It validates the four-dimensional cube and positive
+range limit, computes one fixed complex static template across the complete selected interval,
+precomputes noncoherent range-FFT magnitudes averaged across all 32 chirps and four RX channels, and
+animates two fixed-scale subplots. The lower panel subtracts the full-interval slow-time mean,
+removes each chirp/RX fast-time mean and explicitly zeros range bin 0. Defaults are 0-5 m, linear
+amplitude, every frame and 2x speed. At the recorded 20 Hz, all 12,000 P003 frames are written at
+40 fps for a five-minute MP4. `notes/matlab_export.md` now contains the P003 export, interactive and
+MP4 commands. `git diff --check` passed; static checks confirmed the all-frame loop, 40 fps setting,
+static-template path and explicit DC-bin removal.
+
+**Failed / did not work, and why:** no MATLAB execution or MP4 generation was attempted. Under
+project rule §2, agents may write `.m` files but only print the command for the human to run, so the
+MATLAB runtime and codec path remain unverified. The first user run should use a short export or
+`'NumFrames', 200` before committing to the full five-minute animation.
+
+**Retired / no longer used:** no method was retired. The full-session static mean is explicitly
+visualization-only and noncausal; it does not turn on `phase.clutter_removal` or settle Track 0's
+production clutter-removal decision.
+
+**Next:** in MATLAB, export a small P003 subset, run the 200-frame animation, inspect the range axis
+and both panels, then export/animate all 12,000 frames and optionally write the 40 fps MP4.
+
+## 2026-09-30 - WST collision-abstention planning
+
+**Set out to do:** plan how a Wavelet Scattering Transform could help the heart-rate estimator
+without replacing AHET, weakening the label firewall, or making an unsupported claim that
+frequency collisions can always be separated.
+
+**Worked (with evidence):** added `plans/wst_collision_gate_plan.md` as a Phase 1 addendum and
+integrated its responsibilities into the IoT master and Phase 1–5 plans. The candidate is a
+monotonic abstention helper: it runs only after AHET accepts an HR candidate near an integer
+respiratory harmonic, then either preserves that exact estimate or rejects it. It cannot change a
+rate, rescue a rejection, alter BR, select a range bin, or use future/reference information at
+runtime. The plan fixes the Kymatio NumPy transform, preprocessing, feature order, logistic model,
+synthetic seed, development roles, evidence schema, cross-platform tolerances, edge gates, and the
+single P001–P005 promotion transaction. P006–P015 remain final-evaluation only. The scientific and
+claim limits were added to `notes/approach.md`, citing Mallat, Kymatio, radar wavelet extraction,
+and prior edge-oriented radar WST work. Documentation-format checks passed; no code or data was
+changed and no prospective label was opened.
+
+**Failed / did not work, and why:** no failure occurred. The plan has not received the independent
+DSP/ML review required by `CLAUDE.md`, so it does not authorize implementation or estimator
+promotion. Kymatio and scikit-learn are not yet installed or proven equivalent on Windows and the
+Raspberry Pi; those are explicit stop gates in Milestone W0.
+
+**Retired / no longer used:** the idea of using WST as a standalone HR/BR estimator or as a way to
+recover an AHET rejection. WST itself is not a novelty claim; the candidate contribution is the
+causal, evidence-bearing collision-risk abstention policy and its subject-independent edge
+evaluation.
+
+**Next:** obtain owner acceptance and independent plan review. If both pass, execute W0 only:
+dependency compatibility, deterministic 600-sample fixtures, Windows/Pi feature equivalence,
+resource measurement, and an identifiability demonstration. Do not proceed to model training if
+W0 fails.
+
+## 2026-09-30 - Discrepancy remediation integrated into vital_signs_own_v13
+
+**Set out to do:** merge `codex/discrepancy-remediation` into the integration branch
+`vital_signs_own_v13` without losing the original checkout's uncommitted work, following the
+integration procedure recorded in HANDOFF.
+
+**Worked (with evidence):**
+
+- **Backup first.** Every modified and untracked file was copied, with the diffs of the modified
+  ones, to a scratch backup outside the repository before any change (23 files).
+- **Moved-aside files were checked.** Three untracked files that the branch tracks were compared
+  with the branch before removal:
+  - `reports/remediation_verification_2026-09-30.md` was identical;
+  - the audit copy had no lines the branch lacks;
+  - the plan copy was the older revision 2, whose only unique lines are superseded wording.
+- **Fast-forward.** `HANDOFF.md`, `HISTORY.md` and `notes/approach.md` were set aside, and
+  `vital_signs_own_v13` was fast-forwarded from `e6d055c` to `96140b0` with no conflicts.
+- **Uncommitted work restored:**
+  - the concurrent session's WST note was re-applied to `notes/approach.md` §8.1 as a clean patch;
+  - the original checkout's three unique HISTORY entries were appended verbatim after a preface
+    entry, and its duplicate 2026-09-29 entry (identical after whitespace normalization) was
+    dropped;
+  - `.gitignore` gains `matlab_exports*/`.
+- **Line endings.** 17 tracked files were CRLF in the working tree with no content changes, which
+  was checked for each. They were re-checked out as LF, and every tracked file is now LF.
+- **Full suite in the main checkout: 3233 passed, 5 skipped, 0 failed** (212.88 s).
+  - The count includes 4 tests from the untracked TI-generator test file.
+  - The 12 tests that skip in a checkout without `results/` ran here.
+  - The 5 skips are the opt-in real-data test and 4 tests needing deleted replay folders.
+- **HANDOFF** was rewritten for the single-checkout, integrated state.
+
+**Failed / did not work, and why:** nothing failed.
+
+**Left untracked on purpose:**
+- **MATLAB/TI tooling**, pending the firewall guard, the M-22 fixes and an independent range-FFT
+  review.
+- **IoT-edge and WST plans**, which are unreviewed and unauthorized. The HISTORY entries above (the
+  2026-08-31 MATLAB entries and the 2026-09-30 WST entry) therefore refer to files that are
+  untracked for now.
+
+**Retired / no longer used:**
+- The two-checkout arrangement. The Codex worktree and `codex/discrepancy-remediation` are fully
+  merged and stale; removing them is an owner decision.
+
+**Next:** Milestone 5, recompute under `eca_ahet_safe_refine_v2` (HANDOFF §3).

@@ -638,6 +638,44 @@ cross-model DSP review has not been done** — required before this path is pape
   M2; real sessions must still pass the approved timing, provenance, metadata, cohort and
   dynamic-HR acquisition checks.
 
+### 8.1 Candidate addendum — WST-assisted collision abstention (2026-09-30)
+
+The candidate plan is `plans/wst_collision_gate_plan.md`. It does not replace AHET or estimate HR
+directly. It uses a fixed 1-D Wavelet Scattering Transform representation only when an
+AHET-accepted HR candidate falls within 0.10 Hz of an integer respiratory harmonic. A fixed
+lightweight classifier may preserve the exact AHET estimate or convert it to an explicit
+`wst_respiratory_harmonic_collision` abstention. It cannot change the rate, choose another
+candidate, rescue a rejection, or use future windows.
+
+Scientific reason: WST supplies translation-stable multiscale and higher-order features that may
+differentiate waveform/modulation structure beyond a power spectrum. It does not make exactly
+coincident cardiac and respiratory components identifiable from a single radar phase signal.
+Accordingly, the method is described as an ambiguity-risk gate, never a collision solver.
+
+Implementation choice:
+
+- Kymatio NumPy `Scattering1D`, no neural-network runtime;
+- 600 samples at 20 Hz;
+- `J=7`, `Q=(4,1)`, `T=128`, second order;
+- robust median/MAD normalization;
+- fixed standardized L2 logistic gate and `p_safe >= 0.5`;
+- training on deterministic synthetic cases plus development-only A–D;
+- leave-one-development-subject-out evaluation is diagnostic, not final validation;
+- P001–P005 may be touched once for the declared estimator-promotion decision;
+- P006–P015 remain final evaluation and cannot change the method.
+
+Promotion requires both a material reduction in severe collision errors and bounded coverage loss.
+Failure, insufficient collision examples, or inability to meet the Pi deadline retains the
+non-WST production estimator and is recorded as a negative result.
+
+Research basis:
+
+- Mallat, [Group Invariant Scattering](https://arxiv.org/abs/1101.2286).
+- Andreux et al., [Kymatio: Scattering Transforms in Python](https://arxiv.org/abs/1812.11214).
+- Kymatio [`Scattering1D` API](https://www.kymat.io/codereference.html).
+- Beltrão et al., [radar heartbeat extraction using wavelet methods](https://ieeexplore.ieee.org/document/9726241).
+- Kotte et al., [77 GHz FMCW radar and WST skin-state classification](https://arxiv.org/abs/2609.23158).
+
 ---
 
 ## 9. References

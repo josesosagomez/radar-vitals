@@ -12,6 +12,7 @@ __pycache__/
 # Radar captures and exports can be huge; track configs + metrics, not raw binaries.
 data*/
 m2_capture_work*/
+matlab_exports*/
 
 # Results: keep configs + metrics (json/yaml), ignore heavy artifacts
 results*/
