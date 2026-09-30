@@ -13,7 +13,7 @@ production output, joins them on `(capture_id, k, bin)`, and reports three condi
 Two baselines are mandatory, not optional:
 
 * **`constant_session_median`** — a predictor that ignores the radar entirely and emits the
-  session's median reference. `HANDOFF.md` §2.2 measured that this scores 83-100 % of admissible
+  session's median reference. `HISTORY.md` 2026-07-31 (signal-presence audit) measured that this scores 83-100 % of admissible
   HR windows on these captures, because within-session PR spread (2.6-5.2 bpm) is narrower than
   the +/-5 bpm tolerance. **Any HR number not reported next to it is uninterpretable.**
 * **production's own estimator** at the same cells, so the comparison is estimator-vs-estimator.
@@ -328,7 +328,7 @@ def main(argv: list[str] | None = None) -> int:
         "locks_rederived": locks,
         "frame0_origins": origins,
         "hr_limit": (
-            "HANDOFF §2.2: these captures support HR coverage/feasibility, NOT HR tracking. "
+            "HISTORY 2026-07-31: these captures support HR coverage/feasibility, NOT HR tracking. "
             "Within-session PR spread is 2.6-5.2 bpm, narrower than the +/-5 bpm tolerance, so "
             "constant_session_median scores 83-100%. No HR agreement claim may be made here."
         ),

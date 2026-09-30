@@ -133,7 +133,7 @@ DSP changes). Fresh replays: `results/live_demo/20260715_164124_replay_unknown` 
 for the DSP version), `20260715_164018_replay_unknown` (paced16, bin 20→26), `20260715_164132_
 replay_unknown` (sweep, bin 21→26). Masimo alignment used each session's ORIGINAL live capture's
 real `elapsed_s` joined by `frame_idx` to the fresh replay's DSP output (the fresh replay's own
-`elapsed_s` is broken under `--replay-fast` — the wall-clock landmine, HANDOFF §6); one extra
+`elapsed_s` is broken under `--replay-fast` — the wall-clock landmine, `HISTORY.md` 2026-07-14/15); one extra
 hop per fresh replay beyond the original capture's real-time cutoff was dropped for lack of a
 ground-truth timestamp. Scored under `notes/comparator_prespec.md` exactly (PI gate, ≥80%
 coverage, 5 bpm stationarity gate, median PR). Result:
@@ -235,7 +235,7 @@ statistics parameter**: baseline severe-accept rate is apparently very low-to-ze
 provocative capture taken so far) — a repeat of the existing stepped-rate protocol is not
 guaranteed to produce ANY severe accepts to test against. The primary capture should be
 explicitly designed around a scenario plausible to still trigger one post-bin-fix (e.g. the
-`k×f_r ≈ HR` collision the stepped-rate protocol was originally built around, HANDOFF §4),
+`k×f_r ≈ HR` collision the stepped-rate protocol was originally built around, `notes/protocol.md` stepped-rate sweep),
 not assumed to reproduce one by default.
 
 **Scope note — what the zero-baseline-severe-accepts finding means for this design.** The

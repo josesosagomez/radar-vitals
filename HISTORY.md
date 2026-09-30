@@ -12689,3 +12689,101 @@ it is used as a fact.
 **Next:** when Milestone 5 builds the new evidence chain, add an explicit `subject` field to the new
 capture-registry revision and relax the role-string check in `src/m4/capture_registry.py`
 accordingly, with a test.
+
+## 2026-09-30 - Records clean-up (remediation Milestone 4) completed and independently reviewed
+
+**Set out to do:** complete HANDOFF step "finish Milestone 4 (records)":
+- leftover pilot figures;
+- stale manuscript facts;
+- "pending re-derivation" labels;
+- the 120 s settle limb and the P001–P006 deviation;
+- Track 0 notes;
+- the capture and subject-identity records;
+- stale HANDOFF section references;
+- an executable documentation test.
+
+**Worked (with evidence):**
+
+- **Manuscripts** (`f49f246`, plus review fixes in this commit). Pilot-derived statements were
+  removed:
+  - "10–46%", "0.2–0.5 bpm … four subjects", "10% / 46% / 20%";
+  - where a figure is needed, the canonical M1 11/120 is used, labelled superseded.
+
+  Stale facts updated:
+  - 15 participants × 3 sessions;
+  - test counts;
+  - 1,572,864,000 B per session, ~71 GB for 45 sessions;
+  - IoT-J supersedes the JBHI recommendation;
+  - `figures/fig_range_bin_mislock.py` marked as not yet written;
+  - warmup-threshold scope: 4 sessions from at least two subjects;
+  - "frozen" wording replaced.
+
+  Tables that depend on `eca_ahet_v1` carry "pending re-derivation" labels.
+- **Notes** (`82f52ba`, plus review fixes):
+  - `notes/protocol.md` SETTLE CRITERION gains limb 3 (120 s, owner decision D-OWN-7) and a dated
+    P001–P006 deviation note;
+  - `notes/analysis_prespec.md` §6 gains item 3a (settle-floor deviation);
+  - `notes/approach.md` and `notes/venue_iotj.md` record the accepted Track 0 result;
+  - the live-config comment at line 28 is corrected (values unchanged).
+- **HISTORY records** (`ff9cf10`): the late-recorded P001–P006 capture protocol, taken from
+  manifest protocol fields only (no Masimo values), and the development subject-identity mismatch.
+- **Section-numbered HANDOFF references.** All 34 outside HISTORY, HANDOFF, `reports/` and `plans/`
+  now point to durable owners: note sections, CLAUDE.md, dated HISTORY entries, `.gitattributes`.
+- **`tests/test_documentation_claims.py`, 13 tests**, checks:
+  - citation closure, including grouped/ranged citations;
+  - the Tang [R1] / Kotte [R21] / Ahmed [R22] numbering;
+  - Ahmed never cited as [R1];
+  - CLAUDE.md §4 timing words only inside prohibitions across the manuscripts, HANDOFF, `notes/` and
+    code (two allowlisted lines);
+  - no section-numbered HANDOFF references.
+
+  A pattern check confirmed the regexes catch real violations and pass clean text.
+- **Independent review** (CLAUDE.md §6 claims review) checked about 30 new claims against their
+  sources and found **3 blocking issues, all fixed:**
+  1. the new test matched its own docstring once tracked;
+  2. the "not a retrofit" argument in analysis-spec item 3a was unsound: `df437b9` never reached
+     this branch, the protocol text or the capture code, so the text now calls it a post-capture
+     disposition admissible because it is metadata-only, label-blind and only removes sessions;
+  3. the Ahmed-table labels wrongly implicated rows that do not depend on `eca_ahet_v1`, so only
+     the current-lock / rerun rows are now labelled.
+
+  **Non-blocking fixes applied:**
+  - the 83–100 % figure is attributed to HISTORY 2026-07-31;
+  - bin-choice pointers now go to the reference-blind rule (`notes/analysis_prespec.md` §3);
+  - the replay-pair pointer goes to `plans/bin_drift_diagnostic.md` §1 BDR-20;
+  - the warmup-validation text reflects the script's current three sessions;
+  - analysis-spec item 3 is reworded to "aborted because…";
+  - 3a states that no deviation-inclusive scoring path exists yet;
+  - the protocol says the 300 s settle ceiling is procedural, and that the start PR of sealed
+    sessions never goes into HISTORY;
+  - the test now scans `notes/` with an allowlist and covers grouped citations and
+    "registered <date>".
+- **Full suite: 3202 passed, 17 skipped** (the 13 new tests plus the earlier 3189). `git diff
+  --check` is clean, and HISTORY is append-only.
+
+**Failed / did not work, and why:**
+- **Correction to the "Development subject identity" entry above.** "No per-subject … figure can
+  be derived" from M1/M8 overstates it. The A–D mapping exists in code (`src/br_features.py:43`
+  `SUBJECT_BY_CAPTURE`), so such figures can be produced by an external join. That join is not
+  bound by the M1/M8 provenance chain, which is the real limitation.
+- **The first reverse citation check was wrong.** It required every listed reference to be cited.
+  Many listed references (for example R2–R4, R8–R10) are uncited, because both files are planning
+  documents whose lists double as a surveyed bibliography. The check was dropped deliberately, not
+  as a workaround.
+
+**Recorded consequences:**
+- Comment edits to imported modules (for example `scripts/m8_ahmed_score.py`, `src/br_bin_search.py`)
+  and to `scripts/live_demo_config.yaml` change the M8/M9 source-closure identity of any gate built
+  from now on. That is intended: Milestone 5 builds a new gate.
+
+**Retired / no longer used:**
+- The withdrawn pilot figures in the manuscripts.
+- "10-subject", "797 tests" and "~31 GB / 20 sessions" as current facts.
+- Section-numbered HANDOFF references outside HISTORY, HANDOFF, `reports/` and `plans/`.
+
+**Open questions for the owner:**
+- How were the uniformly 0.000 s clock offsets obtained?
+- Is `JOURNAL_PAPER.md` §4.1 (0.16 vs 2.72 bpm, from 2026-07-14 live hops, no regeneration script
+  found) paper-grade?
+
+**Next:** HANDOFF step "close the firewall gaps".

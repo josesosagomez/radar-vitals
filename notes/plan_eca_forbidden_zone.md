@@ -403,7 +403,7 @@ yield bought by erasing cardiac power is the `legacy` failure in disguise.
    merely empty**, and `steps/step_6/config.yaml` uses **`window_s: 20`, `hop_s: 5`** while the
    live/evidence path uses **30 s / 3 s** — scoring the modes under the default Step-6 config would
    silently compare at the wrong window length, and contradicts the standing "window is 30 s; do
-   not shorten it" decision (HANDOFF §5). Therefore: **create a dedicated
+   not shorten it" decision (`notes/analysis_prespec.md` §7). Therefore: **create a dedicated
    `experiments/exp_eca_modes/` with `config.yaml` + `run.py` pinned to 30 s / 3 s**, re-processing
    the raw `adc_stream.bin` (never `live_estimates.csv` — CLAUDE.md §4) and scoring all three ECA
    modes against Masimo PR on the §6 metrics.
@@ -1478,7 +1478,7 @@ Protocol:
 
 30 s windows at a 3 s hop share **27/30 s of data**. Candidate rows are **not** independent ROC
 samples, and raw counts will **greatly overstate** the effective sample size. (This is the standing
-project decision — HANDOFF §5 — and I should have applied it here myself.)
+project decision — `notes/analysis_prespec.md` §7 — and I should have applied it here myself.)
 - Report **per-session** results, not a pooled ROC.
 - If any uncertainty is quoted, use **contiguous block resampling**, never per-row bootstrap.
 

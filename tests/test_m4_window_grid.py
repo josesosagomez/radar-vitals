@@ -68,8 +68,8 @@ def test_incomplete_tail_is_dropped_never_scored_short():
 
 
 def test_real_capture_frame_counts_yield_the_recorded_window_counts():
-    """The three Masimo captures, at their actual frame counts (HANDOFF §2 / the M0
-    evidence memo): natural 6, paced16 6, sweep 16."""
+    """The three Masimo captures' actual frame counts give the window counts recorded in
+    `plans/m0_b1_evidence_floor_memo.md`: natural 6, paced16 6, sweep 16."""
     assert n_complete_windows(3610) == 6      # natural
     assert n_complete_windows(3611) == 6      # paced16
     assert n_complete_windows(9611) == 16     # sweep

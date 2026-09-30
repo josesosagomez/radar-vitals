@@ -9,7 +9,7 @@ itself be the cause, so these tests target the four ways it could be:
 2. **Every cell must be swept.** A silently truncated sweep would let "it fails at every
    bin" mean "it fails at the bins we happened to run".
 3. **The scoring maths must be right**, including the constant-session-median baseline
-   that makes the HR numbers interpretable at all (HANDOFF §2.2).
+   that makes the HR numbers interpretable at all (CLAUDE.md §1).
 4. **The ceiling must stay labelled.** `best_bin_CEILING` picks the bin using the
    reference; if it ever leaked into a headline row it would be an unreachable number
    presented as an achievable one.

@@ -196,7 +196,7 @@ def test_continuity_mad_needs_two_values():
 
 
 def test_csv_is_written_with_lf_endings(tmp_path):
-    """HANDOFF section 9: line endings are pinned to LF and it is load-bearing."""
+    """`.gitattributes` eol=lf: line endings are pinned to LF and it is load-bearing."""
     path = tmp_path / "out.csv"
     dbs.write_csv(path, [{"a": 1, "b": True, "c": None, "d": {"x": 1}}], ["a", "b", "c", "d"])
     raw = path.read_bytes()

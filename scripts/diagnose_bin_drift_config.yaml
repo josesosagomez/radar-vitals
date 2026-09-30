@@ -40,7 +40,7 @@ approved_replays:
   # though `--replays` would otherwise accept it by content match alone --
   # direct inspection found at least six replay directories sharing massimo1's
   # raw hash across generations from 2026-07-15 through 2026-07-27, including
-  # the non-interchangeable 2026-07-25/2026-07-26 pair (HANDOFF.md §5).
+  # the non-interchangeable 2026-07-25/2026-07-26 pair (`plans/bin_drift_diagnostic.md` §1, BDR-20).
   # The three entries below are the 2026-07-26 replays used by the current
   # canonical run (results/diagnose/bin_drift/20260727T210936Z); live_test1 has
   # no entry by design (BDR-07 Option A -- no replay is ever approved for it).

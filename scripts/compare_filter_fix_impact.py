@@ -30,7 +30,7 @@ import pandas as pd
 
 REPO = Path(__file__).resolve().parents[1]
 LIVE_DEMO = REPO / "results" / "live_demo"
-# The pre-fix reference generation: post-M2-fix replays of 2026-07-25 (HANDOFF §2).
+# The pre-fix reference generation: post-M2-fix replays of 2026-07-25 (`HISTORY.md` 2026-07-25/26).
 PRE_FIX_PREFIX = "20260725_"
 SCORING_HOP_MODULUS = 600      # frozen §7 grid: one window per 600 frames
 SCORING_HOP_OFFSET = 599
@@ -172,7 +172,7 @@ def main() -> int:
                   f"BR {r_old:>3}/{n} ({100*r_old/n:5.1f}%) -> "
                   f"{r_new:>3}/{n} ({100*r_new/n:5.1f}%)")
 
-        # M2 invariant: a first-in-band-bin selection may never be resp_valid (HANDOFF §4).
+        # M2 invariant: a first-in-band-bin selection may never be resp_valid (`plans/m2_respiration_fix.md`).
         floor_pinned = merged[(merged["resp_valid_new"] == 1)
                               & (np.abs(merged["br_bpm_new"] - 6.0) < 1e-6)]
         print(f"\n    M2 invariant check: floor-pinned-and-valid windows (br=6.0 & resp_valid) "

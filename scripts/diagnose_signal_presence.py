@@ -12,9 +12,10 @@ production estimator does. This measures **what any estimator could do at best**
 looking for energy at the frequency the reference says is true, with every verification
 gate removed. Its outputs are ceilings and diagnostics.
 
-Why this may look at the Masimo reference when HANDOFF section 3.5 forbids it
------------------------------------------------------------------------------
-Section 3.5 forbids *choosing a bin because it agrees better with the reference*, and
+Why this may look at the Masimo reference when the reference-blind rule forbids it
+-----------------------------------------------------------------------------------
+The reference-blind rule (`notes/analysis_prespec.md` §3; `HISTORY.md` 2026-07-31 per-bin
+sweep) forbids *choosing a bin because it agrees better with the reference*, and
 CLAUDE.md section 4 forbids tuning the algorithm to match the reference. Neither is what
 happens here. This script asks "is there measurable energy at the known-true frequency",
 which is a **detectability** question; the answer is an upper bound on performance, not a
@@ -559,7 +560,7 @@ def render_report(meta: dict, summaries: list[dict], scans: dict, medians: dict)
         "> **These are ceilings, not results.** Every `oracle_*` number used the Masimo",
         "> reference to say where to look, and every verification gate is switched off.",
         "> Nothing here is accuracy, coverage or agreement, and no threshold, band edge or",
-        "> bin choice may be derived from it (HANDOFF §3.5, CLAUDE.md §4).",
+        "> bin choice may be derived from it (reference-blind rule, `notes/analysis_prespec.md` §3).",
         "",
         "## READ THIS BEFORE THE TABLES — hit rates are misleading on this data",
         "",

@@ -1,6 +1,6 @@
 """Pre-flight for the BR bin-selection feature study: is there anything here to learn?
 
-`HANDOFF.md` §4.2 designed a study to learn a per-window range-bin selection rule for
+The 2026-08-04 HANDOFF (`HISTORY.md` 2026-08-04) designed a study to learn a per-window range-bin selection rule for
 breathing rate from radar-side features. This script answers the question that must come
 first, because the rest of the study is only worth building if the answer is yes:
 
@@ -90,7 +90,7 @@ def sha256(path: Path) -> str:
 
 
 def write_csv(path: Path, columns: list[str], rows: list[dict]) -> None:
-    """LF-pinned stdlib CSV. Line endings are load-bearing in this repo (HANDOFF §7)."""
+    """LF-pinned stdlib CSV. Line endings are load-bearing in this repo (`.gitattributes` eol=lf)."""
     with path.open("w", encoding="utf-8", newline="") as fh:
         w = csv.writer(fh, lineterminator="\n")
         w.writerow(columns)

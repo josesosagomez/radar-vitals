@@ -17,7 +17,8 @@ run the production window DSP (`src/window_pipeline.py:run_window_dsp`) once per
 candidate bin from `src/warmup_select.py:derive_candidate_bins`. Record the outcome of
 every (capture, k, bin) cell.
 
-**No Masimo file is opened by this script, by design.** `HANDOFF.md` section 3.5 forbids
+**No Masimo file is opened by this script, by design.** The reference-blind rule
+(`notes/analysis_prespec.md` §3; `HISTORY.md` 2026-07-31 per-bin sweep) forbids
 choosing a bin because it agrees better with the reference, so the sweep is kept
 structurally unable to do it: it reports radar-side yield (did the chain return an
 AHET-verified rate at all) plus a reference-free temporal-continuity statistic, and it
@@ -548,7 +549,7 @@ def capture_verdict(sweep: dict, per_bin: list[dict]) -> dict:
 
 
 def write_csv(path: Path, rows: list[dict], columns: list[str]) -> None:
-    """Minimal CSV writer with LF endings (HANDOFF section 9: line endings are pinned)."""
+    """Minimal CSV writer with LF endings (`.gitattributes` eol=lf: line endings are pinned)."""
     def cell(value) -> str:
         if value is None:
             return ""
@@ -599,7 +600,7 @@ def render_report(meta: dict, sweeps: list[dict], summaries: dict, verdicts: lis
         f"config `{meta['config_path']}` (`run_config_hash` = `{meta['run_config_hash'][:16]}`)",
         "",
         "Every candidate bin scored on every complete 30 s window, against the production "
-        "DSP. **No Masimo file was opened** (HANDOFF section 3.5); yields below are "
+        "DSP. **No Masimo file was opened** (reference-blind rule); yields below are "
         "radar-side only.",
         "",
         "## Verdicts",

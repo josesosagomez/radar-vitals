@@ -7,7 +7,7 @@ The grid, verbatim in effect:
 
 * 30 s = **600 frames** at 20 Hz; windows are the consecutive, non-overlapping, **half-open
   frame intervals** `[k·600, (k+1)·600)`, indexed by **frame number, never wall-clock**
-  (`elapsed_s` in replay NPZs is wall-clock and unusable — HANDOFF §5).
+  (`elapsed_s` in replay NPZs is wall-clock and unusable — `HISTORY.md` 2026-07-14/15).
 * **`k = 0` IS scored.** Warmup bin-selection runs on the `k = 0` buffer and is applied back
   to that same buffer, so the window is real, not a warmup discard.
 * A window is scored **iff it is a complete 600 frames**; the incomplete tail is dropped.

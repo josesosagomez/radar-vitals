@@ -531,7 +531,8 @@ Reference-failure-plus-radar-NaN overlap is retained in a diagnostic cross-tab, 
 in the primary partition.
 
 **Session level (decided before scoring, from capture/reference integrity — never from agreement):**
-3. **Protocol abort (intentional early termination)** — the settle criterion is not met, or the
+3. **Protocol abort (intentional early termination)** — the run is aborted because the settle
+   criterion is not met, or the
    protocol run is **deliberately halted before its intended 10-min end** (operator stop, subject
    withdrawal, equipment intervention; `notes/protocol.md`): session **not admitted**; logged. **The
    discriminator vs item 4 (M3R-37):** item 3 covers a run that **did not reach its intended
@@ -544,9 +545,14 @@ in the primary partition.
    and 2026-09-29; `HISTORY.md`).** A natural or paced session whose recorded total settle is
    **< 120 s** (`notes/protocol.md` SETTLE CRITERION, limb 3) is a **protocol deviation**. It is
    **excluded from the primary per-protocol analysis** and may appear only in an explicitly
-   labelled, deviation-inclusive sensitivity analysis, never pooled into primary results. This is
-   not a retrofit (§4): the 120 s floor was decided on 2026-08-12 before any affected session was
-   captured, and was only later enforced in code (`src/protocol.py` `MIN_SETTLE_S`). The affected
+   labelled, deviation-inclusive sensitivity analysis, never pooled into primary results. No scoring
+   path for such a sensitivity analysis exists yet: SCORING-mode manifest parsing rejects every
+   deviating session (`src/m2/manifest_v3.py`). The 120 s floor was decided and committed on
+   2026-08-12 14:37Z (`df437b9`, unmerged branch `m2_sidecar_scaffold`), before P001_natural
+   (15:55Z), but it never reached the protocol text or the capture code used for P001–P006. So
+   classifying them is a **post-capture disposition**. It is admissible under this section
+   because it uses capture metadata only, was decided with every label sealed and nothing
+   scored, and can only remove sessions from the primary analysis. The affected
    sessions are **P001–P006 natural** (60 s each); they load with `protocol_compliant=false` /
    `settle_below_120s`. Recovery is exempt. A deviation never authorizes recapture (§2d). Item 3
    governs a session **aborted** because the settle criterion was not met; 3a governs a session that
@@ -598,7 +604,7 @@ evidence-floor rule, **not** by discretionary exclusion.
 - **Exact non-overlapping 30 s window grid (FROZEN).** At the 20 Hz frame rate, 30 s = **600
   frames**. Windows are the consecutive, non-overlapping, **half-open frame intervals**
   `[k·600, (k+1)·600)` for `k = 0, 1, 2, …`, indexed by **frame number** (not wall-clock — the
-  `--replay-fast` `elapsed_s` is unusable; HANDOFF §5). **The first window `k = 0` (`[0, 30) s`) IS
+  `--replay-fast` `elapsed_s` is unusable; `HISTORY.md` 2026-07-14/15). **The first window `k = 0` (`[0, 30) s`) IS
   scored**, and its mechanism is stated exactly: `scripts/live_demo.py` fills the first 600-frame
   ring buffer, runs warmup bin-selection **on that buffer**, then applies the result back to the
   same buffer via `dsp_override` to emit the `k = 0` estimate (`live_demo.py:1564–1598`). So the

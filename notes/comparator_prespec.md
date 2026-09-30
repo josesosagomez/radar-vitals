@@ -176,7 +176,7 @@ rather than asserted.
 ### 2.4 Statistics
 - **Non-overlapping 30 s windows only** (a 3 s hop shares 27/30 s of data — those estimates are not
   independent, and treating them as such fakes tight Bland-Altman limits). Standing decision,
-  HANDOFF §5.
+  `notes/analysis_prespec.md` §7.
 - **Report coverage alongside accuracy, always.** Accuracy computed only on surviving windows is
   selection bias. Report: total windows, excluded-by-PI, excluded-by-coverage,
   excluded-by-non-stationarity, radar-NaN, and the final n.

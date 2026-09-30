@@ -8,7 +8,7 @@
 >
 > **`HISTORY.md` differs between checkouts until integration.** The worktree copy is authoritative
 > for the remediation entries. The original-checkout copy holds the entries the worktree lacks
-> (§3 step 3).
+> (§3 step 2).
 
 ## 1. Project snapshot
 
@@ -44,8 +44,8 @@
     development captures + 9 prospective live folders).
 - **Remediation worktree:**
   `C:\Users\josemsosag\.codex\worktrees\discrepancy-remediation\vitals_radar_3`, branch
-  **`codex/discrepancy-remediation`**, built on `e6d055c`. The 2026-09-30 verification, this HANDOFF
-  and the verification report were committed after `6521787`.
+  **`codex/discrepancy-remediation`**, built on `e6d055c`. Commits after `6521787` record the
+  2026-09-30 verification, the config-pin fix and the records clean-up.
   - **Pushed to `origin` (2026-09-30) and tracking `origin/codex/discrepancy-remediation`; not
     merged.** Commit and push each later step so the remote stays current.
   - It has no `data/` or `results/live_demo/`.
@@ -104,43 +104,32 @@ L-7 regressed (there are now five parabolic interpolators).
   comment now states the below-band-only semantics. Config values are unchanged.
   `tests/test_peak_refinement_artifact.py` checks the artifact against the config as committed at
   `4280e34`, so configs can be edited again.
+- **Records clean-up (2026-09-30), independently reviewed:**
+  - withdrawn pilot figures removed from both manuscripts;
+  - stale facts updated (15 participants × 3 sessions, test counts, raw size, IoT-J venue, missing
+    figure script);
+  - "pending re-derivation" labels on the tables that depend on `eca_ahet_v1`;
+  - the 120 s limb and the P001–P006 deviation in `notes/protocol.md` and `notes/analysis_prespec.md`
+    §6 item 3a;
+  - Track 0 resolution in `notes/approach.md` and `notes/venue_iotj.md`;
+  - HISTORY records for the P001–P006 capture protocol and the development subject-identity
+    mismatch;
+  - every section-numbered "HANDOFF §N" reference repointed to a durable owner;
+  - `tests/test_documentation_claims.py`.
 
 ### Tests
 
 | Where | Result | Source |
 |---|---|---|
-| Worktree | **3189 passed, 17 skipped** | recorded in worktree HISTORY 2026-09-29 (commit `dbeac63`, 252.94 s); reruns on 2026-09-30 at `6521787` and after the config-pin fix gave the same counts, 0 failed (HISTORY 2026-09-30) |
+| Worktree | **3202 passed, 17 skipped** | after the 2026-09-30 records clean-up (HISTORY 2026-09-30). The 13 tests beyond the earlier 3189 are `tests/test_documentation_claims.py` |
 | Original checkout | 3144 passed | `reports/discrepancy_audit_2026-09-29.md`. The 2026-09-29 audit run also observed 5 skipped, and the 4 passes beyond the tracked 3140 are the untracked TI-generator test; neither detail is recorded in HISTORY. Fewer skips than the worktree because local `results/` artifacts exist |
 
 ## 3. Active task / next steps
 
-Do these in order. Items 1–2 are on the **worktree branch**; commit and push each with a HISTORY
-append. The 2026-09-30 verification (corrections to the 09-29 entries, superseded numbers) and the
-config-pin fix are recorded in HISTORY.
+Do these in order. Item 1 is on the **worktree branch**; commit and push each step with a HISTORY
+append. The 2026-09-30 verification, config-pin fix and records clean-up are recorded in HISTORY.
 
-1. **Finish Milestone 4 (records).**
-   - Remove the leftover pilot numbers: "10–46%" at `JOURNAL_PAPER.md:60, 465, 483` and
-     `THIRD_CHAPTER.md:242, 1094`; "0.2–0.5 bpm … four subjects" at `JOURNAL_PAPER.md:81-86`;
-     "10% / 46% / 20%" at `THIRD_CHAPTER.md:604`.
-   - Label the M8/M9 manuscript tables "computed with `eca_ahet_v1`; pending re-derivation".
-   - Add the 120 s limb and the P001–P006 deviation to `notes/protocol.md` SETTLE CRITERION and
-     `notes/analysis_prespec.md`.
-   - Add dated Track 0 correction notes at `notes/approach.md:47`, `notes/protocol.md:114` and
-     `notes/venue_iotj.md:182`.
-   - Append HISTORY entries for the P001–P006 capture record (settle, duration, posture, distance per
-     CLAUDE.md §3.6) and for the subject-identity mismatch (M-5).
-   - Write `tests/test_documentation_claims.py` (citation closure plus CLAUDE.md §4 wording).
-   - Fix the stale manuscript facts in audit item M-17.
-   - **Repoint the stale section-numbered HANDOFF references.** They point at older HANDOFF
-     layouts: `JOURNAL_PAPER.md:18, 600`, `THIRD_CHAPTER.md:18`, `notes/venue_iotj.md:182`,
-     `scripts/diagnose_signal_presence.py:15, 562`, `scripts/simulate_bin_policy.py:28`,
-     `scripts/diagnose_bin_sweep.py:20, 551, 602`, `scripts/m8_ahmed_score.py:16, 331`,
-     `src/br_bin_search.py:421`, `scripts/br_bin_preflight.py:93`,
-     `tests/test_diagnose_bin_sweep.py:199` and `tests/test_m4_window_grid.py:71`. Better: point
-     them at the owning note, not a HANDOFF section number.
-   - Correct `scripts/live_demo_config.yaml:28`. The `energy_eligibility_min_settled_db` comment
-     still says "validated on 4 sessions / 1 subject" and refers to a "10-subject study".
-2. **Close the firewall gaps.**
+1. **Close the firewall gaps.**
    - `scripts/m8_ahmed_transfer.py:430` calls `run_score_stage` without
      `require_production_provenance`. That defaults to False (`src/m4/estimator_scoring.py:2008`)
      and is passed on as `official=`. With `official=False`, the reference is hashed and loaded
@@ -150,7 +139,7 @@ config-pin fix are recorded in HISTORY.
    - Migrate `scripts/diagnose_signal_presence.py:143`, which still calls unsafe `refine_freq_hz`.
    - Reject v2 manifests for `P\d{3}` sessions, and check `protocol_compliant` when a scoring
      capability is minted.
-3. **Integrate into `vital_signs_own_v13`.** The git merge is a clean fast-forward; the original
+2. **Integrate into `vital_signs_own_v13`.** The git merge is a clean fast-forward; the original
    checkout's working tree is what blocks it.
    1. In the original checkout, move aside the untracked `reports/discrepancy_audit_2026-09-29.md`,
       `plans/discrepancy_remediation_2026-09-29.md` and `reports/remediation_verification_2026-09-30.md`.
@@ -167,13 +156,17 @@ config-pin fix are recorded in HISTORY.
    6. Before committing the MATLAB work, do plan item M1.4, the M-22 fixes, and an independent
       range-FFT review (CLAUDE.md §6).
    7. Push `vital_signs_own_v13`.
-4. **Milestone 5 — recompute under `eca_ahet_safe_refine_v2`.**
+3. **Milestone 5 — recompute under `eca_ahet_safe_refine_v2`.**
    - Build a new synthetic gate, a **new authorization filename**, and a reference-blind radar
      parent. Make `--gate`, `--authorization` and `--radar-parent` required and digest-checked.
+   - Add an explicit `subject` field to the new capture-registry revision, and relax the
+     single-subject role check at `src/m4/capture_registry.py:287`, with a test (HISTORY 2026-09-30).
    - Then re-score M1, the 2026-08-04 bin-policy tables and the M8/M9 production arms.
    - Wire `arm_loa` into the canonical summaries, and null its LoA when `descriptive_only`.
    - Add a constant-median null baseline to `estimator_scoring`.
-5. **Record each open DSP choice as a decision or a deferral.** None is currently recorded:
+   - Add a scoring path for the labelled deviation-inclusive sensitivity analysis, if one is wanted.
+     None exists: SCORING-mode parsing rejects every deviating session.
+4. **Record each open DSP choice as a decision or a deferral.** None is currently recorded:
    - AHET codes 2 and 6 test the same `ratio_db`;
    - impulse clip 1.5 rad/frame;
    - absolute prominence;
@@ -183,9 +176,26 @@ config-pin fix are recorded in HISTORY.
    - whether a non-peak second harmonic (refinement reason 6) should reject AHET.
 
    None may be tuned on Masimo.
+5. **Remaining record hygiene** (lower priority; none changes a result):
+   - stale notes: `notes/approach.md:633` "physical acquisition pending";
+     `notes/capture_inventory.md:146, 158` "E/F/G"; `notes/dca1000_protocol.md:310` names
+     `scripts/capture.py` (now `steps/step_1/capture.py`); `notes/note_candidate_ranking.md:3`
+     "awaiting cross-model review";
+   - a "superseded" banner on the `plans/implementation_plan.md` milestone map;
+   - dated banners on plans with affirmative timing wording (`plans/implementation_plan.md:341, 350,
+     379`, `plans/m8_step1b_ahmed_transfer.md`, `plans/m4_offline_harness.md`) and stale status
+     headers (`plans/m4_offline_harness.md`, `plans/m8_step1b_ahmed_transfer.md`,
+     `plans/m4_stage12_review.md`);
+   - in the original checkout, record `scripts/export_session_to_ti_mat.m` and
+     `scripts/view_recording_2.m` in HISTORY.
+6. **Owner questions** (answers go in HISTORY):
+   - how were the clock offsets obtained? All nine prospective manifests record exactly 0.000 s at
+     both ends (HISTORY 2026-09-30 capture record);
+   - is `JOURNAL_PAPER.md` §4.1 (MAE 0.16 vs 2.72 bpm, from 2026-07-14 live hops) paper-grade? No
+     regeneration script was found.
 
 **Do not:**
-- resume acquisition (Track 1) until items 2–3 land;
+- resume acquisition (Track 1) until items 1–2 land;
 - start codex-M3 or any prospective scoring before Milestone 5;
 - rerun Track 0;
 - implement the IoT/WST plans before owner acceptance and independent plan review.
@@ -222,9 +232,8 @@ config-pin fix are recorded in HISTORY.
 
 ## 5. Gotchas / landmines
 
-**Standing analysis rules** (inbound "HANDOFF §5" pointers in `notes/analysis_prespec.md`,
-`notes/comparator_prespec.md`, `src/m4/window_grid.py` and `notes/plan_eca_forbidden_zone.md` refer
-here):
+**Standing analysis rules** (owner: `notes/analysis_prespec.md` §7; replay landmine:
+`HISTORY.md` 2026-07-14/15):
 - **Windows are 30 s; do not shorten them.**
 - **Statistics use non-overlapping 30 s windows only.** A 3 s hop shares 27/30 s of data, so those
   rows are not independent. Use per-session results, or contiguous block resampling; never a
@@ -232,7 +241,7 @@ here):
 - **Index windows by frame number, never wall-clock.** `elapsed_s` in `--replay-fast` NPZs is
   wall-clock and unusable.
 
-**Capture and file-format rules** (also targets of older "HANDOFF §5" / "section 9" pointers):
+**Capture and file-format rules:**
 - **Never change `adcbufCfg` SampleSwap=1.** SampleSwap=0 silently disables LVDS output in the SDK
   demo firmware (`steps/step_1/capture.py:333`, which cites `notes/dca1000_protocol.md` §5.4).
   Python captures therefore decode with `iq_swap: true`.
@@ -285,6 +294,15 @@ here):
   Bare `conda` fails (exit 127) in Git Bash. Calling the env's `python.exe` directly crashes
   Matplotlib (exit 127). Two concurrent `conda run` calls can collide on a temp file. Do not pass a
   shared `--basetemp`: the provenance tests build throwaway git repos.
+- **`tests/test_documentation_claims.py` guards the records.** It fails on:
+  - a cited `[Rn]` that is not in the reference list;
+  - CLAUDE.md §4 timing words outside a prohibition in the manuscripts, HANDOFF, `notes/` or code
+    (two allowlisted lines);
+  - any section-numbered HANDOFF reference outside HISTORY, HANDOFF, `reports/` and `plans/`.
+
+  Point at a durable owner instead: a note section, CLAUDE.md, or a dated HISTORY entry.
+- **Never write a prospective session's PR into HISTORY.** For sealed sessions the start PR stays
+  in the sealed manifest (`notes/protocol.md` SETTLE CRITERION).
 - **`scripts/live_demo_config.yaml` is a hashed provenance input** for M8/M9 gates
   (`src/m8/ahmed_provenance.py:103, 191`; `scripts/m9_kotte_run.py:80`). Any byte change, comments
   included, changes the source identity of gates built afterwards. That is expected; historical

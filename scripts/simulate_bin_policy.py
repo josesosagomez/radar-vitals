@@ -25,7 +25,7 @@ What the policies may and may not use
 -------------------------------------
 A policy decides using **radar-side information only** — the per-bin BR estimates, their validity
 and confidence flags, and their own history. The Masimo reference is used **solely to score the
-outcome afterwards**, never to make a decision (HANDOFF §3.5, CLAUDE.md §4). `P1_oracle` is the
+outcome afterwards**, never to make a decision (reference-blind rule, `notes/analysis_prespec.md` §3). `P1_oracle` is the
 deliberate exception and is labelled a ceiling, not a policy: it picks the best bin per window
 using the reference, so no honest selector can beat it.
 

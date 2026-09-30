@@ -72,7 +72,7 @@ from br_bin_preflight import (                                          # noqa: 
 #: Label-origin sensitivity grid, in seconds added to `frame0_epoch`. Fixed at three points and
 #: run only after the freeze, so it cannot become another degree of freedom. The eight training
 #: captures have no persisted frame-0 epoch; their origin is reconstructed from `start_wall_utc`,
-#: which PRECEDES true frame 0 by 5-15 s (`HANDOFF.md` §4.3). Offset 0 is the primary because it
+#: which PRECEDES true frame 0 by 5-15 s (`HISTORY.md` 2026-08-04, capture-origin defect). Offset 0 is the primary because it
 #: is the only value reconstructible from what was recorded. Captures with a true
 #: `frame0_epoch_utc` are unaffected and the scan is meaningless for them.
 OFFSET_GRID_S = (0.0, 7.5, 15.0)

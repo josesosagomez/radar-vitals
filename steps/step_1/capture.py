@@ -330,7 +330,7 @@ class IWR1642:
 
         CRITICAL: adcbufCfg SampleSwap=1 must not be changed.
         SampleSwap=0 silently disables LVDS output in the SDK demo firmware.
-        See notes/dca1000_protocol.md §5.4 and HANDOFF.md §5.
+        See notes/dca1000_protocol.md §5.4.
         """
         p = cfg['profile']
         f = cfg['frame']

@@ -219,7 +219,8 @@ period rather than constituting the whole of it. It is enforced for new captures
 `src/protocol.py` `MIN_SETTLE_S = 120.0`.
 
 Seated settling typically takes **2–3 minutes**. Budget it. If the criterion is not met within
-5 minutes, **abort and re-seat** — do not record and hope. So admissible settle is 120–300 s.
+5 minutes, **abort and re-seat** — do not record and hope. So admissible settle is 120–300 s. Code enforces only the
+120 s floor; the 300 s ceiling is procedural.
 
 **Scope.** Limbs 1–2 apply to natural, paced and diagnostic captures alike. Limb 3 applies to
 **natural and paced only** — a diagnostic capture is not bound by the 120 s floor. Recovery is
@@ -230,13 +231,16 @@ For paced, the ≥ 120 s of metronome pacing required before recording **counts 
 subject paces while PR settles. Paced pre-record time is therefore ~120 s total, not 240 s.
 
 > **Recorded deviation (owner decision 2026-09-29).** The six natural sessions P001–P006, captured
-> 2026-08-12 → 08-18 before limb 3 was enforced in code, record **60 s** total settle. They remain
+> 2026-08-12 → 08-18, record **60 s** total settle. Limb 3 had been decided and committed on
+> 2026-08-12 14:37Z (`df437b9`, unmerged branch `m2_sidecar_scaffold`) but never reached this
+> protocol text or the capture code used for them. They remain
 > captured, immutable records but are **protocol deviations**: they are not 120 s-compliant
 > primary per-protocol sessions, and any later use must disclose the deviation. They load with
 > `protocol_compliant=false` / `settle_below_120s`. Do not rewrite their manifests, and do not
 > recapture to erase the deviation. The three paced sessions recorded 120 s.
 
-Record in `HISTORY.md`: settle duration, and the PR at the moment recording started.
+Record in `HISTORY.md`: settle duration, and the PR at the moment recording started. **For sealed
+prospective sessions the PR stays in the sealed manifest and is never written to `HISTORY.md`.**
 
 ## Session steps
 
@@ -352,7 +356,7 @@ then slowly, over several minutes.
 
 | candidate | why it fails |
 |---|---|
-| **Slow paced breathing (~6 bpm) to drive RSA** | Wrong axis: RSA oscillates HR *within* the window, inflating within-window spread past the 5 bpm gate and making windows **inadmissible** rather than adding across-session range. It also breaks BR outright — 6 bpm = 0.10 Hz is the exact bottom edge of `respiration.band_hz`, which the M2 `resp_edge_veto` permanently invalidates (HANDOFF §5). Fails twice. |
+| **Slow paced breathing (~6 bpm) to drive RSA** | Wrong axis: RSA oscillates HR *within* the window, inflating within-window spread past the 5 bpm gate and making windows **inadmissible** rather than adding across-session range. It also breaks BR outright — 6 bpm = 0.10 Hz is the exact bottom edge of `respiration.band_hz`, which the M2 `resp_edge_veto` permanently invalidates (`plans/m2_respiration_fix.md`). Fails twice. |
 | **Natural day-to-day / time-of-day variation** | Real but uncontrolled and *between* sessions, not within one. Does nothing for a per-session agreement claim, and cannot be commanded or logged as a design variable. |
 | **Cold pressor / Valsalva** | Larger HR excursion, but adds discomfort and a materially higher risk profile for no advantage over recovery. Would need the same ethics amendment and more. |
 

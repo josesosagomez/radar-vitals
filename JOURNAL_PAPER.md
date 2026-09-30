@@ -59,14 +59,14 @@
 | Comparison against ≥1 published method | **PARTIAL** — Ahmed HA and Kotte joint-Doppler complete; TI on-chip comparison remains |
 | Coverage at a defensible level | **WEAK** — canonical M1 radar coverage was 11/120 windows (k ≥ 1, development data) under the legacy `eca_ahet_v1` estimator; superseded, to be recomputed under `eca_ahet_safe_refine_v2` |
 | Ethics approval / informed consent for human subjects | **OBTAINED** (confirmed 2026-07-23) — record the reference number for the Methods section (§10) |
-| Working system, verified | **DONE** [VERIFIED 2026-09-30 — 3189 passed, 17 skipped, remediation branch] |
+| Working system, verified | **DONE** [VERIFIED 2026-09-30 — 3202 passed, 17 skipped, remediation branch] |
 | Explicit, auditable evaluation methodology | **DONE** — specified and applied consistently. *Not* pre-registered (M0 removed 2026-08-03), so it is a transparency contribution, not a timing claim |
 | **Real-data evaluation of two simulation-only published methods** | **PARTIAL** — M8 Ahmed HA and M9 Kotte complete; multi-subject validation remains |
 | Reproducible pipeline, seeds, hashes | **DONE** |
 
 **Minimum viable path to submission**, in order:
 
-1. **Finish and merge the discrepancy remediation** (`HANDOFF.md` §3), then recompute the
+1. **Finish and merge the discrepancy remediation** (`plans/discrepancy_remediation_2026-09-29.md`), then recompute the
    development results under the corrected estimator `eca_ahet_safe_refine_v2`.
 2. Complete the **15-participant × 3-session study** (45 sessions; 9 captured 2026-08-12 → 08-18,
    which also exercised the live capture chain end to end). Ethics approval is in hand.
@@ -259,10 +259,10 @@ natural, paced, and unknown protocol strata were not pooled.
 
 The table reports the range across all six Ahmed profiles, not a selected winner.
 
-> **Legacy estimator — pending re-derivation.** The production arm and the current-lock
-> (production-rerun) locks were computed with `eca_ahet_v1`, before the 2026-09-29 peak-refinement
-> fix. Recompute under `eca_ahet_safe_refine_v2` before quoting any of these values
-> (`HANDOFF.md` §3).
+> **Current-lock column — pending re-derivation.** Its lock was re-derived by the production
+> warmup under `eca_ahet_v1`, before the 2026-09-29 peak-refinement fix; recompute it under
+> `eca_ahet_safe_refine_v2` before quoting. The recorded-lock column does not depend on that
+> estimator (`plans/discrepancy_remediation_2026-09-29.md`, Milestone 5).
 
 
 | Vital / protocol | Recorded-lock MAE / RMSE (bpm) | Current-lock MAE / RMSE (bpm) | Joint coverage |
@@ -327,7 +327,7 @@ cells; 30 duplicate reference seconds were normalized by the existing parser. Al
 
 > **Legacy lock — pending re-derivation.** The range bin was selected by the production warmup
 > before the 2026-09-29 peak-refinement fix (`eca_ahet_v1`). Recompute under
-> `eca_ahet_safe_refine_v2` before quoting these values (`HANDOFF.md` §3).
+> `eca_ahet_safe_refine_v2` before quoting these values (`plans/discrepancy_remediation_2026-09-29.md`, Milestone 5).
 
 | Vital / protocol | `delta` | Scored / total | Coverage | MAE / RMSE (bpm) | Bias (bpm) |
 |---|---:|---:|---:|---:|---:|
@@ -611,7 +611,7 @@ annotated versions with the role each plays in the argument are in
 
 ## 12. Immediate next actions
 
-1. **Finish and merge the discrepancy remediation** (`HANDOFF.md` §3), then recompute the
+1. **Finish and merge the discrepancy remediation** (`plans/discrepancy_remediation_2026-09-29.md`), then recompute the
    development results under `eca_ahet_safe_refine_v2`. The live capture path has been exercised:
    nine prospective sessions were captured 2026-08-12 → 08-18.
 2. **Preserve the completed M9 Kotte radar-only and exploratory scoring artifacts.** Together

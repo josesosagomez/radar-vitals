@@ -330,7 +330,7 @@ for f_r (§6.1) — **a declared deviation from [R1]**.
 
 ## 6. Algorithm specification
 
-Pipeline, each stage independently verified (`tests/`, 3189 passed, 17 skipped [VERIFIED 2026-09-30, remediation branch]):
+Pipeline, each stage independently verified (`tests/`, 3202 passed, 17 skipped [VERIFIED 2026-09-30, remediation branch]):
 
 1. Parse raw ADC (2-lane LVDS, Complex1x, 4-word packets). **I/Q ordering depends on capture
    source**: SDK/Python captures need `iq_swap=True`, mmWave Studio captures `iq_swap=False`.
@@ -577,8 +577,9 @@ in-gate reflector. They are **not** a general physical law and are **untested wi
 reflectors** (a chair, a second person, a moving object) inside the gate. Re-validate against the
 prospective study.
 
-Validation: `scripts/validate_warmup_selection.py` reruns the real selection logic against all
-four sessions' raw streams and confirms the picks [VERIFIED, committed and regenerable].
+Validation: `scripts/validate_warmup_selection.py` reruns the real selection logic against the
+massimo1, massimo2 and sweep raw streams (live_test1 was dropped from the script on 2026-07-30)
+and checks the picks [committed and regenerable; rerun before quoting].
 
 ### 9.4 Consequence — an honest trade
 
@@ -625,9 +626,10 @@ The canonical run covered eight captures, two lock estimands, and seven paired a
 Comparative metrics exclude k=0 and keep natural, paced, and unknown protocol strata separate.
 The following ranges span all six Ahmed profiles; they are **not** a post-hoc best-arm result.
 
-> **Legacy estimator — pending re-derivation.** The production arm and the current-production
-> rerun locks were computed with `eca_ahet_v1`, before the 2026-09-29 peak-refinement fix.
-> Recompute under `eca_ahet_safe_refine_v2` before quoting any of these values (`HANDOFF.md` §3).
+> **Current-production rerun rows — pending re-derivation.** Their lock was re-derived by the
+> production warmup under `eca_ahet_v1`, before the 2026-09-29 peak-refinement fix; recompute them
+> under `eca_ahet_safe_refine_v2` before quoting. The recorded-as-captured rows do not depend on
+> that estimator (`plans/discrepancy_remediation_2026-09-29.md`, Milestone 5).
 
 **Heart-rate agreement against Masimo `Beats / min`:**
 
@@ -744,7 +746,7 @@ seconds were recorded in the scoring artifact; they were not radar tuning.
 
 > **Legacy lock — pending re-derivation.** The current-production rerun lock was selected by the
 > production warmup before the 2026-09-29 peak-refinement fix (`eca_ahet_v1`). Recompute under
-> `eca_ahet_safe_refine_v2` before quoting these values (`HANDOFF.md` §3).
+> `eca_ahet_safe_refine_v2` before quoting these values (`plans/discrepancy_remediation_2026-09-29.md`, Milestone 5).
 
 | Vital / protocol | Loading arm | Scored / total | Joint coverage | MAE (bpm) | RMSE (bpm) | Bias (bpm) | Descriptive pooled-window interval (bpm) |
 |---|---:|---:|---:|---:|---:|---:|---:|
@@ -1046,7 +1048,7 @@ submission — do not invent them.
   accuracy specification. Masimo SET® is validated in >100 clinical studies per the manufacturer;
   cite the device documentation for the numeric specification, not marketing material.]`
 
-**Also in `literature/ref_papers/`** (surveyed, not yet placed in the argument), both IEEE Trans.
+**Also in `literature/ref_papers/`** (surveyed; both are now cited in the argument as [R22] and [R21]), both IEEE Trans.
 Radar Systems vol. 2 (2024), both simulation-only:
 
 - **[R22] Ahmed et al., "Discovering the Unseen"** (DOI 10.1109/TRS.2024.3412915). Its **Harmonic
@@ -1102,7 +1104,7 @@ Per the reproducibility rules, each must come from a committed script in `figure
 
 1. **Complete the 15-participant study** (`notes/protocol.md`; 9 of 45 sessions captured by
    2026-09-30). Acquisition is paused until the remediation firewall and integration steps land
-   (`HANDOFF.md` §3). This is the critical path for §3.8 and half of §3.10.
+   (`plans/discrepancy_remediation_2026-09-29.md`). This is the critical path for §3.8 and half of §3.10.
 2. **Take one capture designed to provoke a 4·f_r ≈ HR collision** — needed to unblock §12.5 and
    to give §12.1 direct rather than retired evidence.
 3. **Address coverage** (§10.2). Canonical M1 coverage was ≈9% under the legacy estimator; at that
@@ -1149,7 +1151,7 @@ investigation scripts (2,943 lines combined) remain from specific diagnoses.
 
 ### 17.2 Test suite — 2026-07-24 snapshot: 797 test outcomes across 21 files (796 passed, 1 xfailed)
 
-> **Update 2026-09-30:** the suite now runs **3189 passed, 17 skipped** on the remediation branch.
+> **Update 2026-09-30:** the suite now runs **3202 passed, 17 skipped** on the remediation branch.
 > The distribution below is the 2026-07-24 snapshot and has not been recounted.
 
 [VERIFIED 2026-07-24: `796 passed, 1 xfailed, 0 failed`.] **An xfail is not a pass** — the one
@@ -1219,7 +1221,7 @@ spectra, AHET candidates, checkpointed every 60 s), and `adc_stream.bin` (the ra
 
 The project is **heavily weighted toward infrastructure, verification and failure analysis**, and
 **light on subject data**. Roughly 18,700 lines of code (2026-07-24 count) and a test suite now at
-3189 passing tests support eight development captures from four subjects, plus nine prospective
+3202 passing tests support eight development captures from four subjects, plus nine prospective
 sessions whose labels remain sealed. That ratio is not a criticism — the failure analyses in §11 and the
 methodology in §7 are only possible because the diagnostic infrastructure exists, and they are
 the chapter's most distinctive material. But it does identify the critical path precisely:

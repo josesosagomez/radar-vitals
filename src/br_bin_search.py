@@ -418,7 +418,7 @@ def permutation_null(ws: WindowSet, vectors: np.ndarray, sel_wv: np.ndarray,
 
 #: Two-sided 95 % Student-t quantiles by degrees of freedom. A ten-entry table rather than
 #: `scipy.stats.t.ppf` because `from scipy import stats` fails with exit 127 and NO traceback
-#: when the env's `python.exe` is invoked by absolute path (HANDOFF §7) — a silent import
+#: when the env's `python.exe` is invoked by absolute path (`HISTORY.md` 2026-08-04) — a silent import
 #: failure inside a freeze artifact's provenance is a worse trade than a table anyone can check.
 _T_975 = {
     1: 12.706, 2: 4.303, 3: 3.182, 4: 2.776, 5: 2.571, 6: 2.447,
