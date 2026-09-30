@@ -44,7 +44,12 @@ Standard phase-based chain. Each stage verified in isolation:
    the energy prior) and `src/respiration.py::extract_chest_phase` (the one whose bin
    value becomes phase). The numbering here is logical order, not a data-flow diagram —
    nothing consumes a range profile produced by an earlier step.
-3. **Static clutter removal — IMPLEMENTED, DEFAULTED OFF, NEVER CONCLUDED.**
+3. **Static clutter removal — IMPLEMENTED, DEFAULTED OFF, DECIDED: STAYS OFF.**
+   **Corrected 2026-09-30:** the heading previously said "NEVER CONCLUDED", which was wrong. The
+   `--isolate-fields phase.clutter_removal` A/B of 2026-07-30 (`HISTORY.md`, run
+   `20260730T204448Z`, 8 development captures) found no coverage gain with the bin pinned
+   (12% → 12%) and a loss when warmup re-selects the bin (13% → 7%, lock moved in 4/8 captures).
+   The owner accepted that result as the Track 0 answer on 2026-09-29.
    **Corrected 2026-08-26; the previous "NOT IMPLEMENTED" text here was stale and wrong.**
    `src/clutter.py` provides `remove_static_clutter()` with `CLUTTER_METHODS = ("none",
    "slow_time_mean")`, where `slow_time_mean` subtracts the per-(chirp, rx) mean over slow

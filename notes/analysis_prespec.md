@@ -539,6 +539,18 @@ in the primary partition.
    incomplete trailing window. An intentional early stop is item 3 (not admitted); a
    completed-length run with only a trailing file/transport fragment is item 4 (retained). A run
    cannot be both, because "reached its intended duration" is either true or false.
+
+   **3a. Settle-floor deviation (dated addition 2026-09-30; owner decisions 2026-08-12 D-OWN-7
+   and 2026-09-29; `HISTORY.md`).** A natural or paced session whose recorded total settle is
+   **< 120 s** (`notes/protocol.md` SETTLE CRITERION, limb 3) is a **protocol deviation**. It is
+   **excluded from the primary per-protocol analysis** and may appear only in an explicitly
+   labelled, deviation-inclusive sensitivity analysis, never pooled into primary results. This is
+   not a retrofit (§4): the 120 s floor was decided on 2026-08-12 before any affected session was
+   captured, and was only later enforced in code (`src/protocol.py` `MIN_SETTLE_S`). The affected
+   sessions are **P001–P006 natural** (60 s each); they load with `protocol_compliant=false` /
+   `settle_below_120s`. Recovery is exempt. A deviation never authorizes recapture (§2d). Item 3
+   governs a session **aborted** because the settle criterion was not met; 3a governs a session that
+   **was recorded to completion** but is later found below the 120 s floor.
 4. **Unusable / corrupt raw capture (objective test).** From `run_metadata.json`: a session is
    **corrupt and not admitted** iff the raw mirror is truncated so that a **non-final** window is
    incomplete (`mirror_truncated_bytes` cuts into a mid-recording window) **or** a stored file

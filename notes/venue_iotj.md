@@ -179,6 +179,9 @@ submission-to-first-decision 6.9 weeks. UNVERIFIED — confirm in JCR before rel
    Do not re-propose it.
 6. Re-check IoT-J special issues and the JCR impact factor near submission.
 7. **Prerequisite to the DSP story (owner priority, 2026-08-25):** resolve the static
-   clutter-removal omission — cite a justification or implement it. See `HANDOFF.md` §3 Track 0.
-   Reviewers who know this field will ask, and the answer interacts with the harmonic-verification
-   claims in §4.2.
+   clutter-removal omission — cite a justification or implement it. Reviewers who know this field
+   will ask, and the answer interacts with the harmonic-verification claims in §4.2.
+   **Resolved 2026-09-29 (owner decision).** Removal is implemented (`src/clutter.py`) and stays
+   off. The justification is measured: the 2026-07-30 A/B (`HISTORY.md`) showed no coverage gain
+   with the bin pinned (12% → 12%) and a loss when warmup re-selects the bin (13% → 7%). See
+   `notes/approach.md` §3 step 3.

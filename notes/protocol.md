@@ -113,6 +113,12 @@
   > marginally true, and the sidelobe skirts of strong static returns leak into the
   > gate. No stage of the pipeline removes static clutter (see `notes/approach.md`).
   >
+  > **Correction 2026-09-30.** Static clutter removal (`slow_time_mean`) is implemented in
+  > `src/clutter.py` but has always been **off** in production. The 2026-07-30 A/B
+  > (`HISTORY.md`) found no coverage gain with the bin pinned (12% → 12%) and a loss when warmup
+  > re-selects the bin (13% → 7%, lock moved in 4/8 captures). The owner accepted that result on
+  > 2026-09-29, so removal stays off.
+  >
   > **Not retroactively excluded.** Those five captures remain valid captures; this
   > is recorded as a known scene difference between eras, not a defect finding. What
   > it forbids is silently comparing across the two eras as if the scene were fixed.
@@ -131,7 +137,8 @@
   > collection/publication (user-confirmed 2026-07-24/25); the approval document itself is not in
   > the repo. **Do not exceed 10 minutes.**
   >
-  > **Why.** At the measured 10-46% HR coverage, a 5-min session produced only ~9
+  > **Why.** At the then-measured 10-46% HR coverage (a pilot figure withdrawn on 2026-09-29;
+  > canonical M1 coverage under the legacy estimator was ≈9%), a 5-min session produced only ~9
   > windows, i.e. ~1.8-8.3 accepted windows per subject across both sessions before
   > Masimo PI / coverage / stationarity exclusions removed a further 12-20%. At the
   > pessimistic end that is ~2 usable windows per subject, which cannot support a
@@ -196,16 +203,38 @@
 > excluded by the comparator — i.e. **an unsettled subject silently destroys the start of the
 > session.** "Confirm PR is stable" was too vague to prevent it.
 
-**Do not start the radar capture until BOTH hold, measured on the live Masimo:**
+**Do not start the radar capture until ALL THREE hold:**
 
-1. **PR spread ≤ 5 bpm** (max − min) over a **continuous 60 s**; and
-2. **no monotonic drift** — the PR in the last 20 s differs from the first 20 s by ≤ 3 bpm.
+1. **PR spread ≤ 5 bpm** (max − min) over a **continuous 60 s**, measured on the live Masimo; and
+2. **no monotonic drift** — the PR in the last 20 s differs from the first 20 s by ≤ 3 bpm, measured
+   on the live Masimo; and
+3. **total settle ≥ 120 s** — elapsed seated time before recording starts. Not a Masimo measurement,
+   and **natural and paced only** (see scope below).
+
+Limb 3 is an **owner decision of 2026-08-12 (D-OWN-7), reaffirmed 2026-09-29, based on operator
+judgement — it is not derived from measurement.** Limbs 1–2 come from the measured 2026-07-13
+failure described above; limb 3 does not, and must not be presented in the paper as an empirically
+determined settling time. Its purpose is that the 60 s evidence window sits *inside* a settled
+period rather than constituting the whole of it. It is enforced for new captures by
+`src/protocol.py` `MIN_SETTLE_S = 120.0`.
 
 Seated settling typically takes **2–3 minutes**. Budget it. If the criterion is not met within
-5 minutes, **abort and re-seat** — do not record and hope.
+5 minutes, **abort and re-seat** — do not record and hope. So admissible settle is 120–300 s.
 
-**This applies to natural, paced and diagnostic captures alike.** Recovery uses its explicit
-post-exertion start rule below; that is the only study-arm exemption.
+**Scope.** Limbs 1–2 apply to natural, paced and diagnostic captures alike. Limb 3 applies to
+**natural and paced only** — a diagnostic capture is not bound by the 120 s floor. Recovery is
+exempt from this section entirely and uses its explicit post-exertion start rule below; that is the
+only study-arm exemption.
+
+For paced, the ≥ 120 s of metronome pacing required before recording **counts toward** limb 3 — the
+subject paces while PR settles. Paced pre-record time is therefore ~120 s total, not 240 s.
+
+> **Recorded deviation (owner decision 2026-09-29).** The six natural sessions P001–P006, captured
+> 2026-08-12 → 08-18 before limb 3 was enforced in code, record **60 s** total settle. They remain
+> captured, immutable records but are **protocol deviations**: they are not 120 s-compliant
+> primary per-protocol sessions, and any later use must disclose the deviation. They load with
+> `protocol_compliant=false` / `settle_below_120s`. Do not rewrite their manifests, and do not
+> recapture to erase the deviation. The three paced sessions recorded 120 s.
 
 Record in `HISTORY.md`: settle duration, and the PR at the moment recording started.
 
