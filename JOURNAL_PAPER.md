@@ -15,7 +15,7 @@
 > M9 Kotte) under one common comparator with coverage reported. **M8 Ahmed and M9 Kotte are
 > complete; multi-subject validation and the remaining baseline comparison are still pending.**
 >
-> See `plans/implementation_plan.md` "Track 0", `HANDOFF.md` §4, `HISTORY.md` 2026-08-03.
+> See `HISTORY.md` 2026-08-03 and `CLAUDE.md` §4.
 
 # Journal Paper — planning and content source
 
@@ -54,22 +54,22 @@
 
 | Requirement for any credible venue | Status |
 |---|---|
-| Multi-subject dataset | **WEAK** — n = 4 subjects, 8 sessions (corrected 2026-08-03; previously recorded as n = 1) |
+| Multi-subject dataset | **WEAK** — n = 4 development subjects, 8 sessions (corrected 2026-08-03; previously recorded as n = 1). Prospective study: 9 of 45 sessions captured by 2026-09-30, all labels sealed, nothing scored |
 | Agreement vs reference (MAE/RMSE/Bland–Altman) | **MISSING** — prior table withdrawn: three overlapping live-demo sessions from only two subjects, with no regeneration script |
 | Comparison against ≥1 published method | **PARTIAL** — Ahmed HA and Kotte joint-Doppler complete; TI on-chip comparison remains |
-| Coverage at a defensible level | **WEAK** — 10–46% of windows produce an estimate |
+| Coverage at a defensible level | **WEAK** — canonical M1 radar coverage was 11/120 windows (k ≥ 1, development data) under the legacy `eca_ahet_v1` estimator; superseded, to be recomputed under `eca_ahet_safe_refine_v2` |
 | Ethics approval / informed consent for human subjects | **OBTAINED** (confirmed 2026-07-23) — record the reference number for the Methods section (§10) |
-| Working system, verified | **DONE** [VERIFIED — 796 passed, 1 xfailed] |
+| Working system, verified | **DONE** [VERIFIED 2026-09-30 — 3189 passed, 17 skipped, remediation branch] |
 | Explicit, auditable evaluation methodology | **DONE** — specified and applied consistently. *Not* pre-registered (M0 removed 2026-08-03), so it is a transparency contribution, not a timing claim |
 | **Real-data evaluation of two simulation-only published methods** | **PARTIAL** — M8 Ahmed HA and M9 Kotte complete; multi-subject validation remains |
 | Reproducible pipeline, seeds, hashes | **DONE** |
 
 **Minimum viable path to submission**, in order:
 
-1. Run a **live hardware smoke test** — the live capture path has not been exercised since
-   2026-07-14, and the study cannot afford to discover a broken chain on subject 1.
-2. Run the **10-subject × 3-session study**. Ethics approval is in hand; nothing algorithmic
-   blocks it.
+1. **Finish and merge the discrepancy remediation** (`HANDOFF.md` §3), then recompute the
+   development results under the corrected estimator `eca_ahet_safe_refine_v2`.
+2. Complete the **15-participant × 3-session study** (45 sessions; 9 captured 2026-08-12 → 08-18,
+   which also exercised the live capture chain end to end). Ethics approval is in hand.
 3. Take **one collision-provoking capture** (4·f_r ≈ HR) to give the central limitation direct
    evidence.
 4. Run **baselines** — TI's on-chip vital-signs output plus one reimplemented published pipeline.
@@ -78,12 +78,12 @@
 
 Realistically, steps 2–4 are the difference between a rejected manuscript and a competitive one.
 
-**A caution about the framing you may be tempted into.** With MAE around 0.2–0.5 bpm on pilot
-data [PRELIMINARY], it is tempting to lead with "sub-bpm accuracy." Do not. Those numbers come
-from four subjects, on ~10–20% of windows, from sessions that informed the method's design, and
-with a single scorable window in one session. A reviewer who notices any of that — and a good
-one will — will distrust the whole paper. Our own project history contains exactly this lesson:
-a "MAE 0.16 bpm" result was reported internally and had to be withdrawn once the comparator was
+**A caution about the framing you may be tempted into.** Do not lead with "sub-bpm accuracy."
+The pilot table that suggested it was withdrawn on 2026-09-29 (§4.2): its three sessions came from
+only two people, used overlapping live-demo windows, informed the method's design, and had no
+committed regeneration script. A reviewer who notices any of that — and a good one will — will
+distrust the whole paper. Our own project history contains the same lesson a second time: a
+"MAE 0.16 bpm" result was reported internally and had to be withdrawn once the comparator was
 written down explicitly (§4.1). **Lead with the method comparison, report accuracy with coverage
 attached.**
 
@@ -91,13 +91,18 @@ attached.**
 
 ## 2. Target journal comparison
 
+> **Superseded 2026-08-25.** The target venue is **IEEE IoT-J (regular issue)**; the decision and
+> what that venue additionally requires are in `notes/venue_iotj.md` (commit `1221bde`). The
+> comparison below is the earlier analysis, kept for its reasoning about fallbacks. Its JBHI
+> recommendation no longer governs.
+
 You said high-impact and undecided. Here is the honest landscape for *this* paper.
 
 | Venue | IF (recent) | Scope fit | What they demand | Verdict |
 |---|---|---|---|---|
 | **IEEE J. Biomedical and Health Informatics (JBHI)** | ~8.2 | **Excellent** — sensing methods validated against clinical references | Multi-subject validation, proper agreement statistics, some clinical framing | **Primary target.** Best ratio of impact to achievability |
 | **IEEE Trans. Biomedical Engineering (TBME)** | ~4.4 | **Excellent** — methodological rigour in physiological measurement | Strong methodological novelty; a good home for the comparator argument | **Strong second.** Values the methodology contribution most |
-| **npj Digital Medicine** | ~15.1 | **Weak for now** — expects clinical/health-outcome framing, larger and more diverse cohorts | Clinical study design, diverse cohort, health-outcome relevance | Highest impact, but 10 healthy seated subjects will not clear the bar. Revisit only with a clinical population |
+| **npj Digital Medicine** | ~15.1 | **Weak for now** — expects clinical/health-outcome framing, larger and more diverse cohorts | Clinical study design, diverse cohort, health-outcome relevance | Highest impact, but 15 healthy seated participants will not clear the bar. Revisit only with a clinical population |
 | **IEEE Sensors Journal** | ~4.5 | **Good** — sensor systems and signal processing | Solid system paper; lighter validation demands | **Safe fallback.** Fast, respectable, lower impact |
 | **IEEE Trans. Microwave Theory & Techniques (T-MTT)** | ~5.2 | **Moderate** — the home of [R5], [R6], [R7], [R15] | RF/microwave novelty | Weak fit: our novelty is DSP and methodology, not RF hardware |
 | **Sensors (MDPI)** | ~3.4 | Broad | Fast turnaround | Only if speed matters more than prestige |
@@ -129,7 +134,7 @@ expectations that shape §5's word budget.
 We can support this with a direct demonstration: **the same radar output, the same reference,
 the same windows, scored two defensible ways, gives MAE 0.16 bpm or 2.72 bpm — a 17× difference**
 [PRELIMINARY, §4.1]. That is a result about the field's reporting practice, and it is the most
-transferable thing this project has produced. It also does not require 10 subjects to be true,
+transferable thing this project has produced. It also does not require the full cohort to be true,
 although a multi-subject demonstration makes it far harder to dismiss.
 
 ### 3.2 Supporting claims, ranked by evidential strength
@@ -164,20 +169,20 @@ evaluation methodology, and the bin-selection fix.**
 
 The production AHET gates are reference-informed legacy settings. The 2.0/4.0 dB floor thresholds
 were selected in a Masimo-scored development sweep whose source sessions were later deleted, so
-that tuning is not reproducible and the gates are not independently validated. They are frozen,
+that tuning is not reproducible and the gates are not independently validated. They are held fixed,
 not retuned, and may be evaluated only on held-out prospective participants.
 
 ### 3.4 Two possible papers
 
 | | **Paper A — "How to evaluate"** | **Paper B — "System + validation"** |
 |---|---|---|
-| Headline | Real-data evaluation of two simulation-only published methods under one common comparator; coverage-aware reporting; two silent failure modes | A 77 GHz seated HR system validated against a clinical reference across 10 subjects |
+| Headline | Real-data evaluation of two simulation-only published methods under one common comparator; coverage-aware reporting; two silent failure modes | A 77 GHz seated HR system validated against a clinical reference across 15 participants |
 | Venue | TBME, JBHI | JBHI, IEEE Sensors J. |
-| Needs 10 subjects? | Strongly preferred, not strictly required | **Yes, absolutely** |
+| Needs the full cohort? | Strongly preferred, not strictly required | **Yes, absolutely** |
 | Risk | "Methodology paper without enough data" | Crowded field; needs competitive numbers |
 | Current readiness | ~70% | ~25% |
 
-**Recommendation: write Paper A, with the 10-subject study as its evidence base.** It plays to
+**Recommendation: write Paper A, with the 15-participant study as its evidence base.** It plays to
 what the project genuinely has, it is far more defensible, and it is more citable — a paper that
 changes how a field reports its numbers outlives a paper that reports slightly better numbers.
 
@@ -229,15 +234,17 @@ one. The fix gates that bonus on energy within −12 dB of the strongest candida
 **after a 5 s settle skip**. The skip is necessary, not cosmetic: over the full warmup the bad
 bin reads −11.0 dB (inside the gate); only after the skip does its true −28.1 dB appear. Result:
 bonus vetoed, score 1265 → 265, correct bin wins. Validated by
-`scripts/validate_warmup_selection.py` against all four sessions' raw streams; figure:
-`figures/fig_range_bin_mislock.py`.
+`scripts/validate_warmup_selection.py` against the sessions' raw streams. The figure script
+`figures/fig_range_bin_mislock.py` does **not exist yet**; write it before this figure is used
+(CLAUDE.md §3.4).
 
 *Mechanism caveat:* that the first 5 s inflate weak bins is measured; **why** is not. Plausibly
 the static-clutter removal (a per-bin slow-time mean, poorly estimated from few frames, leaking
 residual static energy into low-signal bins) — reasoning, not a result. Do not publish it as one.
 
 **State the scope honestly:** the −12 dB / 5 s thresholds are an empirical, scene-scoped prior
-from 4 sessions, in a scene where a single seated subject dominates the range gate.
+from 4 sessions (live_test1, massimo1, massimo2, sweep; at least two subjects), in a scene where a
+single seated subject dominates the range gate.
 Untested with competing reflectors. Overclaiming here is unnecessary — the *failure mode* is the
 contribution, and it is general even where the threshold is not.
 
@@ -250,7 +257,13 @@ identity. The canonical experiment comprised eight captures, two locks, seven ar
 estimator rows, and 3,584 scored HR/BR rows. k=0 was excluded from comparative metrics, and
 natural, paced, and unknown protocol strata were not pooled.
 
-The table reports the range across all six Ahmed profiles, not a selected winner:
+The table reports the range across all six Ahmed profiles, not a selected winner.
+
+> **Legacy estimator — pending re-derivation.** The production arm and the current-lock
+> (production-rerun) locks were computed with `eca_ahet_v1`, before the 2026-09-29 peak-refinement
+> fix. Recompute under `eca_ahet_safe_refine_v2` before quoting any of these values
+> (`HANDOFF.md` §3).
+
 
 | Vital / protocol | Recorded-lock MAE / RMSE (bpm) | Current-lock MAE / RMSE (bpm) | Joint coverage |
 |---|---:|---:|---:|
@@ -312,6 +325,10 @@ valid. `k=0` was excluded from comparison. Reference admission was 66/120 HR and
 cells; 30 duplicate reference seconds were normalized by the existing parser. All scoring is
 `exploratory_non_frozen` and promotion-ineligible.
 
+> **Legacy lock — pending re-derivation.** The range bin was selected by the production warmup
+> before the 2026-09-29 peak-refinement fix (`eca_ahet_v1`). Recompute under
+> `eca_ahet_safe_refine_v2` before quoting these values (`HANDOFF.md` §3).
+
 | Vital / protocol | `delta` | Scored / total | Coverage | MAE / RMSE (bpm) | Bias (bpm) |
 |---|---:|---:|---:|---:|---:|
 | HR / natural | 1e-2 | 53 / 100 | 0.53 | 29.434 / 30.608 | −29.434 |
@@ -364,7 +381,7 @@ Assumes a ~9,000-word JBHI/TBME-style paper; compress for IEEE Sensors J.
 | **I. Introduction** | Contactless monitoring motivation [R7, R11]; harmonic interference problem; the gaps (two published simulation-only methods; unreported comparators; unreported coverage); contribution list | 1000 | CH §1 |
 | **II. Related work** | Table of the six harmonic-interference approaches; foundations [R5–R8]; original Ahmed and Kotte evidence was simulation-only; declare the project's Ahmed FMCW adaptation and its pulse-radar claim boundary | 1200 | CH §4, §10.3 |
 | **III. Signal model and system** | FMCW ranging, phase-displacement relation (3.2 rad/mm at 77 GHz), the harmonic sum model, hardware and chirp table, protocol | 1500 | CH §2, §3 |
-| **IV. Method** | Nominal ECA + AHET spec with equations; disclose that the frozen production skip policy performs no cancellation inside the cardiac band; deviations from [R1] declared; **warmup bin selection with the energy-eligibility rule**; diagnostics commitment | 1800 | CH §5, §6, §9 |
+| **IV. Method** | Nominal ECA + AHET spec with equations; disclose that the fixed production skip policy performs no cancellation inside the cardiac band; deviations from [R1] declared; **warmup bin selection with the energy-eligibility rule**; diagnostics commitment | 1800 | CH §5, §6, §9 |
 | **V. Evaluation methodology** | The comparator problem; the explicit comparator specification applied uniformly to every estimator; why 5 bpm is derived from FFT resolution; non-overlapping windows; coverage-with-accuracy rule; Bland–Altman [R16] | 1300 | CH §7 |
 | **VI. Results** | Comparator demonstration; Ahmed two-lock/six-profile real-data result; per-subject agreement + Bland–Altman [PENDING]; coverage; mislock case study; remaining baselines [PENDING] | 1800 | CH §10 |
 | **VII. Discussion** | Coincidence identifiability limit; why harmonic verification cannot reject a respiratory harmonic; accuracy–coverage trade-off; what this implies for reading the literature | 1200 | CH §12 |
@@ -392,7 +409,7 @@ of methodology papers look for it there.
 > **Do not reintroduce "pre-registered" into any title.** M0 was removed 2026-08-03; the claim is
 > unavailable. See the banner at the top of this file.
 
-**Abstract skeleton** (fill bracketed values from the 10-subject study):
+**Abstract skeleton** (fill bracketed values from the 15-participant study):
 
 > Contactless heart-rate estimation from millimetre-wave radar is limited by respiratory
 > harmonics that fall inside the cardiac band. Reported accuracies across the literature are
@@ -400,7 +417,7 @@ of methodology papers look for it there.
 > [R22] and Kotte's joint high-amplitude-difference Doppler [R21] — were originally evaluated
 > **only in simulation**.
 > We evaluate harmonic accumulation and joint Doppler on real FMCW radar data, alongside a nominal extensive-cancellation
-> and harmonic-verification pipeline whose frozen cancellation policy is inactive inside the cardiac band, on a 77 GHz FMCW radar for seated subjects at 0.8–1.4 m,
+> and harmonic-verification pipeline whose fixed cancellation policy is inactive inside the cardiac band, on a 77 GHz FMCW radar for seated subjects at 0.8–1.4 m,
 > validated against a fingertip pulse oximeter. All estimators are scored on identical
 > non-overlapping windows under a single explicitly stated comparator, with coverage reported
 > alongside accuracy. [Headline finding: which methods transfer to real data and which do not.]
@@ -436,7 +453,7 @@ Each must come from a committed script in `figures/` — no hand-edited figures.
    `src/agreement.py::arm_loa`, **subject-clustered (repeated
    measurements)**. The retired `scripts/plot_bland_altman.py` must not be reused: its statistics
    pool every window as an independent pair (`se_loa = sqrt(3·SD²/n)`, no subject or session term),
-   which for 10 subjects × 3 sessions × ~19 windows yields falsely narrow limits.
+   which for 15 participants × 3 sessions × ~19 windows yields falsely narrow limits.
    The model is specified in `notes/analysis_prespec.md` §1 (an internal engineering spec, not a
    registration) and must be stated in the Methods.
 8. Radar HR vs Masimo PR time series, rejected windows shaded.
@@ -462,7 +479,8 @@ Reviewers penalise concealment far more than limitation. State all of these plai
 - 20 Hz frame rate, 5× below the primary reference's 100 Hz.
 - **Pulse oximeter PR is not ECG-derived HR.** PR and R-R-derived HR differ physiologically; the
   reference has its own error, which bounds any agreement claim from below.
-- **Coverage is 10–46%** on pilot data. Report it; do not bury it.
+- **Coverage is low.** Canonical M1 radar coverage was 11/120 windows (≈9%, development data,
+  legacy estimator); recompute under the corrected estimator. Report it; do not bury it.
 - The historical **respiration-collapse bug** was corrected with the accepted band-edge veto and
   confidence/consistency gates. Ahmed BR remains separately poor (MAE 8.85–11.80 bpm) and must
   retain the exploratory timing/reference limitations from §4.4.
@@ -480,7 +498,7 @@ Reviewers penalise concealment far more than limitation. State all of these plai
 |---|---|
 | *"Only N subjects, all healthy adults, seated."* | Concede in Limitations; scope the claims to that population explicitly in the abstract. Do not over-generalise |
 | *"Your exclusion gate could hide radar errors."* | Every excluded window was individually inspected; all are genuine reference instabilities (spread 5.1–26.0 bpm). Report the sensitivity table (T4) |
-| *"MAE < 1 bpm is implausible for radar."* | **This is the dangerous one.** It is on 10–46% of windows, non-overlapping, on a small sample. Present coverage in the same sentence, every time. Never quote MAE alone |
+| *"MAE < 1 bpm is implausible for radar."* | **This is the dangerous one.** Any MAE applies only to the windows that produced an estimate, on non-overlapping windows, with subject-clustered limits. Present coverage in the same sentence, every time. Never quote MAE alone |
 | *"ECA + AHET is [R1]'s method — what is new?"* | The comparator methodology, the bin-selection failure and fix, and the structural analysis of why harmonic verification cannot reject a respiratory harmonic. Say so in the contribution list |
 | *"Why not compare with an ECG?"* | Concede — an ECG reference would be stronger. Justify the oximeter (clinical device, PR + a perfusion-quality signal enabling the reference-quality gate) and list ECG as future work |
 | *"Why 30 s? It is long for a real-time claim."* | Frequency resolution: Δf = 1/T gives ~2 bpm at 30 s, ~3 bpm at 20 s. Shortening coarsens accuracy and degrades the warmup bin lock |
@@ -498,7 +516,8 @@ Reviewers penalise concealment far more than limitation. State all of these plai
   availability statement (below). Approval to *collect* does not always include approval to
   *share*, and that distinction is easier to resolve now than at revision.
 - **Data availability statement.** Increasingly mandatory. Decide now whether raw `.bin` captures
-  (**~1.55 GB per 10-minute session, ~31 GB for the 20-session study**) can be shared, and where.
+  (**1.57 GB per 10-minute session — 1,572,864,000 bytes — so ~71 GB for the 45-session study**)
+  can be shared, and where.
   At that size, releasing processed phase signals plus code is the realistic option if raw sharing
   is impractical. Note the ethics follow-up above: approval to *collect* is not automatically
   approval to *share*.
@@ -592,14 +611,16 @@ annotated versions with the role each plays in the argument are in
 
 ## 12. Immediate next actions
 
-1. **Run a live hardware smoke test** before subject 1 — the live capture path has not been
-   exercised since 2026-07-14. This is now the first blocker.
+1. **Finish and merge the discrepancy remediation** (`HANDOFF.md` §3), then recompute the
+   development results under `eca_ahet_safe_refine_v2`. The live capture path has been exercised:
+   nine prospective sessions were captured 2026-08-12 → 08-18.
 2. **Preserve the completed M9 Kotte radar-only and exploratory scoring artifacts.** Together
    with M8 Ahmed they form the paper's published-method comparison. The existing captures can
    support exploratory **BR error/coverage characterization** and **HR coverage/feasibility**, but **not HR tracking** — a constant
-   predictor scores 100% on every admissible window (`HANDOFF.md` §2.1). State that limit in the
+   predictor scores 100% on every admissible window (`CLAUDE.md` §1, measured 2026-07-31). State that limit in the
    paper rather than letting a reviewer find it.
-3. **Run the 10-subject study**, including the collision-provoking arm and the recovery arm.
+3. **Complete the 15-participant study** (9 of 45 sessions captured), including the
+   collision-provoking capture and the recovery arm.
    Ethics approval is in hand (`24IBEC051` + the 2026-08-03 exertion amendment); log the
    reference numbers for the Methods section.
 4. **Choose Paper A or Paper B** (§3.4) once the data is in and you can see how the numbers land.

@@ -15,7 +15,7 @@
 > M9 Kotte) under one common comparator with coverage reported. **M8 Ahmed and M9 Kotte are
 > complete; multi-subject validation and the remaining baseline comparison are still pending.**
 >
-> See `plans/implementation_plan.md` "Track 0", `HANDOFF.md` §4, `HISTORY.md` 2026-08-03.
+> See `HISTORY.md` 2026-08-03 and `CLAUDE.md` §4.
 
 # Thesis Chapter 3 — Contactless Heart-Rate Estimation with a 77 GHz FMCW Radar
 
@@ -70,13 +70,13 @@
 | Evaluation methodology (comparator) | **Yes** | — |
 | Failure-mode analysis | **Yes** — this is a genuine strength | — |
 | Ahmed HA real-data comparison | **Yes, exploratory** | Complete two-lock × seven-arm M8 evaluation; approximate timing prevents final agreement claims |
-| Headline agreement results | **No** | 10-subject study not started; the existing n=4 subjects are development-only |
-| Bland–Altman (subject-clustered), per-subject breakdown | **Implementation only** | `src/agreement.py::arm_loa` implements the frozen estimator; final prospective data are not yet available (§7.5) |
+| Headline agreement results | **No** | Prospective 15-participant study in progress: 9 of 45 sessions captured, labels sealed, nothing scored. The n=4 development subjects are development-only |
+| Bland–Altman (subject-clustered), per-subject breakdown | **Implementation only** | `src/agreement.py::arm_loa` implements the specified estimator; final prospective data are not yet available (§7.5) |
 | Published-method comparison | **Partial** | Ahmed HA and Kotte joint-Doppler are complete; TI on-chip comparison remains |
 | Conclusions | **Partially** | Method conclusions yes; performance conclusions no |
 
 **The single largest gap is data.** The algorithmic and methodological work is mature; the
-empirical evidence base is one subject across four sessions. Everything in §11 is
+empirical evidence base is four development subjects across eight sessions. Everything in §11 is
 writing-ready; §10 is not.
 
 ---
@@ -110,7 +110,7 @@ enough to track a clinical pulse-oximeter reference?
    *identifiability* problem rather than a resolution or tuning problem, with a documented
    chain of four failed attempts to engineer around it [VERIFIED as negative results, §12].
 5. **An implementation and evaluation of a nominal ECA + AHET pipeline** [Tang 2025] on hardware and at a window
-   configuration whose frozen production skip policy leaves ECA inactive inside the cardiac band,
+   configuration whose fixed production skip policy leaves ECA inactive inside the cardiac band,
    length different from the original paper (30 s at 20 Hz vs 20 s at 100 Hz).
 6. **Agreement with a clinical reference across subjects** [PENDING — this is the contribution
    the thesis examiner will look for, and it does not exist yet]. **Across subjects, not
@@ -121,7 +121,7 @@ enough to track a clinical pulse-oximeter reference?
 > does not support that yet. Write it as "we built the system, evaluated two published
 > simulation-only remedies and tested them on real data, and in doing so found
 > that the reported-accuracy literature also has a comparator problem and a bin-selection
-> problem." That chapter is defensible today. Upgrade to the former once the 10-subject study
+> problem." That chapter is defensible today. Upgrade to the former once the 15-participant study
 > lands.
 
 ---
@@ -239,8 +239,8 @@ theirs directly.
 Seated, back straight, both hands resting on the legs, facing the radar; chest 0.8–1.4 m from
 the radar face; **10-minute recordings** (~30 s warmup + ~9.5 min usable, ~19 independent
 non-overlapping 30 s windows — raised from 5 min on 2026-07-24 because 5 min yielded too few
-evaluable windows at 10–46% coverage; the ethics approval permits up to 10 min and that ceiling
-is hard); **10 subjects × 3 sessions** (natural, paced, and a post-exertion recovery arm added
+evaluable windows at the observed coverage; the ethics approval permits up to 10 min and that
+ceiling is hard); **15 new participants × 3 sessions** (natural, paced, and a post-exertion recovery arm added
 2026-08-03 under an approved ethics amendment) on different days, each session re-set up (so
 setup variability is inside, not outside, the reported variance).
 
@@ -312,7 +312,7 @@ than the differences between the methods in this table.
    a live readout, and a 60 s window makes the warmup unusable.
 3. **ECA is a linear projection** — it is diagnosable but not invertible: projected subspace
    components are removed. We can log which harmonic columns survive basis construction and how
-   much power changes. In the frozen production skip mode, no in-band harmonic is projected.
+   much power changes. In the fixed production skip mode, no in-band harmonic is projected.
 4. **Implementable in NumPy/SciPy** with no new dependencies, unlike the MUSIC and VMD families.
 5. **AHET is the principled form of an idea we had already tried and failed with.** We first
    implemented a fixed 0.08 Hz "exclude peaks near respiratory harmonics" proximity rule; it
@@ -330,7 +330,7 @@ for f_r (§6.1) — **a declared deviation from [R1]**.
 
 ## 6. Algorithm specification
 
-Pipeline, each stage independently verified (`tests/`, 796 passed + 1 xfailed [VERIFIED 2026-07-24]):
+Pipeline, each stage independently verified (`tests/`, 3189 passed, 17 skipped [VERIFIED 2026-09-30, remediation branch]):
 
 1. Parse raw ADC (2-lane LVDS, Complex1x, 4-word packets). **I/Q ordering depends on capture
    source**: SDK/Python captures need `iq_swap=True`, mmWave Studio captures `iq_swap=False`.
@@ -380,7 +380,7 @@ Additional production gates [VERIFIED — `live_demo_config.yaml`]: `candidate_m
 
 These gates are **reference-informed legacy settings**, not independently validated thresholds:
 the 2.0/4.0 dB floor gates descend from a Masimo-scored grid sweep on development sessions whose
-raw data were later deleted. They remain frozen for lineage and will not be retuned; any agreement
+raw data were later deleted. They remain unchanged for lineage and will not be retuned; any agreement
 claim requires held-out prospective participants.
 
 ### 6.3 Mandatory diagnostics (a methodological commitment, worth a paragraph)
@@ -482,7 +482,7 @@ standard for method-comparison studies, and explicitly *not* a correlation coeff
 reported alongside accuracy, always** — accuracy computed only on surviving windows is selection
 bias, and given our coverage (§10.2) this is not a hypothetical concern.
 
-**Bland–Altman must account for repeated measurements.** The study design is 10 subjects × 3
+**Bland–Altman must account for repeated measurements.** The study design is 15 participants × 3
 sessions × ~19 windows: those window-level
 differences are **nested within subject** and are not independent pairs. The only implementation in
 the repo before the 2026-09-29 remediation, `scripts/plot_bland_altman.py`, pooled every window as if independent
@@ -534,7 +534,8 @@ t = 70–169 s, initially attributed to a DSP/ECA/AHET fault ("Pattern A") and i
 such for some time. Root cause: **the warmup had locked a skirt bin 28.1 dB below the actual
 chest bin.** Not an algorithm bug at all — a selection bug upstream of it.
 
-Quantified on the same window (t = 147 s, `figures/fig_range_bin_mislock.py`): the mislocked
+Quantified on the same window (t = 147 s; the figure script `figures/fig_range_bin_mislock.py`
+does **not exist yet** and must be written before this figure is used, CLAUDE.md §3.4): the mislocked
 bin 21 reported **64.4 bpm** and *passed* AHET second-harmonic verification, while the correct
 bin 26 reported **81.8 bpm** against a comparator reference of **81.0 bpm**. A 16.6 bpm error,
 indistinguishable at the output from a correct reading.
@@ -569,10 +570,12 @@ frames, so residual static energy leaks in and disproportionately inflates bins 
 signal. **That is reasoning, not a measurement** — do not state it as a finding.
 
 **Honest scoping — say this explicitly in the chapter.** The −12 dB / 5 s thresholds are an
-**empirical, scene-scoped prior** validated on 4 sessions from 1 subject, under a scene where a
-single seated subject is the dominant in-gate reflector. They are **not** a general physical law
-and are **untested with competing reflectors** (a chair, a second person, a moving object) inside
-the gate. Re-validate against the 10-subject study.
+**empirical, scene-scoped prior** validated on 4 sessions (live_test1, massimo1, massimo2, sweep)
+from at least two subjects (A: massimo1–2; B: sweep; live_test1 is unmapped —
+`notes/capture_inventory.md`), under a scene where a single seated subject is the dominant
+in-gate reflector. They are **not** a general physical law and are **untested with competing
+reflectors** (a chair, a second person, a moving object) inside the gate. Re-validate against the
+prospective study.
 
 Validation: `scripts/validate_warmup_selection.py` reruns the real selection logic against all
 four sessions' raw streams and confirms the picks [VERIFIED, committed and regenerable].
@@ -601,8 +604,10 @@ regenerated under the new estimator identity and summarized with subject-aware a
 
 ### 10.2 Coverage — the actual bottleneck [PRELIMINARY]
 
-10% (natural), 46% (paced-16), 20% (sweep) of windows yield an AHET-verified estimate. **AHET's
-conservatism at the correct bin is now the limiting factor**, not accuracy. This is the honest
+Canonical M1 scoring (development data, k ≥ 1, legacy `eca_ahet_v1`) gave radar coverage of
+11/120 windows (≈9%). It is superseded pending recomputation under `eca_ahet_safe_refine_v2`. The
+per-session percentages that previously stood here came from the withdrawn pilot table and are not
+paper-grade. **AHET's conservatism at the correct bin is now the limiting factor**, not accuracy. This is the honest
 headline of the current state of the system and should be stated as such.
 
 ### 10.3 Ahmed harmonic accumulation on real FMCW data [VERIFIED IMPLEMENTATION; EXPLORATORY AGREEMENT]
@@ -619,6 +624,10 @@ The canonical run covered eight captures, two lock estimands, and seven paired a
 128 source spans, 256 shared cells, 1,792 estimator rows, and 3,584 unique scored HR/BR rows.
 Comparative metrics exclude k=0 and keep natural, paced, and unknown protocol strata separate.
 The following ranges span all six Ahmed profiles; they are **not** a post-hoc best-arm result.
+
+> **Legacy estimator — pending re-derivation.** The production arm and the current-production
+> rerun locks were computed with `eca_ahet_v1`, before the 2026-09-29 peak-refinement fix.
+> Recompute under `eca_ahet_safe_refine_v2` before quoting any of these values (`HANDOFF.md` §3).
 
 **Heart-rate agreement against Masimo `Beats / min`:**
 
@@ -733,6 +742,10 @@ seconds were recorded in the scoring artifact; they were not radar tuning.
 
 **Protocol-stratified exploratory summaries (current-production rerun lock):**
 
+> **Legacy lock — pending re-derivation.** The current-production rerun lock was selected by the
+> production warmup before the 2026-09-29 peak-refinement fix (`eca_ahet_v1`). Recompute under
+> `eca_ahet_safe_refine_v2` before quoting these values (`HANDOFF.md` §3).
+
 | Vital / protocol | Loading arm | Scored / total | Joint coverage | MAE (bpm) | RMSE (bpm) | Bias (bpm) | Descriptive pooled-window interval (bpm) |
 |---|---:|---:|---:|---:|---:|---:|---:|
 | HR / natural | `1e-2` | 53 / 100 | 0.53 | 29.434 | 30.608 | −29.434 | [−46.047, −12.821] |
@@ -766,7 +779,7 @@ Canonical artifacts: radar-only
 
 ### 10.5 [PENDING] Everything else
 
-- Agreement across 10 subjects; **per-subject** breakdown.
+- Agreement across 15 participants; **per-subject** breakdown.
 - Bland–Altman bias and 95% limits of agreement on the full study, under a **subject-clustered
   repeated-measures** model (§7.5).
 - **Distance as descriptive metadata only.** `notes/protocol.md` deliberately does not pin the
@@ -922,7 +935,7 @@ currently has nothing to veto.** Its objective criterion is not derivable from a
 population and is deferred to a new capture designed to *provoke* a collision.
 
 ### 12.6 Other declared limitations
-- **Only four subjects** in all current data, not randomly sampled; no recorded demographic, BMI, or chest-morphology diversity.
+- **Only four development subjects** in all data analysed so far, not randomly sampled; no recorded demographic, BMI, or chest-morphology diversity.
 - **Seated posture only**; no lying, standing, or motion arms.
 - **Single-antenna, single-bin** processing.
 - **20 Hz frame rate** — 5× below the primary reference's 100 Hz.
@@ -1087,12 +1100,13 @@ Per the reproducibility rules, each must come from a committed script in `figure
 
 ## 16. Path to a complete chapter
 
-1. **Run the 10-subject study** (`notes/protocol.md`). Nothing algorithmic blocks it. This is the
-   critical path for §3.8 and half of §3.10.
+1. **Complete the 15-participant study** (`notes/protocol.md`; 9 of 45 sessions captured by
+   2026-09-30). Acquisition is paused until the remediation firewall and integration steps land
+   (`HANDOFF.md` §3). This is the critical path for §3.8 and half of §3.10.
 2. **Take one capture designed to provoke a 4·f_r ≈ HR collision** — needed to unblock §12.5 and
    to give §12.1 direct rather than retired evidence.
-3. **Address coverage** (§10.2). Currently 10–46%; at that level a coverage-adjusted accuracy
-   claim is weak regardless of MAE.
+3. **Address coverage** (§10.2). Canonical M1 coverage was ≈9% under the legacy estimator; at that
+   level a coverage-adjusted accuracy claim is weak regardless of MAE.
 4. **Run the baselines** — TI on-chip output and one published pipeline. A thesis chapter without
    a baseline comparison is exposed.
 5. **Close the cross-model DSP review** of the linalg-free path (§12.6).
@@ -1133,7 +1147,10 @@ investigation scripts (2,943 lines combined) remain from specific diagnoses.
 
 **Total: ≈ 18,700 lines** of production and tooling code, excluding tests.
 
-### 17.2 Test suite — 797 test outcomes across 21 files: 796 passed, 1 xfailed
+### 17.2 Test suite — 2026-07-24 snapshot: 797 test outcomes across 21 files (796 passed, 1 xfailed)
+
+> **Update 2026-09-30:** the suite now runs **3189 passed, 17 skipped** on the remediation branch.
+> The distribution below is the 2026-07-24 snapshot and has not been recounted.
 
 [VERIFIED 2026-07-24: `796 passed, 1 xfailed, 0 failed`.] **An xfail is not a pass** — the one
 expected failure is the known design hole in the ECA/AHET decoy case, not a green test. Do not
@@ -1201,8 +1218,9 @@ spectra, AHET candidates, checkpointed every 60 s), and `adc_stream.bin` (the ra
 ### 17.5 Honest summary of the balance of work
 
 The project is **heavily weighted toward infrastructure, verification and failure analysis**, and
-**light on subject data**. Roughly 18,700 lines of code and 797 test outcomes support four captures from
-four subjects. That ratio is not a criticism — the failure analyses in §11 and the
+**light on subject data**. Roughly 18,700 lines of code (2026-07-24 count) and a test suite now at
+3189 passing tests support eight development captures from four subjects, plus nine prospective
+sessions whose labels remain sealed. That ratio is not a criticism — the failure analyses in §11 and the
 methodology in §7 are only possible because the diagnostic infrastructure exists, and they are
 the chapter's most distinctive material. But it does identify the critical path precisely:
 **every remaining gap in §0's status board is closed by collecting data, not by writing code.**

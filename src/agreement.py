@@ -23,7 +23,7 @@ ALLOWED_ARMS = frozenset({"natural", "paced", "recovery"})
 
 
 class AgreementContractError(ValueError):
-    """Raised when agreement rows do not satisfy the frozen analysis contract."""
+    """Raised when agreement rows do not satisfy the specified analysis contract."""
 
 
 def _finite_number(value: object, field: str) -> float:
@@ -55,7 +55,7 @@ def _linear_slope(x: np.ndarray, y: np.ndarray) -> float | None:
 
 
 def _components(groups: Sequence[np.ndarray]) -> dict[str, float]:
-    """Return the exact prespecified ANOVA components for estimable groups."""
+    """Return the exact specified ANOVA components for estimable groups."""
     counts = np.asarray([values.size for values in groups], dtype=np.float64)
     subject_means = np.asarray([np.mean(values) for values in groups], dtype=np.float64)
     n_subjects = len(groups)
@@ -89,7 +89,7 @@ def _components(groups: Sequence[np.ndarray]) -> dict[str, float]:
 
 
 def _failure_fraction_allows_ci(failed: int, total: int) -> bool:
-    """The frozen boundary is inclusive: exactly 5% failed still permits a CI."""
+    """The specified boundary is inclusive: exactly 5% failed still permits a CI."""
     return failed / total <= BOOTSTRAP_MAX_FAILURE_FRACTION
 
 
@@ -536,7 +536,7 @@ def _diagnostics(
     parsed: Sequence[Mapping[str, Any]],
     by_subject: Mapping[str, Sequence[Mapping[str, Any]]],
 ) -> dict[str, Any]:
-    """Mandatory transparent diagnostics without changing the frozen primary estimator."""
+    """Mandatory transparent diagnostics without changing the specified primary estimator."""
     differences = np.asarray([row["difference_bpm"] for row in parsed], dtype=np.float64)
     pair_means = np.asarray([row["pair_mean_bpm"] for row in parsed], dtype=np.float64)
     subject_means = {
