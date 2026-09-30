@@ -12613,3 +12613,79 @@ nothing valid is lost.
 **Next:** HANDOFF step "finish Milestone 4 (records)". It now also lists one more stale comment,
 `scripts/live_demo_config.yaml:28`, whose bin-energy threshold is described as "validated on
 4 sessions / 1 subject" against a "10-subject study".
+
+## 2026-09-30 - Capture-session protocol record for P001–P006 (late-recorded)
+
+**Set out to do:** meet CLAUDE.md §3.6 for the nine prospective sessions captured 2026-08-12 →
+08-18. No HISTORY entry recorded their settle time, duration, posture and distance when they were
+taken.
+
+**Worked (with evidence):** values were copied from each session's
+`data/raw/prospective/<session>/session_manifest_v3.json` (original checkout; gitignored and
+hash-chained through `cohort_registry/registry_v010.json`). Only protocol fields were read.
+**Masimo-derived fields (`start_pr_bpm`, `final_pr_bpm`, settle PR spread/drift) were
+deliberately not read into this record**, because all 15 subjects' labels are sealed. The
+protocol's "record the PR at recording start" instruction therefore stays unmet here by design.
+No reference CSV was opened.
+
+| Session | Arm (paced rate) | Visit (UTC) | Settle (s) | Distance (m) | Posture checklist | Duration (s) | Frames (invalid) | Packet loss |
+|---|---|---|---:|---:|---|---:|---:|---:|
+| P001_natural | natural | 2026-08-12T15:55:41Z | 60 | 1.09 | seated; hands on thighs, back straight, facing radar | 600 | 12000 (0) | 0 |
+| P002_natural | natural | 2026-08-13T14:45:00Z | 60 | 1.11 | same | 600 | 12000 (0) | 0 |
+| P002_paced | paced (15 bpm) | 2026-08-14T16:10:12Z | 120 | 1.09 | same | 600 | 12000 (0) | 0 |
+| P001_paced | paced (12 bpm) | 2026-08-14T16:41:07Z | 120 | 1.10 | same | 600 | 12000 (0) | 0 |
+| P003_natural | natural | 2026-08-17T08:17:58Z | 60 | 0.96 | same | 600 | 12000 (0) | 0 |
+| P004_natural | natural | 2026-08-17T12:28:26Z | 60 | 1.11 | same | 600 | 12000 (0) | 0 |
+| P005_natural | natural | 2026-08-17T14:38:41Z | 60 | 1.00 | same | 600 | 12000 (0) | 0 |
+| P006_natural | natural | 2026-08-18T14:26:33Z | 60 | 1.05 | same | 600 | 12000 (0) | 0 |
+| P005_paced | paced (15 bpm) | 2026-08-18T14:45:46Z | 120 | 1.05 | same | 600 | 12000 (0) | 0 |
+
+All nine record `scene_changed=false` and disturbance category `none`. All distances lie inside
+the 0.8–1.4 m protocol range. Paced rates come from the registry.
+
+**Failed / did not work, and why:**
+- **Settle deviation.** The six natural sessions record 60 s settle, below the 120 s floor decided
+  on 2026-08-12 (D-OWN-7). They are protocol deviations under the 2026-09-29 owner decision
+  (`notes/protocol.md` SETTLE CRITERION; `notes/analysis_prespec.md` §6 item 3a).
+- **Suspicious clock offsets.** Every session records **exactly 0.000 s** for both
+  `clock_offset_start_s` and `clock_offset_end_s`. The ±1 s limit is met as recorded, but the
+  manifest cannot show whether 0.000 was measured or entered as a default. Treat it as unverified
+  until the operator confirms how the offsets were obtained.
+
+**Retired / no longer used:** nothing.
+
+**Next:** the operator confirms how the clock offsets were measured. Future sessions are recorded
+in HISTORY at capture time.
+
+## 2026-09-30 - Development subject identity: registries disagree (recorded, not edited)
+
+**Set out to do:** record audit item M-5 without editing any hash-bound file.
+
+**Worked (with evidence):**
+- The 2026-08-04 correction above established that the eight development captures come from
+  **four subjects**: A = massimo1–2, B = massimo3 + sweep, C = massimo4–5, D = massimo6–7
+  (`notes/capture_inventory.md`, "Subject map"). The M9 config (`experiments/m9_kotte/config.yaml`),
+  `src/br_features.py` and `reference_registry/development_references_v1.json` carry that mapping.
+- The M4/M8 capture registry does not. `experiments/m8_ahmed_transfer/capture_registry.yaml`
+  declares `data_role: development_apparent_single_subject` and has no subject field.
+  `src/m4/capture_registry.py:287` **enforces** that exact role string. So it is a live code
+  contract, not only document text (the 08-04 entry checked the plan document's copy, not this
+  one).
+- `src/m4/capture_registry.py:42-46` labels massimo3–7 `unknown_protocol_development`. Other files
+  call them "natural", but that label was inferred from the Masimo RRp channel (2026-07-30
+  entry), i.e. it is **reference-inferred**.
+
+**Failed / did not work, and why:** the registry was deliberately not edited. It is a hashed
+provenance input of the M8 chain, and editing it would invalidate existing gates.
+
+**Consequences:**
+- M1 and M8 results carry no subject key, so no per-subject or leave-one-subject-out figure can
+  be derived from them.
+- The "natural" stratum for massimo3–7 must be described as reference-inferred wherever it is used.
+
+**Retired / no longer used:** the single-subject description of the development data, anywhere
+it is used as a fact.
+
+**Next:** when Milestone 5 builds the new evidence chain, add an explicit `subject` field to the new
+capture-registry revision and relax the role-string check in `src/m4/capture_registry.py`
+accordingly, with a test.
