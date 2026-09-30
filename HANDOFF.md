@@ -8,7 +8,7 @@
 >
 > **`HISTORY.md` differs between checkouts until integration.** The worktree copy is authoritative
 > for the remediation entries. The original-checkout copy holds the entries the worktree lacks
-> (§3 step 4).
+> (§3 step 3).
 
 ## 1. Project snapshot
 
@@ -98,26 +98,27 @@ L-7 regressed (there are now five parabolic interpolators).
   independently reproduced. **It has no caller yet.**
 - **Manuscripts.** Pilot table withdrawn; Ahmed is `[R22]`; the ethics scope note was added; the
   Masimo-selected gate origin is disclosed.
+- **Config comments.** The Masimo-selected origin of the heart gates is also stated in
+  `scripts/live_demo_config.yaml`, `experiments/exp_eca_modes/config_guard_v1.yaml` and
+  `steps/step_6/config_hop1*_safe.yaml`, replacing "Validated … copied verbatim". The production ECA
+  comment now states the below-band-only semantics. Config values are unchanged.
+  `tests/test_peak_refinement_artifact.py` checks the artifact against the config as committed at
+  `4280e34`, so configs can be edited again.
 
 ### Tests
 
 | Where | Result | Source |
 |---|---|---|
-| Worktree | **3189 passed, 17 skipped** | recorded in worktree HISTORY 2026-09-29 (commit `dbeac63`, 252.94 s); the 2026-09-30 verification rerun at `6521787` gave the same counts, 0 failed (HISTORY 2026-09-30) |
+| Worktree | **3189 passed, 17 skipped** | recorded in worktree HISTORY 2026-09-29 (commit `dbeac63`, 252.94 s); reruns on 2026-09-30 at `6521787` and after the config-pin fix gave the same counts, 0 failed (HISTORY 2026-09-30) |
 | Original checkout | 3144 passed | `reports/discrepancy_audit_2026-09-29.md`. The 2026-09-29 audit run also observed 5 skipped, and the 4 passes beyond the tracked 3140 are the untracked TI-generator test; neither detail is recorded in HISTORY. Fewer skips than the worktree because local `results/` artifacts exist |
 
 ## 3. Active task / next steps
 
-Do these in order. Items 1–3 are on the **worktree branch**; commit each with a HISTORY append.
-The 2026-09-30 verification is recorded in HISTORY; it lists the corrections to the 09-29 entries
-and the superseded numbers.
+Do these in order. Items 1–2 are on the **worktree branch**; commit and push each with a HISTORY
+append. The 2026-09-30 verification (corrections to the 09-29 entries, superseded numbers) and the
+config-pin fix are recorded in HISTORY.
 
-1. **Unfreeze the production config.** `tests/test_peak_refinement_artifact.py:37` compares the
-   artifact's `config_sha256` with the **current** `scripts/live_demo_config.yaml`, so any config
-   edit fails the suite. Compare against `git show 4280e34:scripts/live_demo_config.yaml` instead.
-   Then correct the "Validated … copied verbatim" comments (`live_demo_config.yaml:3, 90`) and the
-   "Best safe combo … MAE=1.23" comments in `steps/step_6/config_hop1*_safe.yaml`.
-2. **Finish Milestone 4 (records).**
+1. **Finish Milestone 4 (records).**
    - Remove the leftover pilot numbers: "10–46%" at `JOURNAL_PAPER.md:60, 465, 483` and
      `THIRD_CHAPTER.md:242, 1094`; "0.2–0.5 bpm … four subjects" at `JOURNAL_PAPER.md:81-86`;
      "10% / 46% / 20%" at `THIRD_CHAPTER.md:604`.
@@ -137,7 +138,9 @@ and the superseded numbers.
      `src/br_bin_search.py:421`, `scripts/br_bin_preflight.py:93`,
      `tests/test_diagnose_bin_sweep.py:199` and `tests/test_m4_window_grid.py:71`. Better: point
      them at the owning note, not a HANDOFF section number.
-3. **Close the firewall gaps.**
+   - Correct `scripts/live_demo_config.yaml:28`. The `energy_eligibility_min_settled_db` comment
+     still says "validated on 4 sessions / 1 subject" and refers to a "10-subject study".
+2. **Close the firewall gaps.**
    - `scripts/m8_ahmed_transfer.py:430` calls `run_score_stage` without
      `require_production_provenance`. That defaults to False (`src/m4/estimator_scoring.py:2008`)
      and is passed on as `official=`. With `official=False`, the reference is hashed and loaded
@@ -147,7 +150,7 @@ and the superseded numbers.
    - Migrate `scripts/diagnose_signal_presence.py:143`, which still calls unsafe `refine_freq_hz`.
    - Reject v2 manifests for `P\d{3}` sessions, and check `protocol_compliant` when a scoring
      capability is minted.
-4. **Integrate into `vital_signs_own_v13`.** The git merge is a clean fast-forward; the original
+3. **Integrate into `vital_signs_own_v13`.** The git merge is a clean fast-forward; the original
    checkout's working tree is what blocks it.
    1. In the original checkout, move aside the untracked `reports/discrepancy_audit_2026-09-29.md`,
       `plans/discrepancy_remediation_2026-09-29.md` and `reports/remediation_verification_2026-09-30.md`.
@@ -164,13 +167,13 @@ and the superseded numbers.
    6. Before committing the MATLAB work, do plan item M1.4, the M-22 fixes, and an independent
       range-FFT review (CLAUDE.md §6).
    7. Push `vital_signs_own_v13`.
-5. **Milestone 5 — recompute under `eca_ahet_safe_refine_v2`.**
+4. **Milestone 5 — recompute under `eca_ahet_safe_refine_v2`.**
    - Build a new synthetic gate, a **new authorization filename**, and a reference-blind radar
      parent. Make `--gate`, `--authorization` and `--radar-parent` required and digest-checked.
    - Then re-score M1, the 2026-08-04 bin-policy tables and the M8/M9 production arms.
    - Wire `arm_loa` into the canonical summaries, and null its LoA when `descriptive_only`.
    - Add a constant-median null baseline to `estimator_scoring`.
-6. **Record each open DSP choice as a decision or a deferral.** None is currently recorded:
+5. **Record each open DSP choice as a decision or a deferral.** None is currently recorded:
    - AHET codes 2 and 6 test the same `ratio_db`;
    - impulse clip 1.5 rad/frame;
    - absolute prominence;
@@ -182,7 +185,7 @@ and the superseded numbers.
    None may be tuned on Masimo.
 
 **Do not:**
-- resume acquisition (Track 1) until items 3–4 land;
+- resume acquisition (Track 1) until items 2–3 land;
 - start codex-M3 or any prospective scoring before Milestone 5;
 - rerun Track 0;
 - implement the IoT/WST plans before owner acceptance and independent plan review.
@@ -282,6 +285,10 @@ here):
   Bare `conda` fails (exit 127) in Git Bash. Calling the env's `python.exe` directly crashes
   Matplotlib (exit 127). Two concurrent `conda run` calls can collide on a temp file. Do not pass a
   shared `--basetemp`: the provenance tests build throwaway git repos.
+- **`scripts/live_demo_config.yaml` is a hashed provenance input** for M8/M9 gates
+  (`src/m8/ahmed_provenance.py:103, 191`; `scripts/m9_kotte_run.py:80`). Any byte change, comments
+  included, changes the source identity of gates built afterwards. That is expected; historical
+  gates verify at their own commit.
 - **Estimator identity is checked at scoring.** Historical radar parents labelled
   `production_eca_ahet_v1` fail validation at the branch HEAD; re-verify them at their own commit.
 

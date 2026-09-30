@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 from collections import Counter
+import hashlib
 import json
 import math
 from pathlib import Path
+import subprocess
 
 import pytest
 
@@ -22,6 +24,21 @@ def _load_artifact() -> dict:
     return json.loads(ARTIFACT.read_text(encoding="utf-8"))
 
 
+def _sha256_at_diagnostic_commit(path: Path) -> str:
+    """SHA-256 of `path` as committed at DIAGNOSTIC_COMMIT, i.e. the bytes the diagnostic read.
+
+    Comparing against the working-tree file instead would freeze that file forever: any later
+    edit, even a comment, would fail this historical-artifact check.
+    """
+    blob = subprocess.run(
+        ["git", "show", f"{DIAGNOSTIC_COMMIT}:{path.relative_to(REPO_ROOT).as_posix()}"],
+        cwd=REPO_ROOT,
+        check=True,
+        capture_output=True,
+    ).stdout
+    return hashlib.sha256(blob).hexdigest()
+
+
 def test_refinement_artifact_is_radar_only_and_bound_to_clean_sources():
     artifact = _load_artifact()
     assert artifact["schema"] == "peak_refinement_dual_calculation_v2"
@@ -34,7 +51,7 @@ def test_refinement_artifact_is_radar_only_and_bound_to_clean_sources():
     assert artifact["registry_path"] == str(DEFAULT_REGISTRY.relative_to(REPO_ROOT))
     assert artifact["registry_sha256"] == sha256_path(DEFAULT_REGISTRY)
     assert artifact["config_path"] == str(CONFIG.relative_to(REPO_ROOT))
-    assert artifact["config_sha256"] == sha256_path(CONFIG)
+    assert artifact["config_sha256"] == _sha256_at_diagnostic_commit(CONFIG)
 
     radar = load_registry(DEFAULT_REGISTRY, root=Path("unused")).radar_scope()
     actual = {row["capture_id"]: row for row in artifact["captures"]}

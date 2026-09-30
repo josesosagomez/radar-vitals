@@ -1,6 +1,10 @@
 # scripts/live_demo_config.yaml
 # Live / replay demo configuration.
-# Heart settings copied verbatim from steps/step_6/config_hop1_win30_safe.yaml.
+# Heart per-window gates are inherited from steps/step_6/config_hop1_win30_safe.yaml. Those gates
+# were chosen by a sweep scored against Masimo PR on development sessions test..test5, deleted in
+# the 2026-07-09 reset: reference-informed, not reproducible, and NOT a validation result
+# (HISTORY 2026-09-29). The live path does not apply that config's Step-4 quality mask, Step-5
+# edge lock, resp-harmonic guard or temporal tracker, and hops 3 s rather than 1 s.
 # Hardware profile / frame settings copied from steps/step_1/capture_config.yaml.
 
 paths:
@@ -87,15 +91,16 @@ respiration:
   stft_min_valid_fraction: 0.5
   emit_low_confidence: false
 
-# Validated hop-1, 30 s configuration — copied from config_hop1_win30_safe.yaml.
+# Heart gates inherited from config_hop1_win30_safe.yaml; reference-informed, not validated
+# (see the header).
 heart:
   band_hz: [0.8, 2.0]
   k_max: 6
   ahet_deviation_hz: 0.1
-  # NOT YET PROMOTED. guard_cardiac_candidate_v1 is implemented and unit-tested, but is
-  # only promoted here once experiments/exp_eca_modes verifies it (plan S8.8). The mode
-  # below is known-broken (cancels nothing in the cardiac band) — see
-  # notes/plan_eca_forbidden_zone.md.
+  # Production mode: projects out only respiratory harmonics BELOW the cardiac band and performs
+  # no in-band cancellation, so the heart estimate is AHET after band-pass (HISTORY 2026-09-29).
+  # guard_cardiac_candidate_v1 is implemented but NOT promoted: it fails its own acceptance test
+  # (notes/plan_eca_forbidden_zone.md). `none` applies no projection, for comparisons.
   eca_mode: skip_forbidden_harmonics_v1
   eca_forbidden_guard_hz: 0.0
   eca_cardiac_guard_hz: 0.10   # guard_cardiac_candidate_v1: spare harmonics within this

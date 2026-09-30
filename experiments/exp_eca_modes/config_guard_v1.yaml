@@ -1,6 +1,9 @@
-# scripts/live_demo_config.yaml
-# Live / replay demo configuration.
-# Heart settings copied verbatim from steps/step_6/config_hop1_win30_safe.yaml.
+# experiments/exp_eca_modes/config_guard_v1.yaml
+# ECA-mode experiment, arm B: a copy of scripts/live_demo_config.yaml differing only in eca_mode.
+# Heart per-window gates are inherited from steps/step_6/config_hop1_win30_safe.yaml. Those gates
+# were chosen by a sweep scored against Masimo PR on development sessions test..test5, deleted in
+# the 2026-07-09 reset: reference-informed, not reproducible, and NOT a validation result
+# (HISTORY 2026-09-29).
 # Hardware profile / frame settings copied from steps/step_1/capture_config.yaml.
 
 paths:
@@ -87,7 +90,8 @@ respiration:
   stft_min_valid_fraction: 0.5
   emit_low_confidence: false
 
-# Validated hop-1, 30 s configuration — copied from config_hop1_win30_safe.yaml.
+# Heart gates inherited from config_hop1_win30_safe.yaml; reference-informed, not validated
+# (see the header).
 heart:
   band_hz: [0.8, 2.0]
   k_max: 6

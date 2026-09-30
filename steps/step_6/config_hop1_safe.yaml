@@ -52,6 +52,10 @@ heart:
   low_candidate_min_peak_to_floor_db: 4.0   # low candidates (< 72 bpm): stricter floor
 
   # Step 6.3 - temporal tracker: safe configuration found by hop-1 sweep
+  # REFERENCE-INFORMED, NOT A VALIDATION RESULT: every figure below was scored against Masimo PR
+  # on sessions test..test5, deleted in the 2026-07-09 reset, so it cannot be reproduced and must
+  # not be quoted as accuracy (CLAUDE.md §4; HISTORY 2026-09-29). Kept only as the record of how
+  # these values were chosen.
   # Sweep: diagnose_step6_candidate_tracks.py --grid-preset hop1 --results-root results_hop1
   # Best safe combo (0 bad, 0 severe across 5 sessions, 1080 combos):
   #   min_fund_db=2.0, max_jump=3.0, max_gap=15, harm=score_penalty,

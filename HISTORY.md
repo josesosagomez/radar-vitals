@@ -12563,3 +12563,53 @@ rewrite `HANDOFF.md` so a new chat can resume from the true state.
 4. integrate into `vital_signs_own_v13` using the listed procedure;
 5. recompute under `eca_ahet_safe_refine_v2`;
 6. record the open DSP choices as decisions or deferrals.
+
+## 2026-09-30 - Artifact config pin removed; misleading config comments corrected
+
+**Set out to do:** complete HANDOFF step "unfreeze the production config". A historical-artifact
+test pinned the current bytes of `scripts/live_demo_config.yaml`. As a result, the misleading
+"Validated … copied verbatim" and Masimo-sweep comments could not be corrected: the remediation
+entry above records that an earlier attempt was reverted for exactly this reason.
+
+**Worked (with evidence):**
+
+- **The pin is removed.** `tests/test_peak_refinement_artifact.py` now checks the artifact's
+  `config_sha256` against `git show 4280e34:scripts/live_demo_config.yaml`: the config exactly as
+  the diagnostic read it at its recorded commit. Before, it checked the working-tree file. The
+  artifact stays bound to its true input, and later config edits no longer fail the suite.
+- **Comments corrected.** In `scripts/live_demo_config.yaml` and
+  `experiments/exp_eca_modes/config_guard_v1.yaml`, the "copied verbatim" / "Validated" comments
+  now say:
+  - the heart gates are inherited from `steps/step_6/config_hop1_win30_safe.yaml`;
+  - those gates were chosen by a sweep scored against Masimo PR on sessions test..test5, deleted in
+    the 2026-07-09 reset, so they are reference-informed, not reproducible, and not a validation
+    result;
+  - the live path applies none of that config's Step-4 mask, Step-5 edge lock, resp-harmonic guard
+    or tracker, and hops 3 s.
+
+  The production ECA comment no longer says "known-broken". It now states the recorded semantics:
+  below-band projection only, no in-band cancellation, guard mode not promoted, and `none`
+  available for comparisons. `config_guard_v1.yaml`'s header now names its own path. Both
+  `steps/step_6/config_hop1*_safe.yaml` files carry a reference-informed warning above the sweep
+  figures (MAE 1.23 / 1.49), which are kept as the record of how the values were chosen.
+- **Values unchanged.** All four edited YAML files parse to values identical to `HEAD`. This was
+  checked with `yaml.safe_load` of `git show HEAD:<file>` against the working tree. No estimator
+  behaviour or recorded number changed.
+- **Full suite:** **3189 passed, 17 skipped** in 198.92 s through the pinned Conda launcher.
+  `git diff --check` is clean.
+
+**Failed / did not work, and why:** nothing failed. One consequence is recorded rather than avoided:
+`scripts/live_demo_config.yaml` is a hashed required artifact of the M8 and M9 source manifests
+(`src/m8/ahmed_provenance.py:103, 191`; `scripts/m9_kotte_run.py:80`). Gates built from this commit
+onward therefore have a different source identity from earlier gates. Those earlier gates already
+could not authorize `eca_ahet_safe_refine_v2`, and Milestone 5 builds a new gate after all edits, so
+nothing valid is lost.
+
+**Retired / no longer used:**
+- Pinning the current working-tree config inside a historical-artifact test.
+- The config comments calling the inherited heart gates "Validated" and "copied verbatim".
+- The "known-broken" description of the production ECA mode.
+
+**Next:** HANDOFF step "finish Milestone 4 (records)". It now also lists one more stale comment,
+`scripts/live_demo_config.yaml:28`, whose bin-energy threshold is described as "validated on
+4 sessions / 1 subject" against a "10-subject study".
