@@ -12454,3 +12454,112 @@ attempt, and the P010-area misnamed settle placeholder as possible evidence.
 
 **Next:** when any of the four sessions actually begins, create fresh session-matching evidence and
 follow the normal planned-to-captured transaction. Do not rename or promote the old P010 placeholder.
+
+## 2026-09-30 - Remediation independently verified; HANDOFF rewritten as a working resume point
+
+**Set out to do:** check, item by item, whether the five audit owner decisions were taken and
+whether the problems in `reports/discrepancy_audit_2026-09-29.md` were fixed on this branch; then
+rewrite `HANDOFF.md` so a new chat can resume from the true state.
+
+**Worked (with evidence):**
+
+- **Verification.** Four independent read-only reviewers covered every audit item (H-1…H-11,
+  M-1…M-24, L-1…L-12, T-1…T-3):
+  - records and manuscripts;
+  - radar DSP;
+  - evaluation, reference and firewall;
+  - code health and merge readiness.
+
+  The high-impact findings were then re-checked directly. The result is
+  `reports/remediation_verification_2026-09-30.md`, committed with this entry. No sealed prospective
+  reference was opened; only file names and manifest metadata fields were read.
+- **Full suite** at `6521787`, through the pinned Conda launcher: **3189 passed, 17 skipped,
+  0 failed** in 293 s. This matches the 2026-09-29 claim above.
+- **Owner decisions.** All five audit decisions are recorded in the 2026-09-29 entry above, and the
+  2026-09-30 preparation-directory disposition is recorded. Their reflection in project documents is
+  incomplete (see Failed).
+- **Scorecard:**
+  - HIGH: 4 of 11 fully fixed (H-4, H-6, H-8, H-11) and 7 partial. The core fixes for H-1, H-5, H-7
+    and H-10 are correct.
+  - MEDIUM: 5 of 24 fixed or resolved, 4 partial, 15 not fixed.
+  - LOW: none fixed; L-7 regressed (five parabolic interpolators now exist).
+  - Most MEDIUM and LOW items were never in `plans/discrepancy_remediation_2026-09-29.md`, and none
+    is recorded as deferred.
+- **Independently reproduced:**
+  - `arm_loa`: the hand-example components (19/9, 38/9, 205/12, 11/6, 463/66), and the
+    10,000-replicate bootstrap (seed 20260725) to 1e-15.
+  - `refine_peak_hz_safe`: rejects the audit's rising-edge case (1, 2, 2.9) as
+    `not_strict_local_maximum`.
+  - The refinement diagnostic's counts: 756 calls; 39 fallbacks, all at the second-harmonic site;
+    exactly one accepted estimate changed, sweep k=4, by 26.479 bpm.
+- **`HANDOFF.md` rewritten.** It restores true state that the previous rewrite had dropped:
+  - 9/45 captured, labels sealed;
+  - the IoT-J venue;
+  - the P006 final-evaluation warning;
+  - pass the latest registry;
+  - no recapture after a recovery Stage-1 failure;
+  - the raw hash chain;
+  - the MATLAB cube size;
+  - the environment notes.
+
+  It adds the three standing analysis rules that older "HANDOFF §5" pointers expect: 30 s windows,
+  non-overlapping statistics, frame-number indexing. It also adds the SampleSwap=1, replay-pairing
+  and LF landmines. It separates the two checkouts, and lists the next steps and the integration
+  procedure in order. A fact-check of about 100 claims in the first draft found 9 errors, all
+  corrected before this commit.
+
+**Failed / did not work, and why:**
+
+- **Correction to the 2026-09-29 "settle, reference-firewall, and admission-gate" entry above.** It
+  says Milestone 1 "items 1–4" were implemented; the Worked section covers items 1–3. **Item 4 was
+  not done.** In the original checkout, `scripts/generate_rawdatareader_config.py` still accepts
+  prospective paths, and `notes/matlab_export.md` still uses P001/P003 as worked examples.
+- **Correction to the same entry's claim that scorer pre-hashing was removed.** The M8 score command
+  (`scripts/m8_ahmed_transfer.py:430`) calls `run_score_stage` without
+  `require_production_provenance`. That runs `execute_score(official=False)`, which hashes and loads
+  the reference outside `src/reference_access.py` (`src/m4/estimator_scoring.py:1500-1506`). Its
+  reach is limited to the development registry, so no sealed label is exposed.
+- **Open defects found:**
+  - `tests/test_peak_refinement_artifact.py:37` pins the **current** `live_demo_config.yaml` hash,
+    so any config edit fails the suite. This is why the M-12 config comments were reverted.
+  - `scripts/diagnose_signal_presence.py:143` still calls the unsafe `refine_freq_hz`.
+  - `arm_loa` has no caller. Its `descriptive_only` LoA stays numeric.
+  - The bypass audit test covers only 9 named scripts.
+  - v2 manifests for P-subjects are not rejected.
+  - Scoring-capability minting does not check `protocol_compliant`.
+  - `notes/protocol.md` lacks the 120 s settle limb.
+  - Leftover pilot-derived coverage and MAE statements remain in both manuscripts.
+  - `tests/test_documentation_claims.py` (plan Milestone 4 item 6) does not exist.
+- **The previous HANDOFF was not a working resume point.** It said no remediation item was waiting,
+  named no next action, omitted Milestone 5 and the unmerged state, and dropped the state listed
+  above.
+- **The audit itself was wrong in three places:**
+  - M-8 overstated preparation folders as capture attempts.
+  - H-5's ≈4.8 bpm example understated the worst measured case (26.48 bpm), while the incidence is
+    far lower than implied (one accepted estimate).
+  - M-24 asked for skip markers that already existed.
+- **Concurrent edits.** Another session edited the original checkout during this work (16:14–16:20):
+  - `plans/wst_collision_gate_plan.md`;
+  - a WST note in `notes/approach.md`;
+  - a HISTORY entry there;
+  - two lines of `HANDOFF.md`, which were kept.
+
+  That plan is unreviewed and unauthorized, and the HANDOFF marks it so.
+
+**Retired / no longer used:**
+- The previous `HANDOFF.md` content (both checkouts' versions; backups kept outside the repo).
+- Reading the 2026-09-29 "items 1–4" line as evidence that item 4 was done.
+- Quoting the following as current. All were produced by `eca_ahet_v1` or by ungated scoring and are
+  **superseded pending recomputation (Milestone 5):**
+  - the M1 result (MAE 2.77 bpm, n = 9; coverage 10.94% / 9.17%);
+  - the M8/M9 production-arm tables in both manuscripts;
+  - the 2026-08-04 bin-policy tables (85% / 1.56, 68% / 0.97, holdout 46% / 2.60 vs 3.41);
+  - the legacy M8 production coverage 0.301.
+
+**Next:** follow `HANDOFF.md` §3 from step 1:
+1. unfreeze the config pin;
+2. finish Milestone 4 records;
+3. close the firewall gaps;
+4. integrate into `vital_signs_own_v13` using the listed procedure;
+5. recompute under `eca_ahet_safe_refine_v2`;
+6. record the open DSP choices as decisions or deferrals.
