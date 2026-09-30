@@ -44,9 +44,10 @@
     development captures + 9 prospective live folders).
 - **Remediation worktree:**
   `C:\Users\josemsosag\.codex\worktrees\discrepancy-remediation\vitals_radar_3`, branch
-  **`codex/discrepancy-remediation`**: 9 commits on top of `e6d055c`. The last commit records the
-  2026-09-30 verification, this HANDOFF and the verification report, and follows `6521787`.
-  - **Not merged and not pushed**; it exists only on this machine.
+  **`codex/discrepancy-remediation`**, built on `e6d055c`. The 2026-09-30 verification, this HANDOFF
+  and the verification report were committed after `6521787`.
+  - **Pushed to `origin` (2026-09-30) and tracking `origin/codex/discrepancy-remediation`; not
+    merged.** Commit and push each later step so the remote stays current.
   - It has no `data/` or `results/live_demo/`.
   - It needs two gitignored source PDFs under `literature/ref_papers/` for the M8/M9 provenance
     tests. They are present there and hash-matched to the original.
@@ -148,21 +149,21 @@ and the superseded numbers.
      capability is minted.
 4. **Integrate into `vital_signs_own_v13`.** The git merge is a clean fast-forward; the original
    checkout's working tree is what blocks it.
-   1. Push the branch.
-   2. In the original checkout, move aside the untracked `reports/discrepancy_audit_2026-09-29.md`,
+   1. In the original checkout, move aside the untracked `reports/discrepancy_audit_2026-09-29.md`,
       `plans/discrepancy_remediation_2026-09-29.md` and `reports/remediation_verification_2026-09-30.md`.
       The branch now tracks all three; its audit and plan are newer.
-   3. Set aside the uncommitted `HANDOFF.md`, `HISTORY.md` and `notes/approach.md` (the branch also
+   2. Set aside the uncommitted `HANDOFF.md`, `HISTORY.md` and `notes/approach.md` (the branch also
       changes `approach.md`), then fast-forward. Re-apply the WST §8.1 note to `approach.md`.
-   4. Re-append the original checkout's two 2026-08-31 MATLAB entries and the 2026-09-30 WST entry
+   3. Re-append the original checkout's two 2026-08-31 MATLAB entries and the 2026-09-30 WST entry
       **after** the branch's last entry, as late-recorded appends. Say in the appended text that the
       branch's 2026-09-29 "entries above" reference points to these. Drop the duplicate 09-29
       owner-decisions entry.
-   5. Commit `.gitignore` `matlab_exports*/`.
-   6. Renormalize the CRLF files. On 2026-09-30 there were 20 `w/crlf` plus a `w/mixed`
+   4. Commit `.gitignore` `matlab_exports*/`.
+   5. Renormalize the CRLF files. On 2026-09-30 there were 20 `w/crlf` plus a `w/mixed`
       `HISTORY.md`; recount after the fast-forward. Otherwise `tests/test_repository_eol.py` fails.
-   7. Before committing the MATLAB work, do plan item M1.4, the M-22 fixes, and an independent
+   6. Before committing the MATLAB work, do plan item M1.4, the M-22 fixes, and an independent
       range-FFT review (CLAUDE.md §6).
+   7. Push `vital_signs_own_v13`.
 5. **Milestone 5 — recompute under `eca_ahet_safe_refine_v2`.**
    - Build a new synthetic gate, a **new authorization filename**, and a reference-blind radar
      parent. Make `--gate`, `--authorization` and `--radar-parent` required and digest-checked.
