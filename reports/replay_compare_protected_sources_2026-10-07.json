@@ -1,0 +1,27 @@
+{
+  "schema": "replay_compare_protected_sources_v1",
+  "base_commit": "dcda615d1a2984848882ed7da6641860331577b1",
+  "branch": "codex/replay-masimo-compare",
+  "frozen_sha256": {
+    "scripts/calibrate_live_motion.py": "bbdec253cc5936d4bab27ac1bca4e5e8a30efee2386461db22eea2a15842f38d",
+    "scripts/live_demo.py": "3e613d87867f38f8abce33ea0c12e9dc32062c21cd459871a9aca9bc72ba5a0c",
+    "src/radar_io.py": "82d3fa925e54bf025a8719f9c495d5d04039938fe23fec3da0044f16798e939d",
+    "src/range_coordinates.py": "ae1ac27cb7647a8ee903caa5a4bb5975aa811683225f1e042c18c19bd78e520b",
+    "src/respiration.py": "cc6471e1abb8f1eb2f90d2206d0c51894e184c53acd6405651a1c6b399f23b04",
+    "src/vitals.py": "d1bdd94fef0368035101ab62d1528ff26bef9ef47ce46fc6a0c1d81458655e43",
+    "src/window_pipeline.py": "635d06abd4ebc33238520d813f863f88ce0d4ec279d6ac0e76cce42ce5ab9ceb",
+    "src/warmup_select.py": "f1e85e13554f56f1972263c6f596aa90a7a4d4a302c9134181713b16cce64aa1",
+    "src/live_motion/__init__.py": "3326f3e912364c8de02ac9622634bb18e638e419b067655b6ce6f6284fdfe044",
+    "src/live_motion/cache.py": "a260c2d0daf274dac8a19f443d49c92648e6e4b1527d6d58c3f0c7418458b900",
+    "src/live_motion/calibration.py": "17982020796e25c143d9ef0e6b638d0a841a403757c9097d7e65c6f4e3a7c792",
+    "src/live_motion/config.py": "3ab271b8d7850e14e8682e5073691b2b7f54af23ec95cadfe0db972576f95a0a",
+    "src/live_motion/controller.py": "75617474ca3ee7d326c3a49c7463e0aef5ee6e09ee0a7f782959b97f01ac03eb",
+    "src/live_motion/evidence.py": "75cdf06783b81ebbaa0bf5d2b84586243834d5e9099fd18bc978b7bea3236413",
+    "src/live_motion/features.py": "e9cf2d3ba39e1bd55b75e4e2dcbd8c17108cf69fa0894f83e54c7ae423c1dab6",
+    "src/live_motion/runtime.py": "f67b5c8dd2d3252ae2ec39ece72113bdae59968679f3364ef823e776a08b58fa",
+    "src/live_motion/scheduler.py": "d36daabc811b870b478f4ded5d1957b2695cbd4097b3a999a9b0738070f67144",
+    "src/live_motion/breathing.py": "410eb81c0b8c09fe8261c59bbe9daeb1b5104859e5ccd49c8987676ec764c5e8",
+    "scripts/live_demo_config.yaml": "254c14c9b738d8450dbf37d322ac7930fb9f7d23485233041cdb639d65efe2c1",
+    "scripts/live_demo_calibrated_config.yaml": "d6513b07e1a98178c5f5e04256f4d19ab5d06a7134e13b5f3bcc61eb63bdce50"
+  }
+}

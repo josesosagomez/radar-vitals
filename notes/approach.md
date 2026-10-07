@@ -810,3 +810,39 @@ usability observation; no HR accuracy or motion robustness result is established
 4. **Independent cross-model DSP review** of the linalg-free `src/vitals.py` path (§7.6).
 5. **Baselines:** produce head-to-head numbers vs TI on-chip output and a published
    phase-based pipeline.
+
+## Recorded development comparison player (2026-10-07)
+
+The owner-approved design is in
+`plans/replay_demo_compare_massimo3_2026-10-07.md`. This separate application
+reprocesses the registered historical massimo3 ADC chronologically using the
+unchanged production SampleSwap decoder and per-window DSP. Ordinary windows
+are 600 frames, with 60-frame updates at 20 Hz; successful automatic selection
+fixes the bin. Its five-value HR median admits only positive, valid,
+AHET-verified ordinary estimates. This is stricter than the historical live
+smoother's finite-value admission and is not reproduction of that saved display.
+
+Accepted display coverage is an application-boundary presentation metric:
+one-hop leases count only elapsed recording frames with accepted positive
+numbers. Initial accumulation and recovery remain in the denominator; quiet
+assessments have a separate status count. Coverage is neither physiological
+freshness nor accuracy. Reference cards and descriptive window medians are
+passive, use integer Unix timestamps, and cannot affect radar processing.
+The missing exact frame-zero UTC requires a persistent approximate-alignment
+warning. No fitted offset, error panel or agreement claim is introduced.
+
+The advanced adapter must retain existing physical-calibration validation and
+historical zero-bias compatibility. The explicit legacy zero-loss assumption
+permits development execution only after all metadata/conservation checks;
+it supplies no observed validity map and cannot qualify calibration or physical
+acceptance. The [Masimo operator manual](https://techdocs.masimo.com/globalassets/techdocs/pdf/lab-10169a_master.pdf)
+specifies RRp display range 4-70 rpm, so its readings cannot validate 3 bpm radar
+performance. Rejected/failed attempts and missing reference buckets stay visible
+in evidence, without interpolation or tuning.
+
+Pinned GUI API review supports immutable snapshot rendering on the Qt main
+thread ([QTimer](https://doc.qt.io/qtforpython-6/PySide6/QtCore/QTimer.html),
+[QThread](https://doc.qt.io/qtforpython-6/PySide6/QtCore/QThread.html)); recording
+boundaries belong to the controller. Prefix-only traces with NaN gaps use
+[pyqtgraph 0.13.7 PlotDataItem](https://pyqtgraph.readthedocs.io/en/pyqtgraph-0.13.7/api_reference/graphicsItems/plotdataitem.html).
+No estimator or calibration threshold is changed by this application.
