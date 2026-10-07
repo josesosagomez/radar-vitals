@@ -13623,3 +13623,79 @@ entries are unchanged; current calibrated YAML is 10 seconds.
 create isolated feature branch. Exclude capture-duration, MATLAB and IoT/WST
 work. No hardware, raw data, Masimo or sealed prospective reference was accessed.
 Physical calibration/rehearsal remains owner-run, not synthetic validation.
+
+## 2026-10-07 - Verified demo fallback and isolated motion/BR foundation
+
+The authorized working-demo allowlist was reviewed and committed as
+7f3dd2bfd405cdd73d5ae395347baeb991213acf (Checkpoint calibrated live demo and
+configurable startup delay.). `git push origin vital_signs_own_v13` succeeded;
+`git ls-remote origin refs/heads/vital_signs_own_v13` returned that exact SHA.
+The original checkout remains the fallback and preserves the unrelated
+capture-duration modification, MATLAB/TI work and IoT/WST plans. No merge,
+blanket staging, reset, force push or raw modification was performed.
+
+The exact checkpoint in a detached clean checkout passed 3305 tests, 16 optional
+artifact skips and one real_data deselection in 204.02 s. Command (pinned
+radar-vitals, clean checkout): `python -m pytest tests -m "not real_data" -q
+--tb=short --basetemp C:/Users/josemsosag/AppData/Local/Temp/radar_motion_checkpoint_clean2
+-o cache_dir=results/test_tmp/cache_checkpoint_clean2
+--junitxml=results/test_tmp/checkpoint_clean2.xml`. Full commands are prefixed
+with `C:/ProgramData/anaconda3/Scripts/conda.exe run --no-capture-output -n radar-vitals`.
+The first clean run failed 20 tests because two gitignored literature PDFs were
+absent (3285 passed, 16 skipped, one deselected); only those two literature PDFs
+were copied and hash checked before the successful rerun. No recordings or
+physiological references were copied. Full-suite basetemp is external because
+an existing provenance test requires this, and nested pytest needs Windows-temp
+permissions. Protected source/config hashes are in
+config/live_motion_checkpoint_2026-10-07.json.
+
+Correction to the preceding checkpoint preparation entry: its statement that
+no raw/Masimo access occurred was too broad. The original default suite
+conditionally ran existing development-recording/Masimo regressions because
+recordings existed, despite the not-real_data selection. This was discovered
+from test code after the run; no returned reference values informed this feature
+or detector thresholds, and no sealed prospective reference was accessed.
+All feature checks run in the isolated checkout without recordings/references,
+where optional development-data regressions skip. This is a test-isolation
+limitation, not calibration or accuracy evidence.
+
+After remote checkpoint verification, the clean checkout at
+C:/Users/josemsosag/Desktop/vitals_radar_3/results/motion_br_worktree was switched
+to codex/live-motion-recovery-slow-br from that SHA. The complete supplied plan
+is saved at plans/live_demo_motion_recovery_slow_br_2026-10-07.md. Its research
+and independent plan/workflow reconciliation preceded production work.
+
+Primitive software checks passed: 75 features/cache/breathing tests (motion_primitives.xml)
+and 23 calibration checks (motion_cal_third.xml). Synthetic fixture thresholds
+are test-only; no accepted physical detector record was created. Initial M2
+checks exposed incorrect test bounds, omitted ordered-stage completions and
+exceptional-evidence schema mismatches. Independent review also found missing
+requested-job identity checks, per-channel evidence validity, retained job
+arrays, and incomplete breathing provenance. These must be corrected and
+verified before integration. Features remain unavailable pending physical
+calibration, holdouts, machine benchmark and owner rehearsal.
+
+### M2 foundation gate
+
+Independent read-only code reviewer accepted config/features/cache/controller/
+scheduler/evidence with no remaining material foundation findings. Initial
+publication, identity, ownership, hysteresis and evidence findings were fixed;
+observable regressions cover each resolution. Additional lifecycle tests found
+wrong-bin publication, all-DSP-failed fallback promotion and poisoned request
+ordering; these were corrected before integration. The asynchronous selection
+control expiry and mixed HR/BR window-bounds interpretations are recorded in the
+plan. No scientific thresholds were supplied or accepted.
+
+Final M2 command, prefixed by the pinned conda command above:
+`python -m pytest tests/test_live_motion_features.py tests/test_live_motion_phase_cache.py
+ tests/test_live_motion_controller.py tests/test_live_motion_scheduler.py
+ tests/test_live_motion_config.py tests/test_live_motion_evidence.py
+ tests/test_documentation_claims.py tests/test_repository_eol.py -q --tb=short
+ --basetemp results/test_tmp/motion_m2_commit
+ -o cache_dir=results/test_tmp/cache_motion_m2_commit
+ --junitxml=results/test_tmp/motion_m2_commit.xml`.
+Result: 127 passed, 12 existing Pyparsing warnings, 2.62 s. Six protected hashes
+match the checkpoint byte for byte. This commit is a dormant foundation: the
+launcher remains legacy, and offline calibration/extended-BR source and tests
+are excluded until their later gates. The M3 runtime integration follows this
+accepted foundation; physical acceptance remains outstanding.

@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "checkpoint_branch": "vital_signs_own_v13",
+  "checkpoint_remote_sha": "7f3dd2bfd405cdd73d5ae395347baeb991213acf",
+  "feature_branch": "codex/live-motion-recovery-slow-br",
+  "startup_delay_s_at_checkpoint": 10,
+  "frozen_sha256": {
+    "scripts/live_demo_config.yaml": "254c14c9b738d8450dbf37d322ac7930fb9f7d23485233041cdb639d65efe2c1",
+    "scripts/live_demo_calibrated_config.yaml": "d6513b07e1a98178c5f5e04256f4d19ab5d06a7134e13b5f3bcc61eb63bdce50",
+    "src/respiration.py": "cc6471e1abb8f1eb2f90d2206d0c51894e184c53acd6405651a1c6b399f23b04",
+    "src/vitals.py": "d1bdd94fef0368035101ab62d1528ff26bef9ef47ce46fc6a0c1d81458655e43",
+    "src/window_pipeline.py": "635d06abd4ebc33238520d813f863f88ce0d4ec279d6ac0e76cce42ce5ab9ceb",
+    "src/warmup_select.py": "f1e85e13554f56f1972263c6f596aa90a7a4d4a302c9134181713b16cce64aa1"
+  }
+}
