@@ -13767,3 +13767,105 @@ no longer leaves old values green; cleanup errors no longer skip remaining owned
 device closes. Implement and independently review the extended runtime/HR veto
 and reconstructable numerical evidence next. Physical captures, independent
 holdouts, representative-machine benchmark and radar rehearsal remain owner gates.
+
+## 2026-10-07 - Extended breathing integrated; software acceptance passed
+
+**Set out to do:** deliver the supplied recovery and extended-breathing design
+without disturbing the working calibrated demo or inventing physical thresholds.
+
+**Worked (with evidence):** the feature branch
+codex/live-motion-recovery-slow-br contains separately pushed, reviewed milestones:
+26e92152915120f3d2d9d26d79b9dcbee8fd76f8 (foundation),
+8363c035a8348eee6508877447560ee2b3b0b6d5 (movement integration),
+7e8fab924c456a0d2088ecd789183804145d77c5 (extended breathing), and
+e8dcbdc34da1cbe2c9f623d5811dc66821d17aee (portable evidence verification).
+The fallback vital_signs_own_v13 remote remains
+7f3dd2bfd405cdd73d5ae395347baeb991213acf; its original checkout and unrelated work
+are preserved. The supplied plan and justified revisions are saved in both checkouts.
+
+The worker reconstructs 1200-frame phase from one committed cached bin; ordinary
+HR still uses the unchanged 600-frame DSP. Positive 3-30 bpm, quiet and unresolved
+decisions update BR independently, with atomic quiet/low/contradictory-BR HR vetoes.
+Previews stay outside ordinary smoothing. Raw recording continues through recovery.
+Quiet never becomes numeric zero. Ordinary DSP failure does not suppress an eligible
+extended assessment; failed shared-boundary analysis publishes neither value.
+
+Every executed attempt retains typed, hashed atomic evidence, including already
+completed components when later phase validation, assessment or coupling fails.
+Known AHET respiration inputs are retained even after coupling failure. Verification
+recomputes numerical assessment and coupling, checks per-attempt bounds and bins,
+and joins all extended attempts to indexed final-selection decisions and events.
+Canonical full selector diagnostics and actual commitment frame/revision are retained.
+
+The calibration builder derives thresholds only from independent training captures,
+locks its candidate before held-out reads, and preserves rejected/failed evidence.
+Synthetic calibration proofs cannot enable production. No physical calibration record
+was generated. Benchmark evaluation preserves source-arrival timing and current RSS;
+owner memory acceptance is explicit rather than an invented growth threshold.
+
+Independent DSP/runtime, framework/evidence, calibration-provenance and portable-root
+reviews accepted the software. The DSP reviewer reported no remaining correctness
+findings; framework review reported no blocker/high/medium defect. Test engineering
+confirmed software coverage and kept physical gaps explicit. Review disagreements were
+resolved: known AHET inputs survive coupling failure; record containment must be
+separate from software source authority. All six protected hashes match the checkpoint;
+the calibrated startup setting remains 10 seconds.
+
+All commands used C:/ProgramData/anaconda3/Scripts/conda.exe run --no-capture-output
+-n radar-vitals python. The M4 focused gate passed 340 tests, 12 dependency warnings,
+16.39 s (results/test_tmp/motion_m4_gate.xml). Portable integration/calibration/config/EOL
+checks passed 135, 12 warnings, 8.83 s; final containment ordering passed its targeted
+integration test, 12 warnings, 1.29 s.
+
+Complete isolated suite on committed source e8dcbdc34da1cbe2c9f623d5811dc66821d17aee:
+
+```powershell
+C:/ProgramData/anaconda3/Scripts/conda.exe run --no-capture-output -n radar-vitals python -m pytest tests -m "not real_data" -q --tb=short --basetemp C:/Users/josemsosag/AppData/Local/Temp/radar_motion_br_final2 -o cache_dir=results/test_tmp/pytest_cache_motion_br_final2 --junitxml=results/test_tmp/motion_br_final2.xml
+```
+
+Observed: 3631 passed, 16 skipped, 1 real_data deselected, 1790 existing warnings,
+225.12 s. JUnit confirms zero failures/errors. Skips: four absent all-bin runs,
+two absent scoring runs, seven absent real-capture artifacts and three absent replay
+artifacts. No sealed tests were enabled. The isolated feature checkout contains no
+recordings or physiological references; the earlier original-checkout access limitation
+is recorded above and in the acceptance report. No hardware was operated and data/raw
+was not modified. Source/config/test hashes, seed and JUnit hashes are recorded in
+reports/live_motion_software_hashes_2026-10-07.json.
+
+**Failed / did not work, and why:** retained M4 first/second JUnit records show
+299 passed/12 failed and 319/7 while stricter selection/component evidence fixtures
+were reconciled. Snapshot object identity was replaced by observable immutable-value
+equality; canonical changed-bin fixtures and typed failure sentinels were corrected.
+The first complete suite had 3630 passes/one failure (395.42 s): external basetemp
+exposed an implicit repository-root fixture assumption. The follow-up had 51 passes/
+one failure (7.07 s), revealing the actual copied-calibration portability bug.
+A proposed run-directory-only source root was rejected by independent review.
+The accepted optional record_root constrains the copied artifact while repository
+source hashes remain authoritative. Containment is proved before reading the copy.
+All failures are retained in results/test_tmp and the acceptance report.
+
+**Retired / no longer used:** a global ordinary failure flag cannot suppress
+verification of an extended component that ran. Standalone selection events cannot
+establish bin lineage. Coupling failure no longer erases known respiration inputs.
+Portable artifacts no longer depend on the original calibration-record location.
+
+**Next:** software is accepted; physical acceptance is not performed. Both tracked
+feature flags remain false with null calibration path/hash. The owner must collect
+independent training/holdouts, obtain accepted hash-bound calibration, inspect the
+representative-machine benchmark and rehearse recovery/target loss/quiet behavior.
+Use a stationary reflector for full-duration quiet tests. Physical 3-bpm accuracy and
+clinical breath-hold sensitivity remain unvalidated. Do not merge into the working
+branch; return to the original calibrated launch for the demo.
+
+## 2026-10-07 - Final staged delivery verification
+
+After staging only the five delivery documents, the pinned environment ran:
+
+```powershell
+C:/ProgramData/anaconda3/Scripts/conda.exe run --no-capture-output -n radar-vitals python -m pytest tests/test_live_motion_config.py tests/test_documentation_claims.py tests/test_repository_eol.py -q --tb=short --basetemp results/test_tmp/motion_br_delivery -o cache_dir=results/test_tmp/cache_motion_br_delivery --junitxml=results/test_tmp/motion_br_delivery.xml
+```
+
+Observed: 32 passed, 12 dependency warnings, 1.21 s. All 35 software-manifest hashes
+and all six protected checkpoint hashes matched. No source or configuration changed
+after the accepted complete suite. The feature configuration remains disabled;
+physical owner gates are unchanged.
