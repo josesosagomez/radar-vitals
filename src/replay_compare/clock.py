@@ -78,6 +78,15 @@ class PlaybackClock:
             raise ValueError("processed frame boundary must be monotone")
         self._processed_frames = processed_frames
 
+    def reanchor(self) -> None:
+        """Start pacing from the current boundary and current wall-clock time.
+
+        Session preparation can hash a large ADC file before playback begins.  That
+        preparation time is outside the recording timeline, so the runtime calls
+        this method after the source has been prepared and before reading frame 0.
+        """
+        self._reanchor()
+
     def wait_until_next_frame(self) -> bool:
         """Wait for the next boundary; return False while paused/pausing."""
         if self._state != "running":

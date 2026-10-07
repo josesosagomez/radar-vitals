@@ -15,6 +15,24 @@ computed through the read-only playback handle; a registry value is an expected
 identity, not evidence that those input bytes were read. Add pre-run substitution
 tests as a Milestone-1 acceptance gate. No other processing contract changes.
 
+The workflow audit also clarified the M2/M3 dependency: M2 may introduce tested,
+radar-only controller event/state-interval schemas and minimal typed display/lease
+primitives required for baseline evidence. M3 remains the milestone that accepts
+full reconstructed coverage, passive reference mapping, and UI presentation.
+This is sequencing clarity, not a change to coverage or scientific contracts.
+
+Independent evidence review clarified the final verifier's source binding:
+saved-phase-to-DSP recomputation proves internal consistency, but cannot reject
+jointly invented phase, spectra and rates. M3 final verification must authorize
+the registered ADC through the session/source boundary, stream it with a bounded
+600-frame baseline ring (1200 for advanced windows), and compare production phase
+at each indexed attempt's actual bounds/bin before checking saved-phase DSP.
+Missing source inputs must produce an explicit incomplete/refused verification,
+never a complete-verification claim. M2 may accept explicitly scoped internal
+evidence checks while preserving all request bounds/bin/lineage needed for this
+M3 verification. This strengthens the already required rejection of invented
+values; it changes no estimator, admission rule or coverage definition.
+
 ## 1. Goal, decisions, and verified starting point
 
 Build a separate development application that replays `massimo3` chronologically, calculates radar estimates during playback, and displays:
