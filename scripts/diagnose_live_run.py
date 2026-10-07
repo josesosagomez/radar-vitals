@@ -755,6 +755,47 @@ def diagnose(rd: RunData) -> dict:
             "capture": capture, "causes": causes}
 
 
+def _diagnose_live_motion(run_dir: Path, metadata: dict) -> int:
+    """Print a schema-aware development summary without legacy warmup assumptions."""
+
+    import csv
+    if str(REPO_ROOT) not in sys.path:
+        sys.path.insert(0, str(REPO_ROOT))
+    from src.live_motion.evidence import verify_development_evidence
+    from scripts.verify_live_demo_artifacts import verify_run
+
+    attempt_path = run_dir / "analysis_attempts.csv"
+    event_path = run_dir / "controller_events.csv"
+    attempts = []
+    events = []
+    if attempt_path.is_file():
+        with attempt_path.open("r", newline="", encoding="utf-8") as handle:
+            attempts = list(csv.DictReader(handle))
+    if event_path.is_file():
+        with event_path.open("r", newline="", encoding="utf-8") as handle:
+            events = list(csv.DictReader(handle))
+    dispositions: dict[str, int] = {}
+    for row in attempts:
+        key = str(row.get("disposition", "unknown"))
+        dispositions[key] = dispositions.get(key, 0) + 1
+    event_counts: dict[str, int] = {}
+    for row in events:
+        key = str(row.get("kind", "unknown"))
+        event_counts[key] = event_counts.get(key, 0) + 1
+    issues = verify_development_evidence(run_dir)
+    print(f"Live-motion diagnosis: {run_dir.name}")
+    print(f"completion_status: {metadata.get('completion_status')}")
+    print(f"source_id: {metadata.get('source_id')}")
+    print(f"analysis_attempts: {len(attempts)} {dispositions}")
+    print(f"controller_events: {len(events)} {event_counts}")
+    print(f"attempt_evidence_verification: {'PASS' if not issues else 'FAIL'}")
+    for issue in issues:
+        print(f"  {issue.code}: {issue.details}")
+    full_status = verify_run(run_dir)
+    print(f"full_artifact_verification: {'PASS' if full_status == 0 else 'FAIL'}")
+    return 0 if not issues and full_status == 0 else 1
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     ap = argparse.ArgumentParser(
         description="Diagnose why HR was blank / whether warmup locked well "
@@ -768,6 +809,12 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument("--out", type=Path, default=None,
                     help="plot output dir (default <run_dir>/diagnosis/)")
     args = ap.parse_args(argv)
+
+    metadata_path = args.run_dir / "run_metadata.json"
+    if metadata_path.is_file():
+        metadata = _read_json(metadata_path) or {}
+        if metadata.get("evidence_version") == 1 or metadata.get("live_motion_enabled") is True:
+            return _diagnose_live_motion(args.run_dir, metadata)
 
     try:
         rd = load_run(args.run_dir)

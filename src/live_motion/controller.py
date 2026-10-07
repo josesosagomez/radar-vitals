@@ -783,3 +783,11 @@ class RecoveryController:
                 self._epoch, job_id,
             ),),
         )
+
+    def handle_source_timeout(self) -> ControllerUpdate:
+        """Invalidate fresh state once when acquisition stops yielding frames."""
+
+        frame_index = -1 if self._last_frame_index is None else self._last_frame_index
+        return self._event_update(
+            frame_index, "data_gap", "source_frame_timeout", moving=False
+        )

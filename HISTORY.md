@@ -13699,3 +13699,71 @@ match the checkpoint byte for byte. This commit is a dormant foundation: the
 launcher remains legacy, and offline calibration/extended-BR source and tests
 are excluded until their later gates. The M3 runtime integration follows this
 accepted foundation; physical acceptance remains outstanding.
+
+### M3 movement runtime and calibration prerequisite gate
+
+**Worked (with evidence):** the isolated feature checkout integrated the bounded
+worker/controller with the production SampleSwap decoder, continuous raw mirror,
+progressive selection, independent red/amber/fresh display snapshots, and versioned
+verification/diagnosis. The working branch stayed at
+7f3dd2bfd405cdd73d5ae395347baeb991213acf. Foundation commit
+26e92152915120f3d2d9d26d79b9dcbee8fd76f8 was pushed and remotely verified.
+The movement-only offline calibration validator/builder is included as a
+preflight dependency; extended assessment remains a subsequent runtime milestone.
+No accepted physical calibration record was generated or shipped.
+
+Independent framework review accepted M3 after fixes for GUI integration,
+source fatal errors and starvation, setup/cleanup ownership, cancellation versus
+execution races, bounded shutdown, late completions, raw/validity/range integrity,
+and production calibration-proof recomputation. Calibrations require training-only
+thresholds, candidate lock before any held-out metadata inspection, independent
+coverage, strict separation, and hash-bound capture provenance. Fake, replay,
+dirty, incompatible and escaped capture artifacts fail closed. Independent
+calibration review accepted these safeguards, including exact clean fallback
+provenance in both CLI and core. Metadata integrity cannot authenticate deliberately
+forged physical-source claims; owner-controlled acquisition remains necessary.
+
+An accepted synthetic fixture cannot enable production. Fake-live artifact tests
+first assert that rejection, then narrowly replace only the hardware-provenance
+guard with an assertion that every fixture is explicitly synthetic. Actual
+schema, source/settings hashes, threshold derivation and held-out recomputation
+remain exercised. No physical or clinical validation is inferred.
+
+The Windows current-working-set telemetry API was checked against Microsoft
+GetProcessMemoryInfo/PROCESS_MEMORY_COUNTERS and Python ctypes documentation.
+Explicit HANDLE/POINTER/DWORD/BOOL prototypes were added; unsupported platforms
+report unavailable rather than substituting lifetime peak RSS. The reviewer
+accepted this correction and the actual Windows API smoke passed.
+
+Final M3 gate (pinned radar-vitals conda prefix as above):
+
+```powershell
+python -m pytest tests/test_live_motion_features.py tests/test_live_motion_phase_cache.py tests/test_live_motion_controller.py tests/test_live_motion_scheduler.py tests/test_live_motion_config.py tests/test_live_motion_evidence.py tests/test_live_motion_integration.py tests/test_live_demo_range_calibration.py tests/test_live_demo_startup_delay.py tests/test_live_demo_warmup_helpers.py tests/test_m2_capture_artifacts.py tests/test_diagnose_live_run.py tests/test_documentation_claims.py tests/test_repository_eol.py -q --tb=short --basetemp results/test_tmp/motion_m3_gate -o cache_dir=results/test_tmp/cache_motion_m3_gate --junitxml=results/test_tmp/motion_m3_gate.xml
+```
+
+Result: 365 passed, 13 existing warnings, 16.07 s. Following the final telemetry
+change, this targeted command passed 28 tests, 12 warnings, 3.88 s:
+
+```powershell
+python -m pytest tests/test_live_motion_integration.py tests/test_repository_eol.py -q --tb=short --basetemp results/test_tmp/motion_m3_telemetry_final -o cache_dir=results/test_tmp/cache_motion_m3_telemetry_final --junitxml=results/test_tmp/motion_m3_telemetry_final.xml
+```
+
+Separately, breathing/calibration/benchmark primitives passed 143 checks, 12
+warnings, no skips, 3.38 s (motion_cal_provenance_final.xml); their integration
+and publication gate still follows M3. Their synthetic thresholds are test-only.
+
+**Failed / did not work:** retained review-run JUnit files record first/second/
+third/fourth/fifth M3 checks: respectively 336 passed/3 failed, 125/3, 127/1,
+22/1 and 159/1. These exposed a verifier NameError and evolving fixture mistakes:
+old provenance schema, initial epoch numbering, event-kind versus reason,
+renamed tombstone event, and omitted frame-byte geometry. The movement detector
+itself fired at frame 684; no detector threshold was changed to repair that test.
+The earlier benchmark run had 112 passes/9 failures because its test metadata
+omitted effective config; the corrected fixture passed. Failures were retained,
+resolved and rerun rather than treated as acceptance.
+
+**Retired / next:** a dispatch is no longer treated as proof of execution; silence
+no longer leaves old values green; cleanup errors no longer skip remaining owned
+device closes. Implement and independently review the extended runtime/HR veto
+and reconstructable numerical evidence next. Physical captures, independent
+holdouts, representative-machine benchmark and radar rehearsal remain owner gates.

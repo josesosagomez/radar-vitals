@@ -6,6 +6,7 @@ Intended for Goal 5 live rehearsals after running:
 from __future__ import annotations
 
 import argparse
+import copy
 import csv
 import hashlib
 import json
@@ -14,6 +15,7 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import yaml
 
 _ROOT = Path(__file__).resolve().parents[1]
 if str(_ROOT) not in sys.path:
@@ -58,13 +60,19 @@ def verify_run(run_dir: Path, expect_mode: str | None = None) -> int:
 
     checks.append(_check("run_dir_exists", run_dir.exists(), str(run_dir)))
     checks.append(_check("metadata_exists", meta_path.exists(), str(meta_path)))
+    if not all(ok for _, ok, _ in checks):
+        return _print_results(checks)
+
+    meta = _load_json(meta_path)
+    if meta.get("evidence_version") == 1 or meta.get("live_motion_enabled") is True:
+        return _verify_live_motion_run(run_dir, meta, expect_mode, checks)
+
     checks.append(_check("warmup_json_exists", warmup_path.exists(), str(warmup_path)))
     checks.append(_check("csv_exists", csv_path.exists(), str(csv_path)))
     checks.append(_check("intermediates_npz_exists", npz_path.exists(), str(npz_path)))
     if not all(ok for _, ok, _ in checks):
         return _print_results(checks)
 
-    meta = _load_json(meta_path)
     warmup = _load_json(warmup_path)
     with csv_path.open("r", newline="", encoding="utf-8") as fh:
         rows = list(csv.DictReader(fh))
@@ -123,6 +131,7 @@ def verify_run(run_dir: Path, expect_mode: str | None = None) -> int:
         ),
         _check("npz_nonempty", npz_path.stat().st_size > 0, f"bytes={npz_path.stat().st_size}"),
     ])
+    effective_mode = expect_mode or meta.get("mode")
 
     cfg = meta.get("config", {})
     coordinate_cfg = {"profile": {
@@ -277,6 +286,201 @@ def verify_run(run_dir: Path, expect_mode: str | None = None) -> int:
             ),
         ])
 
+    return _print_results(checks)
+
+
+def _verify_live_motion_run(
+    run_dir: Path,
+    meta: dict,
+    expect_mode: str | None,
+    checks: list[tuple[str, bool, str]],
+) -> int:
+    """Dispatch development evidence without imposing the legacy warmup schema."""
+
+    from src.live_motion.evidence import verify_development_evidence
+
+    effective_mode = expect_mode or meta.get("mode")
+
+    issues = verify_development_evidence(run_dir)
+    performance_path = run_dir / "performance.csv"
+    performance_meta_path = run_dir / "performance_meta.json"
+    performance_meta = (
+        _load_json(performance_meta_path) if performance_meta_path.is_file() else {}
+    )
+    config_snapshot = run_dir / str(meta.get("config_snapshot", ""))
+    calibration_snapshot = run_dir / str(meta.get("calibration_snapshot", ""))
+    source_identity_path = run_dir / str(meta.get("source_identity_manifest", ""))
+    snapshot_cfg = None
+    if config_snapshot.is_file():
+        with config_snapshot.open("r", encoding="utf-8") as handle:
+            snapshot_cfg = yaml.safe_load(handle)
+    checks.extend([
+        _check(
+            "mode_matches",
+            expect_mode is None or meta.get("mode") == expect_mode,
+            f"mode={meta.get('mode')!r}",
+        ),
+        _check(
+            "completed",
+            meta.get("completion_status") == "completed",
+            f"completion_status={meta.get('completion_status')!r}",
+        ),
+        _check("development_evidence", not issues, str(issues)),
+        _check("performance_csv_exists", performance_path.is_file(), str(performance_path)),
+        _check(
+            "performance_schema",
+            performance_meta.get("schema_version") == "live_motion_performance_v1",
+            str(performance_meta.get("schema_version")),
+        ),
+        _check(
+            "performance_clean_shutdown",
+            performance_meta.get("clean_shutdown") is True,
+            str(performance_meta.get("clean_shutdown")),
+        ),
+        _check(
+            "config_snapshot_hash",
+            config_snapshot.is_file()
+            and hashlib.sha256(config_snapshot.read_bytes()).hexdigest()
+            == meta.get("config_sha256"),
+        ),
+        _check(
+            "calibration_snapshot_hash",
+            calibration_snapshot.is_file()
+            and hashlib.sha256(calibration_snapshot.read_bytes()).hexdigest()
+            == meta.get("calibration_sha256"),
+        ),
+    ])
+    if snapshot_cfg is not None and source_identity_path.is_file():
+        from src.live_motion.calibration import (
+            CalibrationError, semantic_identity, validate_calibration,
+        )
+        try:
+            recomputed_identity = semantic_identity(snapshot_cfg)
+            recorded_identity = _load_json(source_identity_path)
+            checks.append(_check(
+                "source_identity_recomputed",
+                recomputed_identity == recorded_identity
+                and recomputed_identity.get("source_sha256") == meta.get("source_sha256"),
+            ))
+        except (CalibrationError, OSError, ValueError, KeyError, TypeError) as exc:
+            checks.append(_check("source_identity_recomputed", False, str(exc)))
+        detector_spec = snapshot_cfg.get("development_motion", {}).get("calibration", {})
+        checks.append(_check(
+            "detector_calibration_config_bound",
+            detector_spec.get("record_sha256") == meta.get("calibration_sha256"),
+        ))
+        try:
+            calibration_digest = hashlib.sha256(calibration_snapshot.read_bytes()).hexdigest()
+            verification_cfg = copy.deepcopy(snapshot_cfg)
+            verification_cfg["development_motion"]["calibration"] = {
+                "record_path": str(calibration_snapshot.resolve()),
+                "record_sha256": calibration_digest,
+            }
+            validated_record = validate_calibration(verification_cfg, root=_ROOT)
+            copied_record = _load_json(calibration_snapshot)
+            checks.append(_check(
+                "detector_calibration_production_validation",
+                validated_record == copied_record,
+            ))
+        except (CalibrationError, OSError, ValueError, KeyError, TypeError) as exc:
+            checks.append(_check(
+                "detector_calibration_production_validation", False, str(exc)
+            ))
+        try:
+            bias = range_bias_m(snapshot_cfg)
+            calibration_spec = snapshot_cfg.get("range_calibration", {})
+            range_record_path = _ROOT / str(calibration_spec.get("record_path", ""))
+            range_record_hash = (
+                hashlib.sha256(range_record_path.read_bytes()).hexdigest()
+                if range_record_path.is_file() else None
+            )
+            embedded = (meta.get("range_calibration") or {}).get("record")
+            checks.append(_check(
+                "range_calibration_provenance_bound",
+                bias == 0.0 or (
+                    calibration_spec.get("scope") == "development_live_demo_only"
+                    and (meta.get("range_calibration") or {}).get("application")
+                    == "python_range_coordinates_only"
+                    and (meta.get("range_calibration") or {}).get("record_sha256")
+                    == calibration_spec.get("record_sha256")
+                    and
+                    range_record_hash == calibration_spec.get("record_sha256")
+                    and isinstance(embedded, dict)
+                    and embedded == _load_json(range_record_path)
+                    and embedded.get("schema_version") == 1
+                    and embedded.get("range_bias_m") == bias
+                ),
+            ))
+            attempt_index = run_dir / "analysis_attempts.csv"
+            corrected_ok = True
+            if attempt_index.is_file():
+                with attempt_index.open("r", newline="", encoding="utf-8") as handle:
+                    for row in csv.DictReader(handle):
+                        with np.load(run_dir / row["npz_file"], allow_pickle=False) as payload:
+                            actual_bin = int(payload["actual_bin"].item())
+                            corrected = float(payload["corrected_range_m"].item())
+                            if actual_bin >= 0 and not math.isclose(
+                                corrected, bin_range_m(actual_bin, snapshot_cfg),
+                                rel_tol=0.0, abs_tol=1e-12,
+                            ):
+                                corrected_ok = False
+            checks.append(_check("attempt_corrected_ranges", corrected_ok))
+        except (KeyError, TypeError, ValueError, OSError) as exc:
+            checks.append(_check("range_calibration_provenance_bound", False, str(exc)))
+    else:
+        checks.append(_check("source_identity_recomputed", False, "missing snapshot/manifest"))
+    for field in (
+        "source_id", "source_kind", "config_sha256", "source_sha256",
+        "calibration_sha256",
+    ):
+        checks.append(_check(
+            f"performance_{field}_matches",
+            bool(meta.get(field)) and meta.get(field) == performance_meta.get(field),
+            f"metadata={meta.get(field)!r} performance={performance_meta.get(field)!r}",
+        ))
+    if effective_mode == "live":
+        raw_path = run_dir / "adc_stream.bin"
+        raw_hash = hashlib.sha256(raw_path.read_bytes()).hexdigest() if raw_path.is_file() else None
+        packet_stats = meta.get("live_packet_stats") or {}
+        validity_path = run_dir / str(packet_stats.get("frame_validity_map_path", ""))
+        validity_ok = False
+        validity_details = "missing"
+        if validity_path.is_file():
+            try:
+                validity = np.load(validity_path, allow_pickle=False)
+                validity_hash = hashlib.sha256(validity_path.read_bytes()).hexdigest()
+                validity_ok = (
+                    validity.dtype == np.bool_
+                    and validity.ndim == 1
+                    and validity_hash == packet_stats.get("frame_validity_map_sha256")
+                    and validity.size == int(packet_stats.get("n_frames", -1))
+                    and int(np.count_nonzero(~validity))
+                    == int(packet_stats.get("n_invalid_frames", -1))
+                )
+                validity_details = f"shape={validity.shape} dtype={validity.dtype}"
+            except (OSError, ValueError, TypeError) as exc:
+                validity_details = str(exc)
+        checks.extend([
+            _check("live_raw_mirror_exists", raw_path.is_file(), str(raw_path)),
+            _check(
+                "live_raw_mirror_hash_matches",
+                raw_hash is not None and raw_hash == meta.get("live_raw_mirror_hash"),
+            ),
+            _check(
+                "live_raw_mirror_frame_size",
+                raw_path.is_file()
+                and raw_path.stat().st_size
+                == int(packet_stats.get("n_frames", -1))
+                * int(packet_stats.get("bytes_per_frame", -1)),
+                f"bytes={raw_path.stat().st_size if raw_path.is_file() else 'missing'}",
+            ),
+            _check(
+                "source_queue_no_overflow",
+                int(packet_stats.get("source_queue_overflow_count", -1)) == 0,
+                str(packet_stats.get("source_queue_overflow_count")),
+            ),
+            _check("frame_validity_integrity", validity_ok, validity_details),
+        ])
     return _print_results(checks)
 
 

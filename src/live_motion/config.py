@@ -302,6 +302,10 @@ def validate_live_motion_preflight(
         violations.append("manifest locked_bin is incompatible with automatic recovery")
     if cfg.get("session", {}).get("locked_bin") is not None:
         violations.append("session.locked_bin must be null for automatic recovery")
+    if cfg.get("capture", {}).get("record_raw_stream") is not True:
+        violations.append(
+            "development movement recovery requires capture.record_raw_stream=true"
+        )
     if violations:
         raise ValueError("; ".join(violations))
 

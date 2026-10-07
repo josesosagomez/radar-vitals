@@ -465,3 +465,20 @@ half-open bounds covering 1200 frames, plus hr_window_start=end-600 and
 br_window_start=end-1200. It owns the last 600 raw frames and a complete owned
 candidate-bin cache snapshot; no phase stitching is used. The same convention
 applies to first-60-second and subsequent rolling assessments.
+
+### Missing-stream and cancellation clarification
+
+Independent runtime review found that a silent source can return no frame
+without supplying an invalid frame or a discontinuous index. The development
+runtime therefore uses the existing configured monitor hop, 5/20 = 0.25 seconds,
+as its stream-starvation interval after the first frame. One latched
+`data_gap/source_frame_timeout` event holds historical readings red, clears fresh
+buffers and cancels pending work. Acquisition continues, no frame is fabricated,
+and resumed input must satisfy the same 60-frame stillness rule. This is a
+configuration-derived data-delivery guard, not a fitted physical-motion threshold.
+
+Dispatch into the bounded worker queue does not prove execution. Worker-start
+tracking distinguishes cancellation before execution (events only) from an
+executed analysis interrupted at bounded shutdown (one typed attempt with an
+explicit interruption reason). Tombstones prevent later completion from changing
+display state or appending duplicate signal evidence.

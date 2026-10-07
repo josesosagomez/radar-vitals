@@ -44,6 +44,7 @@ import hashlib
 import json
 import math
 import queue
+import socket
 import struct
 import subprocess
 import sys
@@ -228,8 +229,12 @@ class LiveFrameSource(FrameSource):
             raise ValueError("max_frames must be a positive exact integer")
         self._max_frames = max_frames
         self._q: queue.Queue = queue.Queue(maxsize=400)
+        self._arrival_times: collections.OrderedDict[int, float] = collections.OrderedDict()
+        self._arrival_lock = threading.Lock()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+        self.failure: BaseException | None = None
+        self._terminal = threading.Event()
         self._sock = None
         # Public stats (read after stop)
         self.n_received: int = 0
@@ -238,6 +243,7 @@ class LiveFrameSource(FrameSource):
         self.packets_duplicate_or_late_discarded: int = 0
         self.zero_filled_bytes: int = 0
         self.mirror_truncated_bytes: int = 0
+        self.queue_overflow_count: int = 0
         self.frame_validity: list[bool] = []
         self._frame_idx: int = 0
         #: Historical first-packet diagnostic retained for old fixtures. Prospective M2
@@ -279,8 +285,7 @@ class LiveFrameSource(FrameSource):
         stream_bytes_assigned = 0
         invalid_intervals: list[tuple[int, int]] = []
         next_invalid_interval = 0
-        mirror = open(self._raw_mirror_path, "wb") if self._raw_mirror_path else None
-        self._sock.settimeout(0.1)
+        mirror = None
 
         def append_stream_bytes(content: bytes, *, valid: bool) -> None:
             nonlocal stream_bytes_assigned
@@ -302,10 +307,12 @@ class LiveFrameSource(FrameSource):
                 invalid_intervals.append((interval_start, stream_bytes_assigned))
 
         try:
+            self._sock.settimeout(0.1)
+            mirror = open(self._raw_mirror_path, "wb") if self._raw_mirror_path else None
             while not self._stop.is_set():
                 try:
                     pkt = self._sock.recv(1470)
-                except Exception:
+                except socket.timeout:
                     continue
                 if len(pkt) != 10 + PAYLOAD_BYTES_PER_PKT:
                     self.packets_short_discarded += 1
@@ -400,32 +407,47 @@ class LiveFrameSource(FrameSource):
                     frame_bytes = bytes(buf[: self._bytes_per_frame])
                     del buf[: self._bytes_per_frame]
                     self.frame_validity.append(frame_is_valid)
+                    arrival_monotonic = time.monotonic()
+                    decoded = self._decode_frame(frame_bytes)
                     try:
-                        self._q.put_nowait((self._frame_idx, self._decode_frame(frame_bytes)))
+                        with self._arrival_lock:
+                            self._arrival_times[self._frame_idx] = arrival_monotonic
+                            while len(self._arrival_times) > self._q.maxsize:
+                                self._arrival_times.popitem(last=False)
+                            self._q.put_nowait((self._frame_idx, decoded))
                     except queue.Full:
-                        pass
+                        with self._arrival_lock:
+                            self._arrival_times.pop(self._frame_idx, None)
+                        self.queue_overflow_count += 1
                     self._frame_idx += 1
                 if self._max_frames is not None and self._frame_idx >= self._max_frames:
                     self._stop.set()
+        except BaseException as exc:
+            self.failure = exc
+            self._stop.set()
         finally:
-            # Frame-align the mirror by dropping any trailing partial frame, so
-            # read_adc_bin can load it. This is cheap (a truncate, no read) and
-            # completes well inside stop()'s join timeout.
-            if mirror:
-                mirror.close()
-                if self._raw_mirror_path and self._raw_mirror_path.exists():
-                    size = self._raw_mirror_path.stat().st_size
-                    target_size = (
-                        self._max_frames * self._bytes_per_frame
-                        if self._max_frames is not None
-                        and self._frame_idx >= self._max_frames
-                        else size - size % self._bytes_per_frame
-                    )
-                    truncated = max(0, size - target_size)
-                    if truncated:
-                        with self._raw_mirror_path.open("r+b") as fh:
-                            fh.truncate(target_size)
-                        self.mirror_truncated_bytes = truncated
+            try:
+                # Frame-align the mirror by dropping any trailing partial frame.
+                if mirror:
+                    mirror.close()
+                    if self._raw_mirror_path and self._raw_mirror_path.exists():
+                        size = self._raw_mirror_path.stat().st_size
+                        target_size = (
+                            self._max_frames * self._bytes_per_frame
+                            if self._max_frames is not None
+                            and self._frame_idx >= self._max_frames
+                            else size - size % self._bytes_per_frame
+                        )
+                        truncated = max(0, size - target_size)
+                        if truncated:
+                            with self._raw_mirror_path.open("r+b") as fh:
+                                fh.truncate(target_size)
+                            self.mirror_truncated_bytes = truncated
+            except BaseException as cleanup_exc:
+                if self.failure is None:
+                    self.failure = cleanup_exc
+            finally:
+                self._terminal.set()
 
     def frame0_epoch_utc(self, frame_rate_hz: float) -> float | None:
         """Observed frame-index-0 start-assignment UTC, never an inferred sensing time."""
@@ -443,7 +465,17 @@ class LiveFrameSource(FrameSource):
         try:
             return self._q.get(timeout=timeout_s)
         except queue.Empty:
+            if self.failure is not None:
+                raise RuntimeError("LiveFrameSource receiver failed") from self.failure
+            if self._terminal.is_set():
+                return _REPLAY_END
             return None
+
+    def pop_frame_arrival_monotonic(self, frame_index: int) -> float | None:
+        """Return and release the pre-decode arrival clock for one queued frame."""
+
+        with self._arrival_lock:
+            return self._arrival_times.pop(int(frame_index), None)
 
     def stop(self) -> None:
         self._stop.set()
@@ -451,11 +483,16 @@ class LiveFrameSource(FrameSource):
             # 3 s is ample for the receive loop to notice the stop event: the socket
             # timeout is 0.1 s and the only post-loop work is a truncate.
             self._thread.join(timeout=3.0)
+        stuck = bool(self._thread and self._thread.is_alive())
         if self._owns_sock and self._sock:
             try:
                 self._sock.close()
             except Exception:
                 pass
+        if stuck:
+            error = RuntimeError("LiveFrameSource receiver did not stop within 3 seconds")
+            self.failure = self.failure or error
+            raise error
 
 
 # ── Manifest helpers ──────────────────────────────────────────────────────────
@@ -710,6 +747,89 @@ class _HeadlessDisplay:
     def warmup(self, n_buf: int, n_needed: int, elapsed: float) -> None:
         return
 
+
+def _live_motion_display_fields(snapshot) -> dict[str, str]:
+    """Map one immutable development snapshot to independently colored text."""
+
+    colors = {
+        "missing": "black", "held": "red", "preliminary": "#d18700", "fresh": "green",
+    }
+    hr_text = (
+        "--" if not np.isfinite(snapshot.hr.value_bpm)
+        else f"{snapshot.hr.value_bpm:.1f} bpm"
+    )
+    if snapshot.breathing_status == "No breathing motion detected":
+        br_text = (
+            f"Previous: {snapshot.br.value_bpm:.1f} bpm\n{snapshot.breathing_status}"
+            if np.isfinite(snapshot.br.value_bpm) and snapshot.br.value_bpm > 0
+            else snapshot.breathing_status
+        )
+    elif not np.isfinite(snapshot.br.value_bpm) or snapshot.br.value_bpm <= 0:
+        br_text = "--"
+    else:
+        br_text = f"{snapshot.br.value_bpm:.1f} bpm"
+    return {
+        "hr_text": hr_text,
+        "hr_color": colors[snapshot.hr.state],
+        "br_text": br_text,
+        "br_color": colors[snapshot.br.state],
+        "status_text": f"{snapshot.status}: {snapshot.reason}",
+    }
+
+
+class _LiveMotionDisplay:
+    """Small main-thread adapter for development snapshots."""
+
+    def setup(self):
+        from matplotlib import pyplot as plt
+        self.figure, axes = plt.subplots(1, 2, figsize=(9, 4))
+        axes[0].set_title("Heart rate")
+        axes[0].set_ylim(30, 180)
+        axes[1].set_title("Breathing assessment")
+        axes[1].set_ylim(3, 30)
+        for axis in axes:
+            axis.set_xticks([])
+        self.hr_text = axes[0].text(0.5, 0.5, "--", ha="center", transform=axes[0].transAxes)
+        self.br_text = axes[1].text(0.5, 0.5, "--", ha="center", transform=axes[1].transAxes)
+        self.status_text = self.figure.text(0.5, 0.03, "", ha="center")
+        self.figure.tight_layout(rect=(0, 0.08, 1, 1))
+        return self.figure
+
+    def update_snapshot(self, snapshot) -> None:
+        fields = _live_motion_display_fields(snapshot)
+        self.hr_text.set_text(fields["hr_text"])
+        self.hr_text.set_color(fields["hr_color"])
+        self.br_text.set_text(fields["br_text"])
+        self.br_text.set_color(fields["br_color"])
+        self.status_text.set_text(fields["status_text"])
+        self.figure.canvas.draw_idle()
+        self.figure.canvas.flush_events()
+
+
+def _cleanup_live_motion_resources(
+    *, runtime, frame_source, csv_handle, iwr, dca, motion_display=None, pyplot=None,
+) -> tuple[BaseException, ...]:
+    """Attempt every owned cleanup action and preserve errors in call order."""
+
+    errors: list[BaseException] = []
+
+    def attempt(callable_) -> None:
+        try:
+            callable_()
+        except BaseException as exc:
+            errors.append(exc)
+
+    attempt(runtime.stop if runtime is not None else frame_source.stop)
+    if motion_display is not None and pyplot is not None:
+        attempt(lambda: pyplot.close(motion_display.figure))
+    attempt(csv_handle.flush)
+    attempt(csv_handle.close)
+    for device in (iwr, dca):
+        if device is not None:
+            attempt(device.stop)
+            attempt(device.close)
+    return tuple(errors)
+
     def update(
         self,
         times: list,
@@ -963,18 +1083,6 @@ def main() -> None:
         delay_s = _startup_delay_s(cfg, prospective_metadata)
     except ValueError as exc:
         sys.exit(f"ERROR: {exc}")
-    if delay_s > 0:
-        for remaining in range(int(delay_s), 0, -1):
-            print(f"Starting capture in {remaining} s...")
-            time.sleep(1)
-
-    # Backend must be selected before pyplot is imported anywhere
-    if args.headless:
-        cfg.setdefault("display", {})["matplotlib_backend"] = "Agg"
-        cfg["display"]["backend_fallbacks"] = []
-    _select_backend(cfg)
-    from matplotlib import animation, pyplot as plt
-
     # ── Mode resolution ───────────────────────────────────────────────────────
     if args.live_session or (not args.replay_session and not args.replay_paths):
         mode = "live"
@@ -1018,6 +1126,39 @@ def main() -> None:
             iq_swap = False
         posture = session_row.get("posture") or None
         distance_cm = session_row.get("distance_cm") or None
+
+    # Reject development incompatibilities before countdown, GUI/output setup,
+    # and hardware access. Manifest locking is known only after the read above.
+    from src.live_motion.config import validate_live_motion_preflight
+    try:
+        live_motion_settings = validate_live_motion_preflight(
+            cfg,
+            mode=mode,
+            replay_requested=bool(args.replay_session or args.replay_paths),
+            prospective=prospective_metadata is not None,
+            cli_locked_bin=args.locked_bin,
+            manifest_locked_bin=manifest_locked_bin,
+            root=_ROOT,
+        )
+    except ValueError as exc:
+        sys.exit(f"ERROR: {exc}")
+    if live_motion_settings is not None and not live_motion_settings.enabled:
+        print(
+            "Development movement recovery unavailable: "
+            f"{live_motion_settings.unavailable_reason}"
+        )
+
+    if delay_s > 0:
+        for remaining in range(int(delay_s), 0, -1):
+            print(f"Starting capture in {remaining} s...")
+            time.sleep(1)
+
+    # Backend must be selected before pyplot is imported anywhere.
+    if args.headless:
+        cfg.setdefault("display", {})["matplotlib_backend"] = "Agg"
+        cfg["display"]["backend_fallbacks"] = []
+    _select_backend(cfg)
+    from matplotlib import animation, pyplot as plt
 
     # --locked-bin wins over manifest; otherwise warmup may choose the bin.
     bin_selection_enabled = bool(cfg.get("bin_selection", {}).get("enabled", False))
@@ -1080,6 +1221,11 @@ def main() -> None:
         "frame0_epoch_utc": None,
         "frame0_epoch_source": None,
         "mode": mode,
+        "source_kind": "live_dca1000" if mode == "live" else "replay",
+        "source_id": (
+            f"live:{run_dir.name}:adc_stream.bin"
+            if mode == "live" else f"replay:{run_dir.name}"
+        ),
         "startup_delay_s": delay_s,
         "session_id": session_id,
         "locked_bin": locked_bin,
@@ -1152,7 +1298,8 @@ def main() -> None:
             paths = _resolve_replay_paths(session_id, raw_dir, shard_limit)
         print(f"Replay: {[str(p) for p in paths]}")
         frame_source = ReplayFrameSource(paths, chirp_cfg, fast=args.replay_fast)
-        frame_source.start()
+        if live_motion_settings is None or not live_motion_settings.enabled:
+            frame_source.start()
         run_meta["replay_files"] = [str(p) for p in paths]
         run_meta["replay_file_hashes"] = frame_source.file_hashes
         _write_metadata(meta_path, run_meta)
@@ -1170,39 +1317,227 @@ def main() -> None:
         )
 
         if not args.no_configure:
-            uart_cfg = cfg["uart"]
-            iwr = IWR1642(uart_cfg["port"], int(uart_cfg["baud"]))
-            dca = DCA1000(net_cfg)
+            try:
+                uart_cfg = cfg["uart"]
+                iwr = IWR1642(uart_cfg["port"], int(uart_cfg["baud"]))
+                dca = DCA1000(net_cfg)
 
-            print("[1/3] Configuring DCA1000 ...")
-            dca.configure()
+                print("[1/3] Configuring DCA1000 ...")
+                dca.configure()
 
-            hw_cfg = {"profile": cfg["hw_profile"], "frame": cfg["hw_frame"]}
-            print("[2/3] Configuring IWR1642 ...")
-            iwr.configure(n_frames=int(cfg["capture"]["continuous_num_frames"]), cfg=hw_cfg)
+                hw_cfg = {"profile": cfg["hw_profile"], "frame": cfg["hw_frame"]}
+                print("[2/3] Configuring IWR1642 ...")
+                iwr.configure(
+                    n_frames=int(cfg["capture"]["continuous_num_frames"]), cfg=hw_cfg
+                )
 
-            print("[3/3] Starting capture ...")
-            dca.start()
-            iwr.start()
+                print("[3/3] Starting capture ...")
+                if live_motion_settings is None or not live_motion_settings.enabled:
+                    dca.start()
+                    iwr.start()
 
-            frame_source = LiveFrameSource(
-                pcfg,
-                sock_dat=dca._sock_dat,
-                zero_fill_leading_loss=True,
-                raw_mirror_path=raw_mirror,
-                max_frames=12_000 if prospective_metadata is not None else None,
-            )
+                frame_source = LiveFrameSource(
+                    pcfg,
+                    sock_dat=dca._sock_dat,
+                    zero_fill_leading_loss=True,
+                    raw_mirror_path=raw_mirror,
+                    max_frames=12_000 if prospective_metadata is not None else None,
+                )
+            except Exception as exc:
+                try:
+                    csv_fh.close()
+                except Exception:
+                    pass
+                for device in (iwr, dca):
+                    if device is not None:
+                        try:
+                            device.stop()
+                        except Exception:
+                            pass
+                        try:
+                            device.close()
+                        except Exception:
+                            pass
+                run_meta["completion_status"] = "failed"
+                run_meta["runtime_failure"] = repr(exc)
+                run_meta["end_wall_utc"] = datetime.now(timezone.utc).isoformat()
+                _write_metadata(meta_path, run_meta)
+                raise
         else:
             print("--no-configure: attaching to already-running stream.")
-            frame_source = LiveFrameSource(
-                pcfg,
-                net_cfg=net_cfg,
-                zero_fill_leading_loss=False,
-                raw_mirror_path=raw_mirror,
-                max_frames=12_000 if prospective_metadata is not None else None,
-            )
+            try:
+                frame_source = LiveFrameSource(
+                    pcfg,
+                    net_cfg=net_cfg,
+                    zero_fill_leading_loss=False,
+                    raw_mirror_path=raw_mirror,
+                    max_frames=12_000 if prospective_metadata is not None else None,
+                )
+            except Exception as exc:
+                csv_fh.close()
+                run_meta["completion_status"] = "failed"
+                run_meta["runtime_failure"] = repr(exc)
+                run_meta["end_wall_utc"] = datetime.now(timezone.utc).isoformat()
+                _write_metadata(meta_path, run_meta)
+                raise
 
-        frame_source.start()
+        if live_motion_settings is None or not live_motion_settings.enabled:
+            frame_source.start()
+
+    if live_motion_settings is not None and live_motion_settings.enabled:
+        from src.live_motion.calibration import semantic_identity
+        from src.live_motion.runtime import LiveMotionRuntime
+
+        source_id = f"live:{run_dir.name}:adc_stream.bin"
+        config_snapshot = run_dir / "development_config_snapshot.yaml"
+        calibration_snapshot = run_dir / "development_calibration_snapshot.json"
+        source_identity_path = run_dir / "development_source_identity.json"
+        runtime = None
+        started = time.monotonic()
+        previous_key = None
+        motion_display = None
+        setup_error = None
+        try:
+            identities = semantic_identity(cfg)
+            config_snapshot.write_bytes(cfg_path.read_bytes())
+            if live_motion_settings.calibration_record_path is None:
+                raise RuntimeError("enabled live motion has no accepted calibration path")
+            calibration_snapshot.write_bytes(
+                live_motion_settings.calibration_record_path.read_bytes()
+            )
+            source_identity_path.write_text(
+                json.dumps(identities, sort_keys=True, indent=2) + "\n", encoding="utf-8"
+            )
+            run_meta.update({
+                "evidence_version": 1,
+                "live_motion_enabled": True,
+                "source_id": source_id,
+                "source_kind": "live_dca1000",
+                "config_sha256": _sha256_file(config_snapshot),
+                "source_sha256": identities["source_sha256"],
+                "calibration_sha256": _sha256_file(calibration_snapshot),
+                "config_snapshot": config_snapshot.name,
+                "calibration_snapshot": calibration_snapshot.name,
+                "source_identity_manifest": source_identity_path.name,
+            })
+            _write_metadata(meta_path, run_meta)
+            runtime = LiveMotionRuntime(
+                frame_source=frame_source,
+                cfg=cfg,
+                settings=live_motion_settings,
+                run_dir=run_dir,
+                config_sha256=run_meta["config_sha256"],
+                source_sha256=run_meta["source_sha256"],
+                calibration_sha256=run_meta["calibration_sha256"],
+                source_id=source_id,
+                source_kind="live_dca1000",
+                checkout_commit=str(run_meta.get("git_commit", "unknown")),
+                end_sentinel=_REPLAY_END,
+            )
+            if dca is not None and iwr is not None:
+                dca.start()
+                iwr.start()
+            runtime.start()
+            if not args.headless:
+                motion_display = _LiveMotionDisplay()
+                motion_display.setup()
+                plt.show(block=False)
+            while not runtime.ended:
+                elapsed = time.monotonic() - started
+                if duration_s is not None and elapsed >= duration_s:
+                    break
+                snapshot = runtime.latest_snapshot
+                key = (
+                    snapshot.frame_index, snapshot.selection_revision, snapshot.status,
+                    snapshot.hr.state, snapshot.br.state,
+                )
+                if key != previous_key:
+                    previous_key = key
+                    csv_writer.writerow({
+                        "elapsed_s": f"{elapsed:.2f}",
+                        "frame_idx": snapshot.frame_index,
+                        "locked_bin": "" if snapshot.locked_bin is None else snapshot.locked_bin,
+                        "hr_bpm_raw": "",
+                        "hr_bpm_smooth": (
+                            "" if not np.isfinite(snapshot.hr.value_bpm)
+                            else f"{snapshot.hr.value_bpm:.2f}"
+                        ),
+                        "hr_valid": int(snapshot.hr.state in {"preliminary", "fresh"}),
+                        "fallback_hr_bpm": "",
+                        "hr_confidence": snapshot.hr.state,
+                        "ahet_verified": "",
+                        "heart_peak_hz": "",
+                        "f_r_hz_used": "",
+                        "br_bpm": (
+                            "" if not np.isfinite(snapshot.br.value_bpm)
+                            else f"{snapshot.br.value_bpm:.2f}"
+                        ),
+                        "br_confidence": snapshot.br.state,
+                        "resp_valid": int(snapshot.br.state in {"preliminary", "fresh"}),
+                        "spectrum_stage": snapshot.status,
+                        "candidate_rejection_reason": snapshot.reason,
+                        "n_eca_skipped_harmonics": "",
+                    })
+                    csv_fh.flush()
+                    if not args.headless:
+                        motion_display.update_snapshot(snapshot)
+                runtime.record_ui_snapshot()
+                time.sleep(0.1)
+        except KeyboardInterrupt:
+            pass
+        except Exception as exc:
+            setup_error = exc
+        finally:
+            cleanup_errors = _cleanup_live_motion_resources(
+                runtime=runtime,
+                frame_source=frame_source,
+                csv_handle=csv_fh,
+                iwr=iwr if mode == "live" else None,
+                dca=dca if mode == "live" else None,
+                motion_display=motion_display,
+                pyplot=plt,
+            )
+            if setup_error is None and cleanup_errors:
+                setup_error = cleanup_errors[0]
+            run_meta["end_wall_utc"] = datetime.now(timezone.utc).isoformat()
+            run_meta["completion_status"] = (
+                "completed"
+                if setup_error is None and runtime is not None and runtime.clean_shutdown
+                else "failed"
+            )
+            run_meta["runtime_failure"] = (
+                repr(setup_error) if setup_error is not None
+                else (None if runtime is None or runtime.failure is None else repr(runtime.failure))
+            )
+            if mode == "live" and isinstance(frame_source, LiveFrameSource):
+                validity_path = run_dir / "frame_validity.npy"
+                np.save(validity_path, np.asarray(frame_source.frame_validity, dtype=np.bool_))
+                validity = np.asarray(frame_source.frame_validity, dtype=np.bool_)
+                run_meta["live_packet_stats"] = {
+                    "packets_received": frame_source.n_received,
+                    "packets_dropped": frame_source.n_dropped,
+                    "n_frames": int(validity.size),
+                    "n_invalid_frames": int(np.count_nonzero(~validity)),
+                    "source_queue_overflow_count": frame_source.queue_overflow_count,
+                    "frame_validity_map_path": validity_path.name,
+                    "frame_validity_map_sha256": _sha256_file(validity_path),
+                    "bytes_per_frame": frame_source._bytes_per_frame,
+                }
+                raw_path = run_dir / "adc_stream.bin"
+                run_meta["live_raw_mirror_hash"] = (
+                    _sha256_file(raw_path)
+                    if runtime is not None and runtime.clean_shutdown and raw_path.is_file()
+                    else None
+                )
+            _write_metadata(meta_path, run_meta)
+            print(f"Artifacts: {run_dir}")
+        if setup_error is not None:
+            raise RuntimeError("live-motion setup failed") from setup_error
+        if runtime is not None and runtime.failure is not None:
+            raise RuntimeError("live-motion runtime failed") from runtime.failure
+        if runtime is not None and not runtime.clean_shutdown:
+            raise RuntimeError("live-motion runtime did not shut down cleanly")
+        return
 
     # ── Shared mutable state (captured by closures) ───────────────────────────
     ring_buffer: collections.deque = collections.deque(maxlen=ring_maxlen)
