@@ -515,3 +515,11 @@ verification. Any failed shared-boundary attempt publishes neither HR nor BR.
 Every extended attempt with an actual bin, including failed attempts, must join
 its bin/revision to an indexed, applied final-selection attempt and matching event;
 a standalone or orphan selection event is insufficient provenance.
+
+The complete suite's required external temporary directory exposed an artifact
+portability issue. Calibration validation must distinguish the copied record's
+containment root from the current software source root. Artifact verification
+validates its copied record under the run directory while checking source hashes
+against the repository; default live-launch record containment stays unchanged.
+Passing the run directory as the software root is explicitly rejected as an
+incorrect fix. This revision preserves all canonical, hash and proof checks.

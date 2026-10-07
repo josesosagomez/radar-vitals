@@ -447,7 +447,9 @@ def test_production_decoder_runtime_stages_raw_identity_and_artifact_verificatio
         calibration_snapshot.resolve()
     )
     with pytest.raises(calibration_module.CalibrationError, match="non-hardware"):
-        calibration_module.validate_calibration(runtime_validation_cfg)
+        calibration_module.validate_calibration(
+            runtime_validation_cfg, record_root=tmp_path
+        )
 
     def permit_explicit_synthetic_fixture(summaries, field):
         assert field in {"training evidence", "held-out evidence"}

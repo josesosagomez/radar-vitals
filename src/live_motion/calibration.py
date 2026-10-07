@@ -1194,10 +1194,21 @@ def _require_runtime_hardware_provenance(
 
 
 def validate_calibration(
-    cfg: Mapping[str, object], root: str | Path | None = None
+    cfg: Mapping[str, object],
+    root: str | Path | None = None,
+    *,
+    record_root: str | Path | None = None,
 ) -> dict[str, object]:
-    """Load and validate the accepted hash-bound record configured for runtime."""
+    """Load and validate the accepted hash-bound record configured for runtime.
+
+    ``root`` remains the authority for load-bearing software source hashes.
+    Artifact verification may separately constrain a copied record beneath
+    ``record_root`` without treating that portable artifact directory as source.
+    """
     repo_root = _repo_root(root)
+    calibration_record_root = (
+        _repo_root(record_root) if record_root is not None else repo_root
+    )
     try:
         calibration = cfg["development_motion"]["calibration"]
         record_path_value = calibration["record_path"]
@@ -1207,7 +1218,9 @@ def validate_calibration(
     except (KeyError, TypeError, ValueError) as exc:
         raise CalibrationError(f"invalid development motion calibration config: {exc}") from exc
     record_path = resolve_bound_path(
-        repo_root, record_path_value, "development_motion.calibration.record_path"
+        calibration_record_root,
+        record_path_value,
+        "development_motion.calibration.record_path",
     )
     if not record_path.is_file():
         raise CalibrationError(f"calibration record is unavailable: {record_path}")

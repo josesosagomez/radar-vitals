@@ -370,13 +370,20 @@ def _verify_live_motion_run(
             detector_spec.get("record_sha256") == meta.get("calibration_sha256"),
         ))
         try:
+            calibration_relative_path = calibration_snapshot.resolve().relative_to(
+                run_dir.resolve()
+            )
             calibration_digest = hashlib.sha256(calibration_snapshot.read_bytes()).hexdigest()
             verification_cfg = copy.deepcopy(snapshot_cfg)
             verification_cfg["development_motion"]["calibration"] = {
-                "record_path": str(calibration_snapshot.resolve()),
+                "record_path": str(calibration_relative_path),
                 "record_sha256": calibration_digest,
             }
-            validated_record = validate_calibration(verification_cfg, root=_ROOT)
+            validated_record = validate_calibration(
+                verification_cfg,
+                root=_ROOT,
+                record_root=run_dir,
+            )
             copied_record = _load_json(calibration_snapshot)
             checks.append(_check(
                 "detector_calibration_production_validation",
