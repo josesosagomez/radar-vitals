@@ -771,6 +771,32 @@ cancellation* to *contamination*, which is at least detectable.
 
 # PART C — OPEN QUESTIONS FOR THE NEW DATASET
 
+Live-demo range coordinates (2026-10-06): TI corner-reflector calibration gives
+candidate range bias +0.0784329 m, with two owner-reported TI Visualizer distance
+checks (HISTORY 2026-10-06). The implemented Python correction subtracts this bias
+from bin coordinates and uses corrected coordinates for the physical chest gate;
+it does not change raw ADC samples, FFT, phase, HR or BR estimators. Scope and
+verification are in `plans/live_demo_range_calibration_2026-10-06.md`. A dedicated
+demo config (`scripts/live_demo_calibrated_config.yaml`) preserves historical/study
+zero-bias configurations. Independent plan/code reviews accepted; 218 focused
+software tests pass. Owner reports 1.01 m at 1.001 m and 1.36 m at 1.3 m in the
+live profile. Matching latest development warmup shows the strongest return at
+1.3168 m but the vital-sign selector locks the neighboring 1.3604 m bin based on
+breathing evidence. This limits using the selected-bin display as a reflector
+range test; full automatic-selection physical acceptance is not established.
+Keep the measured bias unchanged. No HR accuracy claim.
+
+Development startup timing (2026-10-06): implemented accepted plan
+`plans/live_demo_startup_delay_2026-10-06.md`. `session.startup_delay_s` controls
+the countdown (current calibrated YAML: 10 seconds; missing setting defaults to
+30 seconds); zero skips it. This is independent of the
+30-second analysis window. Study arm timing remains fixed at 30/30/0 seconds for
+natural/paced/recovery; no DSP change. Focused software suite: 177 passed.
+
+Seated demonstration feedback (2026-10-06): owner reports the demo works while
+the participant stays still and is sensitive to movement. This is a qualitative
+usability observation; no HR accuracy or motion robustness result is established.
+
 1. **Does the §4.2 coincidence failure still reproduce?** The paced arm deliberately
    includes 18 bpm (4×f_r = 72 bpm, inside the resting-HR band) to measure this on the
    new pipeline. Record each subject's resting HR so the per-session |HR − 4·f_r| margin

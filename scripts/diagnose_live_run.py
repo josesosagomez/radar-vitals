@@ -188,8 +188,13 @@ def analyze_lock(rd: RunData) -> dict:
     src = (rd.metadata or {}).get("locked_bin_source")
     if rd.warmup is None:
         if src in ("manual", "manifest"):
+            meta = rd.metadata or {}
             return {"status": "manual", "locked_bin_source": src,
-                    "locked_bin": (rd.metadata or {}).get("locked_bin"),
+                    "locked_bin": meta.get("locked_bin"),
+                    "selected_range_m": meta.get("selected_corrected_range_m"),
+                    "selected_raw_range_m": meta.get("selected_raw_range_m"),
+                    "range_bias_m": meta.get("range_bias_m", 0.0),
+                    "range_coordinate_model": meta.get("range_coordinate_model", "legacy_zero_bias"),
                     "flags": []}
         return {"status": "absent", "locked_bin_source": src, "flags": []}
 
@@ -256,6 +261,9 @@ def analyze_lock(rd: RunData) -> dict:
         "status": "scanned",
         "selected_bin": selected_bin,
         "selected_range_m": w.get("selected_range_m"),
+        "selected_raw_range_m": w.get("selected_raw_range_m", w.get("selected_range_m")),
+        "range_bias_m": w.get("range_bias_m", 0.0),
+        "range_coordinate_model": w.get("range_coordinate_model", "legacy_zero_bias"),
         "confidence": confidence,
         "selection_reason": w.get("selection_reason"),
         "margin": margin,
@@ -486,12 +494,19 @@ def build_report(rd: RunData, lock: dict, timeline: dict, signal: dict,
     if lock["status"] == "manual":
         L.append(f"  Bin was preset ({lock['locked_bin_source']}), bin="
                  f"{lock.get('locked_bin')} -- no warmup scan performed.")
+        if lock.get("selected_range_m") is not None:
+            L.append(f"  corrected range {lock['selected_range_m']} m, "
+                     f"raw range {lock['selected_raw_range_m']} m, "
+                     f"bias {lock['range_bias_m']} m, model {lock['range_coordinate_model']}")
     elif lock["status"] == "absent":
         L.append("  Auto lock expected but warmup_bin_selection.json is missing.")
     else:
         L.append(f"  selected bin {lock['selected_bin']} "
                  f"(~{lock['selected_range_m']} m), confidence "
                  f"{lock['confidence']}, reason {lock['selection_reason']}")
+        if lock.get("range_bias_m", 0.0) != 0.0:
+            L.append(f"  raw range {lock['selected_raw_range_m']} m, "
+                     f"bias {lock['range_bias_m']} m, model {lock['range_coordinate_model']}")
         if lock.get("margin") is not None:
             L.append(f"  score margin over runner-up: {lock['margin']:.0f}")
         L.append("  candidates (bin: score, hr_valid, br_conf, energy_rank):")

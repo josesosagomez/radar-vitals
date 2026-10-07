@@ -13066,3 +13066,560 @@ integration procedure recorded in HANDOFF.
   merged and stale; removing them is an owner decision.
 
 **Next:** Milestone 5, recompute under `eca_ahet_safe_refine_v2` (HANDOFF §3).
+
+## 2026-10-06 - Read-only radar firmware identification before the live demo
+
+**Set out to do:** identify the connected radar firmware before checking internal RF calibration,
+at the owner's explicit request to query COM7. The live demonstration is planned for 2026-10-07.
+
+**Worked (with evidence):** read-only `version`, `queryDemoStatus`, and `help` queries at COM7,
+115200 baud returned SDK `03.06.02.00`, platform `xWR16xx`, device `IWR16xx non-secure ES 02.00`,
+RF firmware `02.00.00.01.17.10.05`, RF patch `01.02.06.11.20.06.02`, and mmWaveLink
+`01.02.06.06`. The command interface is consistent with the installed SDK's standard mmwDemo;
+the exact flashed application binary was not read or hashed. Status returned `Sensor State: 0`
+and data-port baud rate `921600`; the installed SDK's `mmw_mss.h` defines state 0 as INIT.
+Evidence is in `results/hardware_checks/20261006T174930.019575Z/`: config, metadata, transcript,
+and byte-exact UART replies. The reproducible query helper is
+`results/hardware_checks/query_firmware.py` (gitignored), with its hash and source HEAD
+`47c3aa1fa1ae997fe1fade0491771c27c507c03a` in metadata. No reset, sensor start/stop, configuration,
+flash write, DCA command, or prospective-reference access occurred.
+
+**Failed / did not work, and why:** no UART query failed. Internal RF calibration remains untested:
+this check did not open/start the sensor or produce an RF initialization calibration report.
+The existing launcher consumes detailed UART replies without preserving that report, so a
+`sensorStart` acknowledgement alone is insufficient evidence of every calibration's success.
+Research used TI SPRACF4C section 7.3 and the installed SDK's CLI and mmWaveLink sources;
+https://www.ti.com/lit/an/spracf4c/spracf4c.pdf describes the enabled-calibration status reports.
+
+**Retired / no longer used:** no firmware, estimator, or configuration was changed.
+
+**Next:** capture and interpret the RF initialization status on the identified firmware before
+the demonstration. The research next step remains remediation Milestone 5; no prospective
+scoring or HR accuracy claim is authorized by this hardware identity check.
+
+## 2026-10-06 - Corrected the IWR1642BOOST SOP header mapping
+
+**Set out to do:** give the owner the boot-mode jumper positions for the internal RF
+calibration check and live demonstration.
+
+**Worked (with evidence):** TI SWRU521C section 2.7.1, Table 4 (page 18) identifies
+P3 as SOP2, P2 as SOP1, and P4 as SOP0. Functional mode is SOP[2:0] = 001:
+P4 closed, P2 and P3 open. Corrected `notes/dca1000_protocol.md` and added the mapping
+to HANDOFF. Source: https://www.ti.com/lit/ug/swru521c/swru521c.pdf#page=18.
+
+**Failed / did not work, and why:** the previous project note incorrectly said P2 closed
+and P4 open while naming mode 001. That physical mapping contradicts TI's table.
+No board jumper position was observed or changed by the agent.
+
+**Retired / no longer used:** the incorrect P2-closed functional-mode instruction.
+
+**Next:** owner verifies P4/SOP0 closed, P2/SOP1 and P3/SOP2 open with power off,
+boots the radar, then captures the RF initialization calibration status. RF calibration
+remains unverified; the research next step remains remediation Milestone 5.
+
+## 2026-10-06 - Interpreted owner-reported RF calibration status 0x17fe
+
+**Set out to do:** interpret the owner's startup line
+`Debug: Init Calibration Status = 0x17fe` for the IWR1642BOOST.
+
+**Worked (with evidence):** the installed SDK 03.06.02.00 mmWaveLink header
+`mmwavelink.h:2127-2144` maps success bits 1-10 and 12 to the supported startup
+calibrations; all are set in 0x17fe. Compared with 0x1ffe, only bit 11 (TX phase
+calibration) is absent. `include/rl_sensor.h:2635` identifies that feature as device
+dependent. TI confirms xWR1642 lacks the hardware phase shifters required for this
+feature: https://e2e.ti.com/support/sensors-group/sensors/f/sensors-forum/1099136/iwr1642boost-raw-adc-data-collection-with-beam-steering-configuration-with-mmwave-studio.
+TI also explicitly describes 0x17fe as a success code in an xWR1443 response:
+https://e2e.ti.com/support/sensors/f/sensors-forum/819225/awr1443-the-first-run-of-demo-always-fails-with-debug-init-calibration-status-0x17fe.
+Together with the device-specific bit mapping, the reported line indicates a pass
+for the IWR1642's applicable internal RF initialization calibrations.
+
+**Failed / did not work, and why:** the earlier guidance expecting 0x1ffe was too
+general across devices. Evidence is the owner's pasted line, not an independently
+captured full startup log; a following `Done` and absence of exceptions have not
+been reported. DCA streaming and HR accuracy are not verified by this status.
+
+**Retired / no longer used:** requiring bit 11 or exact 0x1ffe on this IWR1642.
+
+**Next:** preserve the full startup console and confirm `Done` without exceptions,
+then stop/disconnect the Visualizer, reset the radar, and rehearse the live demo.
+The agent made no hardware changes in this interpretation step.
+
+## 2026-10-06 - Prepared corner-reflector range-bias calibration at 1.001 m
+
+**Set out to do:** prepare TI's range-bias/RX-channel calibration after the owner
+reported a reflector at 1.001 m displayed at 1.13 m. The owner confirmed TI mmWave
+Demo Visualizer, a metal corner reflector, and distance measured from the antenna
+plane to the internal vertex with the reflector centered at boresight.
+
+**Worked (with evidence):** created `config/profile_calibration_1p001m.cfg` from
+the installed SDK 03.06.02.00 xwr16xx `profile_calibration.cfg`. The only changed
+command is `measureRangeBiasAndRxChanPhase 1 1.001 0.4`; added provenance comments.
+Command comparison confirmed all other TI profile commands are unchanged.
+Source SHA-256: `4b4b14181fa73597ae2d3c39674cfbe478d697937a9ffedcd0c96baae4be9faf`.
+Prepared file SHA-256: `51594d0f407f8be26b4109405f585bc0f68856a3820e97e7486a7b0cb33679a2`.
+Installed `objdetdsp/src/objectdetection.c:743` treats searchWinSize as total
+width, so 0.4 m searches approximately 0.801-1.201 m before bin rounding, including
+the reported peak. The default 0.2 m window could exclude it. The source computes
+rangeBias as interpolated peak minus true target distance (`:780`), and
+`dpc/dpu/aoaproc/src/aoaprocdsp.c:353` subtracts it from detected-object range.
+The owner's displayed difference is +0.129 m, a tentative offset, not an accepted
+calibration coefficient. No RX coefficients have been measured or invented.
+TI SDK guide section 6.8 documents Visualizer upload, console coefficient output,
+and applying the full returned command in subsequent profiles:
+https://dr-download.ti.com/software-development/software-development-kit-sdk/MD-PIrUeCYr3X/03.06.00.00-LTS/mmwave_sdk_user_guide.pdf#page=75.
+
+**Failed / did not work, and why:** no hardware run occurred in this preparation.
+Actual calibration, peak identity, coefficient stability and corrected point-cloud
+distance remain unverified. The Python capture launcher sends zero range bias and
+unity RX coefficients; its raw ADC range-bin mapping does not apply these TI
+datapath corrections. A Visualizer calibration does not persist as a correction
+for our Python demo or shift the raw range-profile peak.
+
+**Retired / no longer used:** no existing configuration or algorithm was replaced.
+The prepared file has LVDS disabled, as in TI's source profile.
+
+**Next:** owner uploads the prepared profile, preserves several complete emitted
+`compRangeBiasAndRxChanPhase` lines, then uses the stable measured command in a
+verification profile with measurement disabled. Check corrected detected-object
+distance at the same and another known distance before accepting the correction.
+Address Python range-coordinate calibration separately using measured evidence;
+do not alter existing raw recordings or prospective scoring.
+
+## 2026-10-06 - Saved measured range/RX coefficients and prepared verification
+
+**Set out to do:** interpret the owner's eight reported compensation commands and
+prepare a complete TI Visualizer verification profile.
+
+**Worked (with evidence):** saved all eight pasted lines verbatim (nonblank lines)
+to `results/hardware_checks/range_bias_2026-10-06/owner_reported_coefficients.txt`.
+SHA-256: `4c43cf5ddf7bbf36bc21d3c9414f8cde176caab9806029a77619b172f9b8b9a4`.
+PowerShell decimal parsing confirmed 17 numeric arguments per line (one bias and
+eight complex RX coefficients), with coefficient magnitudes consistent with TI's
+normalized output. Bias minimum 0.0784309 m, maximum 0.0784478 m, arithmetic mean
+0.07843915 m across these eight lines; spread 0.0000169 m. This is short-run
+repeatability of reported outputs, not an absolute distance-accuracy measurement.
+Created `config/profile_calibration_verify_1p001m.cfg` using the first complete
+reported command exactly, bias +0.0784329 m, with measurement disabled via
+`measureRangeBiasAndRxChanPhase 0 1.001 0.4`. No averaging or alteration of RX
+coefficients. Command comparison confirmed only compensation and measurement
+commands changed from `config/profile_calibration_1p001m.cfg`.
+Verification profile SHA-256:
+`27d389a17224fd32a7e3f8ddf8ab2a9db66ee2471f159366c5b95c014d8d470d`.
+TI SDK guide section 6.8 supports reusing the emitted complete compensation
+command in subsequent profiles. No hardware action was performed by the agent.
+
+**Failed / did not work, and why:** corrected physical distance is still unverified.
+The measured bias differs from the earlier displayed +0.129 m discrepancy; profile,
+peak selection and range-bin quantization may matter, but no cause is established.
+No claim that the object must read exactly 1.001 m: point coordinates are quantized
+by range-bin selection while the calibration bias uses an interpolated peak.
+
+**Retired / no longer used:** the +0.129 m display difference is not used as a
+correction. The first measured line is a candidate pending physical verification.
+
+**Next:** owner stops the measurement run, uploads the verification profile,
+checks detected-object coordinates near the known target distance, and verifies
+at a second known distance. Preserve observations and applied profile. Python
+range-bin coordinates and existing raw recordings are unchanged.
+
+## 2026-10-06 - Owner reports corrected reflector range of 1.011 m
+
+**Set out to do:** verify the measured range-bias compensation at the 1.001 m
+corner-reflector position using the prepared TI Visualizer verification profile.
+
+**Worked (with evidence):** following the verification instructions, the owner
+reported: "Okay now it is 1.011 meters, much better." Against the previously
+confirmed physical distance 1.001 m, the reported residual is +0.010 m (+1.0 cm).
+This supports the correction at this single calibration position. Evidence is the
+owner's chat observation; no independent UART/point-cloud recording or screenshot
+was received. The verification profile retains the exact first measured command,
+bias +0.0784329 m and all eight RX complex coefficients.
+
+**Failed / did not work, and why:** a second-distance check remains outstanding.
+The single reported value does not establish accuracy across the operating range
+or RX phase/angle accuracy. No HR accuracy claim follows from range calibration.
+
+**Retired / no longer used:** no additional residual adjustment was made from
+this single observation; the measured coefficients remain unchanged.
+
+**Next:** verify the same compensation at a second accurately measured distance
+without changing coefficients, then address Python range-coordinate calibration
+and rehearse the live demo. The agent made no hardware or DSP changes.
+
+## 2026-10-06 - Owner reports second-distance range verification
+
+**Set out to do:** check the same TI range compensation at a second measured
+corner-reflector distance, without further coefficient adjustment.
+
+**Worked (with evidence):** the owner reported "It shows 1.4855 meters at 1.503".
+Signed residual is 1.4855 - 1.503 = -0.0175 m (-1.75 cm). Together with the
+previous owner-reported +0.010 m residual at 1.001 m, both reported checks have
+absolute residual below 0.02 m. These are two point observations using the
+verification workflow, not a continuous-range accuracy assessment. The current
+profile's measured bias +0.0784329 m and RX coefficients remain unchanged.
+
+**Failed / did not work, and why:** no independent point-cloud log, repeated
+accuracy series, RX phase/angle test or Python-profile verification is available.
+The opposing signs of these residuals provide no reason to tune a new constant
+offset from one displayed point. The cause of the residuals is not established.
+
+**Retired / no longer used:** no further range-bias adjustment from these two
+readings; no claims about HR accuracy or full-range calibration were made.
+
+**Next:** retain the measured full TI compensation command for future Visualizer
+profiles. Address Python range-coordinate calibration explicitly with reproducible
+config/provenance and required review before changing DSP, then rehearse the demo.
+The agent performed documentation updates only, with no hardware action.
+
+## 2026-10-06 - Implemented and reviewed live-demo range correction
+
+**Set out to do:** apply the owner's measured +0.0784329 m range bias to the
+development live demo, with reproducible provenance and consistent distance
+display, automatic chest gate and saved evidence. Preserve historical/study
+configuration and fixed-bin signal processing.
+
+**Worked (with evidence):** independent plan review accepted
+`plans/live_demo_range_calibration_2026-10-06.md` after adding physical acceptance,
+artifact verification, provenance and early-validation requirements. Implemented
+`src/range_coordinates.py`: corrected distance = raw FFT-bin center minus bias.
+`src/warmup_select.py` uses this coordinate for the physical gate, tie-break and
+reported distances. For the dedicated live config, the 0.8-1.4 m gate with
+0.0436 m/bin selects raw bins 21-33. Explicit candidate bins retain raw indices.
+The launcher applies and logs the correction once in Python coordinates; the
+hardware configuration continues to send zero bias/unity RX coefficients for raw
+ADC capture. RX complex coefficients are preserved as provenance, not applied to
+this pipeline. ADC, FFT, phase and HR/BR estimator code are unchanged.
+
+New `scripts/live_demo_calibrated_config.yaml` changes only the range bias and
+calibration provenance fields relative to the original config. The default
+`scripts/live_demo_config.yaml` remains byte-identical. Launcher validation rejects
+nonzero bias in replay/prospective modes and invalid coordinate/provenance inputs
+before countdown, backend, output directory or hardware source construction.
+Metadata, intermediate signals, warmup evidence, display and diagnostics record
+raw/corrected distance and the coordinate model. Artifact verification checks
+these coordinates plus the calibration record's hash and content.
+
+The repository calibration record
+`config/range_calibration_iwr1642_2026-10-06.json` preserves all eight owner-reported
+commands and both TI Visualizer checks. SHA-256:
+`c45a73ec89f078994a1ca13a2f86e53b8a2550c2b76931b64c2b815fadc705ba`.
+Dedicated config SHA-256:
+`402558e74b276ed9890b3e45ffb00ecc657e296498ed0bfd88664890bf32de84`.
+These new files are eligible for version control but remain uncommitted.
+
+Final focused verification: **218 passed, 0 failed**, with 13 existing
+Matplotlib/Pyparsing deprecation warnings. Exact invocation (PowerShell, from root):
+
+```powershell
+& 'C:\ProgramData\anaconda3\Scripts\conda.exe' run --no-capture-output -n radar-vitals python -m pytest tests/test_live_demo_range_calibration.py tests/test_live_demo_warmup_helpers.py tests/test_m2_capture_artifacts.py tests/test_window_pipeline_adapter.py tests/test_diagnose_live_run.py -q --tb=short --basetemp results/test_tmp/range_calibration_review_fixes2 -o cache_dir=results/test_tmp/pytest_cache_range
+```
+
+Full output:
+`results/hardware_checks/range_bias_2026-10-06/software_verification_final2.txt`.
+Tests cover gate boundaries, signs/invalid inputs, provenance tampering, early
+study/replay refusal, legacy zero bias, real warmup DSP with synthetic live frames,
+display-spy agreement, preset diagnostics and persisted artifacts. Synthetic live
+integration uses production decoding and mocked hardware transport; it proves
+software consistency, not physical range accuracy. Raw ADC and phase signals are
+exactly equal in the fixed-bin comparison; estimator outputs match within numeric
+tolerance and discrete decisions are exact. CLI help and diff whitespace check pass.
+
+Independent code review initially found missing artifact provenance validation
+and preset-bin diagnostic coordinates. Both fixed with regression tests; final
+review accepted with no findings. Reviewer independently reran 60 calibration and
+diagnostic tests successfully. This review does not validate hardware transfer.
+
+**Failed / did not work, and why:** default pytest temporary/cache paths were
+inaccessible; workspace-local paths resolved the setup failure (baseline 157
+passed). Repeated-call DSP equivalence assertions initially demanded exact floats,
+then an overly tight spectrum tolerance. Observed differences included about
+1e-11 bpm and a spectrum-floor difference below 8e-7; test tolerances now permit
+that variation while retaining exact ADC/phase and discrete checks. Failed logs
+`software_verification.txt` and `software_verification_final.txt` are preserved.
+No source cause is inferred. The actual live chirp differs from the TI calibration
+profile; no owner live-profile measurement has yet been reported.
+
+**Retired / no longer used:** no extra fit to the +1 cm/-1.75 cm verification
+residuals, no correction from the original 0.129 m displayed difference, and no
+claim that range calibration improves HR accuracy.
+
+**Next:** owner runs the dedicated config, checks the reflector at 1.001 m and
+near 1.30 m using the actual live profile, and records bin/raw/corrected distances.
+Aim for half-bin residual (0.0218 m); one bin is a preliminary demo sanity limit,
+not a research accuracy specification. Investigate wrong target selection or
+larger errors before rehearsal. Then rehearse with a seated person at 0.8-1.4 m.
+No agent UART/DCA operation, raw-data modification, prospective reference access,
+commit or push occurred in this implementation session.
+
+Final documentation verification: 14 passed, 0 failed in
+`tests/test_documentation_claims.py` and `tests/test_repository_eol.py`, using
+workspace basetemp `results/test_tmp/range_calibration_docs` and the same cache
+directory. Twelve existing Matplotlib/Pyparsing warnings. `git diff --check` passed.
+
+## 2026-10-06 - Owner reports first calibrated live-demo range check
+
+**Set out to do:** verify transfer of the measured range correction to the
+Python live-demo profile, starting with the corner reflector at 1.001 m.
+
+**Worked (with evidence):** after the live-demo launch and functional SOP
+instructions, the owner reported "It shows 1.01 meters". In the ongoing 1.001 m
+reflector-check context, the displayed residual is approximately +0.009 m
+(+9 mm). This is within the planned half-bin target of 0.0218 m. Precision is
+limited by the reported display value. Evidence is the owner's chat observation;
+no run-folder path, selected bin, raw coordinate or metadata was supplied.
+
+**Failed / did not work, and why:** the second live-profile distance check near
+1.30 m remains pending. This single observation does not establish continuous
+range accuracy, RX phase/angle calibration or HR/BR accuracy.
+
+**Retired / no longer used:** no further bias adjustment from this reading;
+the measured +0.0784329 m correction remains unchanged.
+
+**Next:** owner stops the demo, positions the reflector near an accurately
+measured 1.30 m and restarts so automatic selection runs again. Record the
+displayed distance, then rehearse with a seated person. The agent only updated
+documentation and did not operate hardware or change the calibration record.
+
+## 2026-10-06 - YAML-configurable development startup countdown
+
+**Set out to do:** let the owner change the repeated live-demo startup wait from
+YAML, preserving existing default and study arm timing.
+
+**Worked (with evidence):** independently cross-reviewed
+`plans/live_demo_startup_delay_2026-10-06.md` before implementation. Reviewer
+accepted with minor clarifications: resolved countdown is not measured elapsed
+time; exact test command/default-config byte identity and invalid study overrides
+must be verified. All incorporated; no unresolved disagreement.
+
+Added `session.startup_delay_s: 30` to
+`scripts/live_demo_calibrated_config.yaml`. Zero skips the countdown; nonnegative
+whole seconds set its length. Missing field retains 30. The launcher rejects
+invalid development values before sleeping, backend, output or hardware source,
+and saves the resolved countdown in `run_metadata.startup_delay_s`. Study
+captures retain natural/paced/recovery timing 30/30/0, ignoring this development
+setting. Signal windows and all DSP remain unchanged.
+
+Exact verification from root:
+
+```powershell
+& 'C:\ProgramData\anaconda3\Scripts\conda.exe' run --no-capture-output -n radar-vitals python -m pytest tests/test_live_demo_startup_delay.py tests/test_live_demo_range_calibration.py tests/test_m2_capture_artifacts.py tests/test_documentation_claims.py tests/test_repository_eol.py -q --tb=short --basetemp results/test_tmp/startup_delay_final -o cache_dir=results/test_tmp/pytest_cache_startup
+```
+
+Result: **177 passed, 0 failed**, 13 existing Matplotlib/Pyparsing warnings;
+log `results/hardware_checks/range_bias_2026-10-06/startup_delay_verification.txt`.
+Countdown tests mock sleep/backend and forbid hardware; synthetic live integration
+now reads YAML zero and verifies persisted delay without mocking timing policy.
+Default `scripts/live_demo_config.yaml` stays byte-identical, SHA-256
+`254c14c9b738d8450dbf37d322ac7930fb9f7d23485233041cdb639d65efe2c1`;
+its diff is empty. Updated calibrated YAML SHA-256:
+`f4f282ccd493b263eee4d674859b710710fb8a285c1c5f83bf9ed8b6a4afdee0`.
+Calibration JSON and bias are unchanged. `git diff --check` passed.
+
+**Failed / did not work, and why:** no failed implementation checks. Physical
+second-distance check and person rehearsal remain owner tasks, not software
+verification results.
+
+**Retired / no longer used:** development countdown is no longer unconditionally
+hardcoded to 30 seconds; the default and study timing remain the same.
+
+**Next:** owner edits the existing `session.startup_delay_s` field (for example
+zero for repeated checks), restarts with the calibrated config, and finishes the
+near-1.30 m reflector check and person rehearsal. No hardware operation,
+prospective reference access, commit or push occurred.
+
+After the final records update, documentation/EOL checks were rerun: 14 passed,
+0 failed with 12 existing warnings (`--basetemp results/test_tmp/startup_delay_docs`,
+same cache). Diff whitespace check passed.
+
+## 2026-10-06 - Second live reflector display discrepancy traced to bin selection
+
+**Set out to do:** investigate the owner's report that a reflector at 1.3 m
+displays 1.36 m, before considering any additional calibration adjustment.
+
+**Worked (with evidence):** inspected only 2026-10-06 development run metadata,
+confirmed `prospective_study_mode: false`, then read warmup artifacts. Latest
+completed run `results/live_demo/20261006_215404_live_unknown` matches the
+reported display: auto-selected bin 33, raw 1.4388 m, bias +0.0784329 m,
+corrected coordinate 1.3603671 m. The coordinate correction is applied correctly.
+Warmup's strongest full-window and settled return is bin 32, corrected
+1.3167671 m, energy rank 1 and settled-relative level 0 dB. Relative to the
+owner's reported 1.3 m, that bin center is approximately +0.0168 m, within the
+planned half-bin target. Bin 33 is rank 3, about -10 dB settled, still eligible.
+
+`src/warmup_select.py::run_warmup_selection` prioritizes vital-sign evidence
+within the energy-eligible pool, not pure return strength. Bin 33 had medium
+breathing confidence/valid breathing and score 135; bin 32 had low breathing
+confidence/invalid breathing and score -105. Neither had valid HR. This explains
+why the displayed selected processing-bin coordinate differs from the strongest
+reflector return. Evidence does not establish that the stationary reflector has
+physiological breathing; these are algorithm outputs. The selected-bin residual
+is approximately +0.0604 m, exceeding the one-bin 0.0436 m demo sanity limit.
+Do not declare the full automatic-selection physical acceptance passed.
+
+Earlier completed development run `20261006_215053_live_unknown` matches the
+1.01 m report: selected/strongest bin 25, corrected 1.0115671 m. Associating these
+two run folders with the owner's two placements is inferred from recency and
+matching readouts; the owner has not explicitly supplied run IDs. This is a
+saved-artifact inspection, not an agent-observed physical measurement.
+
+Reproducibility: latest run seed 42; saved ADC hash
+`22ba08555c26c8088e2c02d8cd4a56a1bf879ed31e74aa52dc5d255c5b5e84ed`.
+Warmup JSON SHA-256
+`1bc56f4704a8d34bbae943b106b49840366c7bca757a32b97d73be1bdbbe9680`;
+metadata SHA-256
+`362f9d4ba85a21c8b981af06255257801e125a29264dcae4b37e70abe763fd65`.
+Metadata embeds effective config and coordinate model. Read-only diagnostic:
+
+```powershell
+& 'C:\ProgramData\anaconda3\Scripts\conda.exe' run --no-capture-output -n radar-vitals python -X utf8 scripts/diagnose_live_run.py results/live_demo/20261006_215404_live_unknown --no-plots
+```
+
+Exit 0; report saved to
+`results/hardware_checks/range_bias_2026-10-06/reflector_1p30m_diagnosis.txt`.
+No ADC reread or prospective reference access was needed.
+
+**Failed / did not work, and why:** earlier guidance treated the vital-sign bin
+display as a sufficient reflector range check without explicitly distinguishing
+it from the strongest range return. This run exposes that limitation. Diagnostic
+emitted an all-NaN warning from blank HR spectra. Its generic recommendation to
+pin bin 21 is inappropriate here: that bin is energy-ineligible (-61.5 dB) and
+the scene is a stationary reflector. Its score-runner-up comparison also includes
+ineligible candidates; do not use it to override the selection policy. Report's
+truncated-packet flag is a separate observation, not evidence for a range bias.
+
+**Retired / no longer used:** no new constant bias fit from the 1.36 m selected-bin
+display; keep +0.0784329 m. No manual bin lock or DSP/config change made.
+
+**Next:** assess reflector range using its dominant return, and distinguish this
+from the vital-sign processing bin. The current display's second-distance
+selection check fails even though the dominant range-bin center is consistent
+with the measured correction. Person rehearsal remains pending. Documentation
+only changed; no hardware was operated, artifacts modified, commit or push made.
+
+## 2026-10-06 - Second live reflector display discrepancy traced to bin selection
+
+**Set out to do:** investigate the owner's report that a reflector at 1.3 m
+displays 1.36 m, before considering any additional calibration adjustment.
+
+**Worked (with evidence):** inspected only 2026-10-06 development run metadata,
+confirmed `prospective_study_mode: false`, then read warmup artifacts. Latest
+completed run `results/live_demo/20261006_215404_live_unknown` matches the
+reported display: auto-selected bin 33, raw 1.4388 m, bias +0.0784329 m,
+corrected coordinate 1.3603671 m. The coordinate correction is applied correctly.
+Warmup's strongest full-window and settled return is bin 32, corrected
+1.3167671 m, energy rank 1 and settled-relative level 0 dB. Relative to the
+owner's reported 1.3 m, that bin center is approximately +0.0168 m, within the
+planned half-bin target. Bin 33 is rank 3, about -10 dB settled, still eligible.
+
+`src/warmup_select.py::run_warmup_selection` prioritizes vital-sign evidence
+within the energy-eligible pool, not pure return strength. Bin 33 had medium
+breathing confidence/valid breathing and score 135; bin 32 had low breathing
+confidence/invalid breathing and score -105. Neither had valid HR. This explains
+why the displayed selected processing-bin coordinate differs from the strongest
+reflector return. Evidence does not establish that the stationary reflector has
+physiological breathing; these are algorithm outputs. The selected-bin residual
+is approximately +0.0604 m, exceeding the one-bin 0.0436 m demo sanity limit.
+Do not declare the full automatic-selection physical acceptance passed.
+
+Earlier completed development run `20261006_215053_live_unknown` matches the
+1.01 m report: selected/strongest bin 25, corrected 1.0115671 m. Associating these
+two run folders with the owner's two placements is inferred from recency and
+matching readouts; the owner has not explicitly supplied run IDs. This is a
+saved-artifact inspection, not an agent-observed physical measurement.
+
+Reproducibility: latest run seed 42; saved ADC hash
+`22ba08555c26c8088e2c02d8cd4a56a1bf879ed31e74aa52dc5d255c5b5e84ed`.
+Warmup JSON SHA-256
+`1bc56f4704a8d34bbae943b106b49840366c7bca757a32b97d73be1bdbbe9680`;
+metadata SHA-256
+`362f9d4ba85a21c8b981af06255257801e125a29264dcae4b37e70abe763fd65`.
+Metadata embeds effective config and coordinate model. Read-only diagnostic:
+
+```powershell
+& 'C:\ProgramData\anaconda3\Scripts\conda.exe' run --no-capture-output -n radar-vitals python -X utf8 scripts/diagnose_live_run.py results/live_demo/20261006_215404_live_unknown --no-plots
+```
+
+Exit 0; report saved to
+`results/hardware_checks/range_bias_2026-10-06/reflector_1p30m_diagnosis.txt`.
+No ADC reread or prospective reference access was needed.
+
+**Failed / did not work, and why:** earlier guidance treated the vital-sign bin
+display as a sufficient reflector range check without explicitly distinguishing
+it from the strongest range return. This run exposes that limitation. Diagnostic
+emitted an all-NaN warning from blank HR spectra. Its generic recommendation to
+pin bin 21 is inappropriate here: that bin is energy-ineligible (-61.5 dB) and
+the scene is a stationary reflector. Its score-runner-up comparison also includes
+ineligible candidates; do not use it to override the selection policy. Report's
+truncated-packet flag is a separate observation, not evidence for a range bias.
+
+**Retired / no longer used:** no new constant bias fit from the 1.36 m selected-bin
+display; keep +0.0784329 m. No manual bin lock or DSP/config change made.
+
+**Next:** assess reflector range using its dominant return, and distinguish this
+from the vital-sign processing bin. The current display's second-distance
+selection check fails even though the dominant range-bin center is consistent
+with the measured correction. Person rehearsal remains pending. Documentation
+only changed; no hardware was operated, artifacts modified, commit or push made.
+
+Record correction: the preceding investigation entry was appended twice by a repeated patch attempt. Both copies describe the same run and inspection; count this as one investigation, not independent replication.
+
+## 2026-10-06 - Owner reports seated person demo works while still
+
+**Set out to do:** rehearse the calibrated development live demo with a person
+near the discussed 1 m position after the reflector checks.
+
+**Worked (with evidence):** owner reports: "It works well as long as the
+participant does not move". This is qualitative feedback that the seated,
+still-person demonstration operates. No HR/BR values, reference comparison,
+run ID, packet evidence or independently verified accuracy was supplied. The
+approximately 1 m position is conversation context, not a newly measured distance.
+
+**Failed / did not work, and why:** owner identifies movement sensitivity;
+the specific failure behavior, movement type and recovery time are unknown.
+This report does not establish motion tolerance, detection/rejection of all
+movement artifacts or clinical accuracy. No participant identity or reference
+labels were inspected.
+
+**Retired / no longer used:** person rehearsal is no longer wholly pending;
+retain the distinction between reported usability and validated accuracy.
+
+**Next:** demonstrate a comfortably seated person breathing normally while
+remaining still, and treat readings during movement as unreliable until stable
+again. Motion robustness remains an open limitation; no DSP/config changes,
+hardware operation, commit or push were made in response to this observation.
+
+## 2026-10-07 - Working-demo checkpoint preparation
+
+**Set out to do:** protect the calibrated demo before isolated movement/slow-BR
+development. Fetched remote base 47c3aa1fa1ae997fe1fade0491771c27c507c03a.
+
+**Worked (with evidence):** retained startup_delay_s: 10; removed the calibration
+test's fixed countdown expectation, added explicit 0/10/30 startup coverage.
+Independent checkpoint and revised numerical-test correctness reviews accepted.
+Focused final: 278 passed, 13 existing warnings. Full default before numerical
+test split: 3320 passed, 4 missing-optional-replay skips, 1 real_data deselected.
+Commands (prefix `C:\ProgramData\anaconda3\Scripts\conda.exe run -n radar-vitals`):
+
+```powershell
+python -m pytest tests/test_live_demo_range_calibration.py tests/test_live_demo_startup_delay.py tests/test_live_demo_warmup_helpers.py tests/test_m2_capture_artifacts.py tests/test_diagnose_live_run.py tests/test_window_pipeline_adapter.py tests/test_documentation_claims.py tests/test_repository_eol.py -q --tb=short --basetemp results/test_tmp/motion_checkpoint_focused2 -o cache_dir=results/test_tmp/cache_motion_checkpoint_focused2 --junitxml=results/test_tmp/motion_checkpoint_focused2.xml
+python -m pytest tests -m "not real_data" -q --tb=short --basetemp C:\Users\josemsosag\AppData\Local\Temp\radar_motion_checkpoint_full -o cache_dir=results/test_tmp/cache_motion_checkpoint_full2 --junitxml=results/test_tmp/motion_checkpoint_full2.xml
+```
+
+**Failed / did not work, and why:** first focused run: 276 passed, one bitwise
+phase equality failure (max 1.508e-7 rad). Synthetic probes reproduced float32
+SIMD/layout sensitivity (18/20 default subprocesses differed, 20/20 exact with
+AVX2/FMA3 disabled diagnostically). Production dispatch/DSP unchanged; revised
+tests separate config isolation from real direct/strided agreement at 1e-6 rad.
+First full run: 3318 passed, two provenance failures. One requires temp files
+outside the repo; nested pytest lacked Windows-temp permissions. Elevated,
+external-temp rerun passed. This justifies external full-suite basetemp instead
+of the supplied in-repo path; cache/JUnit outputs remain isolated.
+
+**Retired / no longer used:** fixed configurable-countdown assertions. Missing
+setting still defaults to 30 and study timing remains 30/30/0. Historical log
+entries are unchanged; current calibrated YAML is 10 seconds.
+
+**Next:** verify exact checkpoint in clean checkout, push and record remote SHA;
+create isolated feature branch. Exclude capture-duration, MATLAB and IoT/WST
+work. No hardware, raw data, Masimo or sealed prospective reference was accessed.
+Physical calibration/rehearsal remains owner-run, not synthetic validation.

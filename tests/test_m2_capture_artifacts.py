@@ -250,6 +250,19 @@ def test_prospective_start_delay_skips_countdown_only_for_recovery():
     assert helper(acquisition_metadata("paced")) == 30
 
 
+def test_direct_prospective_validator_rejects_demo_range_bias(tmp_path):
+    sidecar = _write_sidecar(tmp_path, acquisition_metadata())
+    registry = write_registry(tmp_path / "registry.json", synthetic_registry())
+    cfg = {"bin_selection": {"enabled": True}, "session": {"locked_bin": None},
+           "profile": {"range_bias_m": 0.0784329}}
+    with pytest.raises(ValueError, match="range_bias_m"):
+        _validate_prospective_cli(
+            _prospective_args(sidecar, registry), cfg,
+            ROOT / "scripts" / "live_demo_config.yaml",
+            {"git_commit": "abc123", "git_dirty": False},
+        )
+
+
 def test_live_cli_parses_runtime_recovery_seating_timestamp(monkeypatch):
     monkeypatch.setattr(
         sys,

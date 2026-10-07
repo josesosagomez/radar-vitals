@@ -14,6 +14,10 @@ import numpy as np
 from scipy.fft import fft as sp_fft
 
 from .window_pipeline import run_window_dsp
+from .range_coordinates import (
+    bin_range_m, range_bias_m, range_coordinate_fields, range_resolution_m,
+    validate_range_gate,
+)
 
 
 def derive_candidate_bins(cfg: dict) -> list[int]:
@@ -22,11 +26,11 @@ def derive_candidate_bins(cfg: dict) -> list[int]:
     explicit = bsel.get("candidate_bins")
     if explicit is not None:
         return [int(b) for b in explicit]
-    dist_range = cfg["protocol"]["subject_distance_m"]
-    res = float(cfg["profile"]["range_resolution_m"])
-    n_adc = int(cfg["profile"]["num_adc_samples"])
-    lo = int(np.ceil(float(dist_range[0]) / res))
-    hi = int(np.floor(float(dist_range[1]) / res))
+    gate_lo, gate_hi, n_adc = validate_range_gate(cfg)
+    res = range_resolution_m(cfg)
+    bias = range_bias_m(cfg)
+    lo = int(np.ceil((gate_lo + bias) / res))
+    hi = int(np.floor((gate_hi + bias) / res))
     return list(range(max(0, lo), min(n_adc - 1, hi) + 1))
 
 
@@ -100,7 +104,8 @@ def run_warmup_selection(
             "gate may be empty or entirely out of ADC bounds)."
         )
 
-    res = float(cfg["profile"]["range_resolution_m"])
+    res = range_resolution_m(cfg)
+    range_bias_m(cfg)  # Validate even when candidate bins were provided explicitly.
     dist_range = cfg["protocol"]["subject_distance_m"]
     center_m = (float(dist_range[0]) + float(dist_range[1])) / 2.0
 
@@ -250,7 +255,7 @@ def run_warmup_selection(
             _br_conf_order(r["dsp"]["br_confidence"]),
             int(not r["dsp"]["br_valid"]),
             r["energy_rank"],
-            abs(r["bin"] * res - center_m),
+            abs(bin_range_m(r["bin"], cfg) - center_m),
             r["bin"],
         ))
         winner = winner_pool[0]
@@ -279,13 +284,14 @@ def run_warmup_selection(
     if selection_confidence == "low":
         print(
             f"  WARNING: warmup selection confidence is low for bin {selected_bin} "
-            f"(~{selected_bin * res:.2f} m). Check warmup_bin_selection.json.",
+            f"(~{bin_range_m(selected_bin, cfg):.2f} m). Check warmup_bin_selection.json.",
             file=sys.stderr,
         )
 
     evidence: dict = {
         "selected_bin": int(selected_bin),
-        "selected_range_m": round(selected_bin * res, 4),
+        "selected_range_m": round(bin_range_m(selected_bin, cfg), 4),
+        **range_coordinate_fields(selected_bin, cfg),
         "selected_confidence": selection_confidence,
         "selection_reason": selection_reason,
         "t_warmup_scan_ms": round(t_scan_ms, 1),
@@ -302,7 +308,9 @@ def run_warmup_selection(
         _sdb = settled_db[r["bin"]]
         cand: dict = {
             "bin": r["bin"],
-            "range_m": round(r["bin"] * res, 4),
+            "range_m": round(bin_range_m(r["bin"], cfg), 4),
+            "raw_range_m": r["bin"] * res,
+            "corrected_range_m": bin_range_m(r["bin"], cfg),
             "energy": r["energy"],
             "energy_rank": r["energy_rank"],
             "settled_energy_db": round(_sdb, 1) if np.isfinite(_sdb) else None,

@@ -179,8 +179,12 @@ Send all CLI commands to the Application/User UART port only.
 
 ### 5.2 SOP Jumper for Functional Mode
 
-SOP[2:0] = **001** = functional mode (P2 closed, P3 open, P4 open).
-This is the default shipping state of the board. Do not change unless flashing.
+SOP[2:0] = **001** = functional mode: **P4 (SOP0) closed**, **P2 (SOP1) open**,
+**P3 (SOP2) open**. Follow the SOP labels, not header-number order.
+TI SWRU521C §2.7.1, Table 4 maps P3→SOP2, P2→SOP1, P4→SOP0:
+https://www.ti.com/lit/ug/swru521c/swru521c.pdf#page=18.
+Power off before moving jumpers, then power on; SOP is sampled at boot.
+This mode runs the installed SDK firmware for the live demo and RF calibration check.
 
 ### 5.3 Mandatory Command Sequence (Legacy Frame Mode)
 

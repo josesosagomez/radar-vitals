@@ -20,6 +20,9 @@ CLI usage
 # Live hardware, locked_bin from manifest:
     python scripts/live_demo.py --live-session test3
 
+# This board's calibrated development demo (not replay or prospective capture):
+    python scripts/live_demo.py --config scripts/live_demo_calibrated_config.yaml --duration-s 300
+
 # Live hardware, manual bin override:
     python scripts/live_demo.py --locked-bin 25
 
@@ -67,6 +70,10 @@ from src.warmup_select import (
     run_warmup_selection,
 )
 from src.window_pipeline import run_window_dsp
+from src.range_coordinates import (
+    bin_range_m, range_bias_m, range_coordinate_fields, range_resolution_m,
+    validate_range_gate,
+)
 
 from src.m2.acquisition_metadata import RECOVERY_SEATED_START_SOURCE
 from src.m2.manifest_v3 import FRAME0_EVENT_SOURCE
@@ -773,6 +780,16 @@ def _prospective_start_delay_s(metadata: dict | None) -> int:
     return 30
 
 
+def _startup_delay_s(cfg: dict, metadata: dict | None) -> int:
+    """Resolve development YAML countdown while preserving study arm timing."""
+    if metadata is not None:
+        return _prospective_start_delay_s(metadata)
+    delay = cfg.get("session", {}).get("startup_delay_s", 30)
+    if type(delay) is not int or delay < 0:
+        raise ValueError("session.startup_delay_s must be a nonnegative integer")
+    return delay
+
+
 def _derive_recovery_timing(
     metadata: dict,
     recovery_seated_start_utc: float | None,
@@ -817,6 +834,8 @@ def _validate_prospective_cli(args, cfg: dict, cfg_path: Path, git: dict) -> dic
     metadata = load_sidecar(args.prospective_sidecar)
     default_config = (_ROOT / "scripts" / "live_demo_config.yaml").resolve()
     violations: list[str] = []
+    if range_bias_m(cfg) != 0.0:
+        violations.append("prospective study mode forbids nonzero demo range_bias_m")
     recovery_start_utc = getattr(args, "recovery_seated_start_utc", None)
     if metadata["arm"] == "recovery":
         if metadata.get("stopping_event_category") != "target_reached":
@@ -887,6 +906,34 @@ def _validate_prospective_cli(args, cfg: dict, cfg_path: Path, git: dict) -> dic
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
+
+def _validate_range_calibration(args, cfg: dict) -> dict | None:
+    """Bind demo calibration before countdown, GUI setup, output or hardware access."""
+    bias = range_bias_m(cfg)
+    range_resolution_m(cfg)
+    validate_range_gate(cfg)
+    if bias == 0.0:
+        return None
+    if args.prospective_sidecar is not None:
+        raise ValueError("nonzero demo range_bias_m is forbidden in prospective study mode")
+    if args.replay_session is not None or args.replay_paths:
+        raise ValueError("nonzero demo range_bias_m is forbidden for historical replay")
+    provenance = cfg.get("range_calibration", {})
+    if provenance.get("scope") != "development_live_demo_only":
+        raise ValueError("nonzero range_bias_m requires development_live_demo_only provenance")
+    record_path = _ROOT / str(provenance.get("record_path", ""))
+    if not record_path.is_file():
+        raise ValueError("range calibration record is missing")
+    digest = _sha256_file(record_path)
+    if digest != provenance.get("record_sha256"):
+        raise ValueError("range calibration record SHA256 mismatch")
+    with record_path.open(encoding="utf-8") as fh:
+        record = json.load(fh)
+    if record.get("schema_version") != 1 or record.get("range_bias_m") != bias:
+        raise ValueError("range calibration record disagrees with profile.range_bias_m")
+    return {"record_path": str(record_path.resolve()), "record_sha256": digest,
+            "record": record, "application": "python_range_coordinates_only"}
+
 def main() -> None:
     args = _parse_args()
 
@@ -896,6 +943,14 @@ def main() -> None:
     with cfg_path.open() as fh:
         cfg = yaml.safe_load(fh)
 
+    try:
+        calibration_provenance = _validate_range_calibration(args, cfg)
+    except ValueError as exc:
+        sys.exit(f"ERROR: {exc}")
+
+    if calibration_provenance is not None:
+        print(f"Range correction: subtracting {range_bias_m(cfg):.7f} m from FFT-bin distances.")
+
     np.random.seed(int(cfg.get("seed", 42)))
 
     git = _git_info()
@@ -904,7 +959,10 @@ def main() -> None:
     except ValueError as exc:
         sys.exit(f"ERROR: {exc}")
 
-    delay_s = _prospective_start_delay_s(prospective_metadata)
+    try:
+        delay_s = _startup_delay_s(cfg, prospective_metadata)
+    except ValueError as exc:
+        sys.exit(f"ERROR: {exc}")
     if delay_s > 0:
         for remaining in range(int(delay_s), 0, -1):
             print(f"Starting capture in {remaining} s...")
@@ -1022,6 +1080,7 @@ def main() -> None:
         "frame0_epoch_utc": None,
         "frame0_epoch_source": None,
         "mode": mode,
+        "startup_delay_s": delay_s,
         "session_id": session_id,
         "locked_bin": locked_bin,
         "manifest_locked_bin": manifest_locked_bin,
@@ -1032,6 +1091,8 @@ def main() -> None:
         "warmup_selection_path": None,
         "t_warmup_scan_ms": None,
         "range_resolution_m": float(pcfg["range_resolution_m"]),
+        **range_coordinate_fields(locked_bin, cfg),
+        "range_calibration": calibration_provenance,
         "iq_swap": iq_swap,
         "posture": posture,
         "distance_cm": distance_cm,
@@ -1340,6 +1401,7 @@ def main() -> None:
             "elapsed_s": elapsed,
             "frame_idx": frame_idx,
             "locked_bin": _state["locked_bin"],
+            **range_coordinate_fields(int(_state["locked_bin"]), cfg),
             "phase_raw": dsp["phase_raw"],
             "phase_clean": dsp["phase_clean"],
             # Respiration scalar outputs
@@ -1449,7 +1511,7 @@ def main() -> None:
             _state["locked_bin"],
             (
                 None if _state["locked_bin"] is None
-                else int(_state["locked_bin"]) * float(pcfg["range_resolution_m"])
+                else bin_range_m(int(_state["locked_bin"]), cfg)
             ),
         )
 
@@ -1502,6 +1564,7 @@ def main() -> None:
                     run_meta["locked_bin_source"] = "warmup_auto"
                     run_meta["locked_bin_overridden"] = False
                     run_meta["warmup_selected_bin"] = selected_bin
+                    run_meta.update(range_coordinate_fields(selected_bin, cfg))
                     run_meta["warmup_selection_confidence"] = evidence[
                         "selected_confidence"
                     ]

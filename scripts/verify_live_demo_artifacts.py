@@ -7,11 +7,20 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import math
+import sys
 from pathlib import Path
 
 import numpy as np
+
+_ROOT = Path(__file__).resolve().parents[1]
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+from src.range_coordinates import (
+    RANGE_COORDINATE_MODEL, bin_range_m, range_bias_m, range_coordinate_fields,
+)
 
 
 def _load_json(path: Path) -> dict:
@@ -116,10 +125,75 @@ def verify_run(run_dir: Path, expect_mode: str | None = None) -> int:
     ])
 
     cfg = meta.get("config", {})
+    coordinate_cfg = {"profile": {
+        **cfg.get("profile", {}),
+        "range_resolution_m": meta["range_resolution_m"],
+    }}
+    try:
+        bias = range_bias_m(coordinate_cfg)
+        coordinates = range_coordinate_fields(selected_bin, coordinate_cfg)
+    except ValueError as exc:
+        checks.append(_check("range_coordinates_valid", False, str(exc)))
+        return _print_results(checks)
+    if "range_resolution_m" in cfg.get("profile", {}):
+        checks.append(_check(
+            "range_resolution_consistent",
+            cfg["profile"]["range_resolution_m"] == meta["range_resolution_m"],
+        ))
+    if bias != 0.0:
+        provenance = meta.get("range_calibration") or {}
+        specification = cfg.get("range_calibration") or {}
+        embedded = provenance.get("record") if isinstance(provenance, dict) else None
+        bound_path = _ROOT / str(specification.get("record_path", ""))
+        provenance_ok = False
+        if isinstance(embedded, dict) and bound_path.is_file():
+            expected_digest = specification.get("record_sha256")
+            provenance_ok = (
+                specification.get("scope") == "development_live_demo_only"
+                and provenance.get("application") == "python_range_coordinates_only"
+                and provenance.get("record_sha256") == expected_digest
+                and hashlib.sha256(bound_path.read_bytes()).hexdigest() == expected_digest
+                and embedded.get("schema_version") == 1
+                and embedded.get("range_bias_m") == bias
+                and embedded == _load_json(bound_path)
+            )
+        checks.append(_check("range_calibration_provenance_bound", provenance_ok))
+    if bias != 0.0 or "range_coordinate_model" in warmup or "range_coordinate_model" in meta:
+        def matches(value: object, expected: object) -> bool:
+            if expected is None:
+                return value is None
+            try:
+                return math.isclose(float(value), float(expected), rel_tol=0, abs_tol=0.00005)
+            except (TypeError, ValueError):
+                return False
+
+        checks.append(_check(
+            "range_coordinate_model_consistent",
+            meta.get("range_coordinate_model") == warmup.get("range_coordinate_model")
+            == RANGE_COORDINATE_MODEL,
+        ))
+        for name in ("range_bias_m", "selected_raw_range_m", "selected_corrected_range_m"):
+            checks.append(_check(
+                name + "_consistent",
+                matches(meta.get(name), coordinates[name])
+                and matches(warmup.get(name), coordinates[name]),
+            ))
+        checks.append(_check(
+            "selected_range_m_corrected",
+            matches(warmup.get("selected_range_m"), coordinates["selected_corrected_range_m"]),
+        ))
+        checks.append(_check(
+            "candidate_ranges_consistent",
+            all(
+                matches(c.get("raw_range_m"), c["bin"] * float(meta["range_resolution_m"]))
+                and matches(c.get("corrected_range_m"), bin_range_m(c["bin"], coordinate_cfg))
+                and matches(c.get("range_m"), bin_range_m(c["bin"], coordinate_cfg))
+                for c in candidates
+            ),
+        ))
     explicit_candidates = cfg.get("bin_selection", {}).get("candidate_bins")
     if explicit_candidates is None and selected_bin is not None:
-        res = float(meta["range_resolution_m"])
-        selected_range_m = selected_bin * res
+        selected_range_m = bin_range_m(selected_bin, coordinate_cfg)
         lo, hi = cfg["protocol"]["subject_distance_m"]
         checks.append(_check(
             "selected_range_inside_protocol",
