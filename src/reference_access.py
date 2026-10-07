@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -90,28 +91,60 @@ def _load_development_registry() -> tuple[dict[str, object], ...]:
     return tuple(normalized)
 
 
-def _resolve_registered_path(entry: "Mapping[str, object]") -> Path:
+def _development_data_root(development_data_root: str | Path | None) -> Path:
+    """Resolve an optional data checkout without changing registry authority."""
+
+    root = REPO_ROOT if development_data_root is None else Path(development_data_root)
+    _reject_protected_development_path(root)
+    try:
+        resolved_root = root.resolve(strict=True)
+    except OSError as exc:
+        raise ContractError(f"development data root is unavailable: {root}") from exc
+    _reject_protected_development_path(resolved_root)
+    if not resolved_root.is_dir():
+        raise ContractError("development data root must be a directory")
+    return resolved_root
+
+
+def _resolve_registered_path(
+    entry: "Mapping[str, object]",
+    *,
+    development_data_root: str | Path | None = None,
+) -> Path:
     relative = Path(str(entry["repository_relative_path"]))
     if relative.is_absolute() or ".." in relative.parts:
         raise ContractError("development reference registry path must be repository-relative")
     if relative.parts[:2] != ("results", "live_demo"):
         raise ContractError("development references must be registered under results/live_demo")
     try:
-        resolved_root = REPO_ROOT.resolve(strict=True)
-        resolved = (REPO_ROOT / relative).resolve(strict=True)
+        resolved_root = _development_data_root(development_data_root)
+        supplied = resolved_root / relative
+        _reject_protected_development_path(supplied)
+        resolved = supplied.resolve(strict=True)
     except OSError as exc:
         raise ContractError(f"registered development reference is unavailable: {relative}") from exc
     if not resolved.is_relative_to(resolved_root):
         raise ContractError("registered development reference escapes the repository root")
+    _reject_protected_development_path(resolved)
+    if resolved.relative_to(resolved_root).parts != relative.parts:
+        raise ContractError(
+            "registered development reference has a substituted symlink identity"
+        )
     if resolved.parent.name != entry["capture_id"] or not resolved.is_file():
         raise ContractError("development registry capture identity/path binding is invalid")
-    _reject_protected_development_path(resolved)
     return resolved
 
 
-def list_development_capture_dirs() -> tuple[Path, ...]:
+def list_development_capture_dirs(
+    *, development_data_root: str | Path | None = None
+) -> tuple[Path, ...]:
     """Return only committed, hash-bound development capture directories."""
-    return tuple(_resolve_registered_path(entry).parent for entry in _load_development_registry())
+    return tuple(
+        _resolve_registered_path(
+            entry, development_data_root=development_data_root
+        ).parent
+        for entry in _load_development_registry()
+    )
 
 
 def load_reference(
@@ -122,6 +155,7 @@ def load_reference(
     registry_path: str | Path | None = None,
     subject_id: str | None = None,
     operation: ReferenceOperation | str | None = None,
+    development_data_root: str | Path | None = None,
 ) -> LoadedReference:
     """Load a registered development reference or a capability-bound prospective one.
 
@@ -133,6 +167,8 @@ def load_reference(
     if authorization is None:
         # This lexical rejection occurs before the registry or any CSV is opened.
         _reject_protected_development_path(requested)
+        if ".." in requested.parts:
+            raise ContractError("capture directory traversal is not permitted")
         if reference_override is not None:
             _reject_protected_development_path(Path(reference_override))
         try:
@@ -141,9 +177,26 @@ def load_reference(
             raise ContractError(f"capture directory is unavailable: {requested}") from exc
         if not requested_dir.is_dir():
             raise ContractError("reference access requires a capture directory")
+        resolved_root = _development_data_root(development_data_root)
+        expected_lexical = (
+            resolved_root / "results" / "live_demo" / requested_dir.name
+        )
+        supplied_lexical = Path(os.path.abspath(os.fspath(requested)))
+        if supplied_lexical != expected_lexical:
+            raise ContractError(
+                "capture directory must be the exact registered path beneath the "
+                "development data root"
+            )
         matches: list[tuple[dict[str, object], Path]] = []
+        # Match the immutable capture identity before resolving any registered file.
+        # This lets a caller use a data-only checkout containing just the selected
+        # capture; unrelated registry entries need not exist there.
         for entry in _load_development_registry():
-            registered = _resolve_registered_path(entry)
+            if entry["capture_id"] != requested_dir.name:
+                continue
+            registered = _resolve_registered_path(
+                entry, development_data_root=development_data_root
+            )
             if registered.parent == requested_dir:
                 matches.append((entry, registered))
         if len(matches) != 1:
@@ -177,6 +230,10 @@ def load_reference(
             ),
         )
 
+    if development_data_root is not None:
+        raise ContractError(
+            "development_data_root is incompatible with prospective scoring authorization"
+        )
     if reference_override is None or registry_path is None or operation is None:
         raise ContractError(
             "prospective reference access requires exact path, registry, operation, and capability"
