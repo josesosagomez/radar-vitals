@@ -40,6 +40,9 @@ class ControllerEvent:
     frame_index: int
     epoch: int
     job_id: str | None = None
+    selected_bin: int | None = None
+    selection_revision: int | None = None
+    signal_frame_stop: int | None = None
 
 
 @dataclass(frozen=True)
@@ -70,6 +73,7 @@ class AttemptDisposition:
     reason: str
     hr_accepted: bool = False
     br_accepted: bool = False
+    quiet_assessment_accepted: bool = False
     selection_applied: bool = False
     selection_revision: int | None = None
     snapshot: DisplaySnapshot | None = None
@@ -536,6 +540,7 @@ class RecoveryController:
         *,
         hr_accepted: bool = False,
         br_accepted: bool = False,
+        quiet_assessment_accepted: bool = False,
         selection_applied: bool = False,
         recorded_selection_revision: int | None = None,
     ) -> AttemptDisposition:
@@ -548,6 +553,7 @@ class RecoveryController:
             reason=reason,
             hr_accepted=hr_accepted,
             br_accepted=br_accepted,
+            quiet_assessment_accepted=quiet_assessment_accepted,
             selection_applied=selection_applied,
             selection_revision=(
                 snapshot.selection_revision
@@ -625,8 +631,10 @@ class RecoveryController:
             selection_applied = True
             if result.stage == "preview_10":
                 self._provisional_bin = selected
+                selection_kind = "provisional_bin_selected"
             elif result.stage == "ordinary_30":
                 self._committed_bin = selected
+                selection_kind = "final_bin_selected"
                 if previous_bin is not None and selected != previous_bin:
                     self._hr_history.clear()
                     self._hr = _held(self._hr)
@@ -636,6 +644,20 @@ class RecoveryController:
                         self._last_frame_index or result.frame_stop - 1, self._epoch,
                         result.job_id,
                     ))
+            events.append(ControllerEvent(
+                selection_kind,
+                decision.reason or "selection_applied",
+                (
+                    self._last_frame_index
+                    if self._last_frame_index is not None
+                    else result.frame_stop - 1
+                ),
+                self._epoch,
+                result.job_id,
+                selected,
+                self._selection_revision,
+                result.frame_stop,
+            ))
             resolutions.append(DependencyResolution(
                 result.job_id, selected, self._selection_revision
             ))
@@ -690,7 +712,11 @@ class RecoveryController:
             )
 
         hr_accepted, br_accepted = self._publish_measurement(result)
-        published = hr_accepted or br_accepted
+        breathing_state = getattr(result.breathing, "state", None)
+        if isinstance(result.breathing, dict):
+            breathing_state = result.breathing.get("state")
+        quiet_assessment_accepted = breathing_state == "quiet"
+        published = hr_accepted or br_accepted or quiet_assessment_accepted
         self._latest_published_stop = result.frame_stop
         disposition = "published" if published else "invalid"
         return ControllerUpdate(
@@ -702,6 +728,7 @@ class RecoveryController:
                 self._reason,
                 hr_accepted=hr_accepted,
                 br_accepted=br_accepted,
+                quiet_assessment_accepted=quiet_assessment_accepted,
                 selection_applied=selection_applied,
             ),),
         )
@@ -730,11 +757,13 @@ class RecoveryController:
             extended_value = getattr(breathing, "value_bpm", np.nan)
             if isinstance(breathing, dict):
                 extended_value = breathing.get("value_bpm", np.nan)
-            if np.isfinite(float(extended_value)) and float(extended_value) > 0.0:
+            if np.isfinite(float(extended_value)) and 3.0 <= float(extended_value) <= 30.0:
                 br_valid, br_value = True, float(extended_value)
                 self._breathing_status = ""
             else:
                 br_valid = False
+                breathing_state = "unresolved"
+                self._breathing_status = "Breathing activity unresolved"
         elif breathing_state == "quiet":
             br_valid = False
             self._breathing_status = "No breathing motion detected"
@@ -744,6 +773,20 @@ class RecoveryController:
             self._breathing_status = "Breathing activity unresolved"
 
         veto_reason = str(dsp.get("hr_veto_reason", ""))
+        # Fail closed if a malformed result omits the structured worker veto.
+        # This duplicates only the publication guard; extended BR is never fed
+        # back into the already-completed AHET/ECA calculation.
+        if breathing_state == "positive" and br_valid:
+            try:
+                ahet_input_hz = float(dsp.get("f_r_hz", np.nan))
+            except (TypeError, ValueError):
+                ahet_input_hz = float("nan")
+            if br_value < 9.0:
+                veto_reason = veto_reason or "extended_breathing_below_9_bpm"
+            elif not np.isfinite(ahet_input_hz):
+                veto_reason = veto_reason or "missing_ahet_respiration_input"
+            elif abs(br_value - ahet_input_hz * 60.0) > 2.0:
+                veto_reason = veto_reason or "extended_ahet_respiration_disagreement"
         if veto_reason:
             hr_valid = False
 

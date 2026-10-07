@@ -20,7 +20,8 @@ from src.live_motion.evidence import (
     sha256_file,
     verify_development_evidence,
 )
-from src.live_motion.scheduler import AnalysisResult, SelectionDecision
+from src.live_motion.runtime import _exception_evidence
+from src.live_motion.scheduler import AnalysisJob, AnalysisResult, SelectionDecision
 
 
 HASHES = ("1" * 64, "2" * 64, "3" * 64)
@@ -198,10 +199,58 @@ def test_cancelled_before_execution_is_an_event_without_fabricated_signal_npz(tm
 
 
 def test_interrupted_extended_attempt_requires_complete_typed_empty_schema(tmp_path):
+    writer = _writer(tmp_path)
+    selector_evidence = {
+        "selected_bin": 24,
+        "fallback_used": False,
+        "selection_reason": "eligible_dsp_pass",
+        "candidates": [{"bin": 24, "dsp_passed": True}],
+    }
+    prior = _result(
+        job_id="final-selection",
+        stage="ordinary_30",
+        revision=3,
+        decision=SelectionDecision(
+            24, selector_evidence, True, True, False, "eligible_dsp_pass"
+        ),
+    )
+    writer.write_event(ControllerEvent(
+        "final_bin_selected", "eligible_dsp_pass", 659, 2,
+        "final-selection", 24, 4, 660,
+    ))
+    writer.write_attempt(
+        AttemptDisposition(
+            prior,
+            "published",
+            "estimate_accepted",
+            hr_accepted=True,
+            br_accepted=True,
+            selection_applied=True,
+            selection_revision=4,
+            snapshot=_snapshot(),
+        ),
+        _snapshot(),
+        _evidence(),
+    )
     result = _result(job_id="extended-interrupted", stage="extended_60", status="interrupted")
-    evidence = _evidence(extended=True)
-    evidence["exceptional_evidence"] = True
-    record = _writer(tmp_path).write_attempt(
+    job = AnalysisJob(
+        job_id=result.job_id,
+        epoch=result.epoch,
+        selection_revision=result.selection_revision,
+        stage="extended_60",
+        frame_start=60,
+        frame_stop=1260,
+        requested_bin=24,
+        selection_mode="committed",
+        raw_frames=np.zeros((600, 1, 1, 8), dtype=np.complex64),
+    )
+    evidence = _exception_evidence(
+        job,
+        {"profile": {"range_resolution_m": 0.0436, "range_bias_m": 0.0784329}},
+        "worker_shutdown",
+        24,
+    )
+    record = writer.write_attempt(
         AttemptDisposition(result, "failed", "worker_shutdown"), _snapshot(), evidence
     )
     with np.load(record.npz_path, allow_pickle=False) as payload:

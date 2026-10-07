@@ -18,10 +18,18 @@ from src.range_coordinates import bin_range_m
 from src.warmup_select import run_warmup_selection
 from src.window_pipeline import run_window_dsp
 
-from .cache import RangeBinCache
+from .cache import RangeBinCache, reconstruct_phase
 from .config import LiveMotionSettings
 from .controller import ControllerEvent, ControllerUpdate, DisplaySnapshot, RecoveryController
-from .evidence import AttemptEvidenceWriter
+from .evidence import (
+    BREATHING_BOOL_EVIDENCE_NAMES,
+    BREATHING_COMPLEX_EVIDENCE_NAMES,
+    BREATHING_EVIDENCE_NAMES,
+    BREATHING_INTEGER_EVIDENCE_NAMES,
+    BREATHING_TEXT_EVIDENCE_NAMES,
+    EXTENDED_ANALYSIS_FIELDS,
+    AttemptEvidenceWriter,
+)
 from .features import FrameObservation, RangeFeatureExtractor
 from .scheduler import (
     AnalysisJob,
@@ -118,6 +126,51 @@ class PerformanceWriter:
                 self._handle.close()
 
 
+def _add_empty_extended_evidence(
+    evidence: dict[str, Any],
+    reason: str,
+    *,
+    ordinary_exception_reason: str,
+    extended_exception_reason: str,
+) -> None:
+    """Attach a typed, non-fabricated extended schema after a failed component."""
+
+    for name in BREATHING_EVIDENCE_NAMES:
+        if name in BREATHING_TEXT_EVIDENCE_NAMES:
+            value = np.array([], dtype="U64")
+        elif name in BREATHING_BOOL_EVIDENCE_NAMES:
+            value = np.array([], dtype=np.bool_)
+        elif name in BREATHING_INTEGER_EVIDENCE_NAMES:
+            value = np.array([], dtype=np.int64)
+        elif name in BREATHING_COMPLEX_EVIDENCE_NAMES:
+            value = np.array([], dtype=np.complex128)
+        else:
+            value = np.array([], dtype=np.float64)
+        evidence[f"extended_{name}"] = value
+    evidence.update({
+        "extended_analysis_computed": False,
+        "extended_phase_reconstructed": False,
+        "extended_phase_validated": False,
+        "extended_assessment_computed": False,
+        "extended_coupling_computed": False,
+        "extended_failure_component": "phase_reconstruction",
+        "ordinary_exception_reason": str(ordinary_exception_reason),
+        "extended_exception_reason": str(extended_exception_reason),
+        "extended_assessment_state": "unresolved",
+        "extended_assessment_value_bpm": np.nan,
+        "extended_assessment_reason": str(reason),
+        "extended_br_state": "unresolved",
+        "extended_br_bpm": np.nan,
+        "ahet_respiration_input_hz": np.nan,
+        "ahet_respiration_input_bpm": np.nan,
+        "extended_ahet_difference_bpm": np.nan,
+        "hr_veto_reason": "extended_analysis_failed",
+    })
+    missing = EXTENDED_ANALYSIS_FIELDS.difference(evidence)
+    if missing:
+        raise RuntimeError(f"internal extended exception schema omission: {sorted(missing)}")
+
+
 def _exception_evidence(
     job: AnalysisJob,
     cfg: dict,
@@ -148,18 +201,12 @@ def _exception_evidence(
         ),
     }
     if job.stage == "extended_60" or job.frame_stop - job.frame_start == 1200:
-        for name in (
-            "extended_phase", "extended_fft_freqs_hz", "extended_fft_spectrum",
-            "respiratory_projection", "subband_projection", "respiratory_block_rms",
-            "subband_block_rms", "persistence_half_scores", "persistence_half_energy",
-            "persistence_basis_norms", "persistence_coefficients", "persistence_bases",
-            "persistence_centered_halves", "extended_threshold_values",
-        ):
-            evidence[name] = np.array([], dtype=np.float64)
-        evidence["extended_selected_peak_bins"] = np.array([], dtype=np.int64)
-        evidence["positive_rejections"] = np.asarray([reason], dtype="U")
-        evidence["quiet_rejections"] = np.asarray([reason], dtype="U")
-        evidence["drift_rms"] = np.asarray(np.nan, dtype=np.float64)
+        _add_empty_extended_evidence(
+            evidence,
+            reason,
+            ordinary_exception_reason=reason,
+            extended_exception_reason=reason,
+        )
     return evidence
 
 
@@ -205,16 +252,93 @@ def _ordinary_evidence(
     }
 
 
+def _extended_evidence(
+    job: AnalysisJob,
+    cfg: dict,
+    dsp: dict[str, Any] | None,
+    actual_bin: int,
+    assessment: Any,
+    veto_decision: dict[str, Any],
+    ordinary_exception_reason: str = "",
+) -> dict[str, Any]:
+    """Combine ordinary 30-second evidence with the independent 60-second assessment.
+
+    The ordinary DSP can reject all of its estimates while the cached-bin phase
+    remains suitable for a quiet or positive breathing decision.  In that case
+    the ordinary portion stays explicitly exceptional, but the complete breathing
+    calculation is still persisted and can be recomputed by the verifier.
+    """
+
+    if ordinary_exception_reason or dsp is None:
+        evidence = _exception_evidence(
+            job,
+            cfg,
+            ordinary_exception_reason or "ordinary_dsp_returned_no_result",
+            actual_bin,
+        )
+    else:
+        evidence = _ordinary_evidence(job, cfg, dsp, actual_bin)
+
+    _add_computed_assessment_evidence(evidence, assessment)
+    evidence["extended_analysis_computed"] = True
+    evidence["extended_coupling_computed"] = True
+    evidence["extended_failure_component"] = ""
+    evidence["ordinary_exception_reason"] = str(ordinary_exception_reason)
+    evidence["extended_exception_reason"] = ""
+    evidence.update(veto_decision)
+    return evidence
+
+
+def _add_computed_assessment_evidence(
+    evidence: dict[str, Any], assessment: Any
+) -> None:
+    """Persist a completed breathing assessment before HR coupling is attempted."""
+
+    evidence["extended_phase_reconstructed"] = True
+    evidence["extended_phase_validated"] = True
+    evidence["extended_assessment_computed"] = True
+    evidence["extended_assessment_state"] = str(assessment.state)
+    evidence["extended_assessment_value_bpm"] = float(assessment.value_bpm)
+    evidence["extended_assessment_reason"] = str(assessment.reason)
+    for name, value in assessment.evidence.items():
+        evidence[f"extended_{name}"] = value
+
+
 def production_analysis_function(cfg: dict, settings: LiveMotionSettings) -> AnalysisFunction:
     """Build the production selector/DSP callable used by the single worker."""
 
     fs = settings.frame_rate_hz
     candidate_bins = list(settings.candidate_bins)
+    breathing_thresholds = None
+    assess_breathing = None
+    hr_veto_decision = None
+    if settings.extended_breathing_enabled:
+        # Keep movement-only operation independent of the optional 60-second
+        # assessment.  An enabled configuration has already passed the accepted
+        # calibration validator, so these thresholds are never runtime defaults.
+        record = settings.calibration_record or {}
+        breathing_thresholds = record.get("thresholds", {}).get("breathing")
+        if not isinstance(breathing_thresholds, dict):
+            raise ValueError(
+                "extended breathing requires accepted calibrated breathing thresholds"
+            )
+        from .breathing import assess_breathing as _assess_breathing
+        from .breathing import hr_veto_decision as _hr_veto_decision
+
+        assess_breathing = _assess_breathing
+        hr_veto_decision = _hr_veto_decision
 
     def execute(job: AnalysisJob) -> ExecutedAnalysis:
         started = time.monotonic()
         selector_elapsed_s = None
         actual_bin = job.requested_bin
+        ordinary_dsp: dict[str, Any] | None = None
+        ordinary_exception_reason = ""
+        phase_60_s: np.ndarray | None = None
+        phase_reconstruction_returned = False
+        phase_reconstruction_validated = False
+        breathing: Any | None = None
+        coupling_respiration_input_hz = float("nan")
         try:
             decision = None
             if job.selection_mode == "select":
@@ -236,7 +360,60 @@ def production_analysis_function(cfg: dict, settings: LiveMotionSettings) -> Ana
             else:
                 if actual_bin is None:
                     raise ValueError("resolved non-selection job has no requested bin")
-                dsp = run_window_dsp(job.raw_frames, int(actual_bin), fs, cfg)
+                if job.range_cache_snapshot is None:
+                    dsp = run_window_dsp(job.raw_frames, int(actual_bin), fs, cfg)
+                else:
+                    # Extended BR is a separate measurement.  An ordinary DSP
+                    # exception must not suppress a valid cached-phase quiet or
+                    # positive assessment at the same publication boundary.
+                    try:
+                        dsp = run_window_dsp(job.raw_frames, int(actual_bin), fs, cfg)
+                    except Exception as exc:
+                        ordinary_exception_reason = f"{type(exc).__name__}: {exc}"
+                        dsp = None
+
+            ordinary_dsp = dsp
+            if job.range_cache_snapshot is not None and ordinary_dsp is None:
+                if not ordinary_exception_reason:
+                    ordinary_exception_reason = "ordinary_dsp_returned_no_result"
+            veto: dict[str, Any] = {}
+            if job.range_cache_snapshot is not None:
+                if not settings.extended_breathing_enabled:
+                    raise ValueError(
+                        "60-second cache snapshot supplied while extended breathing is disabled"
+                    )
+                if assess_breathing is None or hr_veto_decision is None:
+                    raise RuntimeError("extended breathing assessment was not initialized")
+                phase_60_s = reconstruct_phase(job.range_cache_snapshot, int(actual_bin))
+                phase_reconstruction_returned = True
+                if (
+                    phase_60_s.shape != (settings.extended_breathing_window_frames,)
+                    or not np.isfinite(phase_60_s).all()
+                ):
+                    raise ValueError(
+                        "extended breathing phase must contain 1200 finite frames"
+                    )
+                phase_reconstruction_validated = True
+                breathing = assess_breathing(
+                    phase_60_s,
+                    fs,
+                    breathing_thresholds,
+                    eligible=True,
+                )
+                try:
+                    coupling_respiration_input_hz = float(
+                        (ordinary_dsp or {}).get("f_r_hz", np.nan)
+                    )
+                except (TypeError, ValueError):
+                    coupling_respiration_input_hz = float("nan")
+                if not np.isfinite(coupling_respiration_input_hz):
+                    coupling_respiration_input_hz = float("nan")
+                veto = dict(hr_veto_decision(breathing, ordinary_dsp or {}))
+                # The controller reads the veto from the ordinary result so HR
+                # and extended BR are published atomically at the shared boundary.
+                dsp_with_veto = dict(ordinary_dsp or {})
+                dsp_with_veto.update(veto)
+                dsp = dsp_with_veto
 
             result = AnalysisResult(
                 job_id=job.job_id,
@@ -249,15 +426,32 @@ def production_analysis_function(cfg: dict, settings: LiveMotionSettings) -> Ana
                 executed=True,
                 status="completed",
                 dsp=dsp,
+                breathing=breathing,
                 selection_decision=decision,
             )
-            evidence = (
-                _exception_evidence(
-                    job, cfg, decision.reason or "all_dsp_failed", actual_bin
+            if breathing is not None:
+                evidence = _extended_evidence(
+                    job,
+                    cfg,
+                    ordinary_dsp,
+                    int(actual_bin),
+                    breathing,
+                    veto,
+                    ordinary_exception_reason,
                 )
-                if dsp is None
-                else _ordinary_evidence(job, cfg, dsp, int(actual_bin))
-            )
+            elif dsp is None:
+                evidence = _exception_evidence(
+                    job,
+                    cfg,
+                    (
+                        decision.reason
+                        if decision is not None and decision.reason
+                        else "ordinary_dsp_returned_no_result"
+                    ),
+                    actual_bin,
+                )
+            else:
+                evidence = _ordinary_evidence(job, cfg, dsp, int(actual_bin))
         except Exception as exc:
             reason = f"{type(exc).__name__}: {exc}"
             result = AnalysisResult(
@@ -270,9 +464,66 @@ def production_analysis_function(cfg: dict, settings: LiveMotionSettings) -> Ana
                 actual_bin=actual_bin,
                 executed=True,
                 status="failed",
+                dsp=ordinary_dsp,
                 error=reason,
             )
-            evidence = _exception_evidence(job, cfg, reason, actual_bin)
+            if (
+                job.range_cache_snapshot is not None
+                and ordinary_dsp is not None
+                and actual_bin is not None
+            ):
+                try:
+                    evidence = _ordinary_evidence(
+                        job, cfg, ordinary_dsp, int(actual_bin)
+                    )
+                    _add_empty_extended_evidence(
+                        evidence,
+                        reason,
+                        ordinary_exception_reason="",
+                        extended_exception_reason=reason,
+                    )
+                except Exception:
+                    evidence = _exception_evidence(job, cfg, reason, actual_bin)
+            else:
+                evidence = _exception_evidence(job, cfg, reason, actual_bin)
+                if job.range_cache_snapshot is not None:
+                    evidence["ordinary_exception_reason"] = (
+                        ordinary_exception_reason or reason
+                    )
+                    evidence["extended_exception_reason"] = reason
+            if job.range_cache_snapshot is not None:
+                evidence["extended_analysis_computed"] = False
+                evidence["extended_coupling_computed"] = False
+                evidence["extended_exception_reason"] = reason
+                if not phase_reconstruction_returned:
+                    evidence["extended_failure_component"] = "phase_reconstruction"
+                elif not phase_reconstruction_validated:
+                    evidence["extended_failure_component"] = "phase_validation"
+                    evidence["extended_phase_reconstructed"] = True
+                    evidence["extended_phase"] = phase_60_s
+                elif breathing is None:
+                    evidence["extended_failure_component"] = "breathing_assessment"
+                    evidence["extended_phase_reconstructed"] = True
+                    evidence["extended_phase_validated"] = True
+                    evidence["extended_phase"] = phase_60_s
+                else:
+                    evidence["extended_failure_component"] = "hr_coupling"
+                    _add_computed_assessment_evidence(evidence, breathing)
+                # Coupling outputs remain explicit sentinels after any failure;
+                # only successfully computed components above retain values.
+                evidence.update({
+                    "extended_br_state": "unresolved",
+                    "extended_br_bpm": np.nan,
+                    "ahet_respiration_input_hz": np.nan,
+                    "ahet_respiration_input_bpm": np.nan,
+                    "extended_ahet_difference_bpm": np.nan,
+                    "hr_veto_reason": "extended_analysis_failed",
+                })
+                if breathing is not None:
+                    evidence["ahet_respiration_input_hz"] = coupling_respiration_input_hz
+                    evidence["ahet_respiration_input_bpm"] = (
+                        coupling_respiration_input_hz * 60.0
+                    )
         return ExecutedAnalysis(
             result=result,
             evidence=evidence,

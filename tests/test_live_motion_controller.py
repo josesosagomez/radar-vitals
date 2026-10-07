@@ -264,6 +264,104 @@ def test_quiet_assessment_never_displays_zero_or_triggers_relocking():
     assert update.snapshot.br.state == "held"
     assert update.snapshot.breathing_status == "No breathing motion detected"
     assert update.snapshot.hr.state == "held"
+    assert update.attempts[0].disposition == "published"
+    assert update.attempts[0].quiet_assessment_accepted is True
+    assert update.attempts[0].br_accepted is False
+
+
+@pytest.mark.parametrize(
+    ("extended_br", "ahet_hz", "veto_reason", "expected_hr", "hr_state"),
+    [
+        (3.0, 0.05, "extended_breathing_below_9_bpm", 80.0, "held"),
+        (12.0, 0.2, "", 85.0, "fresh"),
+        (12.0, 0.1, "extended_ahet_respiration_disagreement", 80.0, "held"),
+        (12.0, None, "missing_ahet_respiration_input", 80.0, "held"),
+    ],
+)
+def test_extended_br_and_hr_veto_publish_atomically_in_one_snapshot(
+    extended_br, ahet_hz, veto_reason, expected_hr, hr_state
+):
+    controller = _controller()
+    _complete_to_committed(controller, ordinary_hr=80.0)
+    jobs = _advance(controller, 660, 1260)
+    extended = next(job for job in jobs if job.stage == "extended_60")
+    for rolling in (job for job in jobs if job.stage == "rolling"):
+        controller.handle_result(_result(rolling, hr_valid=False, br_valid=False))
+
+    breathing = SimpleNamespace(state="positive", value_bpm=extended_br)
+    result = _result(extended, hr=90.0, br=15.0, breathing=breathing)
+    dsp = dict(result.dsp)
+    dsp["hr_veto_reason"] = veto_reason
+    if ahet_hz is not None:
+        dsp["f_r_hz"] = ahet_hz
+    update = controller.handle_result(replace(result, dsp=dsp))
+
+    assert len(update.attempts) == 1
+    attempt = update.attempts[0]
+    assert attempt.disposition == "published"
+    assert attempt.br_accepted is True
+    assert attempt.hr_accepted is (veto_reason == "")
+    assert update.snapshot == attempt.snapshot
+    assert update.snapshot.br.value_bpm == extended_br
+    assert update.snapshot.br.state == "fresh"
+    assert update.snapshot.hr.value_bpm == expected_hr
+    assert update.snapshot.hr.state == hr_state
+    assert update.snapshot.hr.color == ("green" if hr_state == "fresh" else "red")
+    assert update.snapshot.reason == (veto_reason or "estimate_accepted")
+
+
+def test_invalid_hr_never_promotes_diagnostic_no_eca_value_during_unresolved_assessment():
+    controller = _controller()
+    _complete_to_committed(controller, ordinary_hr=80.0)
+    jobs = _advance(controller, 660, 1260)
+    extended = next(job for job in jobs if job.stage == "extended_60")
+    for rolling in (job for job in jobs if job.stage == "rolling"):
+        controller.handle_result(_result(rolling, hr_valid=False, br_valid=False))
+
+    breathing = SimpleNamespace(state="unresolved", value_bpm=float("nan"))
+    result = _result(
+        extended, hr=91.0, br=0.0, hr_valid=False, br_valid=False,
+        breathing=breathing,
+    )
+    dsp = dict(result.dsp)
+    dsp["hr_no_eca"] = 123.0
+    update = controller.handle_result(replace(result, dsp=dsp))
+
+    assert update.attempts[0].disposition == "invalid"
+    assert update.attempts[0].hr_accepted is False
+    assert update.snapshot.hr.value_bpm == 80.0
+    assert update.snapshot.hr.state == "held"
+    assert update.snapshot.hr.color == "red"
+    assert update.snapshot.hr.value_bpm != dsp["hr_no_eca"]
+    assert update.snapshot.breathing_status == "Breathing activity unresolved"
+
+
+def test_unresolved_extended_activity_keeps_ordinary_ahet_hr_decision():
+    controller = _controller()
+    _complete_to_committed(controller, ordinary_hr=80.0)
+    jobs = _advance(controller, 660, 1260)
+    extended = next(job for job in jobs if job.stage == "extended_60")
+    for rolling in (job for job in jobs if job.stage == "rolling"):
+        controller.handle_result(_result(rolling, hr_valid=False, br_valid=False))
+
+    breathing = SimpleNamespace(state="unresolved", value_bpm=float("nan"))
+    result = _result(
+        extended, hr=100.0, br=0.0, hr_valid=True, br_valid=False,
+        breathing=breathing,
+    )
+    dsp = dict(result.dsp)
+    dsp["f_r_hz"] = 0.2
+    dsp["hr_veto_reason"] = ""
+    update = controller.handle_result(replace(result, dsp=dsp))
+
+    assert update.attempts[0].disposition == "published"
+    assert update.attempts[0].hr_accepted is True
+    assert update.attempts[0].br_accepted is False
+    assert update.snapshot.hr.value_bpm == 90.0
+    assert update.snapshot.hr.state == "fresh"
+    assert update.snapshot.br.value_bpm == 15.0
+    assert update.snapshot.br.state == "held"
+    assert update.snapshot.breathing_status == "Breathing activity unresolved"
 
 
 def test_movement_holds_prior_values_red_clears_buffers_and_repeats_recovery():
@@ -477,7 +575,13 @@ def test_final_bin_change_clears_preview_state_and_fresh_median_before_replaceme
         _result(ordinary, hr_valid=False, br_valid=False, decision=_selection(2)),
         actual_bin=2,
     ))
-    assert [event.kind for event in changed.events] == ["final_bin_changed"]
+    assert [event.kind for event in changed.events] == [
+        "final_bin_changed", "final_bin_selected"
+    ]
+    selection_event = changed.events[-1]
+    assert selection_event.selected_bin == 2
+    assert selection_event.selection_revision == 2
+    assert selection_event.signal_frame_stop == 660
     assert changed.snapshot.locked_bin == 2
     assert changed.snapshot.hr.value_bpm == 120.0
     assert changed.snapshot.hr.state == "held"

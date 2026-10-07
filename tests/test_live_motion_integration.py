@@ -24,15 +24,26 @@ from scripts.live_demo import LiveFrameSource
 from scripts.verify_live_demo_artifacts import verify_run
 from src.live_motion import calibration as calibration_module
 from src.live_motion.calibration import semantic_identity
+from src.live_motion.cache import RangeCacheSnapshot, reconstruct_phase
 from src.live_motion.config import (
     FeatureThreshold,
     LiveMotionSettings,
     MovementThresholds,
     PresenceThresholds,
 )
-from src.live_motion.controller import DisplaySnapshot, DisplayValue
-from src.live_motion.evidence import EXTENDED_ANALYSIS_FIELDS, verify_development_evidence
+from src.live_motion.controller import (
+    AttemptDisposition,
+    ControllerEvent,
+    DisplaySnapshot,
+    DisplayValue,
+)
+from src.live_motion.evidence import (
+    EXTENDED_ANALYSIS_FIELDS,
+    AttemptEvidenceWriter,
+    verify_development_evidence,
+)
 import src.live_motion.runtime as runtime_module
+import src.live_motion.breathing as breathing_module
 from src.live_motion.runtime import (
     ExecutedAnalysis,
     LiveMotionRuntime,
@@ -179,6 +190,60 @@ def _synthetic_motion_calibration_record(cfg: dict) -> dict[str, object]:
     return record
 
 
+def _breathing_thresholds() -> dict[str, float]:
+    return {
+        "fft_score_min": 1.0,
+        "ha_score_min": 0.0,
+        "quiet_resp_rms_max": 1e-6,
+        "periodic_resp_rms_min": 0.1,
+        "subband_rms_max": 1e-6,
+        "drift_rms_max": 1e-6,
+        "persistence_min": 0.7,
+    }
+
+
+def _breathing_settings() -> LiveMotionSettings:
+    return replace(
+        _settings(),
+        calibration_record={"thresholds": {"breathing": _breathing_thresholds()}},
+    )
+
+
+def _movement_only_settings() -> LiveMotionSettings:
+    return replace(_settings(), extended_breathing_enabled=False)
+
+
+def _extended_job(phase: np.ndarray, *, actual_bin=1) -> AnalysisJob:
+    phase = np.asarray(phase, dtype=np.float64)
+    assert phase.shape == (1200,)
+    samples = np.ones((1200, 1, 1, 2), dtype=np.complex64)
+    samples[:, 0, 0, 0] = np.exp(1j * phase).astype(np.complex64)
+    samples[:, 0, 0, 1] = np.exp(-0.3j * phase).astype(np.complex64)
+    snapshot = RangeCacheSnapshot(
+        frame_indices=np.arange(60, 1260, dtype=np.int64),
+        valid=np.ones(1200, dtype=np.bool_),
+        candidate_bins=np.asarray([1, 2], dtype=np.int32),
+        samples=samples,
+    )
+    return AnalysisJob(
+        job_id="job-extended-production",
+        epoch=0,
+        selection_revision=2,
+        stage="extended_60",
+        frame_start=60,
+        frame_stop=1260,
+        requested_bin=actual_bin,
+        selection_mode="committed",
+        raw_frames=np.zeros((600, 1, 1, 8), dtype=np.complex64),
+        range_cache_snapshot=snapshot,
+    )
+
+
+def _breathing_tone(rate_bpm: float) -> np.ndarray:
+    time_s = np.arange(1200, dtype=np.float64) / 20.0
+    return np.sin(2.0 * np.pi * (rate_bpm / 60.0) * time_s)
+
+
 def _sample_swap_bytes(samples: np.ndarray) -> bytes:
     """Encode complex integer samples using SDK SampleSwap=1 word ordering."""
     flat = np.asarray(samples, dtype=np.complex64).reshape(-1)
@@ -300,7 +365,15 @@ class _DeterministicAnalysis:
         actual_bin = job.requested_bin
         if job.selection_mode == "select":
             actual_bin = 1
-            decision = SelectionDecision(1, {"synthetic": True}, True, True, False, "passed")
+            selection_evidence = {
+                "selected_bin": 1,
+                "fallback_used": False,
+                "selection_reason": "passed",
+                "candidates": [{"bin": 1, "dsp_passed": True}],
+            }
+            decision = SelectionDecision(
+                1, selection_evidence, True, True, False, "passed"
+            )
         dsp = {"hr_valid": True, "br_valid": True, "hr_raw": 70.0, "br_bpm": 12.0}
         result = AnalysisResult(
             job_id=job.job_id,
@@ -324,13 +397,14 @@ class _DeterministicAnalysis:
 
 def _runtime(tmp_path: Path, source, analysis, **kwargs) -> LiveMotionRuntime:
     cfg = kwargs.pop("cfg", _cfg())
+    settings = kwargs.pop("settings", _settings())
     config_sha256 = kwargs.pop("config_sha256", "a" * 64)
     source_sha256 = kwargs.pop("source_sha256", "b" * 64)
     calibration_sha256 = kwargs.pop("calibration_sha256", "c" * 64)
     return LiveMotionRuntime(
         frame_source=source,
         cfg=cfg,
-        settings=_settings(),
+        settings=settings,
         run_dir=tmp_path,
         config_sha256=config_sha256,
         source_sha256=source_sha256,
@@ -536,7 +610,19 @@ def test_recovery_after_data_loss_reselects_changed_bin_from_only_fresh_frames(t
     def changed_bin_analysis(job):
         output = base(job)
         if job.selection_mode == "select" and job.epoch >= 1:
-            decision = SelectionDecision(2, {"synthetic": True}, True, True, False, "passed")
+            decision = SelectionDecision(
+                2,
+                {
+                    "selected_bin": 2,
+                    "fallback_used": False,
+                    "selection_reason": "passed",
+                    "candidates": [{"bin": 2, "dsp_passed": True}],
+                },
+                True,
+                True,
+                False,
+                "passed",
+            )
             output = replace(
                 output,
                 result=replace(output.result, actual_bin=2, selection_decision=decision),
@@ -1170,7 +1256,7 @@ def test_production_analysis_uses_selector_once_and_preserves_selector_evidence(
         return 2, dsp, selector_evidence
 
     monkeypatch.setattr(runtime_module, "run_warmup_selection", selector)
-    execute = production_analysis_function(_cfg(), _settings())
+    execute = production_analysis_function(_cfg(), _movement_only_settings())
     output = execute(_analysis_job())
 
     assert calls == [((200, 1, 1, 8), (1, 2), _cfg(), 20.0)]
@@ -1191,7 +1277,7 @@ def test_production_analysis_all_failed_selector_keeps_diagnostic_fallback_non_n
         "run_warmup_selection",
         lambda frames, bins, cfg, fs: (2, None, evidence),
     )
-    output = production_analysis_function(_cfg(), _settings())(_analysis_job())
+    output = production_analysis_function(_cfg(), _movement_only_settings())(_analysis_job())
 
     assert output.result.status == "completed"
     assert output.result.dsp is None
@@ -1208,7 +1294,7 @@ def test_production_analysis_selector_exception_is_explicit_failed_attempt(monke
         raise ValueError("synthetic selector error")
 
     monkeypatch.setattr(runtime_module, "run_warmup_selection", explode)
-    output = production_analysis_function(_cfg(), _settings())(_analysis_job())
+    output = production_analysis_function(_cfg(), _movement_only_settings())(_analysis_job())
 
     assert output.result.status == "failed"
     assert output.result.actual_bin is None
@@ -1234,7 +1320,7 @@ def test_production_analysis_reuse_calls_dsp_at_the_single_requested_bin(monkeyp
         return value
 
     monkeypatch.setattr(runtime_module, "run_window_dsp", dsp)
-    output = production_analysis_function(_cfg(), _settings())(
+    output = production_analysis_function(_cfg(), _movement_only_settings())(
         _analysis_job(selection_mode="reuse_provisional", requested_bin=2)
     )
 
@@ -1242,3 +1328,790 @@ def test_production_analysis_reuse_calls_dsp_at_the_single_requested_bin(monkeyp
     assert output.result.actual_bin == 2
     assert output.result.selection_decision is None
     assert output.result.status == "completed"
+
+
+def _ordinary_dsp_600(*, respiration_hz: float | None = 0.2) -> dict[str, object]:
+    dsp = _production_dsp()
+    dsp["phase_raw"] = np.zeros(600, dtype=np.float64)
+    dsp["phase_clean"] = np.zeros(600, dtype=np.float64)
+    if respiration_hz is None:
+        dsp.pop("f_r_hz", None)
+    else:
+        dsp["f_r_hz"] = respiration_hz
+    return dsp
+
+
+@pytest.mark.parametrize(
+    ("rate_bpm", "respiration_hz", "expected_rate", "expected_veto"),
+    [
+        (3.0, 3.0 / 60.0, 3.0, "extended_breathing_below_9_bpm"),
+        (12.0, 12.0 / 60.0, 12.0, ""),
+        (30.0, 30.0 / 60.0, 30.0, ""),
+    ],
+)
+def test_extended_production_analysis_separates_600_frame_dsp_from_1200_frame_cache(
+    monkeypatch, rate_bpm, respiration_hz, expected_rate, expected_veto
+):
+    job = _extended_job(_breathing_tone(rate_bpm))
+    ordinary = _ordinary_dsp_600(respiration_hz=respiration_hz)
+    original = copy.deepcopy(ordinary)
+    calls = []
+
+    def dsp(frames, locked_bin, fs, cfg):
+        calls.append((frames.shape, locked_bin, fs, cfg))
+        return ordinary
+
+    monkeypatch.setattr(runtime_module, "run_window_dsp", dsp)
+    output = production_analysis_function(_cfg(), _breathing_settings())(job)
+
+    assert calls == [((600, 1, 1, 8), 1, 20.0, _cfg())]
+    assert output.result.status == "completed"
+    assert output.result.breathing.state == "positive"
+    assert output.result.breathing.value_bpm == pytest.approx(expected_rate, abs=0.02)
+    assert output.result.dsp["hr_veto_reason"] == expected_veto
+    assert output.evidence["extended_br_state"] == "positive"
+    assert output.evidence["extended_br_bpm"] == pytest.approx(expected_rate, abs=0.02)
+    assert output.evidence["extended_analysis_computed"] is True
+    assert output.evidence["hr_window_start"] == 660
+    assert output.evidence["br_window_start"] == 60
+    assert output.evidence["extended_phase"].shape == (1200,)
+    np.testing.assert_allclose(
+        output.evidence["extended_phase"],
+        reconstruct_phase(job.range_cache_snapshot, 1),
+        rtol=0.0,
+        atol=0.0,
+    )
+    # Extended BR is a post-DSP decision and must not mutate or rerun the
+    # ordinary estimator's respiration input.
+    assert ordinary.keys() == original.keys()
+    for key in ordinary:
+        if isinstance(ordinary[key], np.ndarray):
+            np.testing.assert_array_equal(ordinary[key], original[key])
+        else:
+            assert ordinary[key] == original[key]
+
+
+@pytest.mark.parametrize(
+    ("ordinary_outcome", "ordinary_reason"),
+    [
+        ("none", "ordinary_dsp_returned_no_result"),
+        ("raise", "RuntimeError: synthetic ordinary failure"),
+    ],
+)
+def test_extended_quiet_assessment_survives_ordinary_dsp_failure(
+    monkeypatch, ordinary_outcome, ordinary_reason
+):
+    calls = []
+
+    def dsp(frames, locked_bin, fs, cfg):
+        calls.append((frames.shape, locked_bin, fs, cfg))
+        if ordinary_outcome == "raise":
+            raise RuntimeError("synthetic ordinary failure")
+        return None
+
+    monkeypatch.setattr(runtime_module, "run_window_dsp", dsp)
+    output = production_analysis_function(_cfg(), _breathing_settings())(
+        _extended_job(np.zeros(1200, dtype=np.float64))
+    )
+
+    assert calls == [((600, 1, 1, 8), 1, 20.0, _cfg())]
+    assert output.result.status == "completed"
+    assert output.result.breathing.state == "quiet"
+    assert np.isnan(output.result.breathing.value_bpm)
+    assert output.result.dsp["hr_veto_reason"] == "quiet_breathing"
+    assert output.evidence["exceptional_evidence"] is True
+    assert output.evidence["ordinary_exception_reason"] == ordinary_reason
+    assert output.evidence["extended_exception_reason"] == ""
+    assert output.evidence["extended_analysis_computed"] is True
+    assert output.evidence["extended_assessment_state"] == "quiet"
+    assert np.isnan(output.evidence["extended_assessment_value_bpm"])
+    assert output.evidence["extended_phase"].shape == (1200,)
+    assert output.evidence["extended_respiratory_projection"].shape == (1200,)
+
+
+def test_positive_extended_br_publishes_when_ahet_input_missing_but_vetoes_hr(monkeypatch):
+    ordinary = _ordinary_dsp_600(respiration_hz=None)
+    monkeypatch.setattr(runtime_module, "run_window_dsp", lambda *_args: ordinary)
+
+    output = production_analysis_function(_cfg(), _breathing_settings())(
+        _extended_job(_breathing_tone(12.0))
+    )
+
+    assert output.result.breathing.state == "positive"
+    assert output.result.breathing.value_bpm == pytest.approx(12.0, abs=0.02)
+    assert output.result.dsp["hr_valid"] is True
+    assert output.result.dsp["hr_veto_reason"] == "missing_ahet_respiration_input"
+    assert np.isnan(output.evidence["ahet_respiration_input_hz"])
+    assert output.evidence["extended_br_bpm"] == pytest.approx(12.0, abs=0.02)
+    assert "f_r_hz" not in ordinary
+
+
+def test_unresolved_extended_activity_adds_no_veto_or_numeric_breathing(monkeypatch):
+    ordinary = _ordinary_dsp_600(respiration_hz=0.2)
+    ordinary["hr_no_eca"] = 91.0
+    monkeypatch.setattr(runtime_module, "run_window_dsp", lambda *_args: ordinary)
+
+    output = production_analysis_function(_cfg(), _breathing_settings())(
+        _extended_job(_breathing_tone(2.0))
+    )
+
+    assert output.result.breathing.state == "unresolved"
+    assert np.isnan(output.result.breathing.value_bpm)
+    assert output.result.dsp["hr_veto_reason"] == ""
+    assert output.result.dsp["hr_valid"] is True
+    assert output.result.dsp["hr_no_eca"] == 91.0
+    assert output.evidence["extended_br_state"] == "unresolved"
+    assert np.isnan(output.evidence["extended_br_bpm"])
+    assert output.result.dsp["f_r_hz"] == pytest.approx(0.2)
+
+
+def test_extended_failure_preserves_ordinary_evidence_without_fabricating_state(monkeypatch):
+    ordinary = _ordinary_dsp_600(respiration_hz=0.2)
+    monkeypatch.setattr(runtime_module, "run_window_dsp", lambda *_args: ordinary)
+    monkeypatch.setattr(
+        runtime_module,
+        "reconstruct_phase",
+        lambda *_args: (_ for _ in ()).throw(ValueError("synthetic cache failure")),
+    )
+
+    output = production_analysis_function(_cfg(), _breathing_settings())(
+        _extended_job(_breathing_tone(12.0))
+    )
+
+    assert output.result.status == "failed"
+    assert output.result.breathing is None
+    assert output.result.error == "ValueError: synthetic cache failure"
+    assert output.evidence["extended_analysis_computed"] is False
+    assert output.evidence["extended_exception_reason"] == "ValueError: synthetic cache failure"
+    assert output.evidence["ordinary_exception_reason"] == ""
+    assert output.evidence["extended_assessment_state"] == "unresolved"
+    assert np.isnan(output.evidence["extended_br_bpm"])
+    assert output.evidence["hr_veto_reason"] == "extended_analysis_failed"
+    np.testing.assert_array_equal(output.evidence["phase_raw"], ordinary["phase_raw"])
+    np.testing.assert_array_equal(output.evidence["heart_spectrum"], ordinary["hr_result"]["spectrum"])
+    assert output.evidence["extended_phase"].size == 0
+
+
+def test_assessment_exception_preserves_reconstructed_phase_and_no_derived_decision(
+    monkeypatch, tmp_path
+):
+    ordinary = _ordinary_dsp_600(respiration_hz=0.2)
+    monkeypatch.setattr(runtime_module, "run_window_dsp", lambda *_args: ordinary)
+
+    def fail_assessment(*_args, **_kwargs):
+        raise RuntimeError("synthetic assessment failure")
+
+    monkeypatch.setattr(breathing_module, "assess_breathing", fail_assessment)
+    job = _extended_job(_breathing_tone(12.0))
+    output = production_analysis_function(_cfg(), _breathing_settings())(job)
+
+    assert output.result.status == "failed"
+    assert output.result.error == "RuntimeError: synthetic assessment failure"
+    assert output.evidence["extended_phase_reconstructed"] is True
+    assert output.evidence["extended_phase_validated"] is True
+    assert output.evidence["extended_assessment_computed"] is False
+    assert output.evidence["extended_coupling_computed"] is False
+    assert output.evidence["extended_analysis_computed"] is False
+    assert output.evidence["extended_failure_component"] == "breathing_assessment"
+    assert output.evidence["extended_exception_reason"] == output.result.error
+    np.testing.assert_array_equal(
+        output.evidence["extended_phase"],
+        reconstruct_phase(job.range_cache_snapshot, 1),
+    )
+    assert output.evidence["extended_respiratory_projection"].size == 0
+    assert output.evidence["extended_assessment_state"] == "unresolved"
+    assert np.isnan(output.evidence["extended_br_bpm"])
+    assert output.evidence["hr_veto_reason"] == "extended_analysis_failed"
+
+    snapshot = _extended_snapshot(reason=output.result.error)
+    writer = AttemptEvidenceWriter(tmp_path, "a" * 64, "b" * 64, "c" * 64)
+    _write_indexed_final_selection(writer)
+    writer.write_attempt(
+        AttemptDisposition(
+            output.result, "failed", output.result.error,
+            selection_revision=2, snapshot=snapshot,
+        ),
+        snapshot,
+        output.evidence,
+    )
+    _write_breathing_metadata(tmp_path)
+    assert verify_development_evidence(tmp_path) == []
+
+
+def test_hr_coupling_exception_preserves_complete_assessment_but_publishes_nothing(
+    monkeypatch, tmp_path
+):
+    ordinary = _ordinary_dsp_600(respiration_hz=0.2)
+    monkeypatch.setattr(runtime_module, "run_window_dsp", lambda *_args: ordinary)
+
+    def fail_coupling(*_args, **_kwargs):
+        raise RuntimeError("synthetic coupling failure")
+
+    monkeypatch.setattr(breathing_module, "hr_veto_decision", fail_coupling)
+    job = _extended_job(_breathing_tone(12.0))
+    expected = breathing_module.assess_breathing(
+        reconstruct_phase(job.range_cache_snapshot, 1),
+        20.0,
+        _breathing_thresholds(),
+        eligible=True,
+    )
+    output = production_analysis_function(_cfg(), _breathing_settings())(job)
+
+    assert output.result.status == "failed"
+    assert output.result.error == "RuntimeError: synthetic coupling failure"
+    assert output.evidence["extended_phase_reconstructed"] is True
+    assert output.evidence["extended_phase_validated"] is True
+    assert output.evidence["extended_assessment_computed"] is True
+    assert output.evidence["extended_coupling_computed"] is False
+    assert output.evidence["extended_analysis_computed"] is False
+    assert output.evidence["extended_failure_component"] == "hr_coupling"
+    assert output.evidence["extended_exception_reason"] == output.result.error
+    assert output.evidence["extended_assessment_state"] == expected.state == "positive"
+    assert output.evidence["extended_assessment_value_bpm"] == pytest.approx(
+        expected.value_bpm
+    )
+    for name, value in expected.evidence.items():
+        actual = np.asarray(output.evidence[f"extended_{name}"])
+        reference = np.asarray(value)
+        if actual.dtype.kind in "fc":
+            np.testing.assert_allclose(actual, reference, rtol=1e-12, atol=1e-12)
+        else:
+            np.testing.assert_array_equal(actual, reference)
+    assert output.evidence["extended_br_state"] == "unresolved"
+    assert np.isnan(output.evidence["extended_br_bpm"])
+    assert output.evidence["ahet_respiration_input_hz"] == pytest.approx(0.2)
+    assert output.evidence["ahet_respiration_input_bpm"] == pytest.approx(12.0)
+    assert np.isnan(output.evidence["extended_ahet_difference_bpm"])
+    assert output.evidence["hr_veto_reason"] == "extended_analysis_failed"
+
+    snapshot = _extended_snapshot(reason=output.result.error)
+    writer = AttemptEvidenceWriter(tmp_path, "a" * 64, "b" * 64, "c" * 64)
+    _write_indexed_final_selection(writer)
+    writer.write_attempt(
+        AttemptDisposition(
+            output.result, "failed", output.result.error,
+            selection_revision=2, snapshot=snapshot,
+        ),
+        snapshot,
+        output.evidence,
+    )
+    _write_breathing_metadata(tmp_path)
+    assert verify_development_evidence(tmp_path) == []
+
+
+def test_wrong_length_reconstructed_phase_is_preserved_as_validation_failure(
+    monkeypatch, tmp_path
+):
+    ordinary = _ordinary_dsp_600(respiration_hz=0.2)
+    partial_phase = np.linspace(0.0, 1.0, 1199, dtype=np.float64)
+    monkeypatch.setattr(runtime_module, "run_window_dsp", lambda *_args: ordinary)
+    monkeypatch.setattr(
+        runtime_module, "reconstruct_phase", lambda *_args: partial_phase.copy()
+    )
+
+    output = production_analysis_function(_cfg(), _breathing_settings())(
+        _extended_job(_breathing_tone(12.0))
+    )
+
+    assert output.result.status == "failed"
+    assert "1200 finite frames" in output.result.error
+    assert output.evidence["extended_phase_reconstructed"] is True
+    assert output.evidence["extended_phase_validated"] is False
+    assert output.evidence["extended_assessment_computed"] is False
+    assert output.evidence["extended_coupling_computed"] is False
+    assert output.evidence["extended_failure_component"] == "phase_validation"
+    np.testing.assert_array_equal(output.evidence["extended_phase"], partial_phase)
+    assert output.evidence["extended_respiratory_projection"].size == 0
+
+    snapshot = _extended_snapshot(reason=output.result.error)
+    writer = AttemptEvidenceWriter(tmp_path, "a" * 64, "b" * 64, "c" * 64)
+    _write_indexed_final_selection(writer)
+    writer.write_attempt(
+        AttemptDisposition(
+            output.result, "failed", output.result.error,
+            selection_revision=2, snapshot=snapshot,
+        ),
+        snapshot,
+        output.evidence,
+    )
+    _write_breathing_metadata(tmp_path)
+    assert verify_development_evidence(tmp_path) == []
+
+    _rewrite_only_attempt_and_rehash(
+        tmp_path,
+        lambda payload: payload.__setitem__(
+            "extended_assessment_computed", np.asarray(True, dtype=np.bool_)
+        ),
+    )
+    assert verify_development_evidence(tmp_path)
+
+
+def test_actual_decoder_cache_publishes_quiet_assessment_and_holds_prior_values_red(
+    monkeypatch, tmp_path
+):
+    stops = (260, 460, *range(660, 1261, 60))
+    gates = {stop: threading.Event() for stop in stops}
+    source = _DecodedSource(
+        _stationary_frame_bytes(1260), tmp_path / "adc_stream.bin", gates=gates
+    )
+    settings = _breathing_settings()
+    ordinary_analysis = _DeterministicAnalysis(gates)
+    production = production_analysis_function(_cfg(), settings)
+    jobs = []
+
+    monkeypatch.setattr(runtime_module, "run_window_dsp", lambda *_args: None)
+
+    def analyze(job):
+        jobs.append(job)
+        if job.stage != "extended_60":
+            return ordinary_analysis(job)
+        output = production(job)
+        gates[job.frame_stop].set()
+        return output
+
+    runtime = _runtime(
+        tmp_path, source, analyze, settings=settings, cfg=_cfg()
+    )
+    _finish(runtime)
+
+    extended_jobs = [job for job in jobs if job.stage == "extended_60"]
+    assert len(extended_jobs) == 1
+    extended = extended_jobs[0]
+    assert (extended.frame_start, extended.frame_stop) == (60, 1260)
+    assert extended.raw_frames.shape == (600, 1, 1, 8)
+    assert extended.range_cache_snapshot.samples.shape == (1200, 1, 1, 2)
+    assert extended.requested_bin == runtime.latest_snapshot.locked_bin == 1
+
+    snapshot = runtime.latest_snapshot
+    assert snapshot.hr.value_bpm == pytest.approx(70.0)
+    assert snapshot.hr.state == "held"
+    assert snapshot.hr.color == "red"
+    assert snapshot.br.value_bpm == pytest.approx(12.0)
+    assert snapshot.br.state == "held"
+    assert snapshot.br.color == "red"
+    assert snapshot.breathing_status == "No breathing motion detected"
+    assert snapshot.reason == "quiet_breathing"
+    assert snapshot.epoch == 0
+
+    with (tmp_path / "analysis_attempts.csv").open(newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+    extended_rows = [row for row in rows if row["stage"] == "extended_60"]
+    assert len(extended_rows) == 1
+    row = extended_rows[0]
+    assert row["disposition"] == "published"
+    assert row["fresh_hr_bpm"] == row["fresh_br_bpm"] == ""
+    assert row["held_hr_bpm"] == "70"
+    assert row["held_br_bpm"] == "12"
+    assert row["quiet_assessment_accepted"] == "1"
+    with np.load(tmp_path / row["npz_file"], allow_pickle=False) as payload:
+        assert payload["extended_analysis_computed"].item() is True
+        assert payload["ordinary_exception_reason"].item() == "ordinary_dsp_returned_no_result"
+        assert payload["extended_assessment_state"].item() == "quiet"
+        assert np.isnan(payload["fresh_br_bpm"].item())
+        assert payload["extended_phase"].shape == (1200,)
+
+    _write_breathing_metadata(tmp_path)
+    assert verify_development_evidence(tmp_path) == []
+
+    # The raw mirror remains one continuous acquisition through the quiet branch.
+    assert source.start_count == source.stop_count == 1
+    assert (tmp_path / "adc_stream.bin").read_bytes() == b"".join(
+        _stationary_frame_bytes(1260)
+    )
+
+
+def test_movement_only_runtime_keeps_600_frame_rolling_contract_after_60_seconds(
+    tmp_path
+):
+    stops = (260, 460, *range(660, 1261, 60))
+    gates = {stop: threading.Event() for stop in stops}
+    source = _DecodedSource(
+        _stationary_frame_bytes(1260), tmp_path / "adc_stream.bin", gates=gates
+    )
+    analysis = _DeterministicAnalysis(gates)
+    runtime = _runtime(
+        tmp_path,
+        source,
+        analysis,
+        settings=_movement_only_settings(),
+        cfg=_cfg(),
+    )
+
+    _finish(runtime)
+
+    assert not any(job.stage == "extended_60" for job in analysis.jobs)
+    rolling = [job for job in analysis.jobs if job.stage == "rolling"]
+    assert rolling
+    assert rolling[-1].frame_stop == 1260
+    assert all(job.frame_stop - job.frame_start == 600 for job in rolling)
+    assert all(job.raw_frames.shape == (600, 1, 1, 8) for job in rolling)
+    assert all(job.range_cache_snapshot is None for job in rolling)
+    assert verify_development_evidence(tmp_path) == []
+
+    with (tmp_path / "analysis_attempts.csv").open(newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+    last_path = tmp_path / rows[-1]["npz_file"]
+    with np.load(last_path, allow_pickle=False) as payload:
+        assert not (EXTENDED_ANALYSIS_FIELDS & set(payload.files))
+
+
+def test_physical_event_at_1200_frame_boundary_cancels_extended_assessment(
+    tmp_path
+):
+    stops = (260, 460, *range(660, 1201, 60))
+    gates = {stop: threading.Event() for stop in stops}
+    stationary = _stationary_frame_bytes(1255)
+    moving = [
+        _impulse_frame_bytes(16 + 4j if index % 2 == 0 else -16 - 4j)
+        for index in range(5)
+    ]
+    source = _DecodedSource(
+        stationary + moving, tmp_path / "adc_stream.bin", gates=gates
+    )
+    analysis = _DeterministicAnalysis(gates)
+    runtime = _runtime(
+        tmp_path, source, analysis, settings=_breathing_settings(), cfg=_cfg()
+    )
+
+    _finish(runtime)
+
+    assert not any(job.stage == "extended_60" for job in analysis.jobs)
+    with (tmp_path / "controller_events.csv").open(newline="", encoding="utf-8") as handle:
+        events = list(csv.DictReader(handle))
+    boundary_events = [
+        row for row in events
+        if row["kind"] == "movement" and row["reason"] == "physical_movement"
+    ]
+    assert len(boundary_events) == 1
+    assert boundary_events[0]["frame_index"] == "1259"
+    assert runtime.latest_snapshot.epoch == 1
+    assert runtime.latest_snapshot.hr.state == "held"
+    assert runtime.latest_snapshot.br.state == "held"
+    assert source.start_count == source.stop_count == 1
+
+
+def _extended_snapshot(*, reason: str) -> DisplaySnapshot:
+    return DisplaySnapshot(
+        frame_index=1259,
+        epoch=0,
+        status="active",
+        reason=reason,
+        hr=DisplayValue(70.0, "held", "red"),
+        br=DisplayValue(12.0, "held", "red"),
+        breathing_status=(
+            "No breathing motion detected" if reason == "quiet_breathing" else ""
+        ),
+        locked_bin=1,
+        selection_revision=2,
+    )
+
+
+def _write_breathing_metadata(root: Path) -> None:
+    calibration_path = root / "calibration.snapshot.json"
+    calibration_path.write_text(
+        json.dumps({"thresholds": {"breathing": _breathing_thresholds()}}),
+        encoding="utf-8",
+    )
+    (root / "run_metadata.json").write_text(
+        json.dumps({"calibration_snapshot": calibration_path.name}),
+        encoding="utf-8",
+    )
+
+
+def _write_indexed_final_selection(writer: AttemptEvidenceWriter) -> None:
+    job = AnalysisJob(
+        job_id="job-final-selection",
+        epoch=0,
+        selection_revision=1,
+        stage="ordinary_30",
+        frame_start=60,
+        frame_stop=660,
+        requested_bin=None,
+        selection_mode="select",
+        raw_frames=np.zeros((600, 1, 1, 8), dtype=np.complex64),
+    )
+    selection_evidence = {
+        "selected_bin": 1,
+        "fallback_used": False,
+        "selection_reason": "eligible_dsp_pass",
+        "candidates": [{"bin": 1, "dsp_passed": True}],
+    }
+    result = AnalysisResult(
+        job_id=job.job_id,
+        epoch=0,
+        selection_revision=1,
+        stage="ordinary_30",
+        frame_start=60,
+        frame_stop=660,
+        actual_bin=1,
+        executed=True,
+        status="completed",
+        dsp={"hr_valid": True, "br_valid": True, "hr_raw": 70.0, "br_bpm": 12.0},
+        selection_decision=SelectionDecision(
+            1, selection_evidence, True, True, False, "eligible_dsp_pass"
+        ),
+    )
+    snapshot = DisplaySnapshot(
+        frame_index=659,
+        epoch=0,
+        status="active",
+        reason="estimate_accepted",
+        hr=DisplayValue(70.0, "fresh", "green"),
+        br=DisplayValue(12.0, "fresh", "green"),
+        breathing_status="",
+        locked_bin=1,
+        selection_revision=2,
+    )
+    writer.write_event(ControllerEvent(
+        "final_bin_selected", "eligible_dsp_pass", 659, 0,
+        job.job_id, 1, 2, 660,
+    ))
+    writer.write_attempt(
+        AttemptDisposition(
+            result,
+            "published",
+            "estimate_accepted",
+            hr_accepted=True,
+            br_accepted=True,
+            selection_applied=True,
+            selection_revision=2,
+            snapshot=snapshot,
+        ),
+        snapshot,
+        _evidence(job),
+    )
+
+
+def _rewrite_only_attempt_and_rehash(root: Path, mutate) -> None:
+    index_path = root / "analysis_attempts.csv"
+    with index_path.open(newline="", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle)
+        fieldnames, rows = reader.fieldnames, list(reader)
+    assert fieldnames is not None
+    targets = [row for row in rows if row["stage"] == "extended_60"]
+    assert len(targets) == 1
+    target = targets[0]
+    payload_path = root / target["npz_file"]
+    with np.load(payload_path, allow_pickle=False) as archive:
+        payload = {name: np.array(archive[name], copy=True) for name in archive.files}
+    mutate(payload)
+    with payload_path.open("wb") as handle:
+        np.savez(handle, **payload)
+    target["npz_sha256"] = hashlib.sha256(payload_path.read_bytes()).hexdigest()
+    with index_path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def _write_authentic_quiet_evidence(monkeypatch, root: Path) -> None:
+    monkeypatch.setattr(runtime_module, "run_window_dsp", lambda *_args: None)
+    output = production_analysis_function(_cfg(), _breathing_settings())(
+        _extended_job(np.zeros(1200, dtype=np.float64))
+    )
+    snapshot = _extended_snapshot(reason="quiet_breathing")
+    writer = AttemptEvidenceWriter(root, "a" * 64, "b" * 64, "c" * 64)
+    _write_indexed_final_selection(writer)
+    writer.write_attempt(
+        AttemptDisposition(
+            output.result,
+            "published",
+            "quiet_breathing",
+            quiet_assessment_accepted=True,
+            selection_revision=2,
+            snapshot=snapshot,
+        ),
+        snapshot,
+        output.evidence,
+    )
+    _write_breathing_metadata(root)
+    assert verify_development_evidence(root) == []
+
+
+@pytest.mark.parametrize(
+    ("mutate", "expected_code"),
+    [
+        (
+            lambda payload: payload["extended_respiratory_projection"].__setitem__(
+                0, payload["extended_respiratory_projection"][0] + 0.25
+            ),
+            "extended_numerical_mismatch",
+        ),
+        (
+            lambda payload: payload.__setitem__("hr_veto_reason", np.asarray("")),
+            "extended_decision_mismatch",
+        ),
+        (
+            lambda payload: payload.pop("extended_phase"),
+            "npz_missing_fields",
+        ),
+        (
+            lambda payload: payload.__setitem__(
+                "extended_threshold_quiet_resp_rms_max", np.asarray(0.25)
+            ),
+            "extended_numerical_mismatch",
+        ),
+        (
+            lambda payload: payload.__setitem__(
+                "ahet_respiration_input_hz", np.asarray(0.2)
+            ),
+            "ahet_respiration_input_mismatch",
+        ),
+    ],
+    ids=["projection", "hr-veto", "missing-phase", "threshold", "ahet-input"],
+)
+def test_extended_evidence_verifier_recomputes_after_hash_consistent_tampering(
+    monkeypatch, tmp_path, mutate, expected_code
+):
+    monkeypatch.setattr(runtime_module, "run_window_dsp", lambda *_args: None)
+    output = production_analysis_function(_cfg(), _breathing_settings())(
+        _extended_job(np.zeros(1200, dtype=np.float64))
+    )
+    snapshot = _extended_snapshot(reason="quiet_breathing")
+    attempt = AttemptDisposition(
+        output.result,
+        "published",
+        "quiet_breathing",
+        quiet_assessment_accepted=True,
+        selection_revision=2,
+        snapshot=snapshot,
+    )
+    writer = AttemptEvidenceWriter(
+        tmp_path, "a" * 64, "b" * 64, "c" * 64
+    )
+    _write_indexed_final_selection(writer)
+    record = writer.write_attempt(attempt, snapshot, output.evidence)
+    _write_breathing_metadata(tmp_path)
+
+    assert record.npz_path.is_file()
+    assert verify_development_evidence(tmp_path) == []
+
+    _rewrite_only_attempt_and_rehash(tmp_path, mutate)
+    assert expected_code in {
+        issue.code for issue in verify_development_evidence(tmp_path)
+    }
+
+
+def test_authentic_extended_failure_evidence_verifies_and_forged_computed_flag_fails(
+    monkeypatch, tmp_path
+):
+    ordinary = _ordinary_dsp_600(respiration_hz=0.2)
+    monkeypatch.setattr(runtime_module, "run_window_dsp", lambda *_args: ordinary)
+    monkeypatch.setattr(
+        runtime_module,
+        "reconstruct_phase",
+        lambda *_args: (_ for _ in ()).throw(ValueError("synthetic cache failure")),
+    )
+    output = production_analysis_function(_cfg(), _breathing_settings())(
+        _extended_job(_breathing_tone(12.0))
+    )
+    snapshot = _extended_snapshot(reason="ValueError: synthetic cache failure")
+    attempt = AttemptDisposition(
+        output.result,
+        "failed",
+        output.result.error,
+        selection_revision=2,
+        snapshot=snapshot,
+    )
+    writer = AttemptEvidenceWriter(
+        tmp_path, "a" * 64, "b" * 64, "c" * 64
+    )
+    _write_indexed_final_selection(writer)
+    writer.write_attempt(attempt, snapshot, output.evidence)
+    _write_breathing_metadata(tmp_path)
+
+    assert verify_development_evidence(tmp_path) == []
+
+    def forge_computed(payload):
+        payload["extended_analysis_computed"] = np.asarray(True, dtype=np.bool_)
+        payload["extended_assessment_state"] = np.asarray("quiet")
+
+    _rewrite_only_attempt_and_rehash(tmp_path, forge_computed)
+    codes = {issue.code for issue in verify_development_evidence(tmp_path)}
+    assert {
+        "inconsistent_extended_component_flags",
+        "extended_failure_component_mismatch",
+        "invalid_failed_extended_assessment",
+    } & codes
+
+
+def test_quiet_acceptance_cannot_be_forged_to_an_invalid_disposition(monkeypatch, tmp_path):
+    _write_authentic_quiet_evidence(monkeypatch, tmp_path)
+    index_path = tmp_path / "analysis_attempts.csv"
+    with index_path.open(newline="", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle)
+        fieldnames, rows = reader.fieldnames, list(reader)
+    extended_row = next(row for row in rows if row["stage"] == "extended_60")
+    payload_path = tmp_path / extended_row["npz_file"]
+    with np.load(payload_path, allow_pickle=False) as archive:
+        payload = {name: np.array(archive[name], copy=True) for name in archive.files}
+    payload["quiet_assessment_accepted"] = np.asarray(False, dtype=np.bool_)
+    payload["disposition"] = np.asarray("invalid")
+    with payload_path.open("wb") as handle:
+        np.savez(handle, **payload)
+    extended_row["quiet_assessment_accepted"] = "0"
+    extended_row["disposition"] = "invalid"
+    extended_row["npz_sha256"] = hashlib.sha256(payload_path.read_bytes()).hexdigest()
+    with index_path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+
+    assert "quiet_assessment_not_published" in {
+        issue.code for issue in verify_development_evidence(tmp_path)
+    }
+
+
+@pytest.mark.parametrize("event_mutation", ["delete", "wrong_bin", "wrong_revision"])
+def test_extended_attempt_requires_exact_indexed_final_selection_event(
+    monkeypatch, tmp_path, event_mutation
+):
+    _write_authentic_quiet_evidence(monkeypatch, tmp_path)
+    events_path = tmp_path / "controller_events.csv"
+    with events_path.open(newline="", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle)
+        fieldnames, rows = reader.fieldnames, list(reader)
+    target = next(row for row in rows if row["kind"] == "final_bin_selected")
+    if event_mutation == "delete":
+        rows.remove(target)
+    elif event_mutation == "wrong_bin":
+        target["selected_bin"] = "2"
+    else:
+        target["selection_revision"] = "3"
+    with events_path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+
+    codes = {issue.code for issue in verify_development_evidence(tmp_path)}
+    assert {
+        "selection_event_cardinality",
+        "selection_event_mismatch",
+        "final_selection_event_cardinality",
+    } & codes
+
+
+def test_nonselection_ordinary_none_has_explicit_failure_without_selector_recovery(monkeypatch):
+    job = AnalysisJob(
+        job_id="job-ordinary-none",
+        epoch=3,
+        selection_revision=4,
+        stage="rolling",
+        frame_start=120,
+        frame_stop=720,
+        requested_bin=1,
+        selection_mode="committed",
+        raw_frames=np.zeros((600, 1, 1, 8), dtype=np.complex64),
+    )
+    monkeypatch.setattr(runtime_module, "run_window_dsp", lambda *_args: None)
+
+    output = production_analysis_function(_cfg(), _breathing_settings())(job)
+
+    assert output.result.status == "completed"
+    assert output.result.dsp is None
+    assert output.result.selection_decision is None
+    assert output.result.actual_bin == 1
+    assert output.evidence["rejection_reasons"].tolist() == [
+        "ordinary_dsp_returned_no_result"
+    ]
+    assert output.evidence["exceptional_evidence"] is True

@@ -482,3 +482,36 @@ tracking distinguishes cancellation before execution (events only) from an
 executed analysis interrupted at bounded shutdown (one typed attempt with an
 explicit interruption reason). Tombstones prevent later completion from changing
 display state or appending duplicate signal evidence.
+
+### Physical provenance and component evidence clarification
+
+The calibration tool first resolves capture provenance before validity or ADC
+reads. New captures require a clean feature checkout, `live_dca1000`, and the
+exact `live:<run-directory>:adc_stream.bin` identity. The only legacy exception
+is the exact clean fallback checkpoint. Capture Git identity, metadata, validity
+and raw hashes are bound into training and held-out proofs. This authenticates
+the structure of trusted metadata, not physical origin against deliberate forgery.
+Synthetic proof fixtures cannot enable production; their narrow test-only
+provenance bridge leaves all other production validation active.
+
+A complete eligible 60-second cache may support an extended breathing decision
+even when ordinary DSP fails. Ordinary failure therefore does not suppress
+extended assessment or force relocking. Evidence and verification distinguish
+ordinary failure from an unexecuted/failed extended assessment; a global failure
+flag cannot bypass verification of an extended calculation that actually ran.
+
+Selection evidence must retain the complete selector candidate record per
+executed selection, plus its provisional/final decision, application frame/time
+and revision. Append-only attempt/event records preserve the initial selection.
+Independent integration review exposed this missing diagnostic record, which is
+resolved in the extended-runtime milestone rather than silently omitted.
+
+Independent failure-path review also requires component-level progress evidence.
+Once the extended phase is reconstructed, a later assessment exception must not
+discard it. Once assessment completes, a later HR-coupling exception must not
+discard its projections, spectra, persistence or decision. Record completed and
+unavailable components explicitly; recompute completed components during artifact
+verification. Any failed shared-boundary attempt publishes neither HR nor BR.
+Every extended attempt with an actual bin, including failed attempts, must join
+its bin/revision to an indexed, applied final-selection attempt and matching event;
+a standalone or orphan selection event is insufficient provenance.
