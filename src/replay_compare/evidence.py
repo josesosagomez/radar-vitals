@@ -274,6 +274,7 @@ class ReplayEvidenceWriter:
         summary: Mapping[str, Any],
         display_intervals: list[Mapping[str, Any]],
         reference_audit: list[Mapping[str, Any]],
+        reference_display_audit: Mapping[str, Any] | None = None,
     ) -> Path:
         if not self.index_path.exists():
             with self.index_path.open("w", newline="", encoding="utf-8") as handle:
@@ -285,6 +286,11 @@ class ReplayEvidenceWriter:
             self.pass_dir / "display_state_intervals.json", display_intervals
         )
         _write_json_atomic(self.pass_dir / "reference_audit.json", reference_audit)
+        if reference_display_audit is not None:
+            _write_json_atomic(
+                self.pass_dir / "reference_display_audit.json",
+                dict(reference_display_audit),
+            )
         manifest: dict[str, str] = {}
         for path in sorted(self.pass_dir.rglob("*")):
             if path.is_file() and path.name != "manifest.json":
@@ -1115,6 +1121,29 @@ def _validate_selection_lifecycle(
             raise ValueError("selector candidate-bin gate is unavailable")
         if selected_bin not in candidate_bins:
             raise ValueError("selector selected bin is outside candidate gate")
+        if str(payload["disposition"].item()) == "expired":
+            # A scientifically successful worker return can arrive only after
+            # EOF froze the denominator or after an integrity epoch changed.
+            # Preserve its arrays and decision, but it must not commit the bin,
+            # advance the revision, or publish either channel retroactively.
+            request_epoch = int(payload["request_epoch"].item())
+            application_epoch = int(payload["application_epoch"].item())
+            revision_is_frozen = (
+                application_epoch == request_epoch
+                and applied_revision == requested_revision
+            )
+            revision_was_reset = (
+                application_epoch > request_epoch and applied_revision == 0
+            )
+            if (
+                not (revision_is_frozen or revision_was_reset)
+                or bool(payload["hr_accepted"].item())
+                or bool(payload["br_accepted"].item())
+            ):
+                raise ValueError(
+                    "expired successful selector changed state or admitted values"
+                )
+            return False
         if applied_revision != requested_revision + 1:
             raise ValueError("successful selector must increment revision exactly once")
         return selection["fallback_used"] is False

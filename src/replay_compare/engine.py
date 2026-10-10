@@ -13,7 +13,11 @@ from typing import Any, Callable, Literal
 import numpy as np
 
 from src.live_motion.config import LiveMotionSettings
-from src.live_motion.runtime import ExecutedAnalysis, production_analysis_function
+from src.live_motion.runtime import (
+    ExecutedAnalysis,
+    _rss_bytes,
+    production_analysis_function,
+)
 from src.live_motion.scheduler import (
     AnalysisJob,
     AnalysisResult,
@@ -609,6 +613,7 @@ class ReplayRuntime:
         frame_limit: int,
         clock: PlaybackClock,
         shutdown_timeout_s: float = 5.0,
+        snapshot_observer: Callable[[BaselineSnapshot], None] | None = None,
     ):
         self.source = source
         self.controller = controller
@@ -617,6 +622,7 @@ class ReplayRuntime:
         self.frame_limit = int(frame_limit)
         self.clock = clock
         self.shutdown_timeout_s = float(shutdown_timeout_s)
+        self.snapshot_observer = snapshot_observer
         self._work: queue.Queue[AnalysisJob | None] = queue.Queue(maxsize=1)
         self._results: queue.Queue[ExecutedAnalysis] = queue.Queue(maxsize=1)
         self._commands: queue.Queue[tuple[str, Any]] = queue.Queue()
@@ -711,6 +717,7 @@ class ReplayRuntime:
                     "boundary": 0,
                     "adc_sha256": self.source.initial_sha256,
                     "file_identity": self.source.opened_file_identity,
+                    "monotonic_s": time.monotonic(),
                 })
                 self.clock.reanchor()
                 while (
@@ -752,12 +759,27 @@ class ReplayRuntime:
                         self._drain_one_result()
                         break
                     frame_index, cube = item
+                    controller_started_s = time.monotonic()
                     update = self.controller.handle_frame(frame_index, cube)
                     self.clock.frame_processed(self.controller.processed_boundary)
                     self._write_update(update)
-                    # Source validity/discontinuity at this boundary is applied before
-                    # any worker completion can publish into the same boundary.
+                    # Physical validity for this frame is durable before a worker
+                    # result at the same boundary can be applied and published.
                     self._drain_one_result()
+                    self.evidence.write_performance({
+                        "kind": "frame",
+                        "monotonic_s": time.monotonic(),
+                        "processed_boundary": self.controller.processed_boundary,
+                        "pacing_lag_s": self.clock.pacing_lag_s,
+                        "controller_work_elapsed_s": (
+                            time.monotonic() - controller_started_s
+                        ),
+                        "rss_bytes": _rss_bytes(),
+                        "work_queue_depth": self._work.qsize(),
+                        "result_queue_depth": self._results.qsize(),
+                        "active_analysis": self.controller.active_job is not None,
+                        "pending_analysis": self.controller.pending_job is not None,
+                    })
                 self.evidence.write_playback_event({
                     "kind": "denominator_frozen",
                     "boundary": self.controller.processed_boundary,
@@ -1012,6 +1034,11 @@ class ReplayRuntime:
             self.evidence.write_controller_event(event)
 
     def _publish_snapshot(self, snapshot: BaselineSnapshot) -> None:
+        # Application composition runs on this controller thread.  Consumers only
+        # read the immutable snapshot cached by that observer, so reference and
+        # coverage state can never be advanced by a Qt polling callback.
+        if self.snapshot_observer is not None:
+            self.snapshot_observer(snapshot)
         with self._snapshot_lock:
             self._latest_snapshot = snapshot
 

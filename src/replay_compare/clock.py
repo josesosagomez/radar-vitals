@@ -51,6 +51,16 @@ class PlaybackClock:
     def snapshot(self) -> ClockSnapshot:
         return ClockSnapshot(self._state, self._speed, self._processed_frames)
 
+    @property
+    def pacing_lag_s(self) -> float:
+        """Signed wall-clock lag relative to the current recording boundary."""
+
+        elapsed_frames = self._processed_frames - self._anchor_frame
+        expected = self._anchor_wall_s + elapsed_frames / (
+            self.frame_rate_hz * self._speed
+        )
+        return self._monotonic() - expected
+
     def request_pause(self) -> None:
         if self._state == "running":
             self._state = "pausing"

@@ -526,7 +526,7 @@ Required artifacts:
 | Attempt index and NPZ files | Every executed analysis, its disposition and intermediate evidence |
 | Controller/application events | Exact publication boundaries, resets, expiries, revisions and cancellations |
 | Display state intervals | Half-open spans, independent channel states, originating attempt IDs |
-| Reference audit | Logged reference values and descriptive-window summaries used by the display |
+| Reference audit | Descriptive-window summaries plus a manifested `reference_display_audit.json` containing each processed frame's integer timestamp bucket, displayed values and quality/availability flags; independently recomputed from guarded source inputs |
 | Playback events | Pause acknowledgments, resume, speed changes, restart, stop |
 | Performance telemetry | Analysis/selector latency, lag, queue bounds, memory observations |
 | Summary and manifest | Exact coverage counts, limitations, completion state and artifact hashes |

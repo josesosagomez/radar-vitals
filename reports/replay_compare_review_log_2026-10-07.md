@@ -214,3 +214,292 @@ acceptance still requires binding retained phase to the registered raw ADC and
 independently checking source metadata, coverage and passive reference artifacts.
 An unusable malformed returned scientific coordinate remains explicitly
 unverified; lifecycle normalization never relabels its scientific arrays.
+
+The accepted M2 milestone is commit
+`8dddf028074b8fcec0b273bde7572b5c683f1f29`, pushed on the separate replay branch
+and verified by reading the remote SHA back. The original and feature branches
+remain at their original checkpoints with their existing changes preserved.
+
+## Initial M3/M4 focused check (not acceptance)
+
+Independent test engineer ran current coverage/reference/UI/advanced tests
+serially in the pinned environment. Observed **66 passed, 2 failed**, 14 warnings,
+2.89 seconds; JUnit `results/test_tmp/replay_m34_focus.xml`. One failure is a real
+UI defect: accepted asynchronous Restart must immediately disable repeated
+restart requests. The other is a synthetic fixture missing the calibration
+mapping required before the unchanged live preflight reaches its replay ban.
+Production UI and test fixture fixes are assigned separately; the replay ban
+will remain unchanged. Full application/reference isolation and source-bound
+verification remain required M3 gates. Independent advanced review has pending
+findings and is not an acceptance verdict.
+
+### Application integration iterations
+
+The test engineer's initial M3/M4 selection was coverage, reference, UI and
+advanced test files, with `--basetemp results/test_tmp/replay_m34_focus_tmp` and
+no explicit cache directory. Its 14 warnings were 12 installed deprecations and
+two cache-permission warnings. The two failed nodes subsequently passed
+(`replay_m34_two_failures.xml`: two passes, 3.69 seconds). Qt callback stderr
+was investigated separately; production changed PlotWidget title construction
+and must demonstrate clean callbacks on rerun.
+
+Implementation-owned M3 integration iterations:
+
+- An initial shell used `conda` without its absolute path and could not start.
+- A run without explicit basetemp reported 50 passes and one setup error due to
+  inaccessible default temporary storage (`replay_m3_primitives_after_fixes.xml`).
+- Coverage/reference/UI/source-clock/runtime/application selection: 100 passed,
+  three failed, 12 warnings, 5.69 seconds
+  (`results/test_tmp/replay_m3_application_initial.xml`).
+- Application/runtime/source-clock rerun: 50 passed, one failed, 12 warnings,
+  5.26 seconds (`results/test_tmp/replay_m3_application_rerun.xml`). The remaining
+  comparison included nondeterministic warmup elapsed-time diagnostics; the
+  test engineer will exclude only elapsed diagnostics from scientific equality.
+
+Those two implementation runs used unique basetemp directories under the
+original checkout's `results/test_tmp`, rather than OS temporary storage. Their
+test results are retained but do not satisfy the final external-basetemp gate.
+Primary reinforced that all following runs must create a unique OS-temp parent,
+use its `pytest` child, set a new-worktree-local cache and JUnit, and obtain a
+central serial-environment grant. Final acceptance will use those settings.
+
+Primary/reviewer M3 findings include controller-thread-only composition (UI
+reads must not advance coverage/reference state), atomic cached view models,
+durable-attempt lease deferral, and stop/restart transition coordination/failure
+reporting. These are acceptance blockers, not optional polish. The primary's
+native acceptance driver is separate from production processing and will refuse
+dirty scientific sources before running verified actual playback.
+
+### Standalone advanced/UI review and integration follow-up
+
+Independent reviewer accepted the standalone advanced gate/orchestrator and UI
+slice, explicitly withholding end-to-end M4 acceptance until common replay
+finalization/source/coverage/reference verification passes. Gate/orchestrator
+fixes include atomic pause/start acknowledgment, one cancellation terminal,
+physical production authorization/source/writer binding, preserved malformed
+returned arrays, native AHET admission, and frozen-denominator nonpublication.
+UI close now waits for bounded artifact finalization after the owned event loop.
+
+Fresh UI/advanced focused run first observed **49 passed, one failed** (4.55 s):
+`test_advanced_stop_before_worker_start_is_one_cancellation_and_no_attempt`
+reported non-clean shutdown. The worker now exits when stop is already set after
+dequeue. The rerun passed **50 tests**, 12 installed deprecation warnings, 2.28 s,
+exit 0, with no Qt callback stderr. Both used the absolute pinned command, explicit
+external OS-temp basetemp and repo-local cache. The implementation owner reused
+`replay_ui_advanced_review.xml`, overwriting the first XML; the observed failure
+and reason are preserved here and in the tool transcript, rather than inventing
+a replacement XML. Future runs must use distinct JUnit names.
+
+The test engineer's application-inclusive iteration recorded **87 passed,
+four failed**, 12 warnings, 4.74 s (`replay_m34_current.xml`): three missing test
+imports and one reference-audit integration issue. A following centrally granted
+run recorded **73 passed, four failed**, 12 warnings, 9.79 s, zero Qt callback
+stderr (`replay_m34_rerun.xml`). This exposed a legitimate valid selector finishing
+after EOF: it must preserve evidence without incrementing selection revision;
+the verifier must accept that honest expired record. Primary required this
+regression to remain separate from publication-forcing fixture changes. Missing
+ADC must produce explicit incomplete verification, not an escaped source error.
+The other fixture corrections concern recomputing impulse cleaning after phase
+forgery and actually reaching a scheduled advanced preview.
+
+Further M3 verifier review requires independently deriving expected reference
+audit identities (not trusting saved rows), checking guarded reference even with
+zero attempts, exact physical-event boundary clipping, cancellation vocabulary,
+motion attempt/admission correspondence, and complete common manifest/summary
+schemas. These remain unresolved acceptance gates at this point.
+
+## Continuation audit - 2026-10-11
+
+The prior centrally granted application/advanced/CLI run did complete before the
+interruption. Its retained `results/test_tmp/replay_m34_cli.xml` reports **51
+passed, five failed**, zero errors, 12.000 seconds (56 tests). Three failures
+exposed a missing `BaselineChannel` import in the advanced composition adapter;
+two were stale test expectations for source-binding failure and reference audit
+field names. These are assigned to the production and test owners separately.
+Missing-source, honest late-selector EOF and CLI guard checks passed in this
+iteration; that does not establish integrated milestone acceptance.
+
+Primary re-inspected actual Git state: replay HEAD remains
+`8dddf028074b8fcec0b273bde7572b5c683f1f29`; original and feature checkouts retain
+their original checkpoints and dirty work. All 20 protected source/config hashes
+still match, and calibrated startup remains 10 seconds. The ordinary sandbox
+process launcher failed before process creation with `setup refresh had errors`;
+authorized escalated read-only inspection succeeded. No failed launcher call
+executed a test or changed source. Editing and independent review responsibilities
+were re-established after the interrupted agents were no longer live.
+
+Continuation static audit confirmed remaining defects: canonicalized calibration
+JSON was labelled as the exact hash-authorized file bytes; advanced restart reused
+cached authorization and could create a new pass before fresh physical validation;
+zero-attempt motion passes lacked native CSV headers; stop during a restart build
+could finalize an unstarted pass as running without source integrity. Both replay
+managers require an honest transition/shutdown gate. These findings are returned
+to separate production owners and independent regression tests.
+
+The plan's reference audit includes values shown by the current cards, as well as
+window summaries. Inspection found only summaries persisted. M3 now requires a
+manifested `reference_display_audit.json` scalar frame/bucket/value audit and
+independent reconstruction from guarded reference inputs. This clarifies the
+existing artifact requirement; it changes no reference alignment, PI threshold,
+radar processing or coverage admission.
+
+Independent continuation review also required saved source-integrity hashes and
+cursor counts to match elapsed/completion claims; exact motion generation,
+application epoch and selected-bin lineage; complete common schemas; and a
+hash/parse binding of the saved calibration snapshot to current physical
+authorization. Restart joins must report a still-live transition as non-clean;
+an unstarted cancelled pass must not acquire a successful scientific manifest.
+These are integrated acceptance blockers until reviewed fixes and tests pass.
+
+Review found the native acceptance driver's speed flags acknowledged callbacks,
+not controller application. Primary changed them to require observed generation-2
+speed transitions, durable `speed_changed` events, and measured acknowledgment
+latency. Peak RSS and steady-playback early/late observations are now saved;
+there is no invented absolute memory threshold. The independent driver rereview
+found no remaining material defect. Every actual pass will still receive a
+separate source/reference artifact verification, including the partial pass
+preserved by controls/restart.
+
+### Baseline continuation iteration
+
+The centrally granted test-engineer baseline run observed **156 passed, two
+failed**, 12 installed deprecation warnings, 33.56 seconds. JUnit:
+`results/test_tmp/replay_baseline_resume_20261011.xml`; external basetemp:
+`C:/Users/josemsosag/AppData/Local/Temp/replay_baseline_resume_3d0eb0c78d00416da64c7779b0a459a1/pytest`;
+cache: `results/test_tmp/pytest_cache_replay_baseline_resume`. Selection: application,
+coverage, reference, UI, engine, runtime and evidence replay test files, using
+the absolute pinned conda prefix and `-q --tb=short`.
+The two failures expected ValueError where strict bool/fraction constructor
+inputs correctly raise TypeError. Tests will assert the appropriate exception
+class without weakening rejection. A control patch finished immediately before
+the freeze notice; this run is retained as an iteration, with stable final
+verification still required. The environment slot was returned after completion.
+
+The following application/advanced/CLI iteration executed no tests: collection
+reported two errors from an in-flight unclosed parenthesis in verification.py,
+12 installed warnings, 2.27 seconds. JUnit:
+`results/test_tmp/replay_m34_tests_resume_20261011.xml`; external parent:
+`C:/Users/josemsosag/AppData/Local/Temp/replay_m34_tests_resume_1e620a2dbdfd4c59a3d72b49730920b8`;
+cache: `results/test_tmp/pytest_cache_replay_m34_tests_resume`. The primary granted
+the run before every editing owner had finished and acknowledged the source
+freeze. That coordination error is corrected: subsequent execution requires
+completed static edits, an AST check, and all production owners' freeze
+acknowledgments. The failed XML is preserved; no passing test claim is made.
+
+Independent containment review requires a fail-early artifact preflight before
+either internal verifier: detecting a link/escape later is insufficient if an
+earlier read has already followed it. Required artifacts, NPZ paths and saved
+calibration snapshot paths must be contained before bytes are opened. The CLI
+and native driver also reject a redirected fixed output root rather than treating
+its resolved target as authorized output storage.
+
+### Stable all-replay iteration
+
+After all owners acknowledged completed AST checks and source freezes, the
+test engineer ran all 12 `test_replay_compare_*.py` files serially with the pinned
+absolute conda command. Observed **307 passed, ten failed**, 12 installed
+deprecation warnings, 32.21 seconds, exit 1; no Qt callback stderr. JUnit:
+`results/test_tmp/replay_all_resume_20261011.xml`; external basetemp:
+`C:/Users/josemsosag/AppData/Local/Temp/replay_all_resume_74f836664dfb45e0bf2bb4789f3d494e/pytest`;
+cache: `results/test_tmp/pytest_cache_replay_all_resume`.
+
+Two tests demonstrated a verifier defect: re-signed zero-attempt motion playback
+events with generation `true` or `1.0` were accepted through Python's coercive
+numeric equality. Exact event integer types must be checked before equality.
+The remaining failures concern fixture structure, stopped-manager reuse,
+class/instance monkeypatching, source-prepared file identity, and changed
+fail-early issue codes; production/test owners are checking each rather than
+weakening scientific rejection. Independent review also requires preserving
+the first baseline transition timeout after later cancellation/finalization.
+The files were unfrozen only after the run ended and its XML was preserved.
+
+### Final integrated static review
+
+Independent `code_reviewer` continuation verdict: **ACCEPT**, no remaining
+BLOCKER, HIGH, or MEDIUM findings. The reviewer independently checked the
+baseline and advanced lifecycle, first-causal timeout preservation, atomic
+controls, fail-before-read artifact containment, physical calibration snapshot
+bytes/hash/record authorization, strict event and motion scalar types, source
+cursor/completion/hash binding, guarded per-frame reference reconstruction,
+checkout output authority, and the native full-1x responsiveness gates.
+This is static acceptance only; the earlier 307-pass/ten-fail run is not dynamic
+acceptance. Test corrections prove untampered artifacts are accepted before
+re-signing adversarial modifications, and both stuck-restart regressions assert
+that later transition joins preserve the original timeout failure.
+
+Primary's frozen-source audit independently parsed 29 replay Python files,
+confirmed LF endings and clean diff whitespace, and matched all 20 protected
+source/configuration hashes. Calibrated startup remains 10 seconds.
+
+### Stable all-replay rerun
+
+The serial all-12-file rerun observed **317 passed, two failed**, 12 installed
+deprecation warnings, 32.21 seconds, exit 1, no Qt callback stderr. Retained
+JUnit: `results/test_tmp/replay_all_resume_rerun_20261011.xml`; cache:
+`results/test_tmp/pytest_cache_replay_all_resume_rerun`; external basetemp:
+`C:/Users/josemsosag/AppData/Local/Temp/replay_all_resume_rerun_43dd3baac58a4b99aa430831bf1f902d/pytest`.
+All untampered acceptance prechecks, re-signed boolean/float event rejection,
+and first-timeout identity checks passed. Two stale test assertions remained:
+the missing calibration now correctly reports physical calibration validation
+failure, and the baseline runtime does not have the advanced orchestrator's
+private `_controller_thread` member. Only these test assertions are corrected;
+no production rejection or lifecycle safeguard is weakened. A fresh focused
+rerun and primary complete suite remain required.
+
+The two corrected nodes passed the fresh focused confirmation: **2 passed**,
+12 installed Matplotlib/pyparsing warnings, 1.69 seconds, exit 0, no Qt callback
+stderr. Nodes: advanced wrong-hash/missing-record refusal and baseline stuck
+restart transition. JUnit `results/test_tmp/replay_two_resume_20261011.xml`;
+external basetemp `C:/Users/josemsosag/AppData/Local/Temp/replay_two_resume_f90c475008ab401e8c82e85f0640de15/pytest`;
+cache `results/test_tmp/pytest_cache_replay_two_resume`. Source and tests remain
+frozen for the primary complete-suite run.
+
+### Primary complete-suite dependency failure
+
+The primary ran the approved complete command with `M8_RUN_REAL_DATA_TESTS=0`
+and no EXP004 run-directory opt-in, serially in the pinned environment:
+
+```powershell
+C:/ProgramData/anaconda3/Scripts/conda.exe run --no-capture-output -n radar-vitals python -m pytest tests -m "not real_data" -q --tb=short --basetemp C:/Users/josemsosag/AppData/Local/Temp/replay_compare_final_20261011_50e9f075e9714415a9c42c5b29ec5a08/pytest -o cache_dir=results/test_tmp/pytest_cache_replay_compare_final_20261011_primary --junitxml=results/test_tmp/replay_compare_final_20261011_primary.xml
+```
+
+Observed **3930 passed, 20 failed, 16 skipped, one deselected**, 1391 warnings,
+280.35 seconds, exit 1. All **319 replay cases passed**. Test engineer independently
+classified all 20 failures: 14 Ahmed PDF dependency failures (M4, 12 M8 figure
+cases and the inherited child wrapper), six Joint Estimation PDF dependency
+failures (M9). Both ignored literature inputs were missing only in the new
+worktree. No code or test was changed, bypassed, or skipped to resolve them.
+Existing fixture subprocesses also emitted their own default-cache permission
+warnings; the primary invocation used the explicit approved isolated paths.
+
+After completion, primary copied exactly the two existing ignored PDFs from the
+original checkout, leaving the source files unchanged, and verified both copies:
+
+- Discovering the Unseen PDF: 1,462,401 bytes, SHA-256
+  `2d13bca3fdfcbf249a500622dac0be9ad37e35a6aa880c440ff0c12eb4f8689f`.
+- Joint Estimation PDF: 2,447,944 bytes, SHA-256
+  `4d2c99f9c1a6fd71e4100fba610e0297cc1a54a0ef6a7558c37a6f0135fc1ddd`.
+
+The failed JUnit remains preserved. A fresh complete rerun uses a new external
+parent, cache and JUnit rather than overwriting that report.
+
+### Final complete software gate
+
+Primary's independent serial rerun passed **3950 tests**, with **16 optional
+artifact/mode skips, one real_data deselection**, 1790 warnings, 274.92 seconds,
+exit 0. All 319 replay cases passed. No sealed-data opt-in was enabled. The
+unchanged complete command used external basetemp
+`C:/Users/josemsosag/AppData/Local/Temp/replay_compare_final_restored_20261011_0101a914cbc9432580caf05ae5ea6d66/pytest`,
+cache `results/test_tmp/pytest_cache_replay_compare_final_restored_20261011`, and
+JUnit `results/test_tmp/replay_compare_final_restored_20261011.xml`.
+Warnings are existing Matplotlib/pyparsing deprecations, an inherited invalid
+escape warning, and ten existing quality-mask overflow warnings. An existing
+fixture's child pytest also emitted a default-cache permission warning while
+passing; the primary run used the explicit local cache and external basetemp.
+
+The integrated M3/M4 code and adversarial tests meet software acceptance with
+the independent static ACCEPT verdict. This gate does not establish actual
+recorded UI performance, physical calibration, hardware or clinical acceptance.
+The reviewed source will be committed in dependency order: M3 common baseline
+application/reference/coverage/UI/verifier, M4 advanced replay and guarded CLI,
+then M5 native acceptance driver. Each push receives a remote SHA read-back.

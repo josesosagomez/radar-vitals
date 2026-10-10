@@ -119,6 +119,12 @@ class SequentialAdcSource:
         return self._initial_sha256
 
     @property
+    def integrity(self) -> SourceIntegrity | None:
+        """Final same-handle integrity, available only after source closure."""
+
+        return self._integrity
+
+    @property
     def opened_file_identity(self) -> dict[str, int]:
         if self._opened_stat is None:
             raise ReplaySourceError("ADC source is not open")
