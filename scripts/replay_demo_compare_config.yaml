@@ -1,0 +1,7 @@
+schema: replay_demo_compare_config_v1
+capture: 20260728_224902_live_demo_massimo3
+mode: baseline
+speed: 1.0
+output_root: results/replay_compare
+reference_min_pi: 0.5
+poll_interval_ms: 50
