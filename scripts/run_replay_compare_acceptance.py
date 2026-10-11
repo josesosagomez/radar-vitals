@@ -8,8 +8,11 @@ Run artifact verification separately after each invocation.
 from __future__ import annotations
 
 import argparse
+import csv
 import hashlib
 import json
+import math
+import multiprocessing
 import statistics
 import subprocess
 import sys
@@ -22,6 +25,79 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+
+
+def memory_observation(samples: list[dict], field: str, generation: int) -> dict:
+    """Describe simultaneous observations without inventing a RAM threshold."""
+    measured = [row for row in samples if type(row.get(field)) is int]
+    result = {"peak_bytes": max((row[field] for row in measured), default=None)}
+    stable = [row for row in measured
+              if row["generation"] == generation and row["boundary"] >= 1800]
+    if len(stable) >= 8:
+        quarter = max(1, len(stable) // 4)
+        early = statistics.median(row[field] for row in stable[:quarter])
+        late_rows = stable[-quarter:]
+        late = statistics.median(row[field] for row in late_rows)
+        elapsed = late_rows[-1]["monotonic_s"] - late_rows[0]["monotonic_s"]
+        result["steady"] = {
+            "first_boundary": stable[0]["boundary"],
+            "last_boundary": stable[-1]["boundary"],
+            "early_quarter_median_bytes": early,
+            "late_quarter_median_bytes": late,
+            "late_minus_early_bytes": late - early,
+            "late_quarter_endpoint_bytes_per_s": (
+                (late_rows[-1][field] - late_rows[0][field]) / elapsed
+                if elapsed > 0 else None
+            ),
+            "interpretation": "Observed memory; inspect alongside bounded ownership tests.",
+        }
+    return result
+
+
+def process_performance_errors(performance: list[dict], attempt_ids: list[str]) -> list[str]:
+    """Require complete, bounded transport telemetry for this production driver.
+
+    Independent artifact verification checks the scientific evidence. This
+    separate native gate also binds each process timing row to its durable
+    executed attempt; injected thread backends are not used by this driver.
+    """
+    errors = []
+    rows = [row for row in performance if row.get("kind") == "analysis"]
+    job_ids = [row.get("job_id") for row in rows]
+    if len(set(attempt_ids)) != len(attempt_ids) or job_ids != attempt_ids:
+        errors.append("process telemetry does not match every durable attempt exactly once in order")
+    if not rows:
+        errors.append("production analysis process telemetry is missing")
+    spans = (
+        "analysis_elapsed_s",
+        "parent_copy_elapsed_s", "parent_send_elapsed_s",
+        "parent_wait_receive_elapsed_s", "child_materialization_elapsed_s",
+        "child_callback_elapsed_s", "process_round_trip_elapsed_s",
+    )
+    for sequence, row in enumerate(rows, start=1):
+        if type(row.get("process_sequence")) is not int or row["process_sequence"] != sequence:
+            errors.append("analysis process sequence is missing or discontinuous")
+        for name in spans:
+            value = row.get(name)
+            if type(value) not in (int, float) or not math.isfinite(value) or value < 0:
+                errors.append(f"analysis process span {name} is missing or invalid")
+        for name, limit in (("process_control_bytes", 65_536),
+                            ("process_result_bytes", 16_777_216)):
+            value = row.get(name)
+            if type(value) is not int or not 0 < value <= limit:
+                errors.append(f"analysis process byte count {name} is outside its inclusive bound")
+        valid_spans = all(type(row.get(name)) in (int, float)
+                          and math.isfinite(row[name]) and row[name] >= 0 for name in spans)
+        if valid_spans:
+            round_trip = row["process_round_trip_elapsed_s"]
+            parent_total = sum(row[name] for name in (
+                "parent_copy_elapsed_s", "parent_send_elapsed_s", "parent_wait_receive_elapsed_s"
+            ))
+            if row["analysis_elapsed_s"] + 1e-9 < round_trip or round_trip + 1e-9 < parent_total:
+                errors.append("analysis process durations have impossible nesting")
+        if "fatal_backend_error" not in row or row["fatal_backend_error"] is not None:
+            errors.append("analysis fatal-error field is missing or reports a failure")
+    return errors
 
 
 def main() -> int:
@@ -107,8 +183,12 @@ def main() -> int:
         "limitations": [
             "Recorded current-software playback, not hardware or clinical acceptance.",
             "Qt timer intervals measure event-loop responsiveness, not physiological accuracy.",
+            "Summed parent/child working sets can count shared pages twice; samples are sequential within one tick.",
         ],
     }
+    ui_timing_path = output / "ui_performance.jsonl"
+    ui_timing = ui_timing_path.open("x", encoding="utf-8", newline="\n")
+    observations["ui_performance_path"] = str(ui_timing_path)
     previous_tick: float | None = None
     tick_intervals: list[float] = []
     ui_callback_times: list[float] = []
@@ -143,8 +223,20 @@ def main() -> int:
 
     sys.excepthook = qt_exception
 
+    def timing_context(snapshot) -> dict:
+        return {
+            "generation": snapshot.generation,
+            "boundary": snapshot.processed_boundary,
+            "state": snapshot.playback_state,
+            "accumulation_stage": snapshot.accumulation_stage,
+            "published_monotonic_s": snapshot.published_monotonic_s,
+            "hr_attempt_id": snapshot.hr.attempt_id,
+            "br_attempt_id": snapshot.br.attempt_id,
+        }
+
     def timed_ui_poll() -> None:
         begin = time.monotonic()
+        displayed = window._snapshot
         try:
             window.poll_once()
             displayed = window._snapshot
@@ -156,7 +248,13 @@ def main() -> int:
         except Exception as exc:
             record_error(f"Dashboard poll: {type(exc).__name__}: {exc}")
         finally:
-            ui_callback_times.append(time.monotonic() - begin)
+            end = time.monotonic()
+            ui_callback_times.append(end - begin)
+            ui_timing.write(json.dumps({
+                "kind": "ui_poll", "begin_monotonic_s": begin,
+                "end_monotonic_s": end, "elapsed_s": end - begin,
+                **timing_context(displayed),
+            }, allow_nan=False) + "\n")
 
     window.poll_timer.timeout.disconnect()
     window.poll_timer.timeout.connect(timed_ui_poll)
@@ -178,19 +276,43 @@ def main() -> int:
         nonlocal restart_requested, restart_request_wall, restarted, speed_two, speed_four, during_saved
         nonlocal speed_two_request, speed_four_request
         now = time.monotonic()
-        if previous_tick is not None:
-            tick_intervals.append(now - previous_tick)
+        interval_begin = previous_tick
+        if interval_begin is not None:
+            tick_intervals.append(now - interval_begin)
         previous_tick = now
         try:
             snapshot = manager.latest_snapshot
+            if interval_begin is not None:
+                ui_timing.write(json.dumps({
+                    "kind": "qt_heartbeat", "begin_monotonic_s": interval_begin,
+                    "end_monotonic_s": now, "elapsed_s": now - interval_begin,
+                    **timing_context(snapshot),
+                }, allow_nan=False) + "\n")
             if now - last_sample >= 1.0:
+                memory_begin = time.monotonic()
+                parent_rss = replay_rss_bytes()
+                child = manager.current_run.analysis_process_observation()
+                child_rss = child["current_rss_bytes"]
+                # Only direct children owned by this driver with the production
+                # backend name are counted; this does not enumerate system PIDs.
+                owned_children = [process.pid for process in multiprocessing.active_children()
+                                  if process.name == "ReplayBaselineDSP"]
                 observations["samples"].append({
                     "monotonic_s": now,
                     "generation": snapshot.generation,
                     "boundary": snapshot.processed_boundary,
                     "state": snapshot.playback_state,
                     "speed": snapshot.speed,
-                    "rss_bytes": replay_rss_bytes(),
+                    "rss_bytes": parent_rss,
+                    "analysis_process": child,
+                    "owned_analysis_process_count": len(owned_children),
+                    "owned_analysis_process_pids": owned_children,
+                    "combined_current_rss_bytes": (
+                        parent_rss + child_rss
+                        if type(parent_rss) is int and type(child_rss) is int else None
+                    ),
+                    "memory_sample_begin_monotonic_s": memory_begin,
+                    "memory_sample_end_monotonic_s": time.monotonic(),
                     "coverage": asdict(snapshot.coverage),
                 })
                 last_sample = now
@@ -284,12 +406,17 @@ def main() -> int:
             "qt_heartbeat_max_s": max(tick_intervals, default=0.0),
             "qt_heartbeat_over_0_25s": sum(value > 0.25 for value in tick_intervals),
             "source_frames_read": manager.current_run.source.frames_read,
+            "final_analysis_process": manager.current_run.analysis_process_observation(),
         })
         performance = [
             json.loads(line)
             for line in (manager.pass_dir / "performance.jsonl").read_text(encoding="utf-8").splitlines()
             if line.strip()
         ]
+        with (manager.pass_dir / "analysis_attempts.csv").open(encoding="utf-8", newline="") as handle:
+            attempt_ids = [row["job_id"] for row in csv.DictReader(handle)]
+        observations["process_telemetry_errors"] = process_performance_errors(performance, attempt_ids)
+        observations["errors"].extend(observations["process_telemetry_errors"])
         frame_rows = [row for row in performance if row.get("kind") == "frame"]
         work_times = [float(row["controller_work_elapsed_s"]) for row in frame_rows]
         selector_times = [
@@ -307,6 +434,33 @@ def main() -> int:
         observations["rss_peak_bytes"] = max(
             (row["rss_bytes"] for row in rss_samples), default=None
         )
+        observations["combined_rss_observation"] = memory_observation(
+            observations["samples"], "combined_current_rss_bytes", final.generation
+        )
+        observations["child_current_rss_observation"] = memory_observation(
+            [{**row, "child_current_rss_bytes": row["analysis_process"]["current_rss_bytes"]}
+             for row in observations["samples"]], "child_current_rss_bytes", final.generation
+        )
+        child_ids: dict[int, set[int]] = {}
+        for row in observations["samples"]:
+            pid = row["analysis_process"]["pid"]
+            if type(pid) is int:
+                child_ids.setdefault(row["generation"], set()).add(pid)
+        observations["observed_analysis_pids_by_generation"] = {
+            str(generation): sorted(pids) for generation, pids in child_ids.items()
+        }
+        if any(len(pids) > 1 for pids in child_ids.values()):
+            observations["errors"].append("more than one analysis child was observed in one generation")
+        observations["owned_analysis_process_count_max"] = max(
+            (row["owned_analysis_process_count"] for row in observations["samples"]), default=0
+        )
+        if observations["owned_analysis_process_count_max"] > 1:
+            observations["errors"].append("overlapping owned analysis children were observed")
+        if args.scenario == "controls" and (
+            len(child_ids.get(1, set())) != 1 or len(child_ids.get(2, set())) != 1
+            or child_ids[1] == child_ids[2]
+        ):
+            observations["errors"].append("restart did not establish an observed fresh analysis PID")
         # Report measured growth without inventing an absolute RAM threshold.
         # Initial ring accumulation and the first selector are excluded from
         # the steady-playback comparison, but remain in the overall peak.
@@ -346,6 +500,14 @@ def main() -> int:
             )
         if final.processed_boundary != limit or not manager.clean_shutdown:
             observations["errors"].append("scenario did not finish every authorized frame with clean shutdown")
+        child_final = observations["final_analysis_process"]
+        if child_final["alive"]:
+            observations["errors"].append("owned analysis child remains alive after shutdown")
+        if child_final["exitcode"] != 0:
+            observations["errors"].append("owned analysis child did not exit successfully")
+        if not any(type(row["analysis_process"]["current_rss_bytes"]) is int
+                   for row in observations["samples"]):
+            observations["errors"].append("owned analysis child memory observations are missing")
         if manager.current_run.source.frames_read != limit or len(frame_rows) != limit:
             observations["errors"].append("source/frame telemetry does not account for every processed frame")
         if args.scenario == "controls" and not all((resumed, restarted, speed_two, speed_four)):
@@ -374,6 +536,7 @@ def main() -> int:
         observations["errors"].append(f"Acceptance shutdown: {type(exc).__name__}: {exc}")
     finally:
         timer.stop()
+        ui_timing.close()
         sys.excepthook = exception_hook
         observations["finished_utc"] = datetime.now(timezone.utc).isoformat()
         path = output / "acceptance_observations.json"
