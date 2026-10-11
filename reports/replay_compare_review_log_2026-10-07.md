@@ -975,3 +975,317 @@ local cache/JUnit use the same unique tag. Post-run all 32 frozen hashes,
 20 protected files, both checkout HEAD/status records and 23 preserved local
 files passed (process_ui_full_pass_preserved_20261011.json). Independent reviewer
 accepted the automated software gate; actual native acceptance remains required.
+
+Reviewed process/UI/driver milestones were committed separately and each pushed
+SHA read back: 36fb21dcadea70f58e72013fe9d172e6275cf103,
+1700667605edb64a58c71b52dfafb1e2d05fb674,
+73a48e13718f35beb24347a861fd2541db907e97. Scientific-source status was clean and
+committed bytes matched the tested freeze; original checkouts remained preserved.
+
+Fresh native 1x short diagnostic at 73a48e1 completed 800/800 source/telemetry
+frames, child exit zero, clean shutdown and complete process spans. Its smoke
+driver exited zero but does not enforce the full 0.25-second gate. Primary
+explicitly inspected all metrics and **refused timing acceptance**: controller
+max 0.031 s, UI poll/age max 0.454 s, Qt heartbeat max 0.547 s with 19 breaches.
+Output: results/replay_compare/acceptance_smoke_1x_process_20261011. HR coverage
+0/800, BR 74/800, both zero, quiet zero; no desired coverage target was applied.
+Most heartbeat stalls precede the first analysis, including boundary zero.
+All memory-sample spans round to zero at monotonic clock resolution, so the
+recorded evidence does not implicate RSS calls. Parent sampled peak 615780352
+bytes, combined sampled peak 1194696704, child lifetime peak 743813120.
+Sources remain frozen; primary is profiling main-thread Python/native calls in
+a separately labelled diagnostic run before any further implementation revision.
+
+Native diagnostic evidence at frozen 73a48e1 (all scripts/outputs retained):
+results/test_tmp/profile_native_gui_process_20261011.py and its JSON profile,
+results/replay_compare/diagnostic_gui_process_profile_20261011 identify native
+QProgressBar.setValue calls of 0.399–0.471 s; screenshot totals 0.246–0.323 s
+include PNG encoding 0.205–0.214 s, grab 0.040–0.052 s and an event drain.
+results/test_tmp/profile_native_qt_events_20261011.py and JSON profile,
+results/replay_compare/diagnostic_qt_events_process_20261011 attribute
+0.314–0.516 s UpdateRequest to the whole dashboard at DPR 2.5. The captured
+image is 3450x2108 pixels. Controller work remains at most 0.032 s in that
+probe. Independent reviewer and primary-source Qt research corroborate the
+synchronous progress repaint/backing-store path; this is not scientific tuning.
+
+The identical-setter A/B diagnostic
+results/test_tmp/diagnostic_gui_memo_setters_20261011.py skipped 22857 unchanged
+calls, but results/replay_compare/diagnostic_gui_memo_setters_20261011 still
+reports UI callback 0.454 s, snapshot age 0.469 s and Qt heartbeat 0.750 s with
+19 breaches. All 800 frames, clean child exit and process telemetry remain
+complete. This probe is NOT accepted production behavior, despite smoke exit
+zero. All interventions are identified by their ignored diagnostic script;
+the clean tracked source hash alone does not reproduce the intervention.
+
+Evidence-backed amendment §7.3 proposes a passive deferred progress widget and
+bounded capture of two detached QImages followed by PNG encoding after the
+event loop ends. No extra writer thread is necessary for these two artifacts.
+Independent plan review precedes tracked edits. Scientific files, source/tests,
+timing limits and all existing checkouts remain frozen/preserved.
+
+Independent §7.3 plan review: READY WITH MINOR CHANGES; code reviewer found a
+HIGH defect in the first draft's impossible bounded-thread-join/no-orphan claim.
+The primary independently simplified it before implementation: exactly two
+detached QImages, sequential same-thread PNG encoding after the event loop ends,
+no new writer thread. Final code-review plan verdict READY, no BLOCKER/HIGH/
+MEDIUM remaining. Plan review's progress range/reset/accessibility, cache
+coherence, destination-before-capture, fixed slots, real PNG reopen/hash, timer
+stop and failure-release details were incorporated before scoped grants.
+Python expert owns ui.py; separate Python expert owns only native driver; test
+engineer owns UI/driver tests. Primary owns integration, retained serial tests,
+native checks, Git and documentation truth. Reviewers do not implement edits.
+Prepared ignored deferred-progress probe is retained but UNEXECUTED because
+tracked edits were already granted; no runtime intervention counts as acceptance.
+
+§7.3 final independent static verdict **ACCEPT**, no material findings. Reviewer
+found two initial test gaps (real pixel detachment and unchanged setter/X-range
+suppression); test owner added both before freeze. Frozen production SHA-256:
+ui.py d7c6207f8a4c9419eac4f6ec9ebbe8a37eb51c83c5f7c005ba5c610fb6bf8314;
+native driver fe5d4a7f2652c82218420efb12eb65dee64d06787048f17ff105167fbe26f84f.
+Frozen tests: UI 023bd2b408a0f76972083cac8002195b38502a15c0c2914ba822cba830d0eda5;
+acceptance f2c01d28388c613158d90e4a357db0bd2ebbb819810cf3c44ad8af53e78b10b4.
+Primary AST/LF32/protected20/preserved2-checkout23-file audit passed:
+results/test_tmp/qt_display_freeze_ready_20261011.json. Primary starts focused
+serial execution; all editing owners remain frozen and reviewers independent.
+
+§7.3 first focused execution retained **526 passed, one failed, 12 warnings,
+39.70 s**, exit one. Tag:
+results/test_tmp/replay_process_ui_focus_20261011_712d7bbec45445a3929830dc573484c5
+(.xml/.console.txt/.exit.txt). The pause progress-flush assertion is positioned
+after a running poll but before the fixture supplies its paused snapshot;
+independent classification precedes any correction. Console additionally prints
+pyqtgraph LabelItem partially-initialized sizeHint callback errors; these remain
+an explicit investigation gate even though pytest does not fail them. Post-run
+all 32 frozen hashes, 20 protected files, two checkouts and 23 local files passed:
+results/test_tmp/qt_display_focus_failed_preserved_20261011.json. No production
+or test edits are granted until the independent finding is classified.
+
+Independent classification: the lone failure is a misplaced test assertion,
+and the 16 callbacks match eight added offscreen dashboards with two plots.
+Pinned pyqtgraph 0.13.7 LabelItem calls GraphicsWidget base before initializing
+its instance _sizeHint; Qt may reenter virtual sizeHint during that base call.
+Both independent reviewer and UI owner corroborated installed-source ordering;
+retained native logs have no equivalent error. Grant is TEST ONLY: assert paused
+after the paused snapshot/poll, retain a no-new-flush assertion for the running
+poll, and provide a documented offscreen-construction class-level empty cache
+fallback matching LabelItem's own unknown-hint zero-size behavior. Instance
+initialization replaces it; pytest restores it. Do not suppress exceptions or
+stderr, alter installed libraries, or patch production. Production remains
+frozen. Fresh targeted/focused/full execution and native callback inspection
+remain required; the original failed console is preserved.
+
+Test-only correction independently re-reviewed **ACCEPT**; production hashes and
+acceptance-test hash remain unchanged. UI test SHA-256 now
+5c8a1f0a888b41bc7616dafcdabf2103c72d1da56eeff8339261f68c7255a0a5.
+Refreeze audit: results/test_tmp/qt_display_freeze_ready2_20261011.json.
+Fresh verbose targeted UI execution **PASSED 34 tests, 12 warnings, 3.10 s**,
+exit zero, no Traceback/AttributeError/LabelItem/FAILED in console. Retained tag:
+results/test_tmp/replay_qt_display_ui_20261011_df4b2d5ef17e4d84a36e1932fd3bfc06.
+Post-run 32-hash/protected20/preserved2-checkout23-file audit passed:
+results/test_tmp/qt_display_ui_pass_preserved_20261011.json. The primary proceeds
+to full focused and complete serial suites under this exact new freeze.
+
+The quiet focused rerun then stalled at 95%; retained tag
+results/test_tmp/replay_qt_display_focus_20261011_5625bd2c1d574d71bf2ec1f187c25cc0.
+No pass is claimed. Primary verified command-tag/owned PID 25716 and no remaining
+children before terminating only that process; conda/runner retained exit one.
+A fresh unchanged-source verbose diagnostic with built-in
+faulthandler_timeout=20 reproduced the stall and retained a stack at ui.py:1292
+QImage.save in the force-flush test, after the preceding UI cases passed.
+Tag: results/test_tmp/replay_qt_display_diagnostic_20261011_64da87a897ea405cada382742ccbd144.
+It printed no LabelItem callback error. Primary verified the exact tag and pinned
+executable for owned pytest PID26992, checked zero children and terminated it;
+exit one and its stack remain. All32 source/test hashes and protected/preserved
+files still matched (qt_display_stall_preserved_20261011.json).
+
+Independent reviewer and test owner identified two fixture problems: mutating
+ui.time.monotonic mutates the singleton stdlib clock for every imported library;
+and the force-flush case still encodes PNG in the path now explicitly defined
+as in-loop detached image capture. Grant TEST ONLY: replace the UI module's time
+binding with a local deterministic proxy and exercise real detached capture,
+including non-null/dimensions/dirty-plot/progress assertions. Earlier genuine
+synchronous PNG saving and driver encoding/reopen/hash coverage remain required.
+The exact native-code reason for the mixed-suite encoding stall is not claimed.
+Production remains frozen; targeted/focused/full reruns and actual native PNG
+completion are still required, with no skip, timeout relaxation or suppression.
+
+The module-local clock/capture-only correction received independent STATIC
+ACCEPT at UI-test SHA 3d48256176284fba8166d003310772a42727d16c0686a4693233947dbc2345ca.
+Ready3 audit verified 32 AST/LF source files, 20 protected files and both preserved
+checkouts/23 local files. Targeted UI tag
+replay_qt_display_ui_20261011_61ba0337e481470cb3240a863a14db37 passed
+34 tests, 12 warnings, 2.76 s, exit zero. Focused diagnostic tag
+replay_qt_display_diagnostic_20261011_f9315ab7e6b34ceeaa3aa657f6d36b16
+passed all 527 assertions, 12 warnings, 42.51 s, but exited -1073741819
+(Windows access violation) after its summary. This is NOT a passing gate.
+No callback traceback was printed; post-run freeze/preservation audit matched.
+The required complete suite is now running unchanged sources with Python crash
+diagnostics enabled. Reviewers are investigating test Qt object cleanup;
+production and tests remain frozen during execution.
+
+The unchanged ready3 complete suite finished exit zero: 4158 passed, 16 optional
+skips, one real_data deselected, 1790 warnings in 315.99 s. Retained tag:
+replay_qt_display_full_20261011_989205c53d7e4139b855fb2a2d840229.
+It used the isolated serial runner with PYTHONFAULTHANDLER=1. This does not erase
+the preceding focused process access violation. Independent reviewer/test owner
+identified an asymmetric Qt test teardown: the no-event-drain capture test kept
+its QApplication.processEvents/window-method patches active through close and
+did not process restored events. Root grants only a scoped monkeypatch.context
+around the capture assertions, restoring real methods before close/processEvents
+cleanup. No assertion, production behavior, skip, timeout or gate is changed.
+This is an evidence-backed lifecycle correction/probe; the exact native reason
+for the preceding access violation is not established. Renewed independent review
+and fresh focused/complete process exits are required.
+
+Scoped teardown correction independently STATIC ACCEPT; frozen UI test SHA
+00e47ba01e458ffdf598d725fd6419c538d891b7ee7ec5242535d94f8b6999f0.
+Ready3-to-ready4 comparison changes only this test file; UI/driver/acceptance
+tests remain byte-identical. Ready4 preservation/AST/LF audit passes. The prior
+post-full ready3 comparison was attempted after the authorized test edit had
+begun and rejected the expected changed test hash; it is not a preservation
+failure or evidence of an in-run mutation. New targeted UI tag
+replay_qt_display_ui_20261011_a58d4f0af8e14defa9ba76143fa79221
+passes 34 tests, 12 warnings, 2.69 s, exit zero. Focused/complete reruns pending.
+
+Ready4 diagnostic tag replay_qt_display_diagnostic_20261011_280c75c655b441cba248f3ec48fdaba8
+again passed 527 assertions/12 warnings/41.61 s but exited -1073741819.
+Normal focused gate without the optional watchdog instrumentation also reproduced
+the post-summary access violation (tag replay_qt_display_focus_20261011_9b14f3ec0cf948319ded3c948ec7ac7d).
+Thus restored capture teardown is useful cleanup but does not establish the crash
+cause. Task-specific Windows crash records identify pinned Qt6Core.dll 6.7.3;
+no acceptance is claimed. Independent review proposes isolating the one test
+calling QThread.currentThread from a Python threading.Thread (adopted Qt thread).
+An ignored diagnostic runner now supports explicit predecessor slices and one-test
+exclusion. Reduced runs are diagnosis only, never replacements for full gates.
+
+All-minus-wrong-thread diagnostic tag
+replay_qt_display_thread_exclusion_20261011_48240f1e73db4eb0a09760f6a7966afb
+passed 526 assertions/one deselected/46.11 s then also crashed. This falsifies
+the claim that the adopted-thread case alone explains the failure; no such
+correction is authorized from this evidence. Ordered group diagnostics both
+exit zero with every UI case intact: native predecessor group (application,
+engine, process_analysis, runtime, telemetry) 201 passed/28.39 s, tag
+replay_qt_display_native_group_20261011_d929755a81204f0db16958ce00386637;
+complementary artifact/reference group 360 passed/16.32 s, tag
+replay_qt_display_pure_group_20261011_eab9eb3f31e54a5bb399c12997656375.
+Both report 12 warnings. All32 hashes/protected20/preserved23 files still match
+ready4. Review now examines explicit lazy QApplication/widget lifetime in tests;
+combined gate remains unsuccessful, not replaced by group results.
+
+Independent reviewer accepts a narrowly owned test-lifecycle probe: a lazy
+module-scoped QApplication fixture, explicitly requested only by actual GUI
+tests, holds one strong application reference while dashboards exist. Save/set
+offscreen platform before its first native import, restore after teardown.
+Close/deleteLater remaining owned top-level widgets and explicitly deliver
+DeferredDelete before processing events/releasing application ownership. No
+application quit, forced native deletion, garbage-collection hack, suppression,
+skip, test weakening or production edit. Root granted only UI-test fixture and
+application-reference replacement; independent re-review and all527 gate remain
+required. This does not assert an unsymbolized crash cause.
+
+The fixture review found and resolved one blocker before execution: platform
+restoration must enclose optional Qt imports and QApplication creation, not only
+the yield. Missing dependency/import/setup failure now restores the original
+environment too. Independent renewed STATIC ACCEPT at UI-test SHA
+d6c6d89efd61527ceb808b976fe0c7762cf864dc44a6726a1cf7d4c883b7c6ee;
+13 real GUI functions request the fixture, the lazy import test does not.
+Ready5 32-source AST/LF/protected20/preserved2-checkout23-file audit passes.
+Production and driver hashes remain d7c6207f and fe5d4a7f respectively.
+
+Ready5 all527 focused tag replay_qt_display_focus_20261011_40bbe49dc36d4e4c81b66301455e2002
+passed assertions/12 warnings/43.47 s then also exited unsuccessfully. Explicit
+application ownership is correct fixture hygiene but is not a demonstrated
+resolution. Additive cross-group diagnosis (native group plus acceptance,
+advanced, CLI, coverage and evidence modules; all UI cases) localized a native
+abort to fixture widget.close(), exit3, with retained Python crash stack:
+replay_qt_display_cross_a_20261011_e304d8e4cfa043969d808a0638b38e70.
+The source stays frozen for an uncaptured-message rerun and narrower pairing.
+Static PE export landmarks for Qt crash offsets are retained in ignored
+qt_export_nearest_20261011.py; those are not symbols or a claimed causal stack.
+
+Cross-A verbose reproduces the fixture close abort without a preceding Qt text
+diagnostic (tag replay_qt_display_cross_a_verbose_20261011_1543c3e97d544a3babcbeae1a844f89b).
+The narrower acceptance/process_analysis/UI combination passes 198 assertions
+in 10.90 s then exits unsuccessfully, tag
+replay_qt_display_acceptance_process_20261011_ac649ffba623419e851b549d5927d612.
+An ignored close-identity logging plugin in cross-A records internal QMenu,
+QFrame and ViewBoxMenu popup windows in topLevelWidgets; the last QFrame close
+precedes the native abort. Tag:
+replay_qt_display_cross_a_close_20261011_176fbe96d83646058b19d3db79caad7a.
+These internal parent-owned windows defeat the proposed blanket ownership
+cleanup. Independent reviewer rejects that fixture as remediation; root grants
+its exact removal back to ready4 UI-test bytes, preserving the previously
+accepted scoped capture cleanup and all assertions. No production change yet.
+The next decisive diagnostic excludes only the three constructor-compatibility
+cases, whose two invalid initial snapshots currently raise after Qt widget/timer
+construction. Any reduced result remains diagnosis, not acceptance.
+
+Test fixture removal exactly restores ready4 (00e47ba0), all32-hash preservation
+comparison passes. All-527 minus the three constructor-compatibility rows exits
+zero: 524 passed/three deselected/12 warnings/42.57 s, tag
+replay_qt_display_constructor_exclusion_20261011_11f121e79fd94d04a80b772f420279e3.
+The narrowed acceptance/process_analysis plus only those three UI rows ALSO
+exits zero: 167 passed/31 deselected/12 warnings/9.53 s, tag
+replay_qt_display_constructor_pair_20261011_d0128ff625214f87ba39f921b8d239af.
+This supports further constructor scrutiny, not a complete crash-cause claim.
+Source inspection independently proves timer/widget construction precedes initial
+validation and invalid startup returns no owned handle. Proposed §7.4 uses shared
+pure full validation before GUI allocation and pins a single initial snapshot,
+applied before timer start. Independent plan review is required before edits.
+
+### 2026-10-11 — §7.4 independent startup plan disagreement
+
+Independent plan and code reviewers returned NOT READY: factory-only preflight
+would leave run_dashboard loading Qt and creating QApplication before validation;
+passing only the snapshot also left the validated plot update underspecified.
+The primary amended §7.4 before implementation to require one pure preflight at
+both public entry points, returning the exact pinned snapshot and immutable
+_ValidatedPlotUpdate. Private construction consumes that pair without reread or
+revalidation, renders before timer start, and both APIs receive failure/race tests.
+The shared pure validator retains full scalar/trace and incremental prefix rules.
+No production/test edit is authorized until independent plan re-review is READY.
+
+Independent amended §7.4 verdicts: plan_reviewer READY with no remaining
+findings; code_reviewer independently ACCEPT. Both confirmed exact source
+boundaries and one pinned snapshot+update pair before any GUI work in both APIs.
+Primary granted python_expert exclusive ui.py ownership and test_engineer
+exclusive UI-test ownership, shared-edit preservation, no pinned environment
+or Git operations. Primary retains integration and serial final verification.
+
+### 2026-10-11 — §7.4 frozen integration and primary verification
+
+Python owner froze ui.py at SHA-256
+22a5c4ff82017ba65a87d13be35e80fd27eca533763a32d91094ccc4ba9f8d16;
+test owner froze UI tests at
+94b1d9def1c92c026f637a109cd5a1b8892ec8a484c4f7a95dfd32162a718588.
+Independent code_reviewer verified exact bytes and returned FINAL STATIC ACCEPT
+with no blocker/high/medium finding. Both-API corruption/advancing-adapter tests,
+actual Qt identity preservation, apply-before-timer/failure ownership and
+owned-loop finalized shutdown coverage were inspected without implementation by
+the reviewer. Root static freeze qt_startup_ready_20261011.json verifies all32
+AST/LF files, 20 protected files, two unchanged checkout HEAD/status and 23
+preserved local file hashes. Root starts all focused tests together using the
+serial pinned runner, tag 65332374cb2f4698a65a79176753c6da. Dynamic clean exit
+and full/native gates remain required; static acceptance is not native acceptance.
+
+The complete replay-focused selection now passes: **536 passed**, 12 warnings,
+41.03 s, clean process exit 0. Tag
+replay_qt_display_focus_20261011_65332374cb2f4698a65a79176753c6da; JUnit SHA-256
+e6f11f871371692217d0d607a01834a0dc61c89fb38cf612d2c4e01796917956.
+Unlike prior post-assertion native crashes, this is a clean dynamic focused gate.
+It does not establish the complete cause of previous interaction-sensitive
+Qt failures. All32 source/test/driver hashes match qt_startup_ready; 20protected
+and both preserved checkouts/all23 local hashes remain unchanged. Primary
+starts full non-real-data suite serially, tag49b229f4ff80404298e97cca3bc797fc.
+
+Final full gate passes **4167 passed, 16 skipped, one real_data deselected**,
+1790 warnings, 297.28 s, clean exit0. Tag
+replay_qt_display_full_20261011_49b229f4ff80404298e97cca3bc797fc; JUnit SHA-256
+b394ff1fb6f2673e79c9437e5eb049777a73294a16ac5ccfb8afb693a2657128.
+The exact serial runner is results/test_tmp/run_replay_qt_tests_20261011.ps1
+-Scope full: tests -m not real_data, unique existing external temporary parent,
+worktree cache/JUnit, M8_RUN_REAL_DATA_TESTS=0, EXP004_RUN_DIR removed. No sealed
+opt-in. Post-full all32 frozen hashes and all20protected/two checkouts/23local
+hashes pass unchanged. Independent code review ACCEPT and dynamic focused/full
+gates permit separate explicit UI and screenshot-driver commits, not a native
+performance claim. Native source-clean recording acceptance is next.

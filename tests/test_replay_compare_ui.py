@@ -5,6 +5,7 @@ from __future__ import annotations
 import builtins
 import importlib
 import math
+import os
 import sys
 import threading
 from dataclasses import FrozenInstanceError, replace
@@ -12,6 +13,22 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
+
+
+def _install_offscreen_labelitem_fallback(monkeypatch):
+    """Avoid pyqtgraph's pre-init virtual callback race in offscreen tests.
+
+    ``LabelItem.__init__`` assigns the instance cache immediately after its base
+    ``GraphicsWidget`` constructor.  Offscreen Qt can call ``sizeHint`` from that
+    base constructor first, so provide only the same empty-cache fallback at the
+    class level.  Every completed instance replaces it with its owned cache.
+    """
+
+    assert os.environ.get("QT_QPA_PLATFORM") == "offscreen"
+    pytest.importorskip("pyqtgraph")
+    from pyqtgraph.graphicsItems.LabelItem import LabelItem
+
+    monkeypatch.setattr(LabelItem, "_sizeHint", {}, raising=False)
 
 
 def _display_trace(
@@ -208,6 +225,260 @@ def test_plot_series_rejects_ambiguous_order_and_invalid_state():
         )
 
 
+@pytest.mark.parametrize("entrypoint", ["create_dashboard", "run_dashboard"])
+@pytest.mark.parametrize("invalid_kind", ["scalar", "full_trace"])
+def test_dashboard_startup_rejects_invalid_initial_snapshot_before_gui_load(
+    monkeypatch, entrypoint, invalid_kind
+):
+    import src.replay_compare.ui as ui
+
+    valid = _playback_snapshot(1, total_frames=10)
+    if invalid_kind == "scalar":
+        invalid = replace(valid, processed_boundary=True)
+        diagnostic = "processed_boundary"
+    else:
+        invalid = replace(
+            valid,
+            trace_samples=(replace(valid.trace_samples[0], generation=8),),
+        )
+        diagnostic = "generation"
+    adapter = _SnapshotAdapter(invalid)
+    gui_calls = []
+
+    def reject_gui_load(*_args, **_kwargs):
+        gui_calls.append("called")
+        raise AssertionError("invalid startup must fail before GUI loading")
+
+    monkeypatch.setattr(ui, "_load_gui_dependencies", reject_gui_load)
+    monkeypatch.setattr(ui, "_load_dashboard_type", reject_gui_load)
+
+    with pytest.raises((TypeError, ValueError), match=diagnostic):
+        getattr(ui, entrypoint)(adapter, recording_name="invalid startup")
+    assert gui_calls == []
+
+
+@pytest.mark.parametrize("invalid_kind", ["scalar", "full_trace"])
+def test_rejected_create_dashboard_keeps_real_qt_top_level_identity_set(
+    monkeypatch, invalid_kind
+):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    QtWidgets = pytest.importorskip("PySide6.QtWidgets")
+
+    from src.replay_compare.ui import create_dashboard
+
+    valid = _playback_snapshot(1, total_frames=10)
+    if invalid_kind == "scalar":
+        invalid = replace(valid, processed_boundary=True)
+        diagnostic = "processed_boundary"
+    else:
+        invalid = replace(
+            valid,
+            trace_samples=(replace(valid.trace_samples[0], generation=8),),
+        )
+        diagnostic = "generation"
+    application = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    before = {id(widget) for widget in application.topLevelWidgets()}
+
+    with pytest.raises((TypeError, ValueError), match=diagnostic):
+        create_dashboard(_SnapshotAdapter(invalid), recording_name="rejected startup")
+
+    application.processEvents()
+    assert {id(widget) for widget in application.topLevelWidgets()} == before
+
+
+@pytest.mark.parametrize("entrypoint", ["create_dashboard", "run_dashboard"])
+def test_dashboard_startup_reads_once_and_hands_off_exact_validated_pair(
+    monkeypatch, entrypoint
+):
+    import src.replay_compare.ui as ui
+
+    first = _playback_snapshot(1, total_frames=10)
+    second = _playback_snapshot(2, total_frames=10)
+
+    class AdvancingAdapter(_SnapshotAdapter):
+        def __init__(self):
+            super().__init__(first)
+            self.read_count = 0
+
+        @property
+        def latest_snapshot(self):
+            snapshot = first if self.read_count == 0 else second
+            self.read_count += 1
+            return snapshot
+
+        @latest_snapshot.setter
+        def latest_snapshot(self, snapshot):
+            self._assigned_snapshot = snapshot
+
+    adapter = AdvancingAdapter()
+    validated = []
+    constructed = []
+    real_validate = ui._validate_snapshot_update
+
+    def record_validation(snapshot, **kwargs):
+        update = real_validate(snapshot, **kwargs)
+        validated.append((snapshot, update))
+        return update
+
+    class FakeDashboard:
+        def __init__(self, **kwargs):
+            constructed.append(kwargs)
+
+        def show(self):
+            constructed.append("shown")
+
+    monkeypatch.setattr(ui, "_validate_snapshot_update", record_validation)
+    monkeypatch.setattr(ui, "_load_dashboard_type", lambda: FakeDashboard)
+
+    if entrypoint == "run_dashboard":
+        existing_application = object()
+
+        class FakeApplication:
+            @staticmethod
+            def instance():
+                return existing_application
+
+            def __init__(self, _args):
+                raise AssertionError("existing QApplication must be reused")
+
+        class FakeQtWidgets:
+            QApplication = FakeApplication
+
+        monkeypatch.setattr(
+            ui,
+            "_load_gui_dependencies",
+            lambda: (object(), object(), FakeQtWidgets, object()),
+        )
+        assert ui.run_dashboard(adapter, recording_name="pinned startup") == 0
+        kwargs = constructed[0]
+        assert constructed[1] == "shown"
+    else:
+        dashboard = ui.create_dashboard(adapter, recording_name="pinned startup")
+        assert isinstance(dashboard, FakeDashboard)
+        kwargs = constructed[0]
+
+    assert adapter.read_count == 1
+    assert len(validated) == 1
+    assert validated[0][0] is first
+    assert kwargs["initial_snapshot"] is first
+    assert kwargs["initial_plot_update"] is validated[0][1]
+
+
+def test_real_dashboard_applies_prevalidated_startup_before_timer_start(
+    monkeypatch,
+):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    QtCore = pytest.importorskip("PySide6.QtCore")
+    QtGui = pytest.importorskip("PySide6.QtGui")
+    QtWidgets = pytest.importorskip("PySide6.QtWidgets")
+    pg = pytest.importorskip("pyqtgraph")
+    _install_offscreen_labelitem_fallback(monkeypatch)
+
+    import src.replay_compare.ui as ui
+
+    application = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    events = []
+
+    class RecordingTimer(QtCore.QTimer):
+        def start(self, *args):
+            parent = self.parent()
+            events.append(
+                (
+                    "timer-start",
+                    parent._snapshot,
+                    parent._validated_trace_prefix,
+                )
+            )
+            return super().start(*args)
+
+    class QtCoreProxy:
+        QTimer = RecordingTimer
+
+        def __getattr__(self, name):
+            return getattr(QtCore, name)
+
+    monkeypatch.setattr(ui, "_dashboard_type", None)
+    monkeypatch.setattr(
+        ui,
+        "_load_gui_dependencies",
+        lambda: (QtCoreProxy(), QtGui, QtWidgets, pg),
+    )
+    dashboard_class = ui._load_dashboard_type()
+    real_apply = dashboard_class._apply_validated_snapshot
+
+    def record_apply(window, snapshot, update):
+        events.append(("apply", snapshot, update))
+        return real_apply(window, snapshot, update)
+
+    monkeypatch.setattr(dashboard_class, "_apply_validated_snapshot", record_apply)
+    initial = _playback_snapshot(1, total_frames=10)
+    validated = []
+    real_validate = ui._validate_snapshot_update
+
+    def record_validation(snapshot, **kwargs):
+        update = real_validate(snapshot, **kwargs)
+        validated.append(update)
+        return update
+
+    monkeypatch.setattr(ui, "_validate_snapshot_update", record_validation)
+    window = ui.create_dashboard(
+        _SnapshotAdapter(initial), recording_name="constructor order"
+    )
+    try:
+        assert len(validated) == 1
+        assert events[0][0] == "apply"
+        assert events[0][1] is initial
+        assert events[0][2] is validated[0]
+        assert events[1][0] == "timer-start"
+        assert events[1][1] is initial
+        assert events[1][2] is initial.trace_samples
+    finally:
+        window.close()
+        application.processEvents()
+
+    timer_start_count = sum(event[0] == "timer-start" for event in events)
+    failed = _playback_snapshot(1, total_frames=10, generation=8)
+    failed_update = real_validate(
+        failed,
+        frame_rate_hz=20.0,
+        prior_generation=None,
+        prior_capacity=0,
+        retained_prefix=(),
+        retained_identity=(),
+    )
+
+    def fail_apply(_window, snapshot, update):
+        events.append(("failed-apply", snapshot, update))
+        raise RuntimeError("injected startup apply failure")
+
+    monkeypatch.setattr(dashboard_class, "_apply_validated_snapshot", fail_apply)
+    partial_window = dashboard_class.__new__(dashboard_class)
+    try:
+        with pytest.raises(RuntimeError, match="injected startup apply failure"):
+            dashboard_class.__init__(
+                partial_window,
+                adapter=_SnapshotAdapter(failed),
+                recording_name="failed constructor order",
+                frame_rate_hz=20.0,
+                poll_interval_ms=50,
+                parent=None,
+                initial_snapshot=failed,
+                initial_plot_update=failed_update,
+            )
+        assert events[-1][0] == "failed-apply"
+        assert events[-1][1] is failed
+        assert events[-1][2] is failed_update
+        assert sum(event[0] == "timer-start" for event in events) == timer_start_count
+        assert not hasattr(partial_window, "poll_timer")
+    finally:
+        partial_window.deleteLater()
+        QtCore.QCoreApplication.sendPostedEvents(
+            partial_window,
+            QtCore.QEvent.Type.DeferredDelete,
+        )
+        application.processEvents()
+
+
 def test_native_dashboard_consumes_frozen_snapshot_and_routes_controls(
     tmp_path, monkeypatch
 ):
@@ -221,7 +492,7 @@ def test_native_dashboard_consumes_frozen_snapshot_and_routes_controls(
         ),
     )
     QtWidgets = pytest.importorskip("PySide6.QtWidgets")
-    pytest.importorskip("pyqtgraph")
+    _install_offscreen_labelitem_fallback(monkeypatch)
 
     from src.replay_compare.coverage import CoverageSnapshot
     from src.replay_compare.ui import SUPPORTED_SPEEDS, create_dashboard
@@ -328,7 +599,10 @@ def test_native_dashboard_consumes_frozen_snapshot_and_routes_controls(
         assert window.rate_cards["radar_br"][0].text() == "--"
         assert "No breathing motion" in window.rate_cards["radar_br"][1].text()
         window.request_pause_or_resume()
-        window.set_speed(2.0)
+        speed_two_index = window.speed_selector.findData(2.0)
+        assert speed_two_index >= 0
+        window.speed_selector.setCurrentIndex(speed_two_index)
+        assert window.speed_selector.currentData() == 2.0
         window.request_restart()
         assert ("pause",) in adapter.calls
         assert ("speed", 2.0) in adapter.calls
@@ -336,6 +610,7 @@ def test_native_dashboard_consumes_frozen_snapshot_and_routes_controls(
         assert "waiting for clean shutdown" in window.control_status_label.text()
         assert window.restart_button.isEnabled() is False
         window.poll_once()
+        assert window.speed_selector.currentData() == 1.0
         assert "waiting for clean shutdown" in window.control_status_label.text()
         assert window.restart_button.isEnabled() is False
         assert window.pause_button.isEnabled() is False
@@ -389,7 +664,7 @@ def test_dashboard_preserves_one_frame_held_gap_between_sparse_polls(
         ),
     )
     QtWidgets = pytest.importorskip("PySide6.QtWidgets")
-    pytest.importorskip("pyqtgraph")
+    _install_offscreen_labelitem_fallback(monkeypatch)
 
     from src.replay_compare.coverage import CoverageSnapshot
     from src.replay_compare.ui import create_dashboard
@@ -522,7 +797,7 @@ def test_incremental_dashboard_rejects_prefix_forgery_before_any_ui_mutation(
 ):
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
     QtWidgets = pytest.importorskip("PySide6.QtWidgets")
-    pytest.importorskip("pyqtgraph")
+    _install_offscreen_labelitem_fallback(monkeypatch)
 
     from src.replay_compare.reference import ReferenceValue
     from src.replay_compare.ui import create_dashboard
@@ -536,6 +811,13 @@ def test_incremental_dashboard_rejects_prefix_forgery_before_any_ui_mutation(
         original_prefix = window._validated_trace_prefix
         original_identity = window._validated_trace_identity
         original_snapshot = window._snapshot
+        original_progress = (
+            window.progress_bar.minimum(),
+            window.progress_bar.maximum(),
+            window.progress_bar.value(),
+            window.progress_bar.text(),
+            window.progress_bar.accessibleDescription(),
+        )
         original_arrays = tuple(
             np.array(getattr(window, name), copy=True)
             for name in (
@@ -669,6 +951,13 @@ def test_incremental_dashboard_rejects_prefix_forgery_before_any_ui_mutation(
             assert window._validated_trace_prefix is original_prefix
             assert window._validated_trace_identity is original_identity
             assert window._snapshot is original_snapshot
+            assert (
+                window.progress_bar.minimum(),
+                window.progress_bar.maximum(),
+                window.progress_bar.value(),
+                window.progress_bar.text(),
+                window.progress_bar.accessibleDescription(),
+            ) == original_progress
             assert set(window._dirty_plot_chunks) == original_dirty
             assert window._last_plot_redraw_monotonic_s == original_redraw
             assert (
@@ -719,7 +1008,7 @@ def test_trace_free_compatibility_is_limited_to_zero_boundary_preparing_snapshot
 ):
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
     QtWidgets = pytest.importorskip("PySide6.QtWidgets")
-    pytest.importorskip("pyqtgraph")
+    _install_offscreen_labelitem_fallback(monkeypatch)
 
     from src.replay_compare.ui import create_dashboard
 
@@ -759,13 +1048,337 @@ def _logical_chunk_curve(window, field):
     return np.concatenate(x_parts), np.concatenate(y_parts)
 
 
+def test_passive_progress_exact_range_reset_text_and_accessibility(monkeypatch):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    QtCore = pytest.importorskip("PySide6.QtCore")
+    QtWidgets = pytest.importorskip("PySide6.QtWidgets")
+    QtTest = pytest.importorskip("PySide6.QtTest")
+    _install_offscreen_labelitem_fallback(monkeypatch)
+
+    from src.replay_compare.ui import create_dashboard
+
+    adapter = _SnapshotAdapter(_playback_snapshot(0, total_frames=10, state="preparing"))
+    application = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    window = create_dashboard(adapter, recording_name="passive progress")
+    Progress = type(window.progress_bar)
+    progress = Progress()
+    changed = []
+    progress.valueChanged.connect(changed.append)
+    try:
+        assert (progress.minimum(), progress.maximum(), progress.value()) == (0, 100, -1)
+        assert progress.text() == ""
+        assert progress.accessibleName() == "Recording progress"
+        assert "not started" in progress.accessibleDescription()
+        assert progress.minimumSizeHint().width() > 0
+        assert progress.minimumSizeHint().height() > 0
+        assert progress.focusPolicy() == QtCore.Qt.FocusPolicy.NoFocus
+        assert progress.findChildren(QtCore.QTimer) == []
+
+        progress.setRange(10, 5)
+        assert (progress.minimum(), progress.maximum(), progress.value()) == (10, 10, 9)
+        progress.setValue(10)
+        assert progress.value() == 10
+        assert progress.text() == "100%"
+        assert "100%" in progress.accessibleDescription()
+        assert changed == [10]
+        progress.setValue(11)
+        assert progress.value() == 10
+        assert changed == [10]
+
+        progress.setMaximum(20)
+        assert (progress.minimum(), progress.maximum()) == (10, 20)
+        assert progress.text() == "0%"
+        progress.setMinimum(15)
+        assert progress.value() == 14
+        assert progress.text() == ""
+
+        int_min = -(2**31)
+        progress.setRange(int_min, int_min + 100)
+        progress.reset()
+        assert progress.value() == int_min
+        assert progress.text() == ""
+        progress.setValue(int_min + 50)
+        assert progress.text() == "50%"
+        progress.reset()
+        assert progress.value() == int_min
+        assert "not started" in progress.accessibleDescription()
+
+        progress.setRange(0, 0)
+        progress.setValue(999)
+        assert progress.value() == 999
+        assert progress.text() == ""
+        assert "indeterminate" in progress.accessibleDescription()
+
+        progress.setRange(0, 100)
+        assert progress.value() == -1
+        progress.setRange(0, 1205)
+        assert progress.value() == -1
+        progress.setValue(1205)
+        assert progress.text() == "100%"
+        assert "value 1205 of 1205" in progress.accessibleDescription()
+
+        progress.resize(100, 24)
+        progress.show()
+        application.processEvents()
+        QtTest.QTest.mouseClick(
+            progress,
+            QtCore.Qt.MouseButton.LeftButton,
+            pos=progress.rect().center(),
+        )
+        assert progress.value() == 1205
+    finally:
+        progress.close()
+        window.close()
+        application.processEvents()
+
+
+def test_passive_progress_setters_only_queue_deferred_coalescible_updates(
+    monkeypatch,
+):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    QtWidgets = pytest.importorskip("PySide6.QtWidgets")
+    _install_offscreen_labelitem_fallback(monkeypatch)
+
+    from src.replay_compare.ui import create_dashboard
+
+    adapter = _SnapshotAdapter(_playback_snapshot(0, total_frames=10, state="preparing"))
+    application = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    window = create_dashboard(adapter, recording_name="deferred progress")
+    Progress = type(window.progress_bar)
+    progress = Progress()
+    updates = []
+    monkeypatch.setattr(progress, "update", lambda *args: updates.append(args))
+    monkeypatch.setattr(
+        progress,
+        "repaint",
+        lambda *_args: pytest.fail("passive progress must never repaint synchronously"),
+    )
+    try:
+        progress.setRange(0, 10)
+        progress.setValue(4)
+        assert (progress.value(), progress.text()) == (4, "40%")
+        assert len(updates) == 2
+        progress.setRange(0, 10)
+        progress.setValue(4)
+        progress.setTextVisible(True)
+        assert len(updates) == 2
+        progress.flush_pending_update()
+        assert len(updates) == 3
+    finally:
+        progress.close()
+        window.close()
+        application.processEvents()
+
+
+def test_dashboard_capture_returns_detached_image_on_qt_thread_without_event_drain(
+    monkeypatch,
+):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    QtGui = pytest.importorskip("PySide6.QtGui")
+    QtWidgets = pytest.importorskip("PySide6.QtWidgets")
+    _install_offscreen_labelitem_fallback(monkeypatch)
+
+    from src.replay_compare.ui import create_dashboard
+
+    adapter = _SnapshotAdapter(_playback_snapshot(1, total_frames=10))
+    application = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    window = create_dashboard(adapter, recording_name="detached capture")
+    events = []
+
+    source_image = QtGui.QImage(2, 2, QtGui.QImage.Format.Format_ARGB32)
+    source_image.fill(QtGui.QColor("#c00000"))
+    original_color = source_image.pixelColor(0, 0)
+
+    class Pixmap:
+        def isNull(self):
+            return False
+
+        def toImage(self):
+            events.append("to-image")
+            return source_image
+
+    try:
+        with monkeypatch.context() as capture_monkeypatch:
+            capture_monkeypatch.setattr(
+                window,
+                "_flush_plots",
+                lambda *, force: events.append(("plots", force)),
+            )
+            capture_monkeypatch.setattr(
+                window.progress_bar,
+                "flush_pending_update",
+                lambda: events.append("progress"),
+            )
+            capture_monkeypatch.setattr(
+                window,
+                "grab",
+                lambda: (events.append("grab"), Pixmap())[1],
+            )
+            capture_monkeypatch.setattr(
+                QtWidgets.QApplication,
+                "processEvents",
+                lambda *_args: pytest.fail("capture must not drain the event queue"),
+            )
+            captured = window.capture_screenshot_image()
+            assert captured is not source_image
+            assert captured.sizeInBytes() == source_image.sizeInBytes()
+            assert captured.pixelColor(0, 0) == original_color
+            source_image.fill(QtGui.QColor("#0000c0"))
+            assert source_image.pixelColor(0, 0) != original_color
+            assert captured.pixelColor(0, 0) == original_color
+            assert events == [("plots", True), "progress", "grab", "to-image"]
+    finally:
+        window.close()
+        application.processEvents()
+
+
+def test_repeated_snapshot_suppresses_equal_widget_writes_but_changes_still_apply(
+    monkeypatch,
+):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    QtWidgets = pytest.importorskip("PySide6.QtWidgets")
+    _install_offscreen_labelitem_fallback(monkeypatch)
+
+    from dataclasses import replace
+
+    from src.replay_compare.ui import create_dashboard
+
+    initial = _playback_snapshot(1, total_frames=10)
+    adapter = _SnapshotAdapter(initial)
+    application = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    window = create_dashboard(adapter, recording_name="setter suppression")
+    counts = {"text": 0, "style": 0, "enabled": 0, "hr_x": 0, "br_x": 0}
+
+    def instrument(widget, method_name, key):
+        original = getattr(widget, method_name)
+
+        def wrapped(*args, **kwargs):
+            counts[key] += 1
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(widget, method_name, wrapped)
+
+    instrument(window.state_label, "setText", "text")
+    instrument(window.rate_cards["radar_hr"][0], "setStyleSheet", "style")
+    instrument(window.pause_button, "setEnabled", "enabled")
+    instrument(window.hr_plot, "setXRange", "hr_x")
+    instrument(window.br_plot, "setXRange", "br_x")
+    try:
+        window.poll_once()
+        assert counts == {"text": 0, "style": 0, "enabled": 0, "hr_x": 0, "br_x": 0}
+
+        changed_trace = tuple(
+            _display_trace(boundary, generation=8)
+            for boundary in range(1, 601)
+        ) + (_display_trace(601, generation=8, hr_state="held"),)
+        changed = _playback_snapshot(
+            601,
+            generation=8,
+            total_frames=605,
+            state="completed",
+            trace_samples=changed_trace,
+        )
+        changed = replace(
+            changed,
+            hr=replace(changed.hr, state="held", reason="held"),
+            coverage=replace(
+                changed.coverage,
+                hr_accepted_frames=600,
+                both_frames=600,
+                hr_state="held",
+            ),
+        )
+        adapter.latest_snapshot = changed
+        window.poll_once()
+
+        assert counts["text"] > 0
+        assert counts["style"] > 0
+        assert counts["enabled"] > 0
+        assert counts["hr_x"] > 0
+        assert counts["br_x"] > 0
+        assert window.state_label.text().startswith("State: Complete")
+        assert window.pause_button.isEnabled() is False
+    finally:
+        window.close()
+        application.processEvents()
+
+
+@pytest.mark.parametrize("null_stage", ["pixmap", "image"])
+def test_dashboard_capture_rejects_null_pixels(monkeypatch, null_stage):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    QtWidgets = pytest.importorskip("PySide6.QtWidgets")
+    _install_offscreen_labelitem_fallback(monkeypatch)
+
+    from src.replay_compare.ui import create_dashboard
+
+    adapter = _SnapshotAdapter(_playback_snapshot(1, total_frames=10))
+    application = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    window = create_dashboard(adapter, recording_name="null capture")
+
+    class Image:
+        def copy(self):
+            return self
+
+        def isNull(self):
+            return null_stage == "image"
+
+    class Pixmap:
+        def isNull(self):
+            return null_stage == "pixmap"
+
+        def toImage(self):
+            return Image()
+
+    monkeypatch.setattr(window, "grab", lambda: Pixmap())
+    try:
+        with pytest.raises(RuntimeError, match="null (pixmap|image)"):
+            window.capture_screenshot_image()
+    finally:
+        window.close()
+        application.processEvents()
+
+
+def test_dashboard_capture_rejects_non_qt_thread_before_grab(monkeypatch):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    QtWidgets = pytest.importorskip("PySide6.QtWidgets")
+    _install_offscreen_labelitem_fallback(monkeypatch)
+
+    from src.replay_compare.ui import create_dashboard
+
+    adapter = _SnapshotAdapter(_playback_snapshot(1, total_frames=10))
+    application = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    window = create_dashboard(adapter, recording_name="thread capture")
+    monkeypatch.setattr(
+        window, "grab", lambda: pytest.fail("wrong-thread capture must fail before grab")
+    )
+    errors = []
+
+    def invoke():
+        try:
+            window.capture_screenshot_image()
+        except BaseException as exc:
+            errors.append(exc)
+
+    thread = threading.Thread(target=invoke)
+    thread.start()
+    thread.join(timeout=3.0)
+    try:
+        assert thread.is_alive() is False
+        assert len(errors) == 1
+        assert isinstance(errors[0], RuntimeError)
+        assert "Qt application thread" in str(errors[0])
+    finally:
+        window.close()
+        application.processEvents()
+
+
 @pytest.mark.parametrize("mode", ["baseline", "motion"])
 def test_incremental_chunks_equal_lossless_golden_series_after_sparse_poll(
     monkeypatch, mode
 ):
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
     QtWidgets = pytest.importorskip("PySide6.QtWidgets")
-    pytest.importorskip("pyqtgraph")
+    _install_offscreen_labelitem_fallback(monkeypatch)
 
     from src.replay_compare.ui import TraceSample, create_dashboard, visible_plot_series
 
@@ -874,7 +1487,7 @@ def test_incremental_chunks_equal_lossless_golden_series_after_sparse_poll(
 def test_plot_restart_resets_prefix_buffers_and_removes_old_chunk_curves(monkeypatch):
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
     QtWidgets = pytest.importorskip("PySide6.QtWidgets")
-    pytest.importorskip("pyqtgraph")
+    _install_offscreen_labelitem_fallback(monkeypatch)
 
     from src.replay_compare.ui import create_dashboard
 
@@ -933,23 +1546,31 @@ def test_plot_restart_resets_prefix_buffers_and_removes_old_chunk_curves(monkeyp
         application.processEvents()
 
 
-def test_plot_redraw_cadence_and_pause_eof_screenshot_force_pending_flushes(
-    tmp_path, monkeypatch
-):
+def test_plot_redraw_cadence_and_pause_eof_screenshot_force_pending_flushes(monkeypatch):
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
     QtWidgets = pytest.importorskip("PySide6.QtWidgets")
-    pytest.importorskip("pyqtgraph")
+    _install_offscreen_labelitem_fallback(monkeypatch)
 
     import src.replay_compare.ui as ui
 
     now = [10.0]
-    monkeypatch.setattr(ui.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(ui, "time", SimpleNamespace(monotonic=lambda: now[0]))
     traces = tuple(_display_trace(index) for index in range(1, 5))
     adapter = _SnapshotAdapter(
         _playback_snapshot(1, total_frames=10, trace_samples=traces[:1])
     )
     application = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     window = ui.create_dashboard(adapter, recording_name="forced flush")
+    progress_flushes = []
+    original_progress_flush = window.progress_bar.flush_pending_update
+
+    def record_progress_flush():
+        progress_flushes.append(window._snapshot.playback_state)
+        original_progress_flush()
+
+    monkeypatch.setattr(
+        window.progress_bar, "flush_pending_update", record_progress_flush
+    )
     try:
         window.show()
         application.processEvents()
@@ -963,8 +1584,11 @@ def test_plot_redraw_cadence_and_pause_eof_screenshot_force_pending_flushes(
         assert window._dirty_plot_chunks == {0}
         assert len(window.hr_radar_curve.getData()[0]) == 1
 
-        destination = window.save_screenshot(tmp_path / "forced.png")
-        assert destination.is_file() and destination.stat().st_size > 0
+        captured = window.capture_screenshot_image()
+        assert not captured.isNull()
+        assert captured.width() > 0
+        assert captured.height() > 0
+        assert progress_flushes == ["running"]
         assert window._dirty_plot_chunks == set()
         assert len(window.hr_radar_curve.getData()[0]) == 2
 
@@ -973,6 +1597,7 @@ def test_plot_redraw_cadence_and_pause_eof_screenshot_force_pending_flushes(
             3, total_frames=10, trace_samples=traces[:3]
         )
         window.poll_once()
+        assert progress_flushes == ["running"]
         assert window._dirty_plot_chunks == {0}
         adapter.latest_snapshot = _playback_snapshot(
             3,
@@ -981,6 +1606,7 @@ def test_plot_redraw_cadence_and_pause_eof_screenshot_force_pending_flushes(
             trace_samples=traces[:3],
         )
         window.poll_once()
+        assert progress_flushes[-1] == "paused"
         assert window._dirty_plot_chunks == set()
         assert len(window.hr_radar_curve.getData()[0]) == 3
 
@@ -997,6 +1623,7 @@ def test_plot_redraw_cadence_and_pause_eof_screenshot_force_pending_flushes(
             trace_samples=traces,
         )
         window.poll_once()
+        assert progress_flushes[-1] == "completed"
         assert window._dirty_plot_chunks == set()
         assert len(window.hr_radar_curve.getData()[0]) == 4
     finally:
@@ -1015,6 +1642,11 @@ def test_run_dashboard_owned_loop_waits_for_clean_finalized_shutdown(monkeypatch
         clean_shutdown = False
 
         def __init__(self):
+            self.latest_snapshot = _playback_snapshot(
+                0,
+                total_frames=10,
+                state="preparing",
+            )
             self.finalizer = threading.Thread(target=self._finalize, daemon=True)
             self.finalizer.start()
 
@@ -1043,6 +1675,9 @@ def test_run_dashboard_owned_loop_waits_for_clean_finalized_shutdown(monkeypatch
         QApplication = FakeApplication
 
     class FakeWindow:
+        def __init__(self, **_kwargs):
+            pass
+
         def show(self):
             pass
 
@@ -1051,7 +1686,7 @@ def test_run_dashboard_owned_loop_waits_for_clean_finalized_shutdown(monkeypatch
         "_load_gui_dependencies",
         lambda: (object(), object(), FakeQtWidgets, object()),
     )
-    monkeypatch.setattr(ui, "create_dashboard", lambda *_args, **_kwargs: FakeWindow())
+    monkeypatch.setattr(ui, "_load_dashboard_type", lambda: FakeWindow)
 
     adapter = Adapter()
     outcome = []

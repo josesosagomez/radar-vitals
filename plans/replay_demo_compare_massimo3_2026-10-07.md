@@ -1073,3 +1073,135 @@ and https://github.com/python/cpython/blob/v3.11.11/Lib/multiprocessing/shared_m
 (Windows create versus attach size); https://docs.python.org/3.11/library/mmap.html
 (PAGESIZE); https://learn.microsoft.com/en-us/windows/win32/api/memoryapi/nf-memoryapi-virtualquery
 (page-region capacity).
+
+### 7.3 Observed native painting and screenshot correction (2026-10-11)
+
+The committed process/UI implementation passes 511 focused and 4142 complete
+tests, but native timing is not accepted. Main-thread profiling attributes
+0.399–0.471 s to QProgressBar.setValue; QApplication.notify observes whole-window
+UpdateRequest spans of 0.314–0.516 s at DPR 2.5. Identical-setter suppression alone
+skipped 22857 calls but still produced UI 0.454 s and Qt 0.750 s maxima. Preserve
+all negative runs. No scientific, scheduling, reference, source, DPI, affinity,
+priority, timing-limit or measurement-exclusion changes are authorized.
+
+Replace only the progress presentation with a local passive QWidget using
+deferred update(), never repaint(). Keep immediate logical range/value getters,
+QProgressBar-compatible range/reset/out-of-range rules, percent text and
+accessible name/value description; no keyboard or mouse seeking. Paint only
+border, fill and text. Multiple pending updates coalesce; no extra worker or
+animation. Force current progress and dirty plots at pause/terminal/screenshot.
+Memoize equal text/style/enabled/range and plot X-range setters with a small
+owned cache; every changed displayed value remains current at existing 50 ms
+polling, plots retain their existing 100 ms maximum redraw cadence. Validation
+still precedes all mutation; retained prefixes, causal gaps and restart cleanup
+are unchanged. Actual native timing must establish this correction, not theory.
+
+Screenshot profiling observes 0.246–0.323 s total, including PNG encoding
+0.205–0.214 s. Add capture_screenshot_image(): Qt thread forces dirty plots,
+grabs the real widget, converts to QImage and copies it into detached ownership;
+reject null images. Do not drain processEvents() or pass QPixmap/QWidget to a
+worker. Existing synchronous save_screenshot remains available outside heartbeat
+and uses the same capture API. The acceptance driver owns at most TWO detached
+images with contained destinations: during and final, with duplicate/full
+admission explicitly rejected. Destination containment, nonexistence and admission preflight
+precede pixel capture; completion hashes the actual saved PNG bytes.
+The during request captures pixels without PNG
+encoding; final capture occurs after the event loop and both timers stop. Encode
+the two images sequentially on the same thread after replay shutdown, then
+release them. This requires no additional thread or worker lifecycle. Persist
+capture/encode/completion status, timings, dimensions and hashes; screenshots
+count only after durable successful completion. Encoding failure is retained
+and fails acceptance without erasing replay evidence. Include retained-image
+memory in actual measurements. Tests establish Qt-thread ownership, detached
+pixels, bounded admission, failures and no artifact claims before completion;
+actual screenshots must retain dimensions and visible states. Capture time
+remains inside measured playback heartbeat; only post-loop encoding is outside
+the event loop because playback has ended, with explicit separate timings.
+
+Primary owns driver/plan/log/integration; python_expert owns ui.py only;
+test_engineer owns meaningful UI/writer regressions only. Reviewers remain
+read-only and independent. Review this amendment before tracked code changes;
+then focused and full serial tests, separate reviewed commits/push/read-back,
+clean-source native short/full/speed/control runs and artifact verification.
+The diagnostic script may probe this design before production implementation,
+but runtime interventions never count as production acceptance.
+
+Primary API basis (Qt 6.7.3):
+https://github.com/qt/qtbase/blob/v6.7.3/src/widgets/widgets/qprogressbar.cpp
+https://github.com/qt/qtbase/blob/v6.7.3/src/widgets/kernel/qwidgetrepaintmanager.cpp
+https://github.com/qt/qtbase/blob/v6.7.3/src/widgets/kernel/qwidget.cpp
+https://doc.qt.io/archives/qt-6.7/qimage.html
+https://doc.qt.io/archives/qt-6.7/thread-basics.html
+https://doc.qt.io/archives/qt-6.7/qcoreapplication.html
+
+Independent plan verdict: READY WITH MINOR CHANGES, incorporated before build.
+Test exact range clamping (maximum below minimum), out-of-range ignored values,
+reset sentinel including INT_MIN, range-change reset, 0/0 indeterminate state
+without animation, immediate logical text/value getters and terminal percentage.
+Refresh accessibleDescription synchronously; keep a nonempty visible geometry.
+Use live widget getters for equal-setter suppression, or route ALL writes
+including command handlers through one coherent cache updated only on success.
+Prove a command then poll restores the correct snapshot-derived state.
+Screenshot slots are exactly during/final: unknown or duplicate admission fails
+before GUI work. Assert widget/application thread ownership; record detached
+image width/height, DPR, format and sizeInBytes. Stop BOTH timers before final
+capture. Post-loop saves reopen as non-null PNG with matching dimensions before
+path/completion claims; hash the actual bytes. On either failure retain the error,
+preserve scientific evidence, release both images and fail acceptance. Prove
+pixel detachment, no pre-encode artifact claims, two-slot bounded memory and
+failure cleanup. Measure retained bytes/RSS honestly. No gate is relaxed.
+
+### 7.4 Observed Qt constructor failure and initial snapshot preflight (2026-10-11)
+
+All 527 focused assertions repeatedly pass but the process crashes in pinned
+Qt6Core at shutdown; isolated UI and the complete 4158-test suite exit zero.
+Watchdog removal, one foreign-thread exclusion and a scoped capture cleanup do
+not resolve the crash. An application-wide widget-cleanup fixture is rejected:
+topLevelWidgets also includes internal Qt/pyqtgraph-owned popup/menu frames.
+It is removed exactly, rather than treating broad cleanup as valid ownership.
+The all-527 selection minus just three constructor-compatibility cases exits
+zero (524 passed). A narrowed predecessor pair plus those three cases also
+exits zero (167 passed), so the complete native crash cause is not claimed.
+
+Actual source inspection establishes a startup lifetime defect independently:
+the current constructor allocates Qt/pyqtgraph widgets, connects and starts a
+parented timer, then validates its first snapshot. Invalid initial snapshots
+raise without returning an owned window for cleanup. Correct this fail-late
+boundary by validating before any GUI dependency load/widget allocation.
+Both public entry points, create_dashboard and run_dashboard, invoke one private
+pure startup preflight BEFORE any GUI dependency/class load or QApplication
+construction. Read adapter.latest_snapshot exactly once and return that exact
+pinned immutable snapshot together with its immutable _ValidatedPlotUpdate.
+Extract one pure validator parameterized by frame rate and prior generation,
+capacity, retained prefix and identity; initial preflight uses empty prior state
+and subsequent polls use retained state. Share the existing scalar/nested
+snapshot and full trace validation, including exact trace
+length/start/end/contiguous boundaries, frozen sample types and generation;
+do not introduce a weaker or divergent initial validator. Later polls keep the
+same retained object-identity prefix proof, tail validation and atomic mutation.
+
+Both entry points consume the same preflight pair through private construction.
+run_dashboard must not call the public factory and trigger a second read. Pass
+the exact pinned snapshot AND precomputed immutable update to the private
+dashboard constructor, which commits/renders them without adapter reread or
+revalidation and starts its timer only after successful initial apply. The first
+display must not read a different snapshot after preflight. Subsequent polling
+reads fresh controller snapshots
+normally. No new QObject cleanup heuristic, process-global Qt ownership change,
+DSP/source/reference/coverage change, threshold relaxation or interval exclusion.
+Keep passive progress, bounded screenshots and all preceding safeguards.
+
+Primary owns this amendment, sequencing and verification; python_expert owns
+only ui.py; test_engineer owns only test_replay_compare_ui.py; plan and code
+reviewers remain independent/read-only. Review this amendment before edits.
+Tests exercise BOTH create_dashboard and run_dashboard: invalid initial
+scalar/trace snapshots never load GUI/class/create QApplication or widgets;
+actual rejected creation preserves Qt top-level identities. For both APIs an
+advancing adapter proves exactly one initial read and identical snapshot/update
+objects reaching initial rendering. Preserve owned event-loop shutdown tests.
+Prove the timer starts only
+after successful initial apply, and unchanged later validation/prefix/gaps.
+Rerun every focused case together and the complete isolated non-real-data suite
+with clean process exits. Retain all negative diagnostics; only actual native
+clean-source short/full/speed/control/refusal/artifact/screenshot verification
+can complete delivery. A static startup correction alone is not native acceptance.

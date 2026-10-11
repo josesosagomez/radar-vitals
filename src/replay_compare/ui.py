@@ -249,12 +249,10 @@ def create_dashboard(
 ) -> Any:
     """Create and return the native ``QMainWindow`` without starting an event loop."""
 
-    if not recording_name:
-        raise ValueError("recording_name is required")
-    if frame_rate_hz != FRAME_RATE_HZ:
-        raise ValueError("the replay dashboard requires the recorded 20 Hz frame rate")
-    if type(poll_interval_ms) is not int or not 1 <= poll_interval_ms <= 250:
-        raise ValueError("poll_interval_ms must be an exact integer in [1, 250]")
+    _validate_dashboard_arguments(recording_name, frame_rate_hz, poll_interval_ms)
+    initial_snapshot, initial_plot_update = _validate_initial_snapshot(
+        adapter, frame_rate_hz=frame_rate_hz
+    )
     dashboard_class = _load_dashboard_type()
     return dashboard_class(
         adapter=adapter,
@@ -262,6 +260,8 @@ def create_dashboard(
         frame_rate_hz=frame_rate_hz,
         poll_interval_ms=poll_interval_ms,
         parent=parent,
+        initial_snapshot=initial_snapshot,
+        initial_plot_update=initial_plot_update,
     )
 
 
@@ -279,17 +279,25 @@ def run_dashboard(
     its event loop finishes.
     """
 
+    _validate_dashboard_arguments(recording_name, frame_rate_hz, poll_interval_ms)
+    initial_snapshot, initial_plot_update = _validate_initial_snapshot(
+        adapter, frame_rate_hz=frame_rate_hz
+    )
     QtCore, QtGui, QtWidgets, pg = _load_gui_dependencies()
     del QtCore, QtGui, pg
     application = QtWidgets.QApplication.instance()
     owns_application = application is None
     if application is None:
         application = QtWidgets.QApplication([])
-    window = create_dashboard(
-        adapter,
+    dashboard_class = _load_dashboard_type()
+    window = dashboard_class(
+        adapter=adapter,
         recording_name=recording_name,
         frame_rate_hz=frame_rate_hz,
         poll_interval_ms=poll_interval_ms,
+        parent=None,
+        initial_snapshot=initial_snapshot,
+        initial_plot_update=initial_plot_update,
     )
     window.show()
     if not owns_application:
@@ -307,6 +315,36 @@ def run_dashboard(
     if getattr(adapter, "clean_shutdown", False) is not True:
         raise RuntimeError("replay did not complete a clean finalized shutdown")
     return exit_code
+
+
+def _validate_dashboard_arguments(
+    recording_name: str, frame_rate_hz: float, poll_interval_ms: int
+) -> None:
+    """Validate public dashboard arguments without loading GUI dependencies."""
+
+    if not recording_name:
+        raise ValueError("recording_name is required")
+    if frame_rate_hz != FRAME_RATE_HZ:
+        raise ValueError("the replay dashboard requires the recorded 20 Hz frame rate")
+    if type(poll_interval_ms) is not int or not 1 <= poll_interval_ms <= 250:
+        raise ValueError("poll_interval_ms must be an exact integer in [1, 250]")
+
+
+def _validate_initial_snapshot(
+    adapter: ReplayApplicationAdapter, *, frame_rate_hz: float
+) -> tuple[Any, _ValidatedPlotUpdate]:
+    """Read and fully validate the exact snapshot used for initial rendering."""
+
+    initial_snapshot = adapter.latest_snapshot
+    initial_plot_update = _validate_snapshot_update(
+        initial_snapshot,
+        frame_rate_hz=frame_rate_hz,
+        prior_generation=None,
+        prior_capacity=0,
+        retained_prefix=(),
+        retained_identity=(),
+    )
+    return initial_snapshot, initial_plot_update
 
 
 def _load_gui_dependencies() -> tuple[Any, Any, Any, Any]:
@@ -328,6 +366,176 @@ def _load_dashboard_type() -> type[Any]:
 
     QtCore, QtGui, QtWidgets, pg = _load_gui_dependencies()
 
+    class PassiveProgressBar(QtWidgets.QWidget):
+        """Read-only progress presentation with deferred, coalesced painting.
+
+        The logical range and value follow QProgressBar semantics, including
+        its reset sentinel and special 0/0 indeterminate range. Setters only
+        request a future paint; this widget never starts an animation or calls
+        ``repaint()`` synchronously.
+        """
+
+        _INT_MIN = -(2**31)
+        valueChanged = QtCore.Signal(int)
+
+        def __init__(self, parent: Any = None):
+            super().__init__(parent)
+            self._minimum = 0
+            self._maximum = 100
+            self._value = -1
+            self._text_visible = True
+            self.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
+            self.setSizePolicy(
+                QtWidgets.QSizePolicy.Policy.Expanding,
+                QtWidgets.QSizePolicy.Policy.Fixed,
+            )
+            self.setMinimumSize(40, 24)
+            self.setMaximumHeight(24)
+            self.setAttribute(QtCore.Qt.WidgetAttribute.WA_OpaquePaintEvent, True)
+            self.setAccessibleName("Recording progress")
+            self._refresh_accessible_description()
+
+        def minimum(self) -> int:
+            return self._minimum
+
+        def maximum(self) -> int:
+            return self._maximum
+
+        def value(self) -> int:
+            return self._value
+
+        def isTextVisible(self) -> bool:  # noqa: N802 - Qt-compatible API
+            return self._text_visible
+
+        def setTextVisible(self, visible: bool) -> None:  # noqa: N802
+            visible = bool(visible)
+            if visible == self._text_visible:
+                return
+            self._text_visible = visible
+            self.update(self.rect())
+
+        def reset(self) -> None:
+            reset_value = (
+                self._INT_MIN
+                if self._minimum == self._INT_MIN
+                else self._minimum - 1
+            )
+            self._value = reset_value
+            self._refresh_accessible_description()
+            self.update(self.rect())
+
+        def setRange(self, minimum: int, maximum: int) -> None:  # noqa: N802
+            minimum = int(minimum)
+            maximum = max(minimum, int(maximum))
+            if (minimum, maximum) == (self._minimum, self._maximum):
+                return
+            self._minimum = minimum
+            self._maximum = maximum
+            if self._value < minimum - 1 or self._value > maximum:
+                self._value = (
+                    self._INT_MIN if minimum == self._INT_MIN else minimum - 1
+                )
+            self._refresh_accessible_description()
+            self.update(self.rect())
+
+        def setMinimum(self, minimum: int) -> None:  # noqa: N802
+            minimum = int(minimum)
+            self.setRange(minimum, max(self._maximum, minimum))
+
+        def setMaximum(self, maximum: int) -> None:  # noqa: N802
+            maximum = int(maximum)
+            self.setRange(min(self._minimum, maximum), maximum)
+
+        def setValue(self, value: int) -> None:  # noqa: N802
+            value = int(value)
+            if self._value == value:
+                return
+            outside_range = value < self._minimum or value > self._maximum
+            if outside_range and (self._minimum, self._maximum) != (0, 0):
+                return
+            self._value = value
+            self.valueChanged.emit(value)
+            self._refresh_accessible_description()
+            self.update(self.rect())
+
+        def text(self) -> str:
+            if (
+                (self._minimum, self._maximum) == (0, 0)
+                or self._value < self._minimum
+                or (
+                    self._minimum == self._INT_MIN
+                    and self._value == self._INT_MIN
+                )
+            ):
+                return ""
+            total_steps = self._maximum - self._minimum
+            if total_steps == 0:
+                return "100%"
+            percentage = int(
+                (self._value - self._minimum) * 100.0 / total_steps
+            )
+            return f"{percentage}%"
+
+        def flush_pending_update(self) -> None:
+            """Ensure the current logical state has a queued paint request."""
+
+            self.update(self.rect())
+
+        def sizeHint(self) -> Any:  # noqa: N802 - Qt virtual API
+            return QtCore.QSize(100, 24)
+
+        def minimumSizeHint(self) -> Any:  # noqa: N802 - Qt virtual API
+            return QtCore.QSize(40, 24)
+
+        def paintEvent(self, event: Any) -> None:  # noqa: N802 - Qt virtual API
+            painter = QtGui.QPainter(self)
+            background = QtGui.QColor("#141922")
+            border = QtGui.QColor("#46536a")
+            text_color = QtGui.QColor("#e8edf4")
+            fill_color = QtGui.QColor(RADAR_TEAL)
+            try:
+                # WA_OpaquePaintEvent is valid because every exposed pixel is
+                # filled before the current border, fill, and text are drawn.
+                painter.fillRect(event.rect(), background)
+                bounds = QtCore.QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+                painter.setPen(QtGui.QPen(border, 1.0))
+                painter.setBrush(background)
+                painter.drawRoundedRect(bounds, 3.0, 3.0)
+
+                if self._maximum > self._minimum and self._value >= self._minimum:
+                    fraction = (self._value - self._minimum) / (
+                        self._maximum - self._minimum
+                    )
+                    if fraction > 0.0:
+                        inner = bounds.adjusted(1.0, 1.0, -1.0, -1.0)
+                        inner.setWidth(inner.width() * min(1.0, fraction))
+                        painter.setPen(QtCore.Qt.PenStyle.NoPen)
+                        painter.setBrush(fill_color)
+                        painter.drawRoundedRect(inner, 2.0, 2.0)
+
+                label = self.text()
+                if self._text_visible and label:
+                    painter.setPen(text_color)
+                    painter.drawText(
+                        self.rect(), QtCore.Qt.AlignmentFlag.AlignCenter, label
+                    )
+            finally:
+                painter.end()
+
+        def _refresh_accessible_description(self) -> None:
+            label = self.text()
+            if label:
+                description = (
+                    f"Playback progress {label}; value {self._value} of "
+                    f"{self._maximum}."
+                )
+            elif (self._minimum, self._maximum) == (0, 0):
+                description = "Playback progress is indeterminate."
+            else:
+                description = "Playback progress has not started."
+            if self.accessibleDescription() != description:
+                self.setAccessibleDescription(description)
+
     class ReplayDashboard(QtWidgets.QMainWindow):
         """Read-only rendering of controller-owned immutable replay snapshots."""
 
@@ -339,6 +547,8 @@ def _load_dashboard_type() -> type[Any]:
             frame_rate_hz: float,
             poll_interval_ms: int,
             parent: Any,
+            initial_snapshot: Any,
+            initial_plot_update: _ValidatedPlotUpdate,
         ):
             super().__init__(parent)
             self.adapter = adapter
@@ -357,6 +567,7 @@ def _load_dashboard_type() -> type[Any]:
             self._plot_chunks: list[_PlotChunk] = []
             self._dirty_plot_chunks: set[int] = set()
             self._last_plot_redraw_monotonic_s: float | None = None
+            self._plot_x_ranges: dict[int, tuple[float, float]] = {}
             self.hr_radar_curve: Any = None
             self.hr_reference_curve: Any = None
             self.br_radar_curve: Any = None
@@ -368,11 +579,11 @@ def _load_dashboard_type() -> type[Any]:
             self.setWindowTitle("Recorded radar / Masimo comparison")
             self.resize(1380, 900)
             self._build_ui()
+            self._apply_validated_snapshot(initial_snapshot, initial_plot_update)
             self.poll_timer = QtCore.QTimer(self)
             self.poll_timer.setInterval(poll_interval_ms)
             self.poll_timer.timeout.connect(self.poll_once)
             self.poll_timer.start()
-            self.poll_once()
 
         def _build_ui(self) -> None:
             central = QtWidgets.QWidget(self)
@@ -486,7 +697,7 @@ def _load_dashboard_type() -> type[Any]:
             for speed in SUPPORTED_SPEEDS:
                 self.speed_selector.addItem(f"{speed:g}x", speed)
             self.speed_selector.currentIndexChanged.connect(self._speed_changed)
-            self.progress_bar = QtWidgets.QProgressBar()
+            self.progress_bar = PassiveProgressBar()
             self.progress_bar.setObjectName("recordingProgress")
             self.progress_bar.setTextVisible(True)
             self.progress_bar.setRange(0, 1)
@@ -554,11 +765,42 @@ def _load_dashboard_type() -> type[Any]:
             plot.setBackground("#11161e")
             return plot
 
+        @staticmethod
+        def _set_text(widget: Any, text: str) -> None:
+            if widget.text() != text:
+                widget.setText(text)
+
+        @staticmethod
+        def _set_style(widget: Any, style_sheet: str) -> None:
+            if widget.styleSheet() != style_sheet:
+                widget.setStyleSheet(style_sheet)
+
+        @staticmethod
+        def _set_enabled(widget: Any, enabled: bool) -> None:
+            if widget.isEnabled() != enabled:
+                widget.setEnabled(enabled)
+
+        def _set_plot_x_range(
+            self, plot: Any, minimum_s: float, maximum_s: float
+        ) -> None:
+            requested = (minimum_s, maximum_s)
+            key = id(plot)
+            if self._plot_x_ranges.get(key) == requested:
+                return
+            plot.setXRange(minimum_s, maximum_s, padding=0.0)
+            self._plot_x_ranges[key] = requested
+
         @QtCore.Slot()
         def poll_once(self) -> None:
             snapshot = self.adapter.latest_snapshot
-            _require_immutable_snapshot(snapshot)
             plot_update = self._validate_plot_update(snapshot)
+
+            self._apply_validated_snapshot(snapshot, plot_update)
+
+        def _apply_validated_snapshot(
+            self, snapshot: Any, plot_update: _ValidatedPlotUpdate
+        ) -> None:
+            """Commit and render one snapshot after complete pure validation."""
 
             # All snapshot and trace validation completes before any dashboard
             # state, labels, buffers, or curves are changed.
@@ -591,17 +833,22 @@ def _load_dashboard_type() -> type[Any]:
             self._update_status(snapshot)
             self._update_controls(snapshot)
             force_plot_flush = snapshot.playback_state in {
-                "paused", "complete", "completed", "stopped", "failed"
+                "pausing", "paused", "complete", "completed", "stopped", "failed"
             }
             self._flush_plots(force=force_plot_flush)
+            if force_plot_flush:
+                self.progress_bar.flush_pending_update()
 
         def _update_header(self, snapshot: Any) -> None:
             state_text = _state_label(snapshot.playback_state)
-            self.mode_label.setText(f"Mode: {snapshot.mode}")
-            self.state_label.setText(f"State: {state_text} | {snapshot.speed:g}x")
+            self._set_text(self.mode_label, f"Mode: {snapshot.mode}")
+            self._set_text(
+                self.state_label, f"State: {state_text} | {snapshot.speed:g}x"
+            )
             elapsed_s = snapshot.processed_boundary / self.frame_rate_hz
             total_s = snapshot.total_frames / self.frame_rate_hz
-            self.time_label.setText(
+            self._set_text(
+                self.time_label,
                 f"{_format_duration(elapsed_s)} / {_format_duration(total_s)}"
             )
             alignment_warning = (
@@ -611,7 +858,10 @@ def _load_dashboard_type() -> type[Any]:
             warnings = tuple(str(item) for item in snapshot.warning_messages if str(item))
             if alignment_warning not in warnings:
                 warnings = (alignment_warning, *warnings)
-            self.warning_label.setText("\n".join(f"Warning: {item}" for item in warnings))
+            self._set_text(
+                self.warning_label,
+                "\n".join(f"Warning: {item}" for item in warnings),
+            )
             self.warning_label.setVisible(bool(warnings))
 
         def _update_cards(self, snapshot: Any) -> None:
@@ -661,17 +911,20 @@ def _load_dashboard_type() -> type[Any]:
 
         def _set_card(self, key: str, presentation: ChannelPresentation) -> None:
             value_label, status_label = self.rate_cards[key]
-            value_label.setText(presentation.value_text)
-            status_label.setText(presentation.state_text)
-            value_label.setStyleSheet(f"QLabel {{ color: {presentation.color}; }}")
-            status_label.setStyleSheet(f"QLabel {{ color: {presentation.color}; }}")
+            style_sheet = f"QLabel {{ color: {presentation.color}; }}"
+            self._set_text(value_label, presentation.value_text)
+            self._set_text(status_label, presentation.state_text)
+            self._set_style(value_label, style_sheet)
+            self._set_style(status_label, style_sheet)
 
         def _update_summaries(self, snapshot: Any) -> None:
-            self.hr_summary_label.setText(
-                _format_reference_summary("HR", snapshot.hr_reference_summary)
+            self._set_text(
+                self.hr_summary_label,
+                _format_reference_summary("HR", snapshot.hr_reference_summary),
             )
-            self.br_summary_label.setText(
-                _format_reference_summary("BR", snapshot.br_reference_summary)
+            self._set_text(
+                self.br_summary_label,
+                _format_reference_summary("BR", snapshot.br_reference_summary),
             )
 
         def _update_coverage(self, snapshot: Any) -> None:
@@ -687,8 +940,9 @@ def _load_dashboard_type() -> type[Any]:
                 "rr": coverage.reference_rr_frames,
             }
             for key, numerator in numerators.items():
-                self.coverage_labels[key].setText(
-                    _format_coverage(numerator, denominator, self.frame_rate_hz)
+                self._set_text(
+                    self.coverage_labels[key],
+                    _format_coverage(numerator, denominator, self.frame_rate_hz),
                 )
 
         def _update_status(self, snapshot: Any) -> None:
@@ -697,16 +951,26 @@ def _load_dashboard_type() -> type[Any]:
                 "--" if _positive_finite(selected_range) is None else f"{selected_range:.3f} m"
             )
             bin_text = "--" if snapshot.selected_bin is None else str(snapshot.selected_bin)
-            self.status_values["stage"].setText(str(snapshot.accumulation_stage))
-            self.status_values["bin"].setText(f"{bin_text} / {range_text}")
-            self.status_values["recovery"].setText(str(snapshot.recovery_reason or "--"))
-            self.status_values["age"].setText(
-                _format_frames(snapshot.measurement_window_age_frames, self.frame_rate_hz)
+            self._set_text(
+                self.status_values["stage"], str(snapshot.accumulation_stage)
             )
-            self.status_values["lag"].setText(
-                _format_frames(snapshot.analysis_lag_frames, self.frame_rate_hz)
+            self._set_text(
+                self.status_values["bin"], f"{bin_text} / {range_text}"
             )
-            self.status_values["revision"].setText(str(snapshot.selection_revision))
+            self._set_text(
+                self.status_values["recovery"], str(snapshot.recovery_reason or "--")
+            )
+            self._set_text(
+                self.status_values["age"],
+                _format_frames(snapshot.measurement_window_age_frames, self.frame_rate_hz),
+            )
+            self._set_text(
+                self.status_values["lag"],
+                _format_frames(snapshot.analysis_lag_frames, self.frame_rate_hz),
+            )
+            self._set_text(
+                self.status_values["revision"], str(snapshot.selection_revision)
+            )
 
         def _update_controls(self, snapshot: Any) -> None:
             state = snapshot.playback_state
@@ -714,38 +978,39 @@ def _load_dashboard_type() -> type[Any]:
             restart_pending = self._restart_pending_generation is not None
             stopping = bool(getattr(self.adapter, "stopping", False))
             if state == "paused":
-                self.pause_button.setText("Resume")
-                self.pause_button.setEnabled(True)
+                pause_text = "Resume"
+                pause_enabled = True
             elif state == "pausing":
-                self.pause_button.setText("Pausing...")
-                self.pause_button.setEnabled(False)
+                pause_text = "Pausing..."
+                pause_enabled = False
             else:
-                self.pause_button.setText("Pause")
-                self.pause_button.setEnabled(not terminal)
+                pause_text = "Pause"
+                pause_enabled = not terminal
             if restart_pending or stopping:
-                self.pause_button.setText(
-                    "Stopping..." if stopping else "Restarting..."
-                )
-                self.pause_button.setEnabled(False)
-            self.stop_button.setEnabled(not terminal)
-            if restart_pending:
-                # The visible snapshot remains the preserved completed pass
-                # while the next generation is authorized and constructed.
-                # Stop must remain available during that transition.
-                self.stop_button.setEnabled(True)
-            if stopping:
-                self.stop_button.setEnabled(False)
-            self.restart_button.setEnabled(
+                pause_text = "Stopping..." if stopping else "Restarting..."
+                pause_enabled = False
+            self._set_text(self.pause_button, pause_text)
+            self._set_enabled(self.pause_button, pause_enabled)
+
+            # The preserved completed snapshot stays visible while a restart
+            # constructs the next generation, so Stop remains available.
+            stop_enabled = (not terminal or restart_pending) and not stopping
+            self._set_enabled(self.stop_button, stop_enabled)
+            self._set_enabled(
+                self.restart_button,
                 state != "pausing" and not restart_pending and not stopping
             )
 
             speed = validate_speed(snapshot.speed)
             speed_index = self.speed_selector.findData(speed)
-            self.speed_selector.blockSignals(True)
-            if speed_index >= 0:
-                self.speed_selector.setCurrentIndex(speed_index)
-            self.speed_selector.blockSignals(False)
-            self.speed_selector.setEnabled(
+            if speed_index >= 0 and self.speed_selector.currentIndex() != speed_index:
+                prior_blocked = self.speed_selector.blockSignals(True)
+                try:
+                    self.speed_selector.setCurrentIndex(speed_index)
+                finally:
+                    self.speed_selector.blockSignals(prior_blocked)
+            self._set_enabled(
+                self.speed_selector,
                 not terminal and not restart_pending and not stopping
             )
 
@@ -756,76 +1021,18 @@ def _load_dashboard_type() -> type[Any]:
             suffix = ""
             if getattr(self.adapter, "failure", None) is not None:
                 suffix = f"Replay failure: {self.adapter.failure}"
-            self.control_status_label.setText(suffix or self._control_message)
+            self._set_text(
+                self.control_status_label, suffix or self._control_message
+            )
 
         def _validate_plot_update(self, snapshot: Any) -> _ValidatedPlotUpdate:
-            trace_samples = snapshot.trace_samples
-            boundary = snapshot.processed_boundary
-            if len(trace_samples) != boundary:
-                raise ValueError(
-                    "snapshot trace length must equal its processed boundary"
-                )
-
-            starts_new_generation = self._plot_generation != snapshot.generation
-            if starts_new_generation:
-                if (
-                    self._plot_generation is not None
-                    and snapshot.generation <= self._plot_generation
-                ):
-                    raise ValueError("plot generation must increase on restart")
-                tail_start = 0
-            else:
-                if snapshot.total_frames != self._plot_capacity:
-                    raise ValueError("snapshot total_frames changed within a generation")
-                prefix_length = len(self._validated_trace_prefix)
-                if len(trace_samples) < prefix_length:
-                    raise ValueError("snapshot trace truncated its validated prefix")
-                # Compare cached integer identities without invoking a sample's
-                # equality method.  The retained tuple keeps every accepted
-                # controller object alive, so Python cannot reuse these ids.
-                candidate_identity = tuple(map(id, trace_samples[:prefix_length]))
-                if candidate_identity != self._validated_trace_identity:
-                    raise ValueError("snapshot altered its validated trace prefix")
-                tail_start = prefix_length
-
-            x_s: list[float] = []
-            radar_hr_bpm: list[float] = []
-            reference_pr_bpm: list[float] = []
-            radar_br_bpm: list[float] = []
-            reference_rr_bpm: list[float] = []
-            for frame_index, sample in enumerate(
-                trace_samples[tail_start:], start=tail_start
-            ):
-                values = _validate_trace_sample(
-                    sample,
-                    expected_boundary=frame_index + 1,
-                    generation=snapshot.generation,
-                )
-                x_s.append(frame_index / self.frame_rate_hz)
-                radar_hr_bpm.append(values[0])
-                reference_pr_bpm.append(values[1])
-                radar_br_bpm.append(values[2])
-                reference_rr_bpm.append(values[3])
-
-            if trace_samples:
-                if trace_samples[0].boundary != 1:
-                    raise ValueError("snapshot trace must begin at boundary 1")
-                if trace_samples[-1].boundary != boundary:
-                    raise ValueError(
-                        "snapshot trace endpoint must equal processed boundary"
-                    )
-
-            return _ValidatedPlotUpdate(
-                starts_new_generation=starts_new_generation,
-                capacity=snapshot.total_frames,
-                trace_prefix=trace_samples,
-                trace_identity=tuple(map(id, trace_samples)),
-                tail_start=tail_start,
-                x_s=tuple(x_s),
-                radar_hr_bpm=tuple(radar_hr_bpm),
-                reference_pr_bpm=tuple(reference_pr_bpm),
-                radar_br_bpm=tuple(radar_br_bpm),
-                reference_rr_bpm=tuple(reference_rr_bpm),
+            return _validate_snapshot_update(
+                snapshot,
+                frame_rate_hz=self.frame_rate_hz,
+                prior_generation=self._plot_generation,
+                prior_capacity=self._plot_capacity,
+                retained_prefix=self._validated_trace_prefix,
+                retained_identity=self._validated_trace_identity,
             )
 
         def _commit_plot_update(
@@ -956,8 +1163,8 @@ def _load_dashboard_type() -> type[Any]:
             self._last_plot_redraw_monotonic_s = now
             elapsed_s = observed_stop / self.frame_rate_hz
             visible_stop = max(30.0, elapsed_s)
-            self.hr_plot.setXRange(0.0, visible_stop, padding=0.0)
-            self.br_plot.setXRange(0.0, visible_stop, padding=0.0)
+            self._set_plot_x_range(self.hr_plot, 0.0, visible_stop)
+            self._set_plot_x_range(self.br_plot, 0.0, visible_stop)
 
         @QtCore.Slot()
         def request_pause_or_resume(self) -> None:
@@ -978,12 +1185,12 @@ def _load_dashboard_type() -> type[Any]:
                         "Pause refused during a replay lifecycle transition"
                     )
                 else:
-                    self.pause_button.setText("Pausing...")
-                    self.pause_button.setEnabled(False)
+                    self._set_text(self.pause_button, "Pausing...")
+                    self._set_enabled(self.pause_button, False)
                     self._control_message = (
                         "Pause requested; waiting for controller acknowledgment"
                     )
-            self.control_status_label.setText(self._control_message)
+            self._set_text(self.control_status_label, self._control_message)
 
         @QtCore.Slot()
         def request_restart(self) -> None:
@@ -995,7 +1202,7 @@ def _load_dashboard_type() -> type[Any]:
             else:
                 if restarted:
                     self._restart_pending_generation = self._snapshot.generation
-                    self.restart_button.setEnabled(False)
+                    self._set_enabled(self.restart_button, False)
                     self._control_message = (
                         "Restart requested; waiting for clean shutdown and a new generation"
                     )
@@ -1003,7 +1210,7 @@ def _load_dashboard_type() -> type[Any]:
                     self._control_message = (
                         "Restart refused: prior replay worker did not shut down cleanly"
                     )
-            self.control_status_label.setText(self._control_message)
+            self._set_text(self.control_status_label, self._control_message)
 
         @QtCore.Slot()
         def request_stop(self) -> None:
@@ -1016,7 +1223,7 @@ def _load_dashboard_type() -> type[Any]:
             else:
                 self.adapter.stop(timeout_s=0.0)
             self._control_message = "Stop requested"
-            self.control_status_label.setText(self._control_message)
+            self._set_text(self.control_status_label, self._control_message)
 
         @QtCore.Slot(int)
         def _speed_changed(self, index: int) -> None:
@@ -1035,17 +1242,40 @@ def _load_dashboard_type() -> type[Any]:
                 if accepted is False
                 else f"Speed change requested: {speed:g}x"
             )
-            self.control_status_label.setText(self._control_message)
+            self._set_text(self.control_status_label, self._control_message)
+
+        def capture_screenshot_image(self) -> Any:
+            """Return a detached QImage of the current real dashboard pixels."""
+
+            application = QtWidgets.QApplication.instance()
+            if application is None:
+                raise RuntimeError("dashboard screenshot requires a QApplication")
+            current_thread = QtCore.QThread.currentThread()
+            application_thread = application.thread()
+            if (
+                current_thread != application_thread
+                or self.thread() != application_thread
+            ):
+                raise RuntimeError(
+                    "dashboard screenshot capture must run on the Qt application thread"
+                )
+            self._flush_plots(force=True)
+            self.progress_bar.flush_pending_update()
+            pixmap = self.grab()
+            if pixmap.isNull():
+                raise RuntimeError("dashboard screenshot grab returned a null pixmap")
+            image = pixmap.toImage().copy()
+            if image.isNull():
+                raise RuntimeError("dashboard screenshot copy returned a null image")
+            return image
 
         def save_screenshot(self, path: str | Path) -> Path:
-            """Save pixels from this real widget for acceptance evidence."""
+            """Synchronously save a detached dashboard image as PNG."""
 
-            self._flush_plots(force=True)
-            QtWidgets.QApplication.processEvents()
             destination = Path(path)
             destination.parent.mkdir(parents=True, exist_ok=True)
-            pixmap = self.grab()
-            if pixmap.isNull() or not pixmap.save(str(destination), "PNG"):
+            image = self.capture_screenshot_image()
+            if not image.save(str(destination), "PNG"):
                 raise RuntimeError(f"could not save dashboard screenshot to {destination}")
             return destination
 
@@ -1062,6 +1292,80 @@ def _load_dashboard_type() -> type[Any]:
 
     _dashboard_type = ReplayDashboard
     return ReplayDashboard
+
+
+def _validate_snapshot_update(
+    snapshot: Any,
+    *,
+    frame_rate_hz: float,
+    prior_generation: int | None,
+    prior_capacity: int,
+    retained_prefix: tuple[Any, ...],
+    retained_identity: tuple[int, ...],
+) -> _ValidatedPlotUpdate:
+    """Fully validate one snapshot without changing dashboard or Qt state."""
+
+    _require_immutable_snapshot(snapshot)
+    trace_samples = snapshot.trace_samples
+    boundary = snapshot.processed_boundary
+    if len(trace_samples) != boundary:
+        raise ValueError("snapshot trace length must equal its processed boundary")
+
+    starts_new_generation = prior_generation != snapshot.generation
+    if starts_new_generation:
+        if prior_generation is not None and snapshot.generation <= prior_generation:
+            raise ValueError("plot generation must increase on restart")
+        tail_start = 0
+    else:
+        if snapshot.total_frames != prior_capacity:
+            raise ValueError("snapshot total_frames changed within a generation")
+        prefix_length = len(retained_prefix)
+        if len(trace_samples) < prefix_length:
+            raise ValueError("snapshot trace truncated its validated prefix")
+        # Compare cached integer identities without invoking a sample's equality
+        # method. Retaining the accepted tuple prevents Python from reusing ids.
+        candidate_identity = tuple(map(id, trace_samples[:prefix_length]))
+        if candidate_identity != retained_identity:
+            raise ValueError("snapshot altered its validated trace prefix")
+        tail_start = prefix_length
+
+    x_s: list[float] = []
+    radar_hr_bpm: list[float] = []
+    reference_pr_bpm: list[float] = []
+    radar_br_bpm: list[float] = []
+    reference_rr_bpm: list[float] = []
+    for frame_index, sample in enumerate(
+        trace_samples[tail_start:], start=tail_start
+    ):
+        values = _validate_trace_sample(
+            sample,
+            expected_boundary=frame_index + 1,
+            generation=snapshot.generation,
+        )
+        x_s.append(frame_index / frame_rate_hz)
+        radar_hr_bpm.append(values[0])
+        reference_pr_bpm.append(values[1])
+        radar_br_bpm.append(values[2])
+        reference_rr_bpm.append(values[3])
+
+    if trace_samples:
+        if trace_samples[0].boundary != 1:
+            raise ValueError("snapshot trace must begin at boundary 1")
+        if trace_samples[-1].boundary != boundary:
+            raise ValueError("snapshot trace endpoint must equal processed boundary")
+
+    return _ValidatedPlotUpdate(
+        starts_new_generation=starts_new_generation,
+        capacity=snapshot.total_frames,
+        trace_prefix=trace_samples,
+        trace_identity=tuple(map(id, trace_samples)),
+        tail_start=tail_start,
+        x_s=tuple(x_s),
+        radar_hr_bpm=tuple(radar_hr_bpm),
+        reference_pr_bpm=tuple(reference_pr_bpm),
+        radar_br_bpm=tuple(radar_br_bpm),
+        reference_rr_bpm=tuple(reference_rr_bpm),
+    )
 
 
 def _require_immutable_snapshot(snapshot: Any) -> None:
