@@ -3,10 +3,116 @@
 from __future__ import annotations
 
 import threading
+from types import SimpleNamespace
 
 import pytest
 
 from src.replay_compare import telemetry
+
+
+class _FakeFunction:
+    """Callable Windows function stand-in with assignable ctypes metadata."""
+
+    def __init__(self, implementation):
+        self._implementation = implementation
+        self.calls = []
+        self.argtypes = None
+        self.restype = None
+
+    def __call__(self, *args):
+        self.calls.append(args)
+        return self._implementation(*args)
+
+
+def test_windows_rss_binding_is_cached_and_reports_current_working_set(
+    monkeypatch,
+):
+    process_handle = 0xCAFE
+    current_process = _FakeFunction(lambda: process_handle)
+
+    def fill_counters(handle, counters_pointer, size):
+        assert handle == process_handle
+        assert size == telemetry.ctypes.sizeof(telemetry._ProcessMemoryCounters)
+        counters = telemetry.ctypes.cast(
+            counters_pointer,
+            telemetry._ProcessMemoryCountersPointer,
+        ).contents
+        assert counters.cb == size
+        counters.PeakWorkingSetSize = 987_654_321
+        counters.WorkingSetSize = 123_456_789
+        return 1
+
+    process_memory = _FakeFunction(fill_counters)
+    fake_loader = SimpleNamespace(
+        kernel32=SimpleNamespace(GetCurrentProcess=current_process),
+        psapi=SimpleNamespace(GetProcessMemoryInfo=process_memory),
+    )
+    structure_type = telemetry._ProcessMemoryCounters
+    pointer_type = telemetry._ProcessMemoryCountersPointer
+
+    monkeypatch.setattr(telemetry.ctypes, "windll", fake_loader, raising=False)
+    monkeypatch.setattr(
+        telemetry,
+        "_windows_memory_api",
+        telemetry._UNINITIALIZED,
+    )
+
+    assert telemetry.replay_rss_bytes() == 123_456_789
+    assert telemetry.replay_rss_bytes() == 123_456_789
+
+    assert len(current_process.calls) == 1
+    assert len(process_memory.calls) == 2
+    assert current_process.argtypes == []
+    assert current_process.restype is telemetry.wintypes.HANDLE
+    assert process_memory.argtypes == [
+        telemetry.wintypes.HANDLE,
+        pointer_type,
+        telemetry.wintypes.DWORD,
+    ]
+    assert process_memory.restype is telemetry.wintypes.BOOL
+    assert telemetry._ProcessMemoryCounters is structure_type
+    assert telemetry._ProcessMemoryCountersPointer is pointer_type
+    assert pointer_type is telemetry.ctypes.POINTER(structure_type)
+
+
+def test_windows_rss_unavailability_is_cached(monkeypatch):
+    initialization_calls = 0
+
+    def unavailable():
+        nonlocal initialization_calls
+        initialization_calls += 1
+        return None
+
+    monkeypatch.setattr(telemetry, "_initialize_windows_memory_api", unavailable)
+    monkeypatch.setattr(
+        telemetry,
+        "_windows_memory_api",
+        telemetry._UNINITIALIZED,
+    )
+
+    assert telemetry.replay_rss_bytes() is None
+    assert telemetry.replay_rss_bytes() is None
+    assert initialization_calls == 1
+    assert telemetry._windows_memory_api is None
+
+
+def test_windows_rss_api_failure_returns_none(monkeypatch):
+    calls = 0
+
+    def fail_read(_process, _counters, _size):
+        nonlocal calls
+        calls += 1
+        return 0
+
+    monkeypatch.setattr(
+        telemetry,
+        "_windows_memory_api",
+        (fail_read, 0xCAFE),
+    )
+
+    assert telemetry.replay_rss_bytes() is None
+    assert telemetry.replay_rss_bytes() is None
+    assert calls == 2
 
 
 def test_replay_rss_bytes_serializes_native_getter_across_threads(monkeypatch):
