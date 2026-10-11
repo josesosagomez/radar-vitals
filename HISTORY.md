@@ -13869,3 +13869,157 @@ Observed: 32 passed, 12 dependency warnings, 1.21 s. All 35 software-manifest ha
 and all six protected checkpoint hashes matched. No source or configuration changed
 after the accepted complete suite. The feature configuration remains disabled;
 physical owner gates are unchanged.
+
+## 2026-10-11 - Recorded massimo3 replay delivered on a separate branch
+
+**Set out to do:** implement the approved saved replay-comparison plan through
+tested recorded-session delivery, preserve both existing checkouts and their
+uncommitted planning work, and implement advanced support without bypassing
+physical calibration or operating hardware.
+
+**Worked (with evidence):** `codex/replay-masimo-compare` is isolated at
+`C:/Users/josemsosag/Desktop/vitals_radar_3/results/replay_compare_worktree`,
+from feature base `dcda615d1a2984848882ed7da6641860331577b1`. Reviewed milestones
+were committed and pushed separately, including baseline `8f2df39`, advanced
+`14309f6`, acceptance driver `efdb03c`, UI `c97efe2`, and final runtime/driver
+source `522c4dfc0457036942b89a6bf2fd336c4262b337`. Every push was read back.
+The original fallback and feature HEAD/status, all 23 preserved local-file
+hashes, and all 20 protected production/configuration hashes remain unchanged;
+the calibrated startup is still 10 seconds. No merge was performed.
+
+The application chronologically recalculates radar through the production
+SampleSwap decoder, uses bounded raw windows/queues and immutable snapshots,
+shows independent accepted/held/missing HR and BR, passive integer-timestamp
+Masimo values and descriptive summaries, exact application-based availability
+leases, and status. It supports pause/resume acknowledgment, preserved restart
+generations and 0.5x/1x/2x/4x pacing. All executed attempts retain intermediates
+and lineage; cancelled-before-execution requests retain events. Source-bound
+verification recomputes phase/DSP and reference/coverage evidence. Reference
+values never affect radar processing, admission, calibration or coverage.
+
+The primary ran the pinned environment serially with sealed/real-data opt-ins
+disabled, unique external basetemp and local cache/JUnit. Final replay selection:
+536 passed, 12 warnings, 41.03 s, exit 0; complete non-real-data suite:
+4167 passed, 16 optional skips, one real_data deselected, 1790 warnings,
+297.28 s, exit 0. Retained tags are
+`replay_qt_display_focus_20261011_65332374cb2f4698a65a79176753c6da` and
+`replay_qt_display_full_20261011_49b229f4ff80404298e97cca3bc797fc`.
+The complete JUnit SHA-256 is
+`b394ff1fb6f2673e79c9437e5eb049777a73294a16ac5ccfb8afb693a2657128`.
+Exact primary runner: `results/test_tmp/run_replay_qt_tests_20261011.ps1`
+with `-Scope focus` or `-Scope full`; equivalent full command:
+
+```powershell
+C:/ProgramData/anaconda3/Scripts/conda.exe run --no-capture-output -n radar-vitals python -m pytest tests -m "not real_data" -q --tb=short --basetemp "$env:TEMP/replay_qt_display_full_20261011_49b229f4ff80404298e97cca3bc797fc/pytest" -o cache_dir=results/test_tmp/pytest_cache_replay_qt_display_full_20261011_49b229f4ff80404298e97cca3bc797fc --junitxml results/test_tmp/replay_qt_display_full_20261011_49b229f4ff80404298e97cca3bc797fc.xml
+```
+
+The normal full native 1x repeat at unchanged source `522c4df` completed
+12005/12005 frames and telemetry rows, clean shutdown and one reaped analysis
+child (PID 18004, exit 0). Root:
+`results/replay_compare/replay_native_final_full_1_20261011_2f3374fb38fc4b02b71592cd2cbd8837`.
+Playback was 600.265 wall seconds / 600.25 recording seconds, 19.99950022
+frames/s. Maximum controller work/UI poll/snapshot age/Qt heartbeat were
+0.094/0.032/0.079/0.187 s, with zero 0.25-second breaches and no telemetry
+errors. Selector latency was separately 2.859 s. Independent verifier exited
+0 with accepted/source_binding_complete true and no internal/source issues;
+retained verifier tag `8b8a214e7855425d8fb5f425b5984dc5`.
+
+Accepted display availability was HR 180/12005 (1.50%), positive BR
+9784/12005 (81.50%), joint 180/12005 (1.50%), quiet 0. Reference PR,
+PI-qualified PR and RR availability were each 11845/12005 (98.67%). These
+are availability counts, not physiological accuracy. The original ADC hash
+is `cca0cdcbaa8235672c96f524666835824aadf40aa78b12197705da63dbeb7b00`,
+reference hash `92054b471a04eefdbe4de45988846bab503cf61a0e5c619e5d8f545ef0a965cb`,
+and effective-config hash
+`759ff50d0beecc1e6b372ac828e62e9d43ccedbb27cc1ff4b77d00fb59c5dfe6`.
+Historical development seed is 42; replay uses no RNG (`random_seed: null`).
+Approximate frame-zero UTC and legacy unobserved validity remain visible.
+
+Both real full-repeat PNGs were saved, reopened, hashed and visually checked:
+3840x1985, DPR 2.5; during SHA-256
+`22b3131c3a6e36f97cc0da5a661b84d30559b9d4df879078c0c5c17d1dbc08ed`,
+final `17853bd8b16338d3826e1e75f2f0d2dbdcf7de5a2c80c9c8e9a372f98f8948b2`.
+Capture took 0.063/0.110 s, sequential post-shutdown encode 0.296/0.282 s.
+The two detached-image slots peaked at 60979200 bytes. Parent RSS peaked
+657530880 bytes; its steady median increased 38793216 bytes, including the
+30489600-byte during image. Post-image finite-history filling added about
+4.30 MB by quartile medians; child steady median delta was -385024 bytes.
+Storage is capacity-bounded by frame limit/rings/queues/chunks/two image slots;
+no universal RSS plateau or zero-growth claim is made. Combined working sets
+may count shared pages twice. Screenshot geometry differs from the prior
+3450x2108 run; both recorded DPR 2.5, without an agent DPI/settings change.
+
+All normal smoke speeds completed 800 frames cleanly and independently
+verified. Their maximum heartbeat was 0.125 s or less. Actual controls retained
+a partial 680-frame first pass and completed an 800-frame generation 2;
+the pause snapshot stayed unchanged, pause/speed2/speed4 acknowledgments were
+0.063/0.063/0.062 s, fresh child PIDs were 5016 and 22012 with no overlap.
+Both control passes verified. All six native scenarios/seven verified passes,
+36 software blobs matched to source commit, 20 protected hashes, clean JUnit
+records, rechecked manifest members, PNGs and refusal are indexed in
+`reports/replay_compare_delivery_index_2026-10-11.json`, generated by its tracked
+adjacent builder. Independent code/provenance review returned ACCEPT with no
+material findings. Workflow, plan, Python, test, research, independent code and
+documentation agents had separate responsibilities; reviewers did not implement
+the changes they reviewed. Detailed disagreements and evidence are retained in
+`reports/replay_compare_review_log_2026-10-07.md`.
+
+Actual advanced startup exited 2, before ADC content or hardware access, with
+movement recovery disabled and configured range bias 0.0784329 m incompatible
+with the historical zero-bias capture. Both feature flags and null calibration
+state remain unchanged. The retained refusal is indexed with exact console and
+exit evidence. Advanced software is implemented/tested; physical authorization
+is unavailable. No synthetic record, replay or modified bias unlocks it.
+
+**Failed / did not work, and why:** prior full runs exposed selector-before-age
+publication ordering, synchronous window-copy latency, Windows attached-page
+capacity, mutable prior-prefix forgery, and RSS pointer-signature races. Reviewed
+corrections and regressions resolved those defects without changing protected
+DSP/configuration. Focused assertions also passed before a Qt shutdown crash;
+the rejected broad top-level-widget cleanup was removed, and initial snapshot
+preflight now precedes GUI allocation in both APIs. Final focused/full processes
+exit cleanly; the complete previous Qt interaction cause is not claimed.
+
+The earlier full 1x on the SAME `522c4df` source completed and scientifically
+verified, but failed responsiveness: UI poll 0.266 s, age 0.297 s, heartbeat
+0.594 s with 52 breaches. Its root ends `5abaa70e2325495197b943944b446cb1` and
+is retained, not silently replaced by the passing repeat. Actual 4x profiling
+found a 0.535 s root Qt UpdateRequest while contained plot paint was short;
+neither pen-width nor viewport-policy diagnostics established a production
+cause. Both policies in a later diagnostic reproduced no breach. Independent
+review rejected speculative rendering changes. Timing variance remains an
+explicit limitation; one passing run does not prove it eliminated.
+
+**Retired / no longer used:** full-recording RAM loading, synchronous controller
+window materialization, synchronous progress repaint, repeated equal widget
+setters and PNG encoding during active heartbeat are absent from this replay
+path. Existing live hardware/DSP/calibration paths remain byte-identical.
+The original illustrative mockup is not evidence. Failed runs and diagnostics
+were retained; no data/results were deleted.
+
+**Next:** use the delivered baseline and operator guide. If timing variance
+recurs, retain and profile the exact native run without relaxing gates, DPI or
+scientific settings. Advanced operation requires owner-run independent physical
+training/held-out acceptance and compatible accepted hash-bound calibration;
+follow `notes/live_motion_recovery_operator.md`, without using this replay as
+calibration or 3-bpm validation. The original working fallback remains unchanged.
+
+## 2026-10-11 - Final replay delivery document verification
+
+**Worked (with evidence):** independent final document/provenance review returned
+ACCEPT with no correctness findings. The primary then ran
+`tests/test_live_motion_config.py`, `tests/test_documentation_claims.py` and
+`tests/test_repository_eol.py` in the pinned environment with isolated external
+basetemp: 32 passed, 12 warnings, 2.98 s, clean exit 0. Retained console, exit
+and JUnit tag: `replay_delivery_docs_20261011_7868eb0d499f456aa86ac0d295131401`.
+The staged preservation audit still matched all 32 frozen runtime/test/driver
+files, 20 protected sources, both original checkout HEAD/status values and all
+23 preserved local hashes. Runtime and scientific source did not change.
+
+**Failed / did not work, and why:** no new failure; the earlier identical-source
+native timing failure remains disclosed above.
+
+**Retired / no longer used:** none.
+
+**Next:** commit and push the seven reviewed delivery files, verify the remote
+SHA and preservation once more, then use the baseline operator guide.

@@ -1289,3 +1289,193 @@ opt-in. Post-full all32 frozen hashes and all20protected/two checkouts/23local
 hashes pass unchanged. Independent code review ACCEPT and dynamic focused/full
 gates permit separate explicit UI and screenshot-driver commits, not a native
 performance claim. Native source-clean recording acceptance is next.
+
+### 2026-10-11 — reviewed commits and native 1x smoke
+
+UI milestone c97efe23bfdc849924a4966446e5b5e9dde1189a and screenshot-driver
+milestone 522c4dfc0457036942b89a6bf2fd336c4262b337 were explicitly staged,
+checked against reviewed/tested bytes, committed separately, pushed, and each
+remote SHA read back exactly. Source-clean acceptance runs use 522c4df.
+All32 hashes and20protected/two checkouts/23local files still match.
+Native smoke root:
+results/replay_compare/replay_native_final_smoke_1_20261011_c9f561ee6ceb498dac073495ab8f1097.
+Observed800frames/40s at20fps, exit0/clean shutdown, child29916 exited0 and
+max one owned child. Controllermax0.032s, UIpollmax0.016s, UIagemax0.063s,
+Qt heartbeatmax0.079s, no0.25s breaches, no telemetry/error issues. Coverage
+HR0, BR73, both0, quiet0 /800; passive PR/qualifiedPR/RR800 each.
+RSSparentpeak639819776B, combinedpeak1320771584B (shared pages may count twice),
+childcurrentpeak708902912B, childlifetimepeak743776256B. No steady-memory claim
+from40s. Two actualPNGs3450x2108 DPR2.5, during267665B/final268152B; detached
+retainedpeak58180800B. Both captures insideQtthread; duringcapture0.063s;
+finalcapture0.078s afterboth timers stop. Post-loop PNG encode0.281s each.
+Primary view_image checked actual during screen: labels/warnings/coverage and
+plots readable, HRmissing rather than a fabricated value, BRaccepted, approximate
+alignment and advancedunavailable warnings visible.
+Independent verifier pass_0001 exit0 accepted/source_binding_complete true,
+no internal/source issues; stdout retained OUTSIDEpassmanifest under test_tmp
+tag1fc56ba5889d486eb7bf8be7ff291207. Full12005frame1x starts next root
+replay_native_final_full_1_20261011_5abaa70e2325495197b943944b446cb1; pending.
+
+### 2026-10-11 — complete 522c4df full replay, timing negative
+
+Full root5abaa70e2325495197b943944b446cb1 completed12005frames/600.25s
+at20.0fps, clean shutdown, maxone child10752 exited0. Native exit1: controller
+max0.140s, UIcallback0.266s(onebreach), UIage0.297s, Qt heartbeat0.594s
+(52breaches). No scientific/telemetryerror; responsiveness is NOT accepted.
+Coverage HR180 BR9783 both180 quiet0 /12005; passive PR/qualifiedPR/RR11845
+each. Parentpeak655257600B, steadyearly615583744/late653426688 delta37842944;
+lateendpointslope-1167838.826B/s includesreaped-child/processshutdownperiod,
+so do not infer a universal plateau. Combinedpeak1390317568B; combined
+steady730529792->768360448 delta37830656 slope24230.846B/s (sharedpagesmay
+counttwice). Childcurrentpeak738258944B; steady114704384->114868224
+delta163840 slope382.09B/s; childlifetimepeak744079360B. Retainedimagespeak
+58180800B, bothactualPNGs3450x2108 DPR2.5. Independentverifier exit0 accepted
+source_binding_complete true, noissues, test_tmp tagda2bf67f7f784ca88aefcf0186a2b179.
+Independentreview binned onsetat~8250frames: mostly slowQtbetweenfastpolls
+and growinghistoricalchartscene, association notcompletecause. Scientific
+source remains522c4df andunchanged; no gate/interval/DPI/priority relaxation.
+
+Ignored diagnostics use nativeDPR2.5 with deterministicUIfixtures only, no
+ADC/referencefile access and noacceptanceclaim. Firstpenprofile repeated
+setPen onallcurves artificially invalidatedcaches; itswidth2 .701s versus
+width1 .21s doesNOTjustifyproductionchange. Correctedfreshprocess exact
+width2 andwidth1 probes onlysetchangedpens: bothzero>.25breaches, heartbeat
+max0.226899 and0.240354 respectively. Independentpythonowner rejectswidth1
+fixwithoutreproduction. Theirallfinite sinusoids omitactualgapstructure.
+Next retainedprobe uses generated display_state_intervals/reference_display
+audit plusgenericradarlevels, no inputfiles andnotphysiologicaloutput.
+Read-onlyresearch citespinnedQt6.7.3/pyqtgraph0.13.7 sources and preserves
+finite checks/NaNgaps; no productionedits authorized fromspeculation.
+
+### 2026-10-11 — actual Qt attribution and unmodified acceptance continuation
+
+The generated-gap diagnostic did not reproduce a delay: width-two plots had
+maximum UI poll 0.092962 s, heartbeat 0.199725 s and event 0.093134 s. It used
+generated replay artifacts and generic radar levels, not new physiological data.
+The primary therefore did not implement a speculative pen-width correction.
+
+The actual 12,005-frame 4x diagnostic, retained at
+results/replay_compare/diagnostic_full_4x_qt_20261011_aa5f3dbf83ff40668787e92c1b4d661e,
+reproduced 53 nested events over 0.25 s. Its ignored timing script/profile is
+results/test_tmp/diagnostic_full_4x_qt_profile_20261011.py/.json. The longest
+GraphicsScene MetaCall was 0.535543 s and its nested root UpdateRequest was
+0.535097 s; the contained PlotWidget paint was only 0.0264 s. All plot paints
+were at most 0.051146 s, application plot flushes at most 0.028511 s, and
+the only recorded setter above 0.005 s was an X-range setter at 0.007807 s.
+Independent code review and the Python owner agreed that this does not identify
+raw chart drawing as the cause. These nested event counts must not be summed
+as independent stalls. The 4x diagnostic is not a full 1x acceptance run.
+
+Pinned primary-source research traced root UpdateRequest through Qt 6.7.3
+QWidgetRepaintManager painting and private backing-store flush. Windows raster
+flush uses a bounding-rectangle BitBlt; the source does not prove which private
+stage caused this delay. The application _flush_plots timing is not Qt's private
+backing-store flush. Sources:
+https://github.com/qt/qtbase/blob/v6.7.3/src/widgets/kernel/qwidgetrepaintmanager.cpp
+and https://github.com/qt/qtbase/blob/v6.7.3/src/plugins/platforms/windows/qwindowsbackingstore.cpp.
+
+An independently reviewed diagnostic then alternated Minimal/BoundingRect
+viewport policies in repeated 3,000-frame blocks while recording every Paint
+event, roles, nesting, regions, root/progress paint and application flush.
+Retained script/profile: results/test_tmp/diagnostic_viewport_profile_20261011.py/.json;
+actual run: results/replay_compare/diagnostic_viewport_4x_20261011_37ef3b2da7ae41b29ca8dd5a940d04b0.
+It completed all 12,005 frames at 4x, clean exit 0, heartbeat maximum 0.187 s,
+with no timing breach. Neither policy reproduced the delay: Minimal event
+maximum 0.094289 s and BoundingRect maximum 0.060536 s. The 67,425 event
+records and all transitions remain retained. No production policy change is
+justified. The independent reviewer accepts continuing the ordinary unchanged
+source matrix and full 1x rerun, with the earlier identical-commit failure
+disclosed as intermittent responsiveness variance, not a resolved root cause.
+
+The primary visually checked both full native 1x PNGs. Actual during/final
+screens show held HR, independent BR state, passive reference values, warnings,
+coverage and causal plots clearly. Each detached image is 29,090,400 bytes;
+the two-image peak is 58,180,800 bytes. Advanced startup was actually refused
+with exit 2 at
+results/replay_compare/replay_native_final_refusal_1_20261011_44762d9a681a4df78af6d4cc3ebedcb5/20261011T082322_228204Z/startup_refusal.json:
+movement recovery disabled, no accepted physical calibration, and configured
+0.0784329 m bias incompatible with historical zero. The diagnostic confirms
+ADC content was not opened and hardware was not accessed.
+
+Ordinary native smoke 2x (root3213fb47f95545f08e4ba70d3eb4070f) and 4x
+(root57802d722e354e46bff89d2676c57eb6) each completed 800 frames with clean
+exit 0 and one successfully reaped owned child. Controller/UI poll/age/heartbeat
+maxima respectively were 0.062/0.016/0.047/0.094 s and
+0.016/0.015/0.031/0.125 s, with no breaches. HR/BR numerators were 0/7 and
+0/0; speed-dependent publication availability is not a physiological result.
+Their independent artifact verifiers are still pending at this log entry.
+Source remains reviewed/tested commit 522c4df, with no production intervention.
+The inflight preservation audit still matches all 32 frozen files, 20 protected
+sources, both original checkout HEAD/status values and all 23 preserved local
+files. Normal 0.5x, controls, source-bound verifiers and full 1x repeat follow.
+
+### 2026-10-11 — final native acceptance and independent delivery review
+
+All normal smoke speeds and both control generations independently verify with
+exit 0, accepted/source_binding_complete true and no issues. Controls retain
+680 frames in pass 1 and complete 800 in generation 2, with a frozen acknowledged
+pause, fresh PIDs 5016/22012, no overlap, and pause/speed2/speed4 acknowledgments
+0.063/0.063/0.062 s. Overall controller work across these passes is 0.031 s;
+0.063 s is pause acknowledgment, not controller work. The primary checked real
+0.5x/2x/4x and controls PNGs; missing numbers remain missing.
+
+Final normal full 1x root is
+results/replay_compare/replay_native_final_full_1_20261011_2f3374fb38fc4b02b71592cd2cbd8837.
+On unchanged reviewed source 522c4df it completes 12005 source frames/telemetry
+rows with exit 0, clean shutdown, child 18004 reaped exit 0 and maximum one
+owned child. Throughput 19.99950022 fps; controller/UI poll/age/heartbeat maxima
+0.094/0.032/0.079/0.187 s, zero breaches/errors. Selector 2.859 s separately.
+Availability HR180/BR9784/both180/quiet0 over12005; passive reference11845 each.
+Independent verifier tag8b8a214e7855425d8fb5f425b5984dc5 exits0 accepted,
+source_binding_complete true and no issues. Primary checked both actual PNGs:
+3840x1985 DPR2.5; two-image peak60979200B. Prior actual screenshot geometry
+3450x2108 is disclosed; no agent DPI/priority/gate/source intervention occurred.
+
+Independent final memory review accepts capacity-bounded evidence only. Parent
+steady median delta38793216B includes the30489600B during image. Post-image
+leg b6007–11988 rises5746688B endpoint/about4.30MB by quartile medians while
+finite chart history fills; child steady median delta-385024B. No universal
+RSS plateau, zero-growth or accuracy claim is authorized.
+
+Independent delivery-index review initially found two HIGH/two MEDIUM provenance
+gaps: ignored generator, no manifest-member rehash, no commit-blob comparison,
+and XML-only test indexing. The primary committed-generator proposal resolves
+them with a tracked adjacent reports builder, self hash, every contained
+manifest member rehash, all36 actual software blobs compared to source522,
+20protected, clean JUnit counts536/4167 with console/exit hashes and native
+lifecycle/timing gates. Further MEDIUM refusal/screenshot completeness findings
+were resolved by parsing exact noADC/nohardware/source hashes/reason/exit2,
+exactly two distinct contained completed image slots and matching bytes/hash.
+Independent final provenance verdict ACCEPT with no material finding.
+Generated index SHA-256:
+1373ecfbab9f0f05e22adf09c24bbaa3e1d80478b007181714dc2cea573c148f.
+It binds six native scenarios/seven verified passes to36committed source blobs,
+20protected, two clean JUnit records, every manifest member, real PNGs and the
+physical-calibration refusal. The tracked builder is under reports, outside
+production runtime authority; runtime/test bytes remain unchanged.
+
+Workflow final audit caught stale pending claims and dangling prose in drafts;
+primary truth review also corrected an erroneous100% display-coverage statement
+to100% recording progress and independently checked both control-work maxima.
+Final documents disclose the prior identical-source full timing failure and
+unestablished variance. HISTORY was appended before HANDOFF was rewritten in
+the replay checkout; both other checkouts/planning documents remain untouched.
+
+Final LF audit found that the first JSON-index generator used Windows default
+newline translation. The primary corrected only the report builder's output
+stream to explicit LF, regenerated and repeated generation with identical bytes.
+Final LF index SHA-256 is
+982bb9e08f8f6bd05e038e1711b8eaa522455299755e71cb6aa748a8597fd033;
+the earlier1373ecfb hash describes the retained review version before this
+format correction. Runtime/source/test/input/artifact bytes are unchanged.
+History's original prefix remains exact and all six handoff sections/pointers
+verify. Independent final document review and targeted repository delivery
+checks precede the explicit seven-path delivery commit.
+
+Independent final document/provenance review returned ACCEPT with no correctness
+findings. Primary staged delivery checks then passed: 32 tests, 12 warnings,
+2.98 s, clean exit 0; retained console/exit/JUnit tag
+replay_delivery_docs_20261011_7868eb0d499f456aa86ac0d295131401.
+The staged preservation audit matches all 32 frozen runtime/test/driver files,
+20 protected sources, both original HEAD/status values and 23 preserved local
+hashes. No runtime/scientific changes require repeating full native acceptance.
