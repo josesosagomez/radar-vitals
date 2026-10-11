@@ -10,13 +10,19 @@ pyqtgraph, which keeps headless verification usable.
 from __future__ import annotations
 
 import math
+import time
 from dataclasses import dataclass, is_dataclass
+from numbers import Real
 from pathlib import Path
 from typing import Any, Iterable, Protocol, runtime_checkable
+
+import numpy as np
 
 
 SUPPORTED_SPEEDS = (0.5, 1.0, 2.0, 4.0)
 FRAME_RATE_HZ = 20.0
+PLOT_CHUNK_FRAMES = 600
+PLOT_REDRAW_INTERVAL_S = 0.1
 
 RADAR_TEAL = "#1ab3a6"
 REFERENCE_PURPLE = "#9b72cf"
@@ -27,6 +33,11 @@ MISSING_GREY = "#88919d"
 
 _VALID_CHANNELS = {"hr", "br"}
 _VALID_STATES = {"accepted", "preliminary", "held", "missing", "unresolved"}
+_VALID_PLAYBACK_STATES = {
+    "preparing", "running", "pausing", "paused", "complete", "completed",
+    "stopped", "failed",
+}
+_VALID_MODES = {"baseline", "motion"}
 _dashboard_type: type[Any] | None = None
 
 
@@ -45,6 +56,12 @@ class ReplayApplicationAdapter(Protocol):
 
     @property
     def latest_snapshot(self) -> Any: ...
+
+    @property
+    def restart_in_progress(self) -> bool: ...
+
+    @property
+    def stopping(self) -> bool: ...
 
     def request_pause(self) -> bool | None: ...
 
@@ -83,6 +100,39 @@ class PlotSeries:
     frame_indices: tuple[int, ...]
     radar_bpm: tuple[float, ...]
     reference_bpm: tuple[float, ...]
+
+
+@dataclass(frozen=True)
+class _PlotChunk:
+    """Four curves backed by one bounded recording-frame slice.
+
+    ``start`` and ``stop`` describe the maximum half-open slice used by this
+    chunk.  Chunks after the first begin one point before their primary
+    600-frame interval so adjacent finite lines meet without interpolation.
+    """
+
+    start: int
+    stop: int
+    hr_radar: Any
+    hr_reference: Any
+    br_radar: Any
+    br_reference: Any
+
+
+@dataclass(frozen=True)
+class _ValidatedPlotUpdate:
+    """Snapshot-derived plot values that are safe to commit without validation."""
+
+    starts_new_generation: bool
+    capacity: int
+    trace_prefix: tuple[Any, ...]
+    trace_identity: tuple[int, ...]
+    tail_start: int
+    x_s: tuple[float, ...]
+    radar_hr_bpm: tuple[float, ...]
+    reference_pr_bpm: tuple[float, ...]
+    radar_br_bpm: tuple[float, ...]
+    reference_rr_bpm: tuple[float, ...]
 
 
 def format_channel(
@@ -296,9 +346,21 @@ def _load_dashboard_type() -> type[Any]:
             self.frame_rate_hz = frame_rate_hz
             self._snapshot: Any = None
             self._plot_generation: int | None = None
-            self._last_trace_frame = -1
-            self._hr_samples: list[TraceSample] = []
-            self._br_samples: list[TraceSample] = []
+            self._plot_capacity = 0
+            self._validated_trace_prefix: tuple[Any, ...] = ()
+            self._validated_trace_identity: tuple[int, ...] = ()
+            self._plot_x_s = np.empty(0, dtype=np.float64)
+            self._radar_hr_bpm = np.empty(0, dtype=np.float64)
+            self._reference_pr_bpm = np.empty(0, dtype=np.float64)
+            self._radar_br_bpm = np.empty(0, dtype=np.float64)
+            self._reference_rr_bpm = np.empty(0, dtype=np.float64)
+            self._plot_chunks: list[_PlotChunk] = []
+            self._dirty_plot_chunks: set[int] = set()
+            self._last_plot_redraw_monotonic_s: float | None = None
+            self.hr_radar_curve: Any = None
+            self.hr_reference_curve: Any = None
+            self.br_radar_curve: Any = None
+            self.br_reference_curve: Any = None
             self._control_message = ""
             self._restart_pending_generation: int | None = None
 
@@ -369,18 +431,6 @@ def _load_dashboard_type() -> type[Any]:
             plots = QtWidgets.QHBoxLayout()
             self.hr_plot = self._comparison_plot("Heart rate", "bpm")
             self.br_plot = self._comparison_plot("Breathing rate", "breaths/min")
-            self.hr_radar_curve = self.hr_plot.plot(
-                pen=pg.mkPen(RADAR_TEAL, width=2), name="Radar accepted"
-            )
-            self.hr_reference_curve = self.hr_plot.plot(
-                pen=pg.mkPen(REFERENCE_PURPLE, width=2), name="Masimo PR"
-            )
-            self.br_radar_curve = self.br_plot.plot(
-                pen=pg.mkPen(RADAR_TEAL, width=2), name="Radar accepted"
-            )
-            self.br_reference_curve = self.br_plot.plot(
-                pen=pg.mkPen(REFERENCE_PURPLE, width=2), name="Masimo RRp"
-            )
             plots.addWidget(self.hr_plot)
             plots.addWidget(self.br_plot)
             root.addLayout(plots, 1)
@@ -508,6 +558,11 @@ def _load_dashboard_type() -> type[Any]:
         def poll_once(self) -> None:
             snapshot = self.adapter.latest_snapshot
             _require_immutable_snapshot(snapshot)
+            plot_update = self._validate_plot_update(snapshot)
+
+            # All snapshot and trace validation completes before any dashboard
+            # state, labels, buffers, or curves are changed.
+            self._commit_plot_update(snapshot, plot_update)
             if (
                 self._restart_pending_generation is not None
                 and snapshot.generation > self._restart_pending_generation
@@ -535,7 +590,10 @@ def _load_dashboard_type() -> type[Any]:
             self._update_coverage(snapshot)
             self._update_status(snapshot)
             self._update_controls(snapshot)
-            self._update_plots(snapshot)
+            force_plot_flush = snapshot.playback_state in {
+                "paused", "complete", "completed", "stopped", "failed"
+            }
+            self._flush_plots(force=force_plot_flush)
 
         def _update_header(self, snapshot: Any) -> None:
             state_text = _state_label(snapshot.playback_state)
@@ -700,89 +758,206 @@ def _load_dashboard_type() -> type[Any]:
                 suffix = f"Replay failure: {self.adapter.failure}"
             self.control_status_label.setText(suffix or self._control_message)
 
-        def _update_plots(self, snapshot: Any) -> None:
-            if self._plot_generation != snapshot.generation:
-                self._plot_generation = snapshot.generation
-                self._last_trace_frame = -1
-                self._hr_samples.clear()
-                self._br_samples.clear()
-            trace_samples = getattr(snapshot, "trace_samples", ())
-            if trace_samples:
-                self._append_controller_trace(snapshot, trace_samples)
-            else:
-                # Compatibility path for an initial/preparing snapshot. Running
-                # application snapshots provide controller-owned trace_samples so
-                # a short held interval cannot be skipped between GUI polls.
-                frame_index = snapshot.processed_boundary - 1
-                if frame_index > self._last_trace_frame:
-                    reference = snapshot.reference
-                    self._hr_samples.append(TraceSample(
-                        frame_index=frame_index,
-                        radar_value_bpm=snapshot.hr.value_bpm,
-                        radar_state=snapshot.hr.state,
-                        reference_value_bpm=None if reference is None else reference.pr_bpm,
-                    ))
-                    self._br_samples.append(TraceSample(
-                        frame_index=frame_index,
-                        radar_value_bpm=snapshot.br.value_bpm,
-                        radar_state=snapshot.br.state,
-                        reference_value_bpm=None if reference is None else reference.rr_bpm,
-                    ))
-                    self._last_trace_frame = frame_index
+        def _validate_plot_update(self, snapshot: Any) -> _ValidatedPlotUpdate:
+            trace_samples = snapshot.trace_samples
+            boundary = snapshot.processed_boundary
+            if len(trace_samples) != boundary:
+                raise ValueError(
+                    "snapshot trace length must equal its processed boundary"
+                )
 
-            hr = visible_plot_series(
-                self._hr_samples, snapshot.processed_boundary, channel="hr"
+            starts_new_generation = self._plot_generation != snapshot.generation
+            if starts_new_generation:
+                if (
+                    self._plot_generation is not None
+                    and snapshot.generation <= self._plot_generation
+                ):
+                    raise ValueError("plot generation must increase on restart")
+                tail_start = 0
+            else:
+                if snapshot.total_frames != self._plot_capacity:
+                    raise ValueError("snapshot total_frames changed within a generation")
+                prefix_length = len(self._validated_trace_prefix)
+                if len(trace_samples) < prefix_length:
+                    raise ValueError("snapshot trace truncated its validated prefix")
+                # Compare cached integer identities without invoking a sample's
+                # equality method.  The retained tuple keeps every accepted
+                # controller object alive, so Python cannot reuse these ids.
+                candidate_identity = tuple(map(id, trace_samples[:prefix_length]))
+                if candidate_identity != self._validated_trace_identity:
+                    raise ValueError("snapshot altered its validated trace prefix")
+                tail_start = prefix_length
+
+            x_s: list[float] = []
+            radar_hr_bpm: list[float] = []
+            reference_pr_bpm: list[float] = []
+            radar_br_bpm: list[float] = []
+            reference_rr_bpm: list[float] = []
+            for frame_index, sample in enumerate(
+                trace_samples[tail_start:], start=tail_start
+            ):
+                values = _validate_trace_sample(
+                    sample,
+                    expected_boundary=frame_index + 1,
+                    generation=snapshot.generation,
+                )
+                x_s.append(frame_index / self.frame_rate_hz)
+                radar_hr_bpm.append(values[0])
+                reference_pr_bpm.append(values[1])
+                radar_br_bpm.append(values[2])
+                reference_rr_bpm.append(values[3])
+
+            if trace_samples:
+                if trace_samples[0].boundary != 1:
+                    raise ValueError("snapshot trace must begin at boundary 1")
+                if trace_samples[-1].boundary != boundary:
+                    raise ValueError(
+                        "snapshot trace endpoint must equal processed boundary"
+                    )
+
+            return _ValidatedPlotUpdate(
+                starts_new_generation=starts_new_generation,
+                capacity=snapshot.total_frames,
+                trace_prefix=trace_samples,
+                trace_identity=tuple(map(id, trace_samples)),
+                tail_start=tail_start,
+                x_s=tuple(x_s),
+                radar_hr_bpm=tuple(radar_hr_bpm),
+                reference_pr_bpm=tuple(reference_pr_bpm),
+                radar_br_bpm=tuple(radar_br_bpm),
+                reference_rr_bpm=tuple(reference_rr_bpm),
             )
-            br = visible_plot_series(
-                self._br_samples, snapshot.processed_boundary, channel="br"
-            )
-            hr_x = [frame / self.frame_rate_hz for frame in hr.frame_indices]
-            br_x = [frame / self.frame_rate_hz for frame in br.frame_indices]
-            self.hr_radar_curve.setData(hr_x, hr.radar_bpm, connect="finite")
-            self.hr_reference_curve.setData(hr_x, hr.reference_bpm, connect="finite")
-            self.br_radar_curve.setData(br_x, br.radar_bpm, connect="finite")
-            self.br_reference_curve.setData(br_x, br.reference_bpm, connect="finite")
-            elapsed_s = snapshot.processed_boundary / self.frame_rate_hz
+
+        def _commit_plot_update(
+            self, snapshot: Any, update: _ValidatedPlotUpdate
+        ) -> None:
+            if update.starts_new_generation:
+                self._reset_plot_generation(snapshot.generation, update.capacity)
+
+            tail_stop = update.tail_start + len(update.x_s)
+            if tail_stop > update.capacity:
+                # This is implied by the snapshot scalar validation.  Keep the
+                # local guard so future refactors cannot overrun fixed buffers.
+                raise RuntimeError("validated plot tail exceeds buffer capacity")
+            if tail_stop > update.tail_start:
+                plot_slice = slice(update.tail_start, tail_stop)
+                self._plot_x_s[plot_slice] = update.x_s
+                self._radar_hr_bpm[plot_slice] = update.radar_hr_bpm
+                self._reference_pr_bpm[plot_slice] = update.reference_pr_bpm
+                self._radar_br_bpm[plot_slice] = update.radar_br_bpm
+                self._reference_rr_bpm[plot_slice] = update.reference_rr_bpm
+                first_chunk = update.tail_start // PLOT_CHUNK_FRAMES
+                final_chunk = (tail_stop - 1) // PLOT_CHUNK_FRAMES
+                self._dirty_plot_chunks.update(range(first_chunk, final_chunk + 1))
+            self._validated_trace_prefix = update.trace_prefix
+            self._validated_trace_identity = update.trace_identity
+
+        def _reset_plot_generation(self, generation: int, capacity: int) -> None:
+            for chunk in self._plot_chunks:
+                self.hr_plot.removeItem(chunk.hr_radar)
+                self.hr_plot.removeItem(chunk.hr_reference)
+                self.br_plot.removeItem(chunk.br_radar)
+                self.br_plot.removeItem(chunk.br_reference)
+
+            self._plot_generation = generation
+            self._plot_capacity = capacity
+            self._validated_trace_prefix = ()
+            self._validated_trace_identity = ()
+            # NaN initialization makes unwritten/future positions explicit and
+            # prevents a restarted generation from inheriting visible history.
+            self._plot_x_s = np.full(capacity, np.nan, dtype=np.float64)
+            self._radar_hr_bpm = np.full(capacity, np.nan, dtype=np.float64)
+            self._reference_pr_bpm = np.full(capacity, np.nan, dtype=np.float64)
+            self._radar_br_bpm = np.full(capacity, np.nan, dtype=np.float64)
+            self._reference_rr_bpm = np.full(capacity, np.nan, dtype=np.float64)
+            self._plot_chunks = []
+            self._dirty_plot_chunks = set()
+            self._last_plot_redraw_monotonic_s = None
+            self.hr_radar_curve = None
+            self.hr_reference_curve = None
+            self.br_radar_curve = None
+            self.br_reference_curve = None
+            if capacity:
+                self._ensure_plot_chunk(0)
+
+        def _ensure_plot_chunk(self, chunk_index: int) -> _PlotChunk:
+            while len(self._plot_chunks) <= chunk_index:
+                index = len(self._plot_chunks)
+                start = max(0, index * PLOT_CHUNK_FRAMES - 1)
+                stop = min(self._plot_capacity, (index + 1) * PLOT_CHUNK_FRAMES)
+                curve_name = index == 0
+                hr_radar = self.hr_plot.plot(
+                    pen=pg.mkPen(RADAR_TEAL, width=2),
+                    name="Radar accepted" if curve_name else None,
+                )
+                hr_reference = self.hr_plot.plot(
+                    pen=pg.mkPen(REFERENCE_PURPLE, width=2),
+                    name="Masimo PR" if curve_name else None,
+                )
+                br_radar = self.br_plot.plot(
+                    pen=pg.mkPen(RADAR_TEAL, width=2),
+                    name="Radar accepted" if curve_name else None,
+                )
+                br_reference = self.br_plot.plot(
+                    pen=pg.mkPen(REFERENCE_PURPLE, width=2),
+                    name="Masimo RRp" if curve_name else None,
+                )
+                for curve in (hr_radar, hr_reference, br_radar, br_reference):
+                    curve.setDownsampling(ds=1, auto=False)
+                    curve.setClipToView(False)
+                self._plot_chunks.append(_PlotChunk(
+                    start=start,
+                    stop=stop,
+                    hr_radar=hr_radar,
+                    hr_reference=hr_reference,
+                    br_radar=br_radar,
+                    br_reference=br_reference,
+                ))
+
+            first = self._plot_chunks[0]
+            self.hr_radar_curve = first.hr_radar
+            self.hr_reference_curve = first.hr_reference
+            self.br_radar_curve = first.br_radar
+            self.br_reference_curve = first.br_reference
+            return self._plot_chunks[chunk_index]
+
+        def _flush_plots(self, *, force: bool) -> None:
+            if not self._dirty_plot_chunks:
+                return
+            now = time.monotonic()
+            if (
+                not force
+                and self._last_plot_redraw_monotonic_s is not None
+                and now - self._last_plot_redraw_monotonic_s
+                < PLOT_REDRAW_INTERVAL_S
+            ):
+                return
+
+            observed_stop = len(self._validated_trace_prefix)
+            for chunk_index in sorted(self._dirty_plot_chunks):
+                chunk = self._ensure_plot_chunk(chunk_index)
+                stop = min(chunk.stop, observed_stop)
+                plot_slice = slice(chunk.start, stop)
+                x_s = self._plot_x_s[plot_slice]
+                chunk.hr_radar.setData(
+                    x_s, self._radar_hr_bpm[plot_slice], connect="finite"
+                )
+                chunk.hr_reference.setData(
+                    x_s, self._reference_pr_bpm[plot_slice], connect="finite"
+                )
+                chunk.br_radar.setData(
+                    x_s, self._radar_br_bpm[plot_slice], connect="finite"
+                )
+                chunk.br_reference.setData(
+                    x_s, self._reference_rr_bpm[plot_slice], connect="finite"
+                )
+
+            self._dirty_plot_chunks.clear()
+            self._last_plot_redraw_monotonic_s = now
+            elapsed_s = observed_stop / self.frame_rate_hz
             visible_stop = max(30.0, elapsed_s)
             self.hr_plot.setXRange(0.0, visible_stop, padding=0.0)
             self.br_plot.setXRange(0.0, visible_stop, padding=0.0)
-
-        def _append_controller_trace(
-            self, snapshot: Any, trace_samples: Iterable[Any]
-        ) -> None:
-            previous_boundary = -1
-            for sample in trace_samples:
-                if sample.generation != snapshot.generation:
-                    raise ValueError("plot trace generation disagrees with snapshot")
-                boundary = sample.boundary
-                if type(boundary) is not int or boundary < 1:
-                    raise ValueError("plot trace boundary must be a positive exact integer")
-                if boundary <= previous_boundary:
-                    raise ValueError("controller plot trace boundaries must increase strictly")
-                previous_boundary = boundary
-                if boundary > snapshot.processed_boundary:
-                    raise ValueError("controller plot trace contains future data")
-                frame_index = boundary - 1
-                if frame_index <= self._last_trace_frame:
-                    continue
-                reference_available = bool(sample.reference_available)
-                self._hr_samples.append(TraceSample(
-                    frame_index=frame_index,
-                    radar_value_bpm=sample.radar_hr_bpm,
-                    radar_state=sample.hr_state,
-                    reference_value_bpm=(
-                        sample.reference_pr_bpm if reference_available else None
-                    ),
-                ))
-                self._br_samples.append(TraceSample(
-                    frame_index=frame_index,
-                    radar_value_bpm=sample.radar_br_bpm,
-                    radar_state=sample.br_state,
-                    reference_value_bpm=(
-                        sample.reference_rr_bpm if reference_available else None
-                    ),
-                ))
-                self._last_trace_frame = frame_index
 
         @QtCore.Slot()
         def request_pause_or_resume(self) -> None:
@@ -865,6 +1040,8 @@ def _load_dashboard_type() -> type[Any]:
         def save_screenshot(self, path: str | Path) -> Path:
             """Save pixels from this real widget for acceptance evidence."""
 
+            self._flush_plots(force=True)
+            QtWidgets.QApplication.processEvents()
             destination = Path(path)
             destination.parent.mkdir(parents=True, exist_ok=True)
             pixmap = self.grab()
@@ -899,7 +1076,7 @@ def _require_immutable_snapshot(snapshot: Any) -> None:
         "selection_revision", "accumulation_stage", "recovery_reason",
         "measurement_window_age_frames", "analysis_lag_frames", "reference",
         "hr_reference_summary", "br_reference_summary", "coverage",
-        "warning_messages",
+        "warning_messages", "trace_samples",
     )
     missing = [name for name in required if not hasattr(snapshot, name)]
     if missing:
@@ -910,14 +1087,270 @@ def _require_immutable_snapshot(snapshot: Any) -> None:
         raise ValueError("snapshot total_frames must be nonnegative")
     if snapshot.processed_boundary > snapshot.total_frames:
         raise ValueError("snapshot processed_boundary exceeds total_frames")
-    trace_samples = getattr(snapshot, "trace_samples", ())
-    if type(trace_samples) is not tuple:
+    if type(snapshot.generation) is not int or snapshot.generation <= 0:
+        raise ValueError("snapshot generation must be a positive exact integer")
+    if (
+        type(snapshot.playback_state) is not str
+        or snapshot.playback_state not in _VALID_PLAYBACK_STATES
+    ):
+        raise ValueError("snapshot playback_state is invalid")
+    if snapshot.playback_state == "preparing" and snapshot.processed_boundary != 0:
+        raise ValueError("preparing snapshots are allowed only at boundary zero")
+    if type(snapshot.mode) is not str or snapshot.mode not in _VALID_MODES:
+        raise ValueError("snapshot mode is invalid")
+    if snapshot.quiet_state not in _VALID_STATES:
+        raise ValueError("snapshot quiet_state is invalid")
+    if snapshot.selected_bin is not None and (
+        type(snapshot.selected_bin) is not int or snapshot.selected_bin < 0
+    ):
+        raise ValueError("snapshot selected_bin must be nonnegative when present")
+    _require_nonnegative_integer(snapshot.selection_revision, "selection_revision")
+    _require_optional_nonnegative_integer(
+        snapshot.measurement_window_age_frames, "measurement_window_age_frames"
+    )
+    _require_optional_nonnegative_integer(
+        snapshot.analysis_lag_frames, "analysis_lag_frames"
+    )
+    if not isinstance(snapshot.accumulation_stage, str):
+        raise TypeError("snapshot accumulation_stage must be a string")
+    if not isinstance(snapshot.recovery_reason, str):
+        raise TypeError("snapshot recovery_reason must be a string")
+    selected_range_m = getattr(snapshot, "selected_range_m", None)
+    if selected_range_m is not None:
+        _require_positive_finite(selected_range_m, "selected_range_m")
+    if type(snapshot.warning_messages) is not tuple or any(
+        not isinstance(message, str) for message in snapshot.warning_messages
+    ):
+        raise TypeError("snapshot warning_messages must be an immutable string tuple")
+    if type(snapshot.trace_samples) is not tuple:
         raise TypeError("snapshot trace_samples must be an immutable tuple")
-    for sample in trace_samples:
-        sample_parameters = getattr(type(sample), "__dataclass_params__", None)
-        if not is_dataclass(sample) or sample_parameters is None or not sample_parameters.frozen:
-            raise TypeError("snapshot trace samples must be frozen dataclasses")
     validate_speed(snapshot.speed)
+    _validate_display_channel(snapshot.hr, "HR")
+    _validate_display_channel(snapshot.br, "BR")
+    _validate_coverage(snapshot.coverage, snapshot.processed_boundary)
+    if snapshot.hr.state != snapshot.coverage.hr_state:
+        raise ValueError("snapshot HR state disagrees with coverage state")
+    if snapshot.br.state != snapshot.coverage.br_state:
+        raise ValueError("snapshot BR state disagrees with coverage state")
+    if snapshot.quiet_state != snapshot.coverage.quiet_state:
+        raise ValueError("snapshot quiet state disagrees with coverage state")
+    _validate_reference(snapshot.reference)
+    _validate_reference_summary(snapshot.hr_reference_summary, "hr")
+    _validate_reference_summary(snapshot.br_reference_summary, "br")
+
+
+def _require_frozen_dataclass(
+    value: Any, label: str, required_fields: tuple[str, ...]
+) -> None:
+    parameters = getattr(type(value), "__dataclass_params__", None)
+    if not is_dataclass(value) or parameters is None or not parameters.frozen:
+        raise TypeError(f"snapshot {label} must be a frozen dataclass")
+    missing = [name for name in required_fields if not hasattr(value, name)]
+    if missing:
+        raise TypeError(
+            f"snapshot {label} is missing fields: {', '.join(missing)}"
+        )
+
+
+def _validate_display_channel(channel: Any, label: str) -> None:
+    _require_frozen_dataclass(
+        channel, label, ("value_bpm", "state", "reason", "attempt_id")
+    )
+    if channel.state not in _VALID_STATES:
+        raise ValueError(f"snapshot {label} channel state is invalid")
+    value = _strict_nonnegative_optional(channel.value_bpm, f"{label} value")
+    if channel.state == "accepted" and (value is None or value <= 0.0):
+        raise ValueError(
+            f"snapshot accepted {label} channel requires a positive finite value"
+        )
+    if channel.state == "missing" and value is not None:
+        raise ValueError(f"snapshot missing {label} channel cannot carry a value")
+    if not isinstance(channel.reason, str):
+        raise TypeError(f"snapshot {label} channel reason must be a string")
+    if channel.attempt_id is not None and not isinstance(channel.attempt_id, str):
+        raise TypeError(f"snapshot {label} attempt_id must be a string when present")
+
+
+def _validate_coverage(coverage: Any, processed_boundary: int) -> None:
+    count_fields = (
+        "denominator_frames",
+        "hr_accepted_frames",
+        "br_numeric_frames",
+        "both_frames",
+        "quiet_frames",
+        "reference_pr_frames",
+        "reference_pr_qualified_frames",
+        "reference_rr_frames",
+    )
+    _require_frozen_dataclass(
+        coverage, "coverage", (*count_fields, "hr_state", "br_state", "quiet_state")
+    )
+    for field in count_fields:
+        _require_nonnegative_integer(getattr(coverage, field), f"coverage {field}")
+    if coverage.denominator_frames != processed_boundary:
+        raise ValueError("coverage denominator must equal processed boundary")
+    for field in count_fields[1:]:
+        if getattr(coverage, field) > coverage.denominator_frames:
+            raise ValueError(f"coverage {field} exceeds its denominator")
+    if coverage.reference_pr_qualified_frames > coverage.reference_pr_frames:
+        raise ValueError("PI-qualified reference coverage exceeds PR coverage")
+    if coverage.both_frames > min(
+        coverage.hr_accepted_frames, coverage.br_numeric_frames
+    ):
+        raise ValueError("simultaneous coverage exceeds an individual channel")
+    for field in ("hr_state", "br_state", "quiet_state"):
+        if getattr(coverage, field) not in _VALID_STATES:
+            raise ValueError(f"coverage {field} is invalid")
+
+
+def _validate_reference(reference: Any) -> None:
+    if reference is None:
+        return
+    _require_frozen_dataclass(
+        reference,
+        "reference",
+        (
+            "timestamp_s", "pr_bpm", "pi", "rr_bpm", "pr_present",
+            "pr_qualified", "rr_present",
+        ),
+    )
+    if reference.timestamp_s is not None and type(reference.timestamp_s) is not int:
+        raise TypeError("reference timestamp_s must be an exact integer when present")
+    pr_bpm = _strict_positive_optional(reference.pr_bpm, "reference PR")
+    rr_bpm = _strict_positive_optional(reference.rr_bpm, "reference RR")
+    pi = _strict_nonnegative_optional(reference.pi, "reference PI")
+    for field in ("pr_present", "pr_qualified", "rr_present"):
+        if type(getattr(reference, field)) is not bool:
+            raise TypeError(f"reference {field} must be an exact boolean")
+    if reference.pr_present != (pr_bpm is not None):
+        raise ValueError("reference pr_present disagrees with PR value")
+    if reference.rr_present != (rr_bpm is not None):
+        raise ValueError("reference rr_present disagrees with RR value")
+    if reference.pr_qualified and (pr_bpm is None or pi is None):
+        raise ValueError("PI-qualified reference requires finite PR and PI")
+    if reference.timestamp_s is None and (
+        pr_bpm is not None or rr_bpm is not None or pi is not None
+    ):
+        raise ValueError("reference values require a source timestamp")
+
+
+def _validate_reference_summary(summary: Any, expected_channel: str) -> None:
+    if summary is None:
+        return
+    count_fields = (
+        "expected_timestamp_count", "observed_count", "finite_count",
+        "pr_qualified_count",
+    )
+    _require_frozen_dataclass(
+        summary,
+        f"{expected_channel} reference summary",
+        (
+            "channel", "frame_start", "frame_stop", "duration_s",
+            *count_fields, "median_bpm",
+        ),
+    )
+    if summary.channel != expected_channel:
+        raise ValueError("reference summary channel disagrees with its display channel")
+    _require_nonnegative_integer(summary.frame_start, "summary frame_start")
+    _require_nonnegative_integer(summary.frame_stop, "summary frame_stop")
+    if summary.frame_stop <= summary.frame_start:
+        raise ValueError("reference summary frame bounds must be positive")
+    _require_positive_finite(summary.duration_s, "summary duration_s")
+    for field in count_fields:
+        _require_nonnegative_integer(getattr(summary, field), f"summary {field}")
+    if summary.observed_count > summary.expected_timestamp_count:
+        raise ValueError("summary observed count exceeds expected count")
+    if summary.finite_count > summary.observed_count:
+        raise ValueError("summary finite count exceeds observed count")
+    if summary.pr_qualified_count > summary.finite_count:
+        raise ValueError("summary PI-qualified count exceeds finite count")
+    _strict_positive_optional(summary.median_bpm, "summary median")
+
+
+def _require_nonnegative_integer(value: Any, label: str) -> None:
+    if type(value) is not int or value < 0:
+        raise ValueError(f"snapshot {label} must be a nonnegative exact integer")
+
+
+def _require_optional_nonnegative_integer(value: Any, label: str) -> None:
+    if value is not None:
+        _require_nonnegative_integer(value, label)
+
+
+def _validate_trace_sample(
+    sample: Any,
+    *,
+    expected_boundary: int,
+    generation: int,
+) -> tuple[float, float, float, float]:
+    """Validate one newly observed controller sample and return plot values."""
+
+    parameters = getattr(type(sample), "__dataclass_params__", None)
+    if not is_dataclass(sample) or parameters is None or not parameters.frozen:
+        raise TypeError("snapshot trace samples must be frozen dataclasses")
+    if type(sample.generation) is not int or sample.generation != generation:
+        raise ValueError("plot trace generation disagrees with snapshot")
+    if type(sample.boundary) is not int or sample.boundary != expected_boundary:
+        raise ValueError("controller plot trace boundaries must be contiguous")
+    if sample.hr_state not in _VALID_STATES or sample.br_state not in _VALID_STATES:
+        raise ValueError("plot trace contains an unknown display state")
+    if type(sample.reference_available) is not bool:
+        raise TypeError("plot trace reference_available must be an exact boolean")
+
+    radar_hr = _strict_positive_optional(sample.radar_hr_bpm, "radar HR")
+    radar_br = _strict_positive_optional(sample.radar_br_bpm, "radar BR")
+    reference_pr = _strict_positive_optional(sample.reference_pr_bpm, "reference PR")
+    reference_rr = _strict_positive_optional(sample.reference_rr_bpm, "reference RR")
+    if sample.hr_state == "accepted" and radar_hr is None:
+        raise ValueError("accepted HR trace state requires a positive finite value")
+    if sample.br_state == "accepted" and radar_br is None:
+        raise ValueError("accepted BR trace state requires a positive finite value")
+    if sample.hr_state == "missing" and radar_hr is not None:
+        raise ValueError("missing HR trace state cannot carry a numeric value")
+    if sample.br_state == "missing" and radar_br is not None:
+        raise ValueError("missing BR trace state cannot carry a numeric value")
+    if not sample.reference_available and (
+        reference_pr is not None or reference_rr is not None
+    ):
+        raise ValueError("unavailable reference trace cannot carry numeric values")
+    if sample.reference_available and reference_pr is None and reference_rr is None:
+        raise ValueError("available reference trace requires PR or RR")
+
+    return (
+        radar_hr if sample.hr_state == "accepted" and radar_hr is not None else math.nan,
+        reference_pr if sample.reference_available and reference_pr is not None else math.nan,
+        radar_br if sample.br_state == "accepted" and radar_br is not None else math.nan,
+        reference_rr if sample.reference_available and reference_rr is not None else math.nan,
+    )
+
+
+def _strict_positive_optional(value: Any, label: str) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, Real):
+        raise ValueError(f"{label} must be positive and finite when present")
+    number = float(value)
+    if not math.isfinite(number) or number <= 0.0:
+        raise ValueError(f"{label} must be positive and finite when present")
+    return number
+
+
+def _strict_nonnegative_optional(value: Any, label: str) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, Real):
+        raise ValueError(f"{label} must be nonnegative and finite when present")
+    number = float(value)
+    if not math.isfinite(number) or number < 0.0:
+        raise ValueError(f"{label} must be nonnegative and finite when present")
+    return number
+
+
+def _require_positive_finite(value: Any, label: str) -> float:
+    number = _strict_positive_optional(value, label)
+    if number is None:
+        raise ValueError(f"{label} must be positive and finite")
+    return number
 
 
 def _positive_finite(value: Any) -> float | None:
