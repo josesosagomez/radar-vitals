@@ -503,3 +503,107 @@ recorded UI performance, physical calibration, hardware or clinical acceptance.
 The reviewed source will be committed in dependency order: M3 common baseline
 application/reference/coverage/UI/verifier, M4 advanced replay and guarded CLI,
 then M5 native acceptance driver. Each push receives a remote SHA read-back.
+
+### Native acceptance exposed additional defects
+
+M3/M4/M5 were pushed and read back as `8f2df39a3fea765a90648bc457c187d18f46d6ba`,
+`14309f6358b686a78781f57dad4a82e41c39b0bb`, and
+`efdb03cc79b20c9392f2aad9128aa8764e24b9c0`. The native full-1x invocation used:
+
+```powershell
+C:/ProgramData/anaconda3/Scripts/conda.exe run --no-capture-output -n radar-vitals python scripts/run_replay_compare_acceptance.py --development-data-root C:/Users/josemsosag/Desktop/vitals_radar_3 --scenario full --speed 1 --output-root results/replay_compare/acceptance_full_1x_20261011
+```
+
+This is a preserved **failed diagnostic**, not final acceptance. It stopped at
+8387 frames / 419.35 seconds, with zero accepted HR/BR/both coverage and null
+final source integrity. Observations, both actual screenshots, events, and
+executed attempt arrays remain in that run directory.
+
+Independent reviewer raised a new **HIGH, required fix**: a current-identity
+successful selector older than one hop never commits its bin because publication
+age is checked before selector-state commit. Native selectors took more than
+three seconds, repeatedly selecting instead of retaining the successful bin.
+The plan's one-hop guard governs numeric publication. Commit a valid bin during
+active current-epoch playback, cancel the queued retry, and expire old numerics
+without HR/BR admission; EOF/reset/revision/bounds/malformed/out-of-gate cases
+must still never commit. The existing lag-61 test encoded the wrong expectation.
+This observation supersedes the prior static acceptance for final delivery.
+
+The run then failed on Windows RSS telemetry: concurrent controller and Qt
+calls entered the unchanged production getter, which defines a new ctypes
+Counters type and changes a cached DLL function's pointer type on each call.
+The observed error was `expected LP_Counters instance instead of pointer to
+Counters`. Replay-only serialization will guard those calls; the protected
+live runtime stays byte-identical. The driver's failed-pass throughput used
+the requested limit as numerator and is therefore not a valid failed-run FPS;
+the correction uses the last actual telemetry boundary. The stored diagnostic
+JSON is not overwritten or presented as final performance evidence.
+
+No production/test file was changed while this native invocation was active.
+After it finished, coordinated corrections were authorized. They require new
+regressions, independent review, fresh complete-suite acceptance, a new committed
+revision and a new full native run. No estimator, age threshold, reference,
+physical calibration gate, or raw input is changed to resolve these defects.
+
+The first correction review found an additional **HIGH composite forgery**:
+unchanged revision with an invented freeze reason could suppress the mandatory
+current-epoch over-age selector commit. No-commit expiry must bind to an actual
+preceding denominator-freeze event with its exact reason, or an evidenced epoch
+reset with its exact stale-epoch reason; re-signing several mutually consistent
+fields cannot manufacture that causal state. A combined-tamper regression is
+required in addition to individual field tampering.
+
+The initial all-13 replay correction run observed **321 passed, one failed**, 12
+installed deprecation warnings, 32.79 seconds, exit 1, no Qt callback stderr.
+JUnit `results/test_tmp/replay_all13_selector_20261011.xml`, cache
+`results/test_tmp/pytest_cache_replay_all13_selector`, external basetemp
+`C:/Users/josemsosag/AppData/Local/Temp/replay_all13_selector_7b39d81f1a8740b3a82134759271f8ea/pytest`.
+The production owner applied the new review finding after a source freeze while
+the test invocation was active. Primary stopped further edits, preserved the
+report, and treats this as a **mixed-version iteration**, never acceptance.
+The failure was the busy-selector coalescing fixture's stale-result disposition.
+Further execution requires the reviewer's final verdict and renewed AST/freeze
+acknowledgments; the primary will broadcast the active environment grant to all
+owners and reviewers. Source/test fixes resume only after the process ends.
+
+Final correction rereview: independent **ACCEPT**, no remaining
+BLOCKER/HIGH/MEDIUM. The reviewer checked the required active successful
+selector commit versus nonpublication, exact causal EOF/reset no-commit
+states, composite false-freeze rejection, and a narrowly proven pre-freeze
+current-identity all-DSP-failed rejection. Every over-age publication/admission
+remains prohibited. The same narrow exception is passed to the duplicated
+application helper; its default remains strict. No busy-coalescing fixture
+was weakened. Replay RSS calls share one lock and release it on exceptions;
+the partial-run FPS uses the actual last telemetry boundary.
+
+Primary independently parsed all 31 replay Python files, checked LF/whitespace,
+and matched all 20 protected hashes. All editing owners renewed their freeze
+acknowledgments. The next environment grant is broadcast to implementer,
+test engineer and reviewer before execution; no follow-up edit is allowed
+until the primary returns the slot and explicitly authorizes it.
+
+### Reviewed correction automated gates (2026-10-11)
+
+The renewed frozen all-13 replay run passed **322 tests**, 12 installed
+import-time deprecation warnings, 31.46 s, exit 0, with no Qt callback stderr.
+JUnit `results/test_tmp/replay_all13_finalfix_20261011.xml`, cache
+`results/test_tmp/pytest_cache_replay_all13_finalfix`, external basetemp
+`C:/Users/josemsosag/AppData/Local/Temp/replay_all13_finalfix_c64de4d17d0d4e1cbd848f0874e8ee16/pytest`.
+No source/test edits occurred during this invocation.
+
+Primary's fresh serial complete non-real-data suite then passed **3953 tests**,
+16 optional skips, one real_data deselection, 1790 existing warnings, 272.17 s,
+exit 0. JUnit `results/test_tmp/replay_compare_final_correction_20261011.xml`,
+cache `results/test_tmp/pytest_cache_replay_compare_final_correction_20261011`,
+external basetemp
+`C:/Users/JOSEMS~1/AppData/Local/Temp/replay_compare_final_correction_20261011_c5a6695876104a7883647315fdc5b3c8/pytest`.
+The pinned command was `python -m pytest tests -m 'not real_data' -q --tb=short`
+with those explicit basetemp/cache/JUnit arguments; M8_RUN_REAL_DATA_TESTS=0 and
+EXP004_RUN_DIR absent. All 322 replay cases passed; child-process cache warnings
+remain distinct from the explicit primary cache. No owners edited during the
+broadcast source/test freeze.
+
+Primary independently rechecked 31 Python ASTs and LF, all 20 protected hashes,
+and both existing checkout HEAD/status plus all 23 preserved dirty-file hashes.
+All matched. A read-only performance assessment now examines the earlier failed
+run's hop-boundary copy costs before the replacement native acceptance.

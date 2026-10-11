@@ -1241,6 +1241,152 @@ def test_expired_late_result_is_allowed_only_without_publication(tmp_path):
     )
 
 
+def test_overage_successful_selector_commit_is_verified_and_tamper_evident(tmp_path):
+    writer = _writer(tmp_path / "base")
+    executed = _authentic_executed(
+        job_id="selector-overage",
+        selection_mode="select",
+        selection_revision=0,
+    )
+    assert executed.result.selection_decision is not None
+    assert executed.result.selection_decision.selector_succeeded is True
+    assert executed.result.selection_decision.dsp_succeeded is True
+    expired = replace(
+        _authentic_disposition(executed),
+        application_boundary=661,
+        selection_revision=1,
+        disposition="expired",
+        reason="publication_age_exceeded_one_hop",
+        hr_accepted=False,
+        br_accepted=False,
+        display_hr_bpm=None,
+        display_hr_state="missing",
+        display_br_bpm=None,
+        display_br_state="missing",
+        request_epoch=executed.result.epoch,
+        request_frame_start=executed.result.frame_start,
+        request_frame_stop=executed.result.frame_stop,
+        requested_bin=None,
+        selection_mode="select",
+        requested_selection_revision=0,
+        application_epoch=executed.result.epoch,
+    )
+    _write_requested_attempt(writer, executed, expired)
+    _finalize(writer)
+
+    assert verify_replay_artifacts(writer.pass_dir) == ()
+    summary = json.loads(
+        (writer.pass_dir / "summary.json").read_text(encoding="utf-8")
+    )
+    assert summary["hr_accepted_frames"] == 0
+    assert summary["br_numeric_frames"] == 0
+    assert summary["both_frames"] == 0
+
+    def forge_selection_source(payload):
+        decision = json.loads(str(payload["selection_decision_json"].item()))
+        decision["selected_bin"] = 2
+        payload["selection_decision_json"] = np.asarray(
+            json.dumps(decision, sort_keys=True, separators=(",", ":"))
+        )
+
+    cases = (
+        (
+            "attempt_applied_revision",
+            lambda root: _rewrite_attempt_and_rehash_pass(
+                root,
+                lambda payload: payload.__setitem__(
+                    "applied_selection_revision", np.asarray(0, dtype=np.int64)
+                ),
+            ),
+        ),
+        (
+            "attempt_selection_source",
+            lambda root: _rewrite_attempt_and_rehash_pass(
+                root, forge_selection_source
+            ),
+        ),
+        (
+            "index_applied_revision",
+            lambda root: _rewrite_index_and_rehash(
+                root,
+                lambda rows: rows[0].__setitem__(
+                    "applied_selection_revision", "0"
+                ),
+            ),
+        ),
+        (
+            "event_applied_revision",
+            lambda root: _rewrite_events_and_rehash(
+                root,
+                lambda events: next(
+                    item for item in events if item["kind"] == "result_applied"
+                ).__setitem__("selection_revision", 0),
+            ),
+        ),
+        (
+            "event_selected_bin",
+            lambda root: _rewrite_events_and_rehash(
+                root,
+                lambda events: next(
+                    item for item in events if item["kind"] == "result_applied"
+                ).__setitem__("selected_bin", None),
+            ),
+        ),
+        (
+            "event_expiry_reason",
+            lambda root: _rewrite_events_and_rehash(
+                root,
+                lambda events: next(
+                    item for item in events if item["kind"] == "result_applied"
+                ).__setitem__("reason", "accepted"),
+            ),
+        ),
+    )
+    for label, mutate in cases:
+        forged = tmp_path / label
+        shutil.copytree(writer.pass_dir, forged)
+        mutate(forged)
+        issues = verify_replay_artifacts(forged)
+        assert issues, f"verifier accepted re-signed expired selector {label}"
+        assert all(issue.code != "file_hash" for issue in issues)
+
+    composite = tmp_path / "composite_false_frozen_revision"
+    shutil.copytree(writer.pass_dir, composite)
+
+    def forge_attempt_as_frozen(payload):
+        payload["applied_selection_revision"] = np.asarray(0, dtype=np.int64)
+        payload["reason"] = np.asarray("playback_denominator_frozen")
+
+    _rewrite_attempt_and_rehash_pass(composite, forge_attempt_as_frozen)
+    _rewrite_index_and_rehash(
+        composite,
+        lambda rows: rows[0].update(
+            {
+                "applied_selection_revision": "0",
+                "reason": "playback_denominator_frozen",
+            }
+        ),
+    )
+
+    def forge_event_as_frozen(events):
+        applied = next(
+            item for item in events if item["kind"] == "result_applied"
+        )
+        applied["selection_revision"] = 0
+        applied["selected_bin"] = None
+        applied["reason"] = "playback_denominator_frozen"
+
+    _rewrite_events_and_rehash(composite, forge_event_as_frozen)
+    issues = verify_replay_artifacts(composite)
+    assert issues, "verifier accepted a re-signed false post-freeze selector"
+    assert all(issue.code != "file_hash" for issue in issues)
+    assert any(
+        "freeze" in (issue.code + issue.details).lower()
+        or "expired" in (issue.code + issue.details).lower()
+        for issue in issues
+    )
+
+
 @pytest.mark.parametrize(
     "selection_payload",
     [

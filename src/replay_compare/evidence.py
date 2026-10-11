@@ -623,8 +623,21 @@ def verify_replay_artifacts(pass_dir: str | Path) -> tuple[VerificationIssue, ..
                 br_valid = bool(payload["br_valid"].item())
                 br_raw = float(payload["br_raw_bpm"].item())
                 selection = json.loads(str(payload["selection_decision_json"].item()))
+                application = applications_by_job.get(row["job_id"])
+                if application is None:
+                    raise ValueError("executed attempt lacks one application event")
+                application_position = event_positions.get(
+                    (row["job_id"], "result_applied"), -1
+                )
+                applied_after_freeze = any(
+                    freeze_position < application_position
+                    for freeze_position in freeze_positions
+                )
                 selection_publishable = _validate_selection_lifecycle(
-                    payload, selection, candidate_bins
+                    payload,
+                    selection,
+                    candidate_bins,
+                    applied_after_freeze=applied_after_freeze,
                 )
                 recomputed_vitals: dict[str, Any] | None = None
                 if (
@@ -679,9 +692,6 @@ def verify_replay_artifacts(pass_dir: str | Path) -> tuple[VerificationIssue, ..
                     accepted_hr_history.clear()
                     current_lineage = lineage
 
-                application = applications_by_job.get(row["job_id"])
-                if application is None:
-                    raise ValueError("executed attempt lacks one application event")
                 application_boundary = int(payload["application_boundary"].item())
                 application_age = application_boundary - frame_stop
                 if application_age < 0:
@@ -694,13 +704,23 @@ def verify_replay_artifacts(pass_dir: str | Path) -> tuple[VerificationIssue, ..
                     raise ValueError(
                         "publication age exceeds the one-hop application limit"
                     )
-                application_position = event_positions.get(
-                    (row["job_id"], "result_applied"), -1
+                current_committed_application = (
+                    str(payload["selection_mode"].item()) == "committed"
+                    and int(payload["application_epoch"].item())
+                    == int(payload["request_epoch"].item())
+                    and int(payload["applied_selection_revision"].item())
+                    == int(payload["requested_selection_revision"].item())
+                    and not applied_after_freeze
                 )
-                applied_after_freeze = any(
-                    freeze_position < application_position
-                    for freeze_position in freeze_positions
-                )
+                if (
+                    current_committed_application
+                    and application_age > 60
+                    and str(payload["reason"].item())
+                    != "publication_age_exceeded_one_hop"
+                ):
+                    raise ValueError(
+                        "over-age current committed result lacks the exact age reason"
+                    )
                 _validate_application_transition(
                     payload,
                     application,
@@ -716,6 +736,26 @@ def verify_replay_artifacts(pass_dir: str | Path) -> tuple[VerificationIssue, ..
                     and 0 <= application_age <= 60
                     and not applied_after_freeze
                     and not identity_mismatch
+                )
+                active_all_dsp_failed_rejection = (
+                    exceptional
+                    and str(payload["execution_status"].item()) == "completed"
+                    and str(payload["selection_mode"].item()) == "select"
+                    and isinstance(selection, dict)
+                    and selection.get("selector_succeeded") is True
+                    and selection.get("dsp_succeeded") is False
+                    and selection.get("fallback_used") is True
+                    and selection.get("reason")
+                    == "all_dsp_failed_energy_fallback"
+                    and int(payload["application_epoch"].item())
+                    == int(payload["request_epoch"].item())
+                    and int(payload["applied_selection_revision"].item())
+                    == int(payload["requested_selection_revision"].item())
+                    and not applied_after_freeze
+                    and not identity_mismatch
+                    and str(payload["disposition"].item()) == "rejected"
+                    and str(payload["reason"].item())
+                    == "selector_no_verified_dsp"
                 )
                 expected_hr_accepted = bool(
                     fresh_lifecycle
@@ -791,6 +831,7 @@ def verify_replay_artifacts(pass_dir: str | Path) -> tuple[VerificationIssue, ..
                 if (
                     str(payload["execution_status"].item()) == "completed"
                     and not fresh_lifecycle
+                    and not active_all_dsp_failed_rejection
                     and saved_disposition != "expired"
                 ):
                     raise ValueError("stale completed result must be explicitly expired")
@@ -798,7 +839,11 @@ def verify_replay_artifacts(pass_dir: str | Path) -> tuple[VerificationIssue, ..
                 request = requests_by_job.get(row["job_id"])
                 if request is not None:
                     _assert_request_matches_attempt(request, payload)
-                _assert_application_matches_attempt(application, payload)
+                _assert_application_matches_attempt(
+                    application,
+                    payload,
+                    allow_overage_rejection=active_all_dsp_failed_rejection,
+                )
                 terminal = terminals_by_job.get(row["job_id"])
                 if terminal is not None:
                     _assert_terminal_matches_attempt(terminal, payload)
@@ -1056,6 +1101,8 @@ def _validate_selection_lifecycle(
     payload: Any,
     selection: Any,
     candidate_bins: set[int] | None,
+    *,
+    applied_after_freeze: bool,
 ) -> bool:
     """Validate the exact selector revision/bin transition.
 
@@ -1122,12 +1169,24 @@ def _validate_selection_lifecycle(
         if selected_bin not in candidate_bins:
             raise ValueError("selector selected bin is outside candidate gate")
         if str(payload["disposition"].item()) == "expired":
-            # A scientifically successful worker return can arrive only after
-            # EOF froze the denominator or after an integrity epoch changed.
-            # Preserve its arrays and decision, but it must not commit the bin,
-            # advance the revision, or publish either channel retroactively.
             request_epoch = int(payload["request_epoch"].item())
             application_epoch = int(payload["application_epoch"].item())
+            application_age = (
+                int(payload["application_boundary"].item())
+                - int(payload["frame_stop"].item())
+            )
+            reason = str(payload["reason"].item())
+            publication_age_commit = (
+                reason == "publication_age_exceeded_one_hop"
+                and application_age > 60
+                and application_epoch == request_epoch
+                and applied_revision == requested_revision + 1
+                and not applied_after_freeze
+            )
+
+            # A valid current selector commits its bin even when its values are
+            # too old to display.  EOF and integrity resets instead preserve the
+            # already-frozen state and cannot use this narrow age exception.
             revision_is_frozen = (
                 application_epoch == request_epoch
                 and applied_revision == requested_revision
@@ -1135,13 +1194,36 @@ def _validate_selection_lifecycle(
             revision_was_reset = (
                 application_epoch > request_epoch and applied_revision == 0
             )
+            frozen_state_is_authorized = (
+                revision_is_frozen
+                and applied_after_freeze
+                and reason == "playback_denominator_frozen"
+            )
+            reset_state_is_authorized = revision_was_reset and (
+                (
+                    not applied_after_freeze
+                    and reason == "stale_epoch"
+                )
+                or (
+                    applied_after_freeze
+                    and reason == "playback_denominator_frozen"
+                )
+            )
             if (
-                not (revision_is_frozen or revision_was_reset)
+                not (
+                    publication_age_commit
+                    or frozen_state_is_authorized
+                    or reset_state_is_authorized
+                )
                 or bool(payload["hr_accepted"].item())
                 or bool(payload["br_accepted"].item())
             ):
                 raise ValueError(
                     "expired successful selector changed state or admitted values"
+                )
+            if reason == "publication_age_exceeded_one_hop" and not publication_age_commit:
+                raise ValueError(
+                    "publication-age selector expiry lacks its exact current-state commit"
                 )
             return False
         if applied_revision != requested_revision + 1:
@@ -1189,7 +1271,10 @@ def _assert_request_matches_attempt(request: Mapping[str, Any], payload: Any) ->
 
 
 def _assert_application_matches_attempt(
-    application: Mapping[str, Any], payload: Any
+    application: Mapping[str, Any],
+    payload: Any,
+    *,
+    allow_overage_rejection: bool = False,
 ) -> None:
     requested_revision = int(payload["requested_selection_revision"].item())
     applied_revision = int(payload["applied_selection_revision"].item())
@@ -1230,14 +1315,18 @@ def _assert_application_matches_attempt(
     application_age = expected["boundary"] - int(payload["frame_stop"].item())
     if application_age < 0:
         raise ValueError("application boundary precedes the analyzed window")
-    if expected["disposition"] == "published" and application_age > 60:
-        raise ValueError("published application exceeds the one-hop age limit")
     if application_age > 60 and (
-        expected["disposition"] != "expired"
+        expected["disposition"] == "published"
         or expected["hr_accepted"]
         or expected["br_accepted"]
     ):
-        raise ValueError("over-age application must be nonpublishing and expired")
+        raise ValueError("over-age application cannot publish or admit values")
+    if (
+        application_age > 60
+        and expected["disposition"] != "expired"
+        and not allow_overage_rejection
+    ):
+        raise ValueError("over-age application must be explicitly expired")
 
 
 def _validate_application_transition(

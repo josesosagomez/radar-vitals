@@ -389,23 +389,77 @@ def test_hr_marked_valid_without_explicit_ahet_verification_is_never_accepted():
     assert update.snapshot.hr.state == "held"
 
 
-@pytest.mark.parametrize("lag", [60, 61])
-def test_publication_age_accepts_exactly_one_hop_and_rejects_one_frame_beyond(lag):
+def test_publication_age_accepts_exactly_one_hop():
     controller = BaselineController({}, generation=1)
     _feed(controller, 600)
     job = _claim(controller)
-    _feed(controller, lag)
+    _feed(controller, 60)
     update = controller.handle_executed(
         _executed(job, actual_bin=3, decision=_selection(3))
     )
 
-    if lag == 60:
-        assert update.disposition.hr_accepted is True
-        assert update.disposition.br_accepted is True
-    else:
-        assert update.disposition.disposition == "expired"
-        assert update.disposition.reason == "publication_age_exceeded_one_hop"
-        assert controller.selected_bin is None
+    assert update.disposition.hr_accepted is True
+    assert update.disposition.br_accepted is True
+    assert controller.selected_bin == 3
+    assert controller.selection_revision == 1
+
+
+def test_overage_current_selector_commits_identity_without_numeric_publication():
+    controller = BaselineController({}, generation=1)
+    _feed(controller, 600)
+    selector = _claim(controller)
+    _feed(controller, 61)
+    queued_retry = controller.pending_job
+    assert queued_retry is not None
+    assert queued_retry.selection_mode == "select"
+    assert tuple(controller._hr_history) == ()
+
+    update = controller.handle_executed(
+        _executed(selector, actual_bin=3, decision=_selection(3))
+    )
+
+    assert controller.selected_bin == 3
+    assert controller.selection_revision == 1
+    assert controller.pending_job is None
+    assert update.cancelled_job_ids == (queued_retry.job_id,)
+    assert [event.kind for event in update.events] == [
+        "cancelled_before_execution",
+        "result_applied",
+    ]
+    disposition = update.disposition
+    assert disposition is not None
+    assert disposition.disposition == "expired"
+    assert disposition.reason == "publication_age_exceeded_one_hop"
+    assert disposition.application_epoch == selector.epoch
+    assert disposition.selection_mode == "select"
+    assert disposition.requested_selection_revision == 0
+    assert disposition.selection_revision == 1
+    assert disposition.hr_accepted is False
+    assert disposition.br_accepted is False
+    assert disposition.display_hr_bpm is None
+    assert disposition.display_br_bpm is None
+    assert disposition.display_hr_state == "missing"
+    assert disposition.display_br_state == "missing"
+    assert tuple(controller._hr_history) == ()
+    assert update.snapshot.hr.value_bpm is None
+    assert update.snapshot.br.value_bpm is None
+    assert update.events[-1].selected_bin == 3
+    assert update.events[-1].selection_revision == 1
+
+    _feed(controller, 59)
+    rolling = _claim(controller)
+    assert rolling.selection_mode == "committed"
+    assert rolling.stage == "rolling"
+    assert rolling.requested_bin == 3
+    assert rolling.selection_revision == 1
+    fresh = controller.handle_executed(_executed(rolling, actual_bin=3))
+    assert fresh.disposition is not None
+    assert fresh.disposition.disposition == "published"
+    assert fresh.disposition.hr_accepted is True
+    assert fresh.disposition.br_accepted is True
+    assert fresh.snapshot.hr.value_bpm == pytest.approx(70.0)
+    assert fresh.snapshot.br.value_bpm == pytest.approx(12.0)
+    assert tuple(controller._hr_history) == (70.0,)
 
 
 def test_busy_controller_bounds_one_active_and_replaces_one_pending_window():

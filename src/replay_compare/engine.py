@@ -15,7 +15,6 @@ import numpy as np
 from src.live_motion.config import LiveMotionSettings
 from src.live_motion.runtime import (
     ExecutedAnalysis,
-    _rss_bytes,
     production_analysis_function,
 )
 from src.live_motion.scheduler import (
@@ -29,6 +28,7 @@ from .clock import PlaybackClock
 from .evidence import ReplayEvidenceWriter
 from .session import ReplaySessionSpec
 from .source import SequentialAdcSource
+from .telemetry import replay_rss_bytes
 
 
 @dataclass(frozen=True)
@@ -368,7 +368,14 @@ class BaselineController:
         else:
             cancelled_after_selection = ()
 
-        if result.status != "completed" or result.dsp is None:
+        publication_age_frames = self.processed_boundary - result.frame_stop
+        if publication_age_frames > self.ordinary_hop_frames:
+            # A current selector result still establishes the bin identity.  Its
+            # numerical values are too old for a causal one-hop display update.
+            disposition = self._held_disposition(
+                "expired", "publication_age_exceeded_one_hop"
+            )
+        elif result.status != "completed" or result.dsp is None:
             disposition = self._held_disposition(
                 "failed", result.error or "analysis_returned_no_dsp"
             )
@@ -447,8 +454,6 @@ class BaselineController:
             return "requested_bounds_mismatch"
         if result.selection_revision != self.selection_revision:
             return "stale_selection_revision"
-        if self.processed_boundary - result.frame_stop > self.ordinary_hop_frames:
-            return "publication_age_exceeded_one_hop"
         if (
             requested.selection_mode != "select"
             and result.actual_bin != self.selected_bin
@@ -774,7 +779,7 @@ class ReplayRuntime:
                         "controller_work_elapsed_s": (
                             time.monotonic() - controller_started_s
                         ),
-                        "rss_bytes": _rss_bytes(),
+                        "rss_bytes": replay_rss_bytes(),
                         "work_queue_depth": self._work.qsize(),
                         "result_queue_depth": self._results.qsize(),
                         "active_analysis": self.controller.active_job is not None,

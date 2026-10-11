@@ -43,7 +43,7 @@ def main() -> int:
 
     from PySide6 import QtCore, QtWidgets
 
-    from src.live_motion.runtime import _rss_bytes
+    from src.replay_compare.telemetry import replay_rss_bytes
     from src.replay_compare.application import create_replay_application
     from src.replay_compare.reference import PassiveReferenceTimeline
     from src.replay_compare.session import SUPPORTED_CAPTURE_ID, resolve_replay_session
@@ -190,7 +190,7 @@ def main() -> int:
                     "boundary": snapshot.processed_boundary,
                     "state": snapshot.playback_state,
                     "speed": snapshot.speed,
-                    "rss_bytes": _rss_bytes(),
+                    "rss_bytes": replay_rss_bytes(),
                     "coverage": asdict(snapshot.coverage),
                 })
                 last_sample = now
@@ -341,7 +341,9 @@ def main() -> int:
         if prepared and frame_rows:
             playback_wall = float(frame_rows[-1]["monotonic_s"]) - float(prepared[0]["monotonic_s"])
             observations["playback_wall_elapsed_s"] = playback_wall
-            observations["observed_frames_per_wall_second"] = limit / playback_wall
+            observations["observed_frames_per_wall_second"] = (
+                int(frame_rows[-1]["processed_boundary"]) / playback_wall
+            )
         if final.processed_boundary != limit or not manager.clean_shutdown:
             observations["errors"].append("scenario did not finish every authorized frame with clean shutdown")
         if manager.current_run.source.frames_read != limit or len(frame_rows) != limit:
