@@ -17,6 +17,7 @@ import pytest
 import yaml
 
 from src.reference_access import LoadedReference, ReferenceSource
+import src.replay_compare.application as application_module
 from src.replay_compare.application import create_replay_application
 from src.replay_compare.clock import PlaybackClock
 from src.replay_compare.engine import baseline_analysis_function
@@ -219,6 +220,196 @@ def _fast_clock(frame_rate_hz: float, speed: float) -> PlaybackClock:
         monotonic=lambda: 0.0,
         wait=lambda _seconds: None,
     )
+
+
+def test_default_factory_owns_fresh_process_backend_per_pass_and_injection_does_not(
+    tmp_path, monkeypatch
+):
+    constructed = []
+
+    class RecordingBackend:
+        def __init__(self, config, expected_config_sha256):
+            self.config = config
+            self.expected_config_sha256 = expected_config_sha256
+            constructed.append(self)
+
+    monkeypatch.setattr(
+        application_module, "SpawnBaselineBackend", RecordingBackend
+    )
+    spec = _spec(tmp_path)
+    manager = create_replay_application(
+        spec,
+        output_root=tmp_path / "default-process",
+        reference_timeline=_timeline([]),
+        frame_limit=1,
+        source_factory=lambda: _ArraySource(_frames()),
+        clock_factory=_fast_clock,
+    )
+
+    first_backend = manager.current_run.process_backend
+    assert first_backend is constructed[0]
+    assert first_backend.config == spec.effective_config
+    assert first_backend.expected_config_sha256 == spec.effective_config_sha256
+    assert manager.current_run.analysis_function is None
+
+    second_run = manager._build_run(2, 1.0)
+    assert second_run.runtime.process_backend is constructed[1]
+    assert constructed[1] is not constructed[0]
+    assert second_run.runtime.analysis_function is None
+
+    injected = _RecordingAnalysis()
+    injected_manager = create_replay_application(
+        spec,
+        output_root=tmp_path / "injected-thread",
+        reference_timeline=_timeline([]),
+        frame_limit=1,
+        source_factory=lambda: _ArraySource(_frames()),
+        analysis_function=injected,
+        clock_factory=_fast_clock,
+    )
+    assert injected_manager.current_run.analysis_function is injected
+    assert injected_manager.current_run.process_backend is None
+    assert len(constructed) == 2
+
+
+def test_restart_readiness_does_not_hold_manager_lock_and_stop_cancels_before_source(
+    tmp_path, monkeypatch, request
+):
+    ready_entered = threading.Event()
+    release_ready = threading.Event()
+    sources = []
+    backends = []
+
+    class TrackingSource(_ArraySource):
+        def __init__(self):
+            super().__init__(_frames())
+            self.enter_calls = 0
+
+        def __enter__(self):
+            self.enter_calls += 1
+            return super().__enter__()
+
+    class BlockingSecondBackend:
+        def __init__(self, _config, _expected_config_sha256):
+            self.ordinal = len(backends) + 1
+            self.is_started = False
+            self.is_closed = False
+            self.start_calls = 0
+            self.close_calls = 0
+            backends.append(self)
+
+        def start(self, timeout_s):
+            assert timeout_s == pytest.approx(1.0)
+            self.start_calls += 1
+            if self.ordinal == 2:
+                ready_entered.set()
+                assert release_ready.wait(timeout=3.0)
+            self.is_started = True
+
+        def execute(self, _job):
+            raise AssertionError("one-frame replay cannot schedule analysis")
+
+        def close(
+            self,
+            *,
+            deadline_monotonic_s,
+            containment_deadline_monotonic_s,
+            force,
+        ):
+            assert containment_deadline_monotonic_s >= deadline_monotonic_s
+            del force
+            if not self.is_closed:
+                self.close_calls += 1
+                self.is_closed = True
+                self.is_started = False
+
+        def observation(self):
+            return {
+                "pid": self.ordinal,
+                "alive": self.is_started and not self.is_closed,
+                "exitcode": 0 if self.is_closed else None,
+                "current_rss_bytes": None,
+                "peak_rss_bytes": None,
+            }
+
+    def source_factory():
+        source = TrackingSource()
+        sources.append(source)
+        return source
+
+    monkeypatch.setattr(
+        application_module, "SpawnBaselineBackend", BlockingSecondBackend
+    )
+    manager = create_replay_application(
+        _spec(tmp_path),
+        output_root=tmp_path / "restart-ready-cancel",
+        reference_timeline=_timeline([]),
+        frame_limit=1,
+        initial_speed=4.0,
+        source_factory=source_factory,
+        clock_factory=_fast_clock,
+        shutdown_timeout_s=1.0,
+    )
+
+    def cleanup():
+        release_ready.set()
+        manager.stop(timeout_s=1.0)
+
+    request.addfinalizer(cleanup)
+    manager.start()
+    assert manager.current_run._ended.wait(timeout=3.0)
+    monitor = manager._run.monitor
+    assert monitor is not None
+    monitor.join(timeout=3.0)
+    assert monitor.is_alive() is False
+    assert manager.clean_shutdown is True
+    assert len(sources) == 1 and sources[0].enter_calls == 1
+
+    assert manager.restart() is True
+    assert ready_entered.wait(timeout=3.0)
+    assert manager.restart_in_progress is True
+    assert manager.stopping is False
+    ui_done = threading.Event()
+    observed = {}
+
+    def stop_from_ui():
+        observed["restart_before"] = manager.restart_in_progress
+        observed["stopping_before"] = manager.stopping
+        manager.request_stop()
+        observed["stopping_after"] = manager.stopping
+        ui_done.set()
+
+    ui_thread = threading.Thread(target=stop_from_ui)
+    ui_thread.start()
+    assert ui_done.wait(timeout=1.0)
+    assert observed == {
+        "restart_before": True,
+        "stopping_before": False,
+        "stopping_after": True,
+    }
+    release_ready.set()
+    ui_thread.join(timeout=3.0)
+    transition = manager._transition
+    stop_thread = manager._stop_thread
+    assert transition is not None and stop_thread is not None
+    transition.join(timeout=3.0)
+    stop_thread.join(timeout=3.0)
+
+    assert transition.is_alive() is False
+    assert stop_thread.is_alive() is False
+    assert manager.restart_in_progress is False
+    assert manager.stopping is True
+    assert manager.generation == 1
+    assert len(backends) == 2
+    assert backends[1].start_calls == 1
+    assert backends[1].close_calls == 1
+    assert backends[1].is_closed is True
+    assert len(sources) == 2
+    assert sources[1].enter_calls == 0
+    assert sources[1].cursor == 0
+    assert isinstance(manager.failure, RuntimeError)
+    assert "unopened pass" in str(manager.failure)
+    assert manager.clean_shutdown is False
 
 
 def _run_application(tmp_path, label, reference):

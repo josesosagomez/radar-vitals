@@ -841,3 +841,235 @@ Both revisions require independent code review, focused and complete non-real-
 data suites, separate reviewed commits/pushes, and fresh full 1x/native controls,
 other speeds, source-bound artifact verification and an actual screenshot.
 Failed runs remain diagnostic evidence; no responsiveness threshold is relaxed.
+
+## 7. Native contention correction under protected-source isolation (2026-10-11)
+
+The full cfcb2c00 run completed 12005 frames and independently verified all
+artifacts, but failed strict Qt/snapshot/callback timing. Controller max 0.234 s
+passed. Of 190 analyses, 165 exceeded 0.25 s, against 158 Qt heartbeat breaches.
+A profiled unchanged 800-frame diagnostic already had Qt maximum 0.516 s.
+This demonstrates contention before long plot history, without proving exact
+GIL ownership. Native FFT calls took about 0.093-0.109 s, stack reached 0.187 s,
+and protected per-bin DSP about 0.25-0.42 s. A separate inactive-analysis UI
+stall also exists. Failed full/diagnostic artifacts remain preserved.
+
+The proposed correction cannot change protected window_pipeline.py/vitals.py
+or any frozen source. An ndarray-fast-path edit there is excluded. Before
+implementation, independently review this replay-only process boundary:
+
+- Add process_analysis.py and preserve the exact baseline settings builder.
+  Production default uses one persistent multiprocessing spawn child per pass;
+  explicit injected callbacks retain the tested thread backend. The manager
+  must retain a default marker so restart constructs a fresh backend/process.
+- Child receives only canonical effective config plus expected hash, exact job
+  scalar metadata/sequence, and one fixed shared-memory window descriptor. No
+  ADC/reference path, hardware object, Qt object, evidence writer, or arbitrary
+  algorithm override. Child calls the unchanged production analyzer.
+- Existing parent worker is the sole IPC bridge. It copies exactly 600 owned
+  read-only captured frames chronologically into one fixed region, frame by
+  frame; no parent full-window stack. Send only after the copy is complete.
+  One request/result may be in flight; never overwrite before matching reply.
+  Child validates exact schema, sequence, geometry/dtype/bounds/byte count, then
+  creates the owned/read-only execution array required by AnalysisJob. No
+  non-owning-view shortcut. Return ordinary ExecutedAnalysis with exact lineage
+  and small intermediate arrays; existing admission/writer/verifier unchanged.
+- Total analysis time includes bridge copy/IPC/child materialization/callback.
+  Selector time remains selector-only. Persist stage spans and first causal
+  failure, including startup/protocol/transport/child-death diagnostics.
+- Spawn entry is module-level and import safe. Require a ready handshake with
+  verified config before worker/controller startup, within the existing 5 s
+  bound. Startup failure cleans all owned handles/processes before source use.
+- Callback exceptions retain ordinary failed-attempt evidence. Transport/protocol
+  corruption, EOF or child death yields exactly one honest active failed attempt
+  before pass failure. Never silently respawn or continue with substituted DSP.
+- Pause parks new execution while active work may complete; no late publication.
+  Stop/restart stops dispatch and joins active analysis plus child under existing
+  5 s acceptance. Timeout marks pass failed and blocks restart; terminate/kill
+  only the explicitly owned child for containment, join it and close/unlink all
+  owned shared-memory/Pipe resources. No abandoned process/thread or surviving
+  pass state. Tombstone cleanup remains exact and signal references release.
+- Parent-only RSS is insufficient after isolation. Record parent/child current
+  working sets and simultaneous combined samples, with shared-page double-count
+  caveat. Report child lifetime peak separately from current bytes. Expose PID,
+  child exit status and bounded process count. No hidden-memory plateau claim.
+
+Separate replay-only GUI correction: validate immutable snapshot scalar fields
+and only newly observed trace samples; reject altered/truncated prior prefixes,
+wrong generation/order/future samples. Keep a lossless causal full prefix and
+exact NaN gaps, incrementally maintain numeric plot buffers without duplicated
+HR/BR TraceSample histories. Rebuild/redraw only on new data at a bounded plot
+cadence while status/cards/controls retain 50 ms polling. Restart resets all
+plot state. Any prefix proof must be explicit, not endpoint-only trust that
+could silently accept altered history. No curve interpolation/decimation.
+
+Primary acceptance driver adds timestamped heartbeat/poll breach records, phase
+spans and process memory observations without excluding any sample or relaxing
+0.25 s thresholds. Screenshots remain actual, observed, and attributable.
+
+Required gates: independent plan review before build; exact thread/process
+production evidence equality for selector and committed synthetic windows;
+configuration/job/sequence/shape/type/byte-count rejection; bounded one-slot
+transport/no overwrite; child startup/exception/crash/hang/EOF/timeout cleanup;
+stop/pause/tombstone/restart fresh PID and no shared-memory/process leak;
+incremental multi-frame UI gaps, prefix alteration, NaN semantics, full final
+equality, future rejection and restart; independent code review; serial focused
+then complete non-real-data suite; reviewed separate commits/push read-back;
+fresh short native diagnostic then complete strict full 1x and other speeds/
+controls; independent artifact verification and honest combined RSS review.
+
+This revision changes scheduling/isolation/rendering only. It never changes
+scientific algorithms, config thresholds, windows/hops, coverage rules, source
+integrity, reference/calibration boundaries, raw inputs, or protected bytes.
+
+### 7.1 Required independent-review clarifications before build
+
+The first section-7 review returned NOT READY, with HIGH findings on the GUI
+prefix interface, per-generation factory and durable fatal-result ordering,
+and MEDIUM findings on shutdown deadline, complete result transport and SHM
+ownership. The following concrete contracts replace ambiguous proposal text.
+
+GUI: snapshots keep the cumulative tuple of the same frozen controller sample
+objects. The UI stores its last validated tuple, rejects shorter prefixes and
+compares the exact prior prefix by tuple identity/equality before any mutation
+(including changed earlier sample with the same endpoint). This bounded C tuple
+comparison is retained deliberately; expensive Python per-sample validation runs
+only for the new tail. Validate frozen type, generation, contiguous increasing
+boundaries, state/value rules, and no future sample. Allocate fixed-capacity
+NumPy x/HR/BR/reference buffers using total_frames/frame_limit, initialize value
+buffers to NaN, fill only observed causal positions, and remove duplicated HR/BR
+TraceSample histories. No history-wide visible_plot_series call in polling.
+Use plot chunks of 600 observed frame positions, with one previous-point overlap
+between adjacent chunks so visual continuity is exact. Four curves per chunk;
+only dirty chunks receive bounded slices. Plot redraw cadence is at most 10 Hz
+(100 ms); cards/status/controls retain 50 ms polling. Force any pending redraw
+for pause, terminal snapshots, and screenshots. Logical concatenation excluding
+overlap equals the old complete series exactly, including NaN gaps and future
+blanking. Restart removes all old curves/prefix/buffers before a fresh generation.
+Advanced full-prefix snapshots retain the same GUI behavior. Compatibility
+preparing snapshots without trace do not invent missing historical observations.
+
+Factory: keep analysis_function=None through create_replay_application and
+ReplayApplicationManager. Each _build_run(None) creates a new pass-scoped
+SpawnBaselineBackend owned by that ReplayRuntime, without spawning during
+construction. Explicit callable remains the existing thread path. runtime.start
+performs child start and ready/config-hash handshake before worker/controller
+threads or source opening. Never-started canceled restarts clean allocated
+resources. Restart starts a new child only after the previous pass is fully
+joined/finalized. clean_shutdown additionally requires dead child, closed Pipe
+ends, and closed/unlinked owned SHM.
+
+Fatal ordering: define a typed replay-local worker outcome carrying the complete
+ExecutedAnalysis and optional fatal_backend_error. A callback/scientific failure
+is nonfatal normal evidence. Parent bridge/protocol/EOF/child death creates one
+failed result with original parent request identity and exceptional evidence,
+marked fatal. Controller normalizes identity and durably writes events, NPZ,
+index and performance, then raises the fatal error to fail/freeze the pass. No
+second synthetic attempt, subsequent dispatch or respawn; late replies are
+tombstoned. Failure-path tests establish durability-before-failure ordering.
+
+Shutdown: one monotonic five-second deadline is shared by active-result wait,
+worker join, child shutdown acknowledgment/join and ordinary cleanup. Poll IPC
+in bounded slices; no indefinite recv. Exceeding the deadline always leaves the
+pass failed and blocks restart. Terminal containment terminates, then kills if
+needed, only the explicitly owned child, closes/discards its transport, closes
+and unlinks only parent-owned SHM and reaps child/worker. If timeout cleanup
+needs time beyond the acceptance deadline, use a separate explicitly bounded
+one-second containment allowance and record that overrun as failed; cleanup
+success cannot turn this into clean shutdown. Never leave an abandoned child.
+
+Transport: deliver the complete unchanged picklable ExecutedAnalysis, including
+AnalysisResult.dsp, selection_decision/evidence, breathing and all evidence
+arrays. No filtering, casting or omission. Only timing fields may differ.
+Validate typed envelope/version/sequence/config hash/result identity, and bound
+serialized control/result payload bytes (raw windows never enter the Pipe).
+Serialization/protocol/type errors follow fatal ordering above. Scientific
+equivalence checks every nested scalar/dataclass and array shape/dtype/value
+with NaNs, excluding elapsed timing, for selector, committed and scientific
+failure outcomes.
+
+Shared memory: get_context('spawn'), never mutate global start method. Target
+is module-level in process_analysis.py. Parent alone creates/unlinks one fixed
+region; child only attaches/closes. Validate exact 600 bounds, homogeneous frame
+shape/dtype and capacity before chronological frame-by-frame np.copyto. One
+in-flight sequence; no overwrite until matching reply or terminal discard and
+cleanup. Child verifies scalar metadata/descriptor/geometry/dtype/byte count,
+copies the entire readonly view into an owned array, marks that copy readonly,
+releases the view, constructs the materialized replay job, then calls unchanged
+production. Close unused Pipe ends immediately for reliable EOF. Shared-memory
+read-only flags are a cooperative contract, not an OS security sandbox.
+
+Telemetry: sample parent/child current RSS, simultaneous summed current, PID/
+process count and exit state at the acceptance driver's existing 1 Hz cadence,
+never query child memory on the 20 Hz controller path. Capture child lifetime
+peak before closing its process handle, distinctly named as peak. Combined
+working sets can double-count shared pages. Persist stage spans once per attempt
+(parent copy/send/wait/receive, child materialization/callback, selector and
+round-trip), and timestamp every UI/heartbeat interval/breach without exclusions.
+Windows spawn/import safety, fresh PID and no leaked mapping are test gates.
+
+Research basis: Python 3.11 multiprocessing/shared_memory documentation and
+CPython 3.11 implementation; Windows named mappings disappear after every handle
+closes, unlink is a Windows no-op, and 3.13 track= is unavailable in this pinned
+version. Termination is terminal containment only; a possibly corrupted Pipe
+is never reused. Primary links and independent research details are recorded
+in the review log. Process isolation still requires observed native acceptance.
+
+Final independent plan re-review: **READY WITH MINOR CHANGES**, incorporated
+before build. For every production non-preparing snapshot, require trace length
+equal to processed_boundary, first boundary 1, and final boundary exactly
+processed_boundary; the tail is contiguous. Preparing compatibility is allowed
+only at boundary zero. Entire prefix/tail/endpoint validation precedes mutation;
+invalid snapshot preserves prior UI state. Tests cover skipped GUI polls,
+same-endpoint earlier alteration and short endpoint/initial truncation.
+
+IPC objective constants in src/replay_compare/process_analysis.py:
+MAX_CONTROL_BYTES=65536, MAX_RESULT_BYTES=16777216, inclusive len(payload)<=limit.
+Record actual serialized byte lengths; refuse larger messages before sending or
+while bounded receiving. Test limit-1, limit and limit+1. The limits may never
+justify omission/casting of scientific content. The full complete production
+ExecutedAnalysis must fit or the pass fails honestly. Only trusted owned-child
+Pipe endpoints carry serialization; no external endpoint or arbitrary callback.
+
+### 7.2 Observed Windows capacity and immutable prefix corrections (2026-10-11)
+
+The focused implementation run produced 483 passes and seven failures. Independent
+test and code reviewers identified two production defects; the other five are
+fixture expectations/signatures. Preserve all logs and do not change scientific
+processing or acceptance thresholds to make these tests pass.
+
+Keep descriptor.byte_count equal to exact shape-times-dtype payload bytes. On
+Windows only, validate attached SharedMemory.size against exactly that byte count
+rounded up to mmap.PAGESIZE; on other platforms retain exact payload equality.
+Reject every other capacity, including undersized and unexpectedly oversized
+mappings, before constructing the scientific view. Page padding never enters
+the descriptor, copied region, ndarray.nbytes or analyzer. A pinned Windows probe
+observed requested/created 38400 bytes and attached 40960 bytes with 4096-byte
+pages. This follows CPython 3.11's VirtualQuerySize attach implementation and the
+documented possibility of page-based allocation. Tests must cover platform
+normalization and strict invalid capacities, plus a real non-page-aligned child
+callback proving exact payload geometry/dtype/nbytes.
+
+Replace retained UI prefix equality with exact object identity proof before any
+mutation. Previous samples remain strongly referenced by the validated tuple;
+cache their identities and compare candidate prefix identities using built-in
+primitive operations. Equality-equivalent SimpleNamespace or reconstructed
+samples cannot substitute for the original frozen DisplayTraceSample objects.
+Validate new tail fields/types as before; do not add a history-wide Python field
+validation loop. Preserve constructor rejection, full prefix/endpoint checks,
+chunked curves, causal NaN gaps and all unchanged 0.25-second native gates.
+
+Fixture corrections preserve their original safeguards: NaN inputs are compared
+as the unchanged analyzer's completed scientific rejection; an unsupported phase
+method supplies two caught ordinary scientific failures on one child to prove
+nonfatal continuation, while a separate valid-config child tests selector and
+committed results. Match the stricter geometry error, give the child-death fake
+the production timeout_s keyword, and expect invalid preparing snapshots to fail
+during the constructor's initial poll. Preserve the mutable-prefix adversarial
+case. Independently review these changes, rerun focused and complete tests with
+fresh retained logs, then run actual native acceptance before claiming delivery.
+
+Primary sources: https://docs.python.org/3.11/library/multiprocessing.shared_memory.html
+and https://github.com/python/cpython/blob/v3.11.11/Lib/multiprocessing/shared_memory.py
+(Windows create versus attach size); https://docs.python.org/3.11/library/mmap.html
+(PAGESIZE); https://learn.microsoft.com/en-us/windows/win32/api/memoryapi/nf-memoryapi-virtualquery
+(page-region capacity).

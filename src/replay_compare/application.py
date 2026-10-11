@@ -28,10 +28,10 @@ from .engine import (
     BaselineDisposition,
     BaselineSnapshot,
     ReplayRuntime,
-    baseline_analysis_function,
 )
 from .evidence import ReplayEvidenceWriter
 from .reference import PassiveReferenceTimeline, ReferenceValue
+from .process_analysis import SpawnBaselineBackend
 from .session import ReplaySessionSpec
 from .source import ProductionFrameDecoder, SequentialAdcSource
 from .view_model import DisplayChannel, DisplayTraceSample, PlaybackSnapshot
@@ -546,7 +546,7 @@ class ReplayApplicationManager:
         initial_speed: float,
         reference_timeline: PassiveReferenceTimeline | None,
         source_factory: SourceFactory,
-        analysis_function: AnalysisFunction,
+        analysis_function: AnalysisFunction | None,
         clock_factory: ClockFactory,
         mode: str = "baseline",
         initial_generation: int = 1,
@@ -635,6 +635,16 @@ class ReplayApplicationManager:
                 and run.finalize_error is None
                 and self._transition_error is None
             )
+
+    @property
+    def restart_in_progress(self) -> bool:
+        with self._lock:
+            return self._transition is not None and self._transition.is_alive()
+
+    @property
+    def stopping(self) -> bool:
+        with self._lock:
+            return self._stopping
 
     @property
     def failure(self) -> BaseException | None:
@@ -770,6 +780,11 @@ class ReplayApplicationManager:
                 if self._stopping or self._run is not previous:
                     return
             next_run = self._build_run(previous.generation + 1, self.initial_speed)
+            # Spawn/config readiness may take seconds.  Complete it without the
+            # manager lock so dashboard reads and Stop remain responsive.  No
+            # worker/controller thread or ADC source is opened at this stage.
+            next_run.runtime.prepare_analysis_backend()
+            cancelled_after_prepare = False
             with self._lock:
                 if self._stopping or self._run is not previous:
                     next_run.evidence.writer.write_playback_event({
@@ -783,9 +798,15 @@ class ReplayApplicationManager:
                     self._record_lifecycle_failure_locked(RuntimeError(
                         "restart was cancelled after constructing an unopened pass"
                     ))
-                    return
-                next_run.runtime.start()
-                self._run = next_run
+                    cancelled_after_prepare = True
+                else:
+                    # Child readiness is complete, so this locked start only
+                    # publishes the generation and starts local threads.
+                    next_run.runtime.start()
+                    self._run = next_run
+            if cancelled_after_prepare:
+                next_run.runtime.stop(timeout_s=self.shutdown_timeout_s)
+                return
             monitor = threading.Thread(
                 target=self._monitor_run,
                 args=(next_run,),
@@ -896,6 +917,11 @@ class ReplayApplicationManager:
             controller=controller,
             evidence=evidence,  # type: ignore[arg-type]
             analysis_function=self.analysis_function,
+            process_backend=(
+                SpawnBaselineBackend(config, self.spec.effective_config_sha256)
+                if self.analysis_function is None
+                else None
+            ),
             frame_limit=self.frame_limit,
             clock=self.clock_factory(self.spec.frame_rate_hz, speed),
             shutdown_timeout_s=self.shutdown_timeout_s,
@@ -932,8 +958,6 @@ def create_replay_application(
                 expected_sha256=spec.registered_adc_sha256,
                 expected_frame_count=spec.frame_count,
             )
-    if analysis_function is None:
-        analysis_function = baseline_analysis_function(config)
     if clock_factory is None:
         clock_factory = PlaybackClock
     return ReplayApplicationManager(

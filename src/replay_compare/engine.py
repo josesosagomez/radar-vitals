@@ -12,11 +12,7 @@ from typing import Any, Callable, Literal
 
 import numpy as np
 
-from src.live_motion.config import LiveMotionSettings
-from src.live_motion.runtime import (
-    ExecutedAnalysis,
-    production_analysis_function,
-)
+from src.live_motion.runtime import ExecutedAnalysis
 from src.live_motion.scheduler import (
     AnalysisJob,
     AnalysisResult,
@@ -26,75 +22,20 @@ from src.warmup_select import derive_candidate_bins
 
 from .clock import PlaybackClock
 from .evidence import ReplayEvidenceWriter
+from .process_analysis import (
+    ProcessAnalysisError,
+    ProcessExecution,
+    SpawnBaselineBackend,
+    _FrozenReplayAnalysisJob,
+    _materialize_replay_job,
+    baseline_analysis_function,
+)
 from .session import ReplaySessionSpec
 from .source import SequentialAdcSource
 from .telemetry import replay_rss_bytes
 
 
 _BASELINE_WINDOW_FRAMES = 600
-
-
-@dataclass(frozen=True)
-class _FrozenReplayAnalysisJob(AnalysisJob):
-    """Carry either a frozen frame recipe or its materialized worker array."""
-
-    raw_frames: np.ndarray | None = field(default=None, repr=False)
-    captured_frames: tuple[np.ndarray, ...] = field(default_factory=tuple, repr=False)
-
-    def __post_init__(self) -> None:
-        super().__post_init__()
-        if type(self.captured_frames) is not tuple:
-            raise ValueError("captured replay frames must use an immutable tuple")
-        if self.frame_stop - self.frame_start != _BASELINE_WINDOW_FRAMES:
-            raise ValueError("baseline replay jobs require exactly 600 frame bounds")
-
-        request_state = self.raw_frames is None
-        if request_state:
-            if len(self.captured_frames) != _BASELINE_WINDOW_FRAMES:
-                raise ValueError(
-                    "baseline replay requests require exactly 600 captured frames"
-                )
-            first_frame = self.captured_frames[0]
-            if not isinstance(first_frame, np.ndarray) or first_frame.ndim != 3:
-                raise ValueError(
-                    "captured replay frames must be three-dimensional arrays"
-                )
-            first_shape = first_frame.shape
-            first_dtype = first_frame.dtype
-            for frame in self.captured_frames:
-                if not isinstance(frame, np.ndarray) or frame.ndim != 3:
-                    raise ValueError(
-                        "captured replay frames must be three-dimensional arrays"
-                    )
-                if frame.shape != first_shape or frame.dtype != first_dtype:
-                    raise ValueError("captured replay frames must share shape and dtype")
-                if not frame.flags.owndata or frame.flags.writeable:
-                    raise ValueError("captured replay frames must be owned and read-only")
-            return
-
-        if self.captured_frames:
-            raise ValueError("materialized replay jobs cannot retain captured frames")
-        assert self.raw_frames is not None
-        if self.raw_frames.ndim != 4 or (
-            self.raw_frames.shape[0] != _BASELINE_WINDOW_FRAMES
-        ):
-            raise ValueError(
-                "materialized baseline replay jobs require one 600-frame array"
-            )
-        if not self.raw_frames.flags.owndata or self.raw_frames.flags.writeable:
-            raise ValueError("materialized replay frames must be owned and read-only")
-
-
-def _materialize_replay_job(
-    request: _FrozenReplayAnalysisJob,
-) -> _FrozenReplayAnalysisJob:
-    """Build the analysis array on the worker from an immutable frame recipe."""
-
-    if request.raw_frames is not None or not request.captured_frames:
-        raise ValueError("only an unmaterialized replay request can be materialized")
-    window_frames = np.stack(request.captured_frames, axis=0)
-    window_frames.setflags(write=False)
-    return replace(request, raw_frames=window_frames, captured_frames=())
 
 
 @dataclass(frozen=True)
@@ -175,35 +116,13 @@ class BaselineUpdate:
     cancelled_job_ids: tuple[str, ...] = ()
 
 
-def baseline_analysis_function(
-    config: dict[str, Any],
-) -> Callable[[AnalysisJob], ExecutedAnalysis]:
-    """Build production analysis with a private, calibration-free baseline contract."""
+@dataclass(frozen=True)
+class WorkerOutcome:
+    """One complete attempt result and an optional fatal backend cause."""
 
-    frame_rate_hz = float(config["session"]["frame_rate_hz"])
-    settings = LiveMotionSettings(
-        enabled=False,
-        unavailable_reason="baseline replay does not use motion calibration",
-        frame_rate_hz=frame_rate_hz,
-        preview_frames=(200, 400),
-        ordinary_window_frames=600,
-        ordinary_hop_frames=60,
-        monitor_window_frames=20,
-        monitor_hop_frames=5,
-        stillness_frames=60,
-        extended_breathing_enabled=False,
-        extended_breathing_window_frames=1200,
-        extended_breathing_band_hz=(0.05, 0.50),
-        candidate_bins=tuple(derive_candidate_bins(config)),
-        presence_thresholds=None,
-        movement_thresholds=None,
-        calibration_record=None,
-        calibration_record_path=None,
-        calibration_record_sha256=None,
-    )
-    if not settings.candidate_bins:
-        raise ValueError("baseline candidate-bin gate is empty")
-    return production_analysis_function(config, settings)
+    executed: ExecutedAnalysis
+    fatal_backend_error: str | None = None
+    performance: dict[str, Any] = field(default_factory=dict)
 
 
 class BaselineController:
@@ -683,7 +602,8 @@ class ReplayRuntime:
         source: SequentialAdcSource,
         controller: BaselineController,
         evidence: ReplayEvidenceWriter,
-        analysis_function: Callable[[AnalysisJob], ExecutedAnalysis],
+        analysis_function: Callable[[AnalysisJob], ExecutedAnalysis] | None,
+        process_backend: SpawnBaselineBackend | None = None,
         frame_limit: int,
         clock: PlaybackClock,
         shutdown_timeout_s: float = 5.0,
@@ -692,17 +612,26 @@ class ReplayRuntime:
         self.source = source
         self.controller = controller
         self.evidence = evidence
+        if (analysis_function is None) == (process_backend is None):
+            raise ValueError(
+                "replay runtime requires exactly one analysis function/backend"
+            )
         self.analysis_function = analysis_function
+        self.process_backend = process_backend
         self.frame_limit = int(frame_limit)
         self.clock = clock
         self.shutdown_timeout_s = float(shutdown_timeout_s)
         self.snapshot_observer = snapshot_observer
         self._work: queue.Queue[AnalysisJob | None] = queue.Queue(maxsize=1)
-        self._results: queue.Queue[ExecutedAnalysis] = queue.Queue(maxsize=1)
+        self._results: queue.Queue[WorkerOutcome] = queue.Queue(maxsize=1)
         self._commands: queue.Queue[tuple[str, Any]] = queue.Queue()
         self._stop = threading.Event()
         self._ended = threading.Event()
         self._execution_condition = threading.Condition()
+        self._stop_lock = threading.Lock()
+        self._shutdown_lock = threading.Lock()
+        self._shutdown_started_s: float | None = None
+        self._shutdown_deadline_s: float | None = None
         self._snapshot_lock = threading.Lock()
         self._latest_snapshot = controller.snapshot
         self._execution_paused = False
@@ -724,6 +653,7 @@ class ReplayRuntime:
     def start(self) -> None:
         if self._controller is not None:
             raise RuntimeError("replay runtime can only be started once")
+        self.prepare_analysis_backend()
         self._worker = threading.Thread(
             target=self._worker_loop, name="ReplayAnalysis", daemon=True
         )
@@ -732,6 +662,38 @@ class ReplayRuntime:
         )
         self._worker.start()
         self._controller.start()
+
+    def prepare_analysis_backend(self) -> None:
+        """Complete child readiness before worker/controller/source startup."""
+
+        if self.process_backend is not None:
+            if self.process_backend.is_started:
+                return
+            # Child readiness and config identity are established before either
+            # thread can open the registered ADC source.
+            try:
+                self.process_backend.start(
+                    timeout_s=min(5.0, self.shutdown_timeout_s)
+                )
+            except BaseException as exc:
+                self.failure = exc
+                self._ended.set()
+                raise
+
+    def _shutdown_deadlines(
+        self, requested_timeout_s: float | None = None
+    ) -> tuple[float, float]:
+        duration_s = (
+            min(5.0, self.shutdown_timeout_s)
+            if requested_timeout_s is None
+            else min(5.0, max(0.0, float(requested_timeout_s)))
+        )
+        with self._shutdown_lock:
+            if self._shutdown_deadline_s is None:
+                self._shutdown_started_s = time.monotonic()
+                self._shutdown_deadline_s = self._shutdown_started_s + duration_s
+            normal_deadline = self._shutdown_deadline_s
+        return normal_deadline, normal_deadline + 1.0
 
     def request_pause(self) -> None:
         self._commands.put(("pause", None))
@@ -754,19 +716,57 @@ class ReplayRuntime:
             materialized_job: _FrozenReplayAnalysisJob | None = None
             raw_frames: np.ndarray | None = None
             executed: ExecutedAnalysis | None = None
+            process_execution: ProcessExecution | None = None
+            fatal_backend_error: str | None = None
+            performance: dict[str, Any] = {}
             try:
                 if not isinstance(original_request, _FrozenReplayAnalysisJob):
                     raise TypeError("baseline worker requires a frozen replay request")
-                materialized_job = _materialize_replay_job(original_request)
-                raw_frames = materialized_job.raw_frames
-                if raw_frames is None:
-                    raise RuntimeError("materialized replay job omitted its frame array")
-                executed = self.analysis_function(materialized_job)
+                if self.process_backend is not None:
+                    process_execution = self.process_backend.execute(original_request)
+                    executed = process_execution.executed
+                    performance = {
+                        "process_sequence": process_execution.sequence,
+                        "parent_copy_elapsed_s": (
+                            process_execution.parent_copy_elapsed_s
+                        ),
+                        "parent_send_elapsed_s": (
+                            process_execution.parent_send_elapsed_s
+                        ),
+                        "parent_wait_receive_elapsed_s": (
+                            process_execution.parent_wait_receive_elapsed_s
+                        ),
+                        "child_materialization_elapsed_s": (
+                            process_execution.child_materialization_elapsed_s
+                        ),
+                        "child_callback_elapsed_s": (
+                            process_execution.child_callback_elapsed_s
+                        ),
+                        "process_round_trip_elapsed_s": (
+                            process_execution.round_trip_elapsed_s
+                        ),
+                        "process_control_bytes": process_execution.control_bytes,
+                        "process_result_bytes": process_execution.result_bytes,
+                    }
+                else:
+                    materialized_job = _materialize_replay_job(original_request)
+                    raw_frames = materialized_job.raw_frames
+                    if raw_frames is None:
+                        raise RuntimeError(
+                            "materialized replay job omitted its frame array"
+                        )
+                    assert self.analysis_function is not None
+                    executed = self.analysis_function(materialized_job)
                 executed = replace(
                     executed,
                     analysis_elapsed_s=time.monotonic() - started,
                 )
             except Exception as exc:
+                if self.process_backend is not None:
+                    fatal_backend_error = f"{type(exc).__name__}: {exc}"
+                    if isinstance(exc, ProcessAnalysisError):
+                        performance = dict(exc.performance)
+                    performance["fatal_backend_error"] = fatal_backend_error
                 result = AnalysisResult(
                     job_id=original_request.job_id, epoch=original_request.epoch,
                     selection_revision=original_request.selection_revision,
@@ -790,16 +790,23 @@ class ReplayRuntime:
                     selector_elapsed_s=None,
                 )
             assert executed is not None
+            outcome = WorkerOutcome(
+                executed=executed,
+                fatal_backend_error=fatal_backend_error,
+                performance=performance,
+            )
             if original_request.job_id in self._tombstoned_jobs:
                 self._tombstoned_jobs.discard(original_request.job_id)
                 original_request = None
                 materialized_job = None
                 raw_frames = None
                 executed = None
+                process_execution = None
+                outcome = None
                 continue
             while True:
                 try:
-                    self._results.put(executed, timeout=0.05)
+                    self._results.put(outcome, timeout=0.05)
                     break
                 except queue.Full:
                     if original_request.job_id in self._tombstoned_jobs:
@@ -809,6 +816,8 @@ class ReplayRuntime:
             materialized_job = None
             raw_frames = None
             executed = None
+            process_execution = None
+            outcome = None
 
     def _controller_loop(self) -> None:
         try:
@@ -1001,21 +1010,29 @@ class ReplayRuntime:
 
     def _drain_one_result(self) -> None:
         try:
-            executed = self._results.get_nowait()
+            outcome = self._results.get_nowait()
         except queue.Empty:
             return
+        executed = outcome.executed
         executed = self._normalize_returned_identity(executed)
         update = self.controller.handle_executed(executed)
         assert update.disposition is not None
         self._persist_update_events(update)
         self.evidence.write_attempt(executed, update.disposition)
         self._publish_snapshot(update.snapshot)
-        self.evidence.write_performance({
+        performance = {
             "kind": "analysis", "job_id": executed.result.job_id,
             "boundary": self.controller.processed_boundary,
             "analysis_elapsed_s": executed.analysis_elapsed_s,
             "selector_elapsed_s": executed.selector_elapsed_s,
-        })
+            **outcome.performance,
+            "fatal_backend_error": outcome.fatal_backend_error,
+        }
+        self.evidence.write_performance(performance)
+        if outcome.fatal_backend_error is not None:
+            # The failed attempt, application event, NPZ/index, snapshot and
+            # performance row are durable before the pass is frozen as failed.
+            raise ProcessAnalysisError(outcome.fatal_backend_error)
 
     def _normalize_returned_identity(
         self, executed: ExecutedAnalysis
@@ -1094,13 +1111,74 @@ class ReplayRuntime:
     def _shutdown_active(self) -> None:
         update = self.controller.cancel_pending("playback_finished")
         self._write_update(update)
-        deadline = time.monotonic() + self.shutdown_timeout_s
+        deadline, containment_deadline = self._shutdown_deadlines()
         while self.controller.active_job is not None and time.monotonic() < deadline:
             self._drain_one_result()
             time.sleep(0.01)
         if self.controller.active_job is not None:
             active = self.controller.active_job
             assert active is not None
+            if self.process_backend is not None:
+                backend_error = "analysis process exceeded the five-second deadline"
+                try:
+                    self.process_backend.close(
+                        deadline_monotonic_s=deadline,
+                        containment_deadline_monotonic_s=containment_deadline,
+                        force=True,
+                    )
+                except BaseException as exc:
+                    backend_error = f"{type(exc).__name__}: {exc}"
+                # A transport-fatal worker outcome may already be queued even
+                # when containment consumed the full allowance.  Drain it once
+                # so its measured partial spans and first causal error win.
+                self._drain_one_result()
+                while (
+                    self.controller.active_job is not None
+                    and time.monotonic() < containment_deadline
+                ):
+                    self._drain_one_result()
+                    time.sleep(0.01)
+                if self.controller.active_job is None:
+                    raise ProcessAnalysisError(backend_error)
+                self._tombstoned_jobs.add(active.job_id)
+                from src.live_motion.runtime import _exception_evidence
+                failure_result = AnalysisResult(
+                    job_id=active.job_id,
+                    epoch=active.epoch,
+                    selection_revision=active.selection_revision,
+                    stage=active.stage,
+                    frame_start=active.frame_start,
+                    frame_stop=active.frame_stop,
+                    actual_bin=active.requested_bin,
+                    executed=True,
+                    status="failed",
+                    error=backend_error,
+                )
+                failed = ExecutedAnalysis(
+                    result=failure_result,
+                    evidence=_exception_evidence(
+                        active,
+                        self.controller.config,
+                        backend_error,
+                        active.requested_bin,
+                    ),
+                    analysis_elapsed_s=self._shutdown_elapsed_s(),
+                    selector_elapsed_s=None,
+                )
+                update = self.controller.handle_executed(failed)
+                assert update.disposition is not None
+                self._persist_update_events(update)
+                self.evidence.write_attempt(failed, update.disposition)
+                self._publish_snapshot(update.snapshot)
+                self.evidence.write_performance({
+                    "kind": "analysis",
+                    "job_id": failed.result.job_id,
+                    "boundary": self.controller.processed_boundary,
+                    "analysis_elapsed_s": failed.analysis_elapsed_s,
+                    "selector_elapsed_s": None,
+                    "fatal_backend_error": backend_error,
+                })
+                raise ProcessAnalysisError(backend_error)
             self._tombstoned_jobs.add(active.job_id)
             from src.live_motion.runtime import _exception_evidence
             interrupted = AnalysisResult(
@@ -1143,27 +1221,90 @@ class ReplayRuntime:
         with self._snapshot_lock:
             self._latest_snapshot = snapshot
 
+    def _shutdown_elapsed_s(self) -> float:
+        with self._shutdown_lock:
+            started_s = self._shutdown_started_s
+        if started_s is None:
+            return 0.0
+        return max(0.0, time.monotonic() - started_s)
+
     def stop(self, timeout_s: float | None = None) -> None:
+        # Monitor, restart, and operator Stop can converge here.  Serialize the
+        # whole local shutdown while the backend independently serializes its
+        # process/resource cleanup.
+        with self._stop_lock:
+            self._stop_runtime(timeout_s)
+
+    def _stop_runtime(self, timeout_s: float | None) -> None:
+        deadline, containment_deadline = self._shutdown_deadlines(timeout_s)
         self._stop.set()
         with self._execution_condition:
             self._execution_paused = False
             self._execution_condition.notify_all()
-        wait_s = self.shutdown_timeout_s + 1.0 if timeout_s is None else float(timeout_s)
         if self._controller is not None:
-            self._controller.join(timeout=wait_s)
+            self._controller.join(timeout=max(0.0, deadline - time.monotonic()))
         try:
             self._work.put_nowait(None)
         except queue.Full:
             pass
         if self._worker is not None:
-            self._worker.join(timeout=wait_s)
+            self._worker.join(timeout=max(0.0, deadline - time.monotonic()))
+        process_cleanup_failed = False
+        if self.process_backend is not None:
+            force = bool(
+                (self._controller is not None and self._controller.is_alive())
+                or (self._worker is not None and self._worker.is_alive())
+                or time.monotonic() >= deadline
+            )
+            try:
+                self.process_backend.close(
+                    deadline_monotonic_s=deadline,
+                    containment_deadline_monotonic_s=containment_deadline,
+                    force=force,
+                )
+            except BaseException as exc:
+                process_cleanup_failed = True
+                if self.failure is None:
+                    self.failure = exc
+            if self._worker is not None and self._worker.is_alive():
+                self._worker.join(
+                    timeout=max(0.0, containment_deadline - time.monotonic())
+                )
+            if self._controller is not None and self._controller.is_alive():
+                self._controller.join(
+                    timeout=max(0.0, containment_deadline - time.monotonic())
+                )
+        if (
+            (self._controller is not None and self._controller.is_alive())
+            or (self._worker is not None and self._worker.is_alive())
+            or process_cleanup_failed
+        ) and self.failure is None:
+            self.failure = TimeoutError(
+                "replay runtime exceeded the five-second shutdown deadline"
+            )
         self.clean_shutdown = bool(
             self.failure is None
             and self._controller is not None
             and not self._controller.is_alive()
             and self._worker is not None
             and not self._worker.is_alive()
+            and (
+                self.process_backend is None or self.process_backend.is_closed
+            )
         )
+
+    def analysis_process_observation(self) -> dict[str, int | bool | None]:
+        """Return owned-child state for the driver's low-rate memory sampling."""
+
+        if self.process_backend is None:
+            return {
+                "pid": None,
+                "alive": False,
+                "exitcode": None,
+                "current_rss_bytes": None,
+                "peak_rss_bytes": None,
+            }
+        return self.process_backend.observation()
 
 
 def _positive_finite(value: Any) -> float | None:

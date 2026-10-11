@@ -115,6 +115,128 @@ def test_windows_rss_api_failure_returns_none(monkeypatch):
     assert calls == 2
 
 
+def test_owned_child_memory_binding_reports_current_and_peak_and_closes_handle(
+    monkeypatch,
+):
+    process_handle = 0xBEEF
+    open_process = _FakeFunction(
+        lambda access, inherit, process_id: (
+            process_handle
+            if (
+                access
+                == telemetry._PROCESS_QUERY_INFORMATION | telemetry._PROCESS_VM_READ
+                and inherit is False
+                and process_id == 4321
+            )
+            else 0
+        )
+    )
+
+    def fill_counters(handle, counters_pointer, size):
+        assert handle == process_handle
+        assert size == telemetry.ctypes.sizeof(telemetry._ProcessMemoryCounters)
+        counters = telemetry.ctypes.cast(
+            counters_pointer,
+            telemetry._ProcessMemoryCountersPointer,
+        ).contents
+        assert counters.cb == size
+        counters.WorkingSetSize = 123_456
+        counters.PeakWorkingSetSize = 987_654
+        return 1
+
+    process_memory = _FakeFunction(fill_counters)
+    close_handle = _FakeFunction(lambda handle: int(handle == process_handle))
+    fake_loader = SimpleNamespace(
+        kernel32=SimpleNamespace(
+            OpenProcess=open_process,
+            CloseHandle=close_handle,
+        ),
+        psapi=SimpleNamespace(GetProcessMemoryInfo=process_memory),
+    )
+    structure_type = telemetry._ProcessMemoryCounters
+    pointer_type = telemetry._ProcessMemoryCountersPointer
+
+    monkeypatch.setattr(telemetry.ctypes, "windll", fake_loader, raising=False)
+    monkeypatch.setattr(
+        telemetry,
+        "_external_windows_memory_api",
+        telemetry._UNINITIALIZED,
+    )
+
+    assert telemetry.replay_process_memory_bytes(4321) == (123_456, 987_654)
+    assert telemetry.replay_process_memory_bytes(4321) == (123_456, 987_654)
+
+    assert len(open_process.calls) == 2
+    assert len(process_memory.calls) == 2
+    assert close_handle.calls == [(process_handle,), (process_handle,)]
+    assert open_process.argtypes == [
+        telemetry.wintypes.DWORD,
+        telemetry.wintypes.BOOL,
+        telemetry.wintypes.DWORD,
+    ]
+    assert open_process.restype is telemetry.wintypes.HANDLE
+    assert process_memory.argtypes == [
+        telemetry.wintypes.HANDLE,
+        pointer_type,
+        telemetry.wintypes.DWORD,
+    ]
+    assert process_memory.restype is telemetry.wintypes.BOOL
+    assert close_handle.argtypes == [telemetry.wintypes.HANDLE]
+    assert close_handle.restype is telemetry.wintypes.BOOL
+    assert telemetry._ProcessMemoryCounters is structure_type
+    assert telemetry._ProcessMemoryCountersPointer is pointer_type
+
+
+@pytest.mark.parametrize("process_id", [True, False, 0, -1, 1.0, "1"])
+def test_owned_child_memory_rejects_coercive_or_nonpositive_pid(process_id):
+    with pytest.raises(ValueError, match="positive exact integer"):
+        telemetry.replay_process_memory_bytes(process_id)
+
+
+def test_owned_child_memory_failure_still_closes_handle(monkeypatch):
+    close_calls = []
+
+    def fail_read(_handle, _counters, _size):
+        raise OSError("synthetic process-exit race")
+
+    monkeypatch.setattr(
+        telemetry,
+        "_external_windows_memory_api",
+        (
+            lambda _access, _inherit, _pid: 0xBEEF,
+            fail_read,
+            lambda handle: close_calls.append(handle),
+        ),
+    )
+
+    assert telemetry.replay_process_memory_bytes(4321) == (None, None)
+    assert close_calls == [0xBEEF]
+
+
+def test_owned_child_memory_unavailability_is_cached(monkeypatch):
+    initialization_calls = 0
+
+    def unavailable():
+        nonlocal initialization_calls
+        initialization_calls += 1
+        return None
+
+    monkeypatch.setattr(
+        telemetry,
+        "_initialize_external_windows_memory_api",
+        unavailable,
+    )
+    monkeypatch.setattr(
+        telemetry,
+        "_external_windows_memory_api",
+        telemetry._UNINITIALIZED,
+    )
+
+    assert telemetry.replay_process_memory_bytes(4321) == (None, None)
+    assert telemetry.replay_process_memory_bytes(4321) == (None, None)
+    assert initialization_calls == 1
+
+
 def test_replay_rss_bytes_serializes_native_getter_across_threads(monkeypatch):
     state_lock = threading.Lock()
     first_entered = threading.Event()

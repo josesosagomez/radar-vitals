@@ -22,6 +22,7 @@ from src.replay_compare.engine import (
     baseline_analysis_function,
 )
 from src.replay_compare.evidence import ReplayEvidenceWriter, verify_replay_artifacts
+from src.replay_compare.process_analysis import ProcessAnalysisError, ProcessExecution
 from src.replay_compare.source import ReplaySourceError
 
 
@@ -476,6 +477,7 @@ def test_worker_materializes_once_for_injected_callback_and_releases_idle_locals
 
     monkeypatch.setattr(engine_module, "_materialize_replay_job", materialize_once)
     runtime = _runtime(source, evidence, analyze, frame_limit=frame_count)
+    assert runtime.process_backend is None
     _arm_bounded_cleanup(request, runtime, source)
     runtime.start()
     assert source.block_entered.wait(timeout=3.0)
@@ -489,6 +491,356 @@ def test_worker_materializes_once_for_injected_callback_and_releases_idle_locals
     gc.collect()
     assert job_ref is not None and job_ref() is None
     assert array_ref is not None and array_ref() is None
+
+
+def test_fatal_process_failure_is_durable_once_then_fails_without_redispatch(
+    monkeypatch, request
+):
+    class FailingBackend:
+        def __init__(self):
+            self.is_closed = False
+            self.is_started = False
+            self.start_calls = 0
+            self.execute_calls = 0
+            self.close_calls = 0
+            self.execute_entered = threading.Event()
+
+        def start(self, timeout_s):
+            assert timeout_s == pytest.approx(1.0)
+            self.start_calls += 1
+            self.is_started = True
+
+        def execute(self, _job):
+            self.execute_calls += 1
+            self.execute_entered.set()
+            raise ProcessAnalysisError(
+                "synthetic fatal child transport",
+                performance={
+                    "process_sequence": 1,
+                    "parent_copy_elapsed_s": 0.01,
+                    "parent_send_elapsed_s": 0.02,
+                    "parent_wait_receive_elapsed_s": 0.03,
+                    "child_materialization_elapsed_s": 0.0,
+                    "child_callback_elapsed_s": 0.0,
+                    "process_round_trip_elapsed_s": 0.06,
+                    "process_control_bytes": 123,
+                    "process_result_bytes": 0,
+                },
+            )
+
+        def close(
+            self,
+            *,
+            deadline_monotonic_s,
+            containment_deadline_monotonic_s,
+            force,
+        ):
+            assert isinstance(deadline_monotonic_s, float)
+            assert containment_deadline_monotonic_s >= deadline_monotonic_s
+            self.close_calls += 1
+            self.is_closed = True
+
+        def observation(self):
+            return {
+                "pid": 123,
+                "alive": not self.is_closed,
+                "exitcode": None,
+                "current_rss_bytes": None,
+                "peak_rss_bytes": None,
+            }
+
+    source = _BarrierSource(601, block_index=600)
+    evidence = _RecordingEvidence()
+    backend = FailingBackend()
+    runtime = ReplayRuntime(
+        source=source,
+        controller=BaselineController({}, generation=1, speed=4.0),
+        evidence=evidence,
+        analysis_function=None,
+        process_backend=backend,
+        frame_limit=601,
+        clock=_clock(),
+        shutdown_timeout_s=1.0,
+    )
+    result_queued = threading.Event()
+    original_result_put = runtime._results.put
+
+    def signal_result_put(*args, **kwargs):
+        result = original_result_put(*args, **kwargs)
+        result_queued.set()
+        return result
+
+    monkeypatch.setattr(runtime._results, "put", signal_result_put)
+    _arm_bounded_cleanup(request, runtime, source)
+    runtime.start()
+    assert source.block_entered.wait(timeout=3.0)
+    assert backend.execute_entered.wait(timeout=3.0)
+    assert result_queued.wait(timeout=3.0)
+    source.block_release.set()
+    assert runtime._ended.wait(timeout=3.0)
+    runtime.stop(timeout_s=2.0)
+
+    assert backend.start_calls == 1
+    assert backend.execute_calls == 1
+    assert backend.close_calls == 1
+    assert backend.is_closed is True
+    assert len(evidence.attempts) == 1
+    executed, disposition = evidence.attempts[0]
+    assert executed.result.status == "failed"
+    assert "synthetic fatal child transport" in executed.result.error
+    assert disposition.disposition == "rejected"
+    performance = [
+        row for row in evidence.performance if row.get("kind") == "analysis"
+    ]
+    assert len(performance) == 1
+    assert performance[0]["process_sequence"] == 1
+    assert performance[0]["parent_copy_elapsed_s"] == pytest.approx(0.01)
+    assert performance[0]["parent_send_elapsed_s"] == pytest.approx(0.02)
+    assert performance[0]["parent_wait_receive_elapsed_s"] == pytest.approx(0.03)
+    assert performance[0]["child_materialization_elapsed_s"] == 0.0
+    assert performance[0]["child_callback_elapsed_s"] == 0.0
+    assert performance[0]["process_round_trip_elapsed_s"] == pytest.approx(0.06)
+    assert performance[0]["process_control_bytes"] == 123
+    assert performance[0]["process_result_bytes"] == 0
+    assert "synthetic fatal child transport" in performance[0][
+        "fatal_backend_error"
+    ]
+    assert isinstance(runtime.failure, ProcessAnalysisError)
+    assert "synthetic fatal child transport" in str(runtime.failure)
+    assert runtime.clean_shutdown is False
+
+
+def test_process_success_applies_once_reaches_eof_and_reports_owned_child_state(
+    request,
+):
+    class SuccessfulBackend:
+        def __init__(self):
+            self.is_closed = False
+            self.is_started = False
+            self.start_calls = []
+            self.execute_calls = []
+            self.close_calls = []
+            self.executed = threading.Event()
+
+        def start(self, timeout_s):
+            self.start_calls.append(timeout_s)
+            self.is_started = True
+
+        def execute(self, job):
+            assert isinstance(job, engine_module._FrozenReplayAnalysisJob)
+            assert job.raw_frames is None
+            assert len(job.captured_frames) == 600
+            self.execute_calls.append(job.job_id)
+            self.executed.set()
+            return ProcessExecution(
+                executed=_successful_execution(job),
+                sequence=1,
+                parent_copy_elapsed_s=0.01,
+                parent_send_elapsed_s=0.02,
+                parent_wait_receive_elapsed_s=0.03,
+                child_materialization_elapsed_s=0.04,
+                child_callback_elapsed_s=0.05,
+                round_trip_elapsed_s=0.15,
+                control_bytes=100,
+                result_bytes=200,
+            )
+
+        def close(
+            self,
+            *,
+            deadline_monotonic_s,
+            containment_deadline_monotonic_s,
+            force,
+        ):
+            assert containment_deadline_monotonic_s >= deadline_monotonic_s
+            self.close_calls.append((deadline_monotonic_s, force))
+            self.is_closed = True
+
+        def observation(self):
+            return {
+                "pid": 4321,
+                "alive": not self.is_closed,
+                "exitcode": None if not self.is_closed else 0,
+                "current_rss_bytes": 123_456,
+                "peak_rss_bytes": 234_567,
+            }
+
+    source = _BarrierSource(601, block_index=600)
+    evidence = _RecordingEvidence()
+    backend = SuccessfulBackend()
+    runtime = ReplayRuntime(
+        source=source,
+        controller=BaselineController({}, generation=1, speed=4.0),
+        evidence=evidence,
+        analysis_function=None,
+        process_backend=backend,
+        frame_limit=601,
+        clock=_clock(),
+        shutdown_timeout_s=1.0,
+    )
+    _arm_bounded_cleanup(request, runtime, source)
+    runtime.start()
+    assert backend.executed.wait(timeout=3.0)
+    assert source.block_entered.wait(timeout=3.0)
+    assert runtime.analysis_process_observation() == {
+        "pid": 4321,
+        "alive": True,
+        "exitcode": None,
+        "current_rss_bytes": 123_456,
+        "peak_rss_bytes": 234_567,
+    }
+    source.block_release.set()
+    assert runtime._ended.wait(timeout=3.0)
+    runtime.stop(timeout_s=2.0)
+
+    assert backend.start_calls == [pytest.approx(1.0)]
+    assert len(backend.execute_calls) == 1
+    assert len(backend.close_calls) == 1
+    assert backend.is_closed is True
+    assert runtime.clean_shutdown is True
+    assert runtime.latest_snapshot.processed_boundary == 601
+    assert runtime.latest_snapshot.selected_bin == 3
+    assert len(evidence.attempts) == 1
+    assert evidence.attempts[0][0].result.status == "completed"
+    performance = [
+        row for row in evidence.performance if row.get("kind") == "analysis"
+    ]
+    assert len(performance) == 1
+    assert performance[0]["process_sequence"] == 1
+    assert performance[0]["process_control_bytes"] == 100
+    assert performance[0]["process_result_bytes"] == 200
+
+
+def test_child_death_after_last_result_is_fatal_at_eof_without_losing_attempt(
+    request,
+):
+    class DiesAfterResultBackend:
+        def __init__(self):
+            self.is_closed = False
+            self.is_started = False
+            self.execute_calls = 0
+            self.close_calls = 0
+            self.result_returned = threading.Event()
+
+        def start(self, timeout_s):
+            assert timeout_s == 1.0
+            self.is_started = True
+
+        def execute(self, job):
+            self.execute_calls += 1
+            execution = ProcessExecution(
+                executed=_successful_execution(job),
+                sequence=1,
+                parent_copy_elapsed_s=0.01,
+                parent_send_elapsed_s=0.01,
+                parent_wait_receive_elapsed_s=0.01,
+                child_materialization_elapsed_s=0.01,
+                child_callback_elapsed_s=0.01,
+                round_trip_elapsed_s=0.05,
+                control_bytes=100,
+                result_bytes=200,
+            )
+            self.result_returned.set()
+            return execution
+
+        def close(
+            self,
+            *,
+            deadline_monotonic_s,
+            containment_deadline_monotonic_s,
+            force,
+        ):
+            assert isinstance(deadline_monotonic_s, float)
+            assert containment_deadline_monotonic_s >= deadline_monotonic_s
+            assert force is False
+            self.close_calls += 1
+            self.is_closed = True
+            raise ProcessAnalysisError(
+                "analysis child exited before graceful shutdown acknowledgment"
+            )
+
+        def observation(self):
+            return {
+                "pid": 4321,
+                "alive": False,
+                "exitcode": 7,
+                "current_rss_bytes": None,
+                "peak_rss_bytes": 234_567,
+            }
+
+    source = _BarrierSource(601, block_index=600)
+    evidence = _RecordingEvidence()
+    backend = DiesAfterResultBackend()
+    runtime = ReplayRuntime(
+        source=source,
+        controller=BaselineController({}, generation=1, speed=4.0),
+        evidence=evidence,
+        analysis_function=None,
+        process_backend=backend,
+        frame_limit=601,
+        clock=_clock(),
+        shutdown_timeout_s=1.0,
+    )
+    _arm_bounded_cleanup(request, runtime, source)
+    runtime.start()
+    assert backend.result_returned.wait(timeout=3.0)
+    assert source.block_entered.wait(timeout=3.0)
+    source.block_release.set()
+    assert runtime._ended.wait(timeout=3.0)
+    runtime.stop(timeout_s=2.0)
+
+    assert backend.execute_calls == 1
+    assert backend.close_calls == 1
+    assert backend.is_closed is True
+    assert len(evidence.attempts) == 1
+    assert evidence.attempts[0][0].result.status == "completed"
+    assert runtime.latest_snapshot.selected_bin == 3
+    assert isinstance(runtime.failure, ProcessAnalysisError)
+    assert "graceful shutdown acknowledgment" in str(runtime.failure)
+    assert runtime.clean_shutdown is False
+
+
+def test_process_startup_failure_precedes_source_open_and_thread_start():
+    class StartupFailureBackend:
+        is_closed = True
+        is_started = False
+
+        def start(self, timeout_s):
+            assert timeout_s == pytest.approx(1.0)
+            raise ProcessAnalysisError("synthetic ready/config failure")
+
+        def close(self, **_kwargs):
+            raise AssertionError("failed backend owns its startup cleanup")
+
+        def observation(self):
+            return {
+                "pid": None,
+                "alive": False,
+                "exitcode": 1,
+                "current_rss_bytes": None,
+                "peak_rss_bytes": None,
+            }
+
+    source = _BarrierSource(1)
+    runtime = ReplayRuntime(
+        source=source,
+        controller=BaselineController({}, generation=1),
+        evidence=_RecordingEvidence(),
+        analysis_function=None,
+        process_backend=StartupFailureBackend(),
+        frame_limit=1,
+        clock=_clock(),
+        shutdown_timeout_s=1.0,
+    )
+
+    with pytest.raises(ProcessAnalysisError, match="ready/config failure"):
+        runtime.start()
+    assert source.cursor == 0
+    assert source.closed.is_set() is False
+    assert runtime._worker is None
+    assert runtime._controller is None
+    assert runtime.ended is True
+    assert isinstance(runtime.failure, ProcessAnalysisError)
 
 
 @pytest.mark.parametrize("failure_stage", ["assembly", "callback"])

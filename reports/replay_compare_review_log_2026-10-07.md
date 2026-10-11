@@ -747,3 +747,231 @@ passed all 31 replay Python files, whitespace clean. Existing warnings and
 child cache-permission warning retained. All 20 protected hashes and both
 preserved checkout HEAD/status/23 dirty-file hashes passed. This is software
 verification; native recorded-playback acceptance remains a separate gate.
+
+Reviewed worker correction committed as
+`eed95f5f1323b1ba1fafaae712ac4b5c91f5badf`. Initial push failed transient DNS
+resolution, with no remote change. Stable Windows telemetry committed separately
+as `cfcb2c00a59e72e2164eebd1e38909acbeaadffe`. Retried publication succeeded
+for both commits; `git ls-remote origin refs/heads/codex/replay-masimo-compare`
+read back exact cfcb2c00a59e72e2164eebd1e38909acbeaadffe. Source scope clean
+before fresh full native run under
+`results/replay_compare/acceptance_full_1x_worker_20261011`; source/tests frozen
+and pinned environment exclusively owned by primary during playback.
+
+### Worker correction native diagnostic: complete artifacts, UI gate failed
+
+The full 1x native run at cfcb2c00a59e72e2164eebd1e38909acbeaadffe completed
+all 12005 frames with clean shutdown and exact source accounting. Artifact
+verifier exited 0: accepted true, source_binding_complete true, no internal or
+source issues. Preserved run: `results/replay_compare/acceptance_full_1x_worker_20261011`;
+verifier text/exit live outside its pass manifest. Native driver exited 1.
+Controller work max 0.234 s, no controller breaches; UI snapshot age max 0.531 s,
+Qt heartbeat max 0.640 s with 158 breaches, UI callback max 0.500 s with three
+breaches. No gate relaxed. Playback wall 600.281 s, throughput
+19.9989671503846 frames/s. HR 180/12005, BR 9618/12005, both 180/12005,
+quiet zero; reference PR/qualified PR/RRp each 11845/12005. These are diagnostic
+availability counts, not final performance acceptance or accuracy.
+RSS driver peak 1101815808 bytes; early/late steady medians 458790912/473315328,
+delta 14524416 bytes, endpoint slope 106670.72197087832 bytes/s. The per-call
+ctypes growth was removed, but final memory interpretation needs independent
+review alongside bounded signal ownership and retained display/audit rows.
+Actual during/final screenshots retained; primary during visual check confirmed
+explicit held/accepted states, reference isolation warnings and legible plots.
+Remaining UI stalls persist around analysis; primary is profiling unchanged
+worker calls before an evidence-backed revision. A diagnostic runner's initial
+argument-interface error performed no replay and saved zero call records;
+corrected diagnostic uses a fresh log and distinct run directory. No source or
+tests changed during full playback, verification, or profiling.
+
+The unchanged short native diagnostic completed 800 frames at 1x under
+`results/replay_compare/diagnostic_gil_native_20261011` with profile hooks on
+ReplayAnalysis only. The smoke driver exits 0 because full-run timing gates
+apply to full scenario; its Qt maximum was 0.516 s, so this is **not** responsive
+acceptance. Long-call log:
+`results/test_tmp/replay_gil_calls_valid_20261011.json` (103 records). Queue
+waits are intentional. Non-wait C FFT calls were about 0.093-0.109 s; stack
+reached 0.187 s and unchanged per-bin DSP 0.25-0.42 s; selector with profiling
+4.891 s. These timings locate contention but do not prove C-call GIL ownership.
+Independent review found 165/190 analyses over 0.25 s versus 158 heartbeat
+breaches, and a separate UI stall when analysis was inactive. Residual RSS
+growth is consistent with bounded per-frame display/audit histories, not the
+removed ctypes type-cache leak; it is not labelled a plateau.
+Direct ndarray-fast-path edits in protected window_pipeline.py are excluded by
+the owner's explicit byte-identity instruction. A replay-only isolated analysis
+process and incremental UI work are being independently plan-reviewed before
+implementation. DSP, references, thresholds, windows/hops and calibration remain
+unchanged.
+
+### Process/UI revision independent research and first plan review
+
+Independent plan review initially returned **NOT READY**. HIGH findings: exact
+GUI prefix/redraw interface, fresh per-generation backend factory, and typed
+durable fatal-result ordering. MEDIUM: single shutdown deadline, complete result
+transport, SHM ownership; LOW: telemetry outside 20 Hz path. Primary incorporated
+all requirements in plan section 7.1 before requesting re-review. No production
+implementation began while the plan was not ready.
+
+Independent research recommends one persistent spawned child and one fixed
+parent-owned shared-memory window; preserve exact inputs and complete
+ExecutedAnalysis, bound transport and lifecycle, and observe combined memory.
+Primary API sources: [Python 3.11 multiprocessing](https://docs.python.org/3.11/library/multiprocessing.html#contexts-and-start-methods),
+[spawn import restrictions](https://docs.python.org/3.11/library/multiprocessing.html#the-spawn-and-forkserver-start-methods),
+[SharedMemory](https://docs.python.org/3.11/library/multiprocessing.shared_memory.html),
+[CPython 3.11 shared-memory implementation](https://github.com/python/cpython/blob/v3.11.11/Lib/multiprocessing/shared_memory.py),
+[Pipe/Connection](https://docs.python.org/3.11/library/multiprocessing.html#pipes-and-queues),
+[termination semantics](https://docs.python.org/3.11/library/multiprocessing.html#multiprocessing.Process.terminate),
+and [Microsoft working-set meaning](https://learn.microsoft.com/en-us/windows/win32/psapi/process-memory-usage-information).
+Use get_context('spawn'), module-level target and safe main import. Windows
+3.11 uses named mmap; all handles must close, unlink is no-op and 3.13 track
+argument is unavailable. Parent alone owns creation/unlink. Terminal terminate
+can corrupt transport, so never reuse it. Shared-page counts may be duplicated
+in summed RSS. Read-only NumPy flags are cooperative, not a sandbox. Synthetic
+API correctness does not guarantee native timing. The protected-source fast
+path proposed by test review is excluded by the owner's explicit byte-identity
+rule; process isolation retains all scientific files unchanged.
+
+Independent process/UI plan re-review returned READY WITH MINOR CHANGES.
+Required exact full-trace endpoint completeness and objective inclusive IPC
+limits are appended before implementation authorization. Exact module path
+process_analysis.py; control<=65536 bytes, result<=16777216 bytes. Full-result
+transport remains mandatory. No unresolved architecture finding remains;
+independent code review and actual native acceptance are still required.
+
+### Process/UI implementation review, first pass (2026-10-11)
+
+Independent review found blocking draft defects before environment execution:
+multiple fresh shutdown deadlines; possible duplicate or undrained fatal evidence;
+startup endpoint cleanup outside the exception path; cleanup/containment truth and
+concurrent close races; a restart handshake under the manager lock; missing manager
+lifecycle properties; child geometry/dtype validation and validation-before-copy;
+child death between its last result and EOF being treated as clean; and missing
+partial fatal transport timings/active request sequence. These are assigned to the
+production owner with deterministic failure-path tests owned independently.
+
+The UI reviewer accepted the prefix/chunk/NaN design but required validation of
+all displayed scalar payloads before any mutation. The UI owner is correcting
+that atomicity issue. Primary driver corrections expose sampled owned-child
+count, distinct restart PIDs and final exit code, and stream timestamped UI
+poll/heartbeat intervals outside the pass manifest. The strict 0.25 s full-run
+limits are unchanged. No pinned environment execution or acceptance claim is
+authorized until owners freeze and independent final review resolves findings.
+
+The reviewer also required a production-native telemetry gate because the
+scientific artifact verifier manifests performance.jsonl without validating its
+timing schema. The primary added one-to-one ordered binding to the attempt CSV,
+exact contiguous sequence, finite nonnegative complete spans, inclusive message
+bounds, total/round-trip/parent-span nesting (1 ns floating-point tolerance), and
+an explicit normal fatal-error field of None. The test owner added adversarial
+tests. Injected-thread scientific artifact compatibility is preserved. Final
+review additionally required retaining available child phase timings on fatal
+replies; that correction remains under the production owner before final freeze.
+
+Production and test owners subsequently corrected the available child fatal
+spans, retryable retained-resource cleanup, strict UI real-scalar/state/mode
+contracts, and their regression fixtures. The pure frozen job/materializer and
+baseline analyzer builder now live in process_analysis.py with engine aliases;
+the actual child target no longer imports engine/source/application. This is a
+stronger import boundary, not evidence of prior hardware operation or a changed
+scientific result. Every normal analysis timing row explicitly records
+fatal_backend_error=None. All owners issued fresh STATIC_READY/FREEZE_ACK.
+Primary AST/LF checks passed 32 replay source/test files and integrated diff-check
+passed; the exact hashes are saved in ignored
+results/test_tmp/process_ui_freeze_20261011.json. No dynamic test has yet run on
+this revision; independent final static verdict is still required.
+
+### Process/UI focused execution and observed corrections (2026-10-11)
+
+Independent final static review accepted the frozen revision before execution;
+dynamic verification superseded that provisional verdict. Primary alone ran the
+pinned environment with isolated created external basetemp and unique cache,
+JUnit and console files. Result: **483 passed, 7 failed, 12 warnings, 37.31 s**.
+Retained evidence: results/test_tmp/replay_process_ui_focus_20261011_fde9784698d04b598cc5441653c18515
+(.xml, .console.txt, .exit.txt); exact run source/test hashes:
+results/test_tmp/process_ui_focus_failed_source_20261011.json.
+
+Independent test and code reviewers agreed on two HIGH production defects:
+Windows attached SHM capacity is page-rounded, and candidate-left prefix equality
+admits an attribute-equal mutable SimpleNamespace substitute. Five remaining
+failures are fixtures: unchanged NaN cleaning yields completed scientific rejection,
+stricter geometry message, fake start timeout_s signature, and two invalid
+preparing snapshots rejected by the constructor's initial poll. None justify
+changing scientific processing, deleting adversarial cases or weakening gates.
+
+The primary pinned synthetic mapping probe (no recording or hardware) confirmed
+requested/created 38400, attached 40960, page size 4096, Python 3.11.15. Script and
+JSON: results/test_tmp/probe_shared_memory_capacity_20261011.py and
+results/test_tmp/shared_memory_capacity_probe_20261011.json. An initial multiline
+conda -c invocation failed in its launcher before Python execution; the saved
+script subsequently exited zero and closed/unlinked both owned handles.
+Research independently tied the observation to CPython's Windows VirtualQuerySize
+attach path and documented page allocation. Full registered window bytes happen
+to be page-aligned; the compact valid geometry exposed the platform bug.
+
+Plan section 7.2 records exact platform-normalized capacity with unchanged exact
+scientific byte count and exact retained object identity for prior UI samples.
+Owners remain frozen pending independent narrow plan review. Native acceptance
+and the complete suite are still required on the corrected revision.
+
+Independent narrow section-7.2 plan review returned **READY** before scoped
+implementation grants. It required unchanged parent creator size, strict child
+platform-normalized capacity, strong prior UI tuple references plus exact cached
+integer identities, and both mutable and reconstructed-frozen substitutions in
+tests. Production owners then froze process_analysis.py (SHA-256
+a5cf571640783309fb8b3820c2296f47ce6a3d97848e41a8229f245fe1494700) and
+ui.py (ed27647ec33c284e21ee54c4ca90314e8c1b737f19b244684c5a4b6ed264e9ed).
+Independent production static re-review found no material defect in these fixes;
+test corrections and dynamic gates are still pending.
+
+All three scoped test files then froze, and independent final static review
+returned **ACCEPT**, with no BLOCKER/HIGH/MEDIUM. It confirmed bad-capacity
+rejection before buffer/analyzer access, exact non-page-aligned callback payload,
+two caught scientific failures on the same child, handled-NaN exact equivalence,
+and mutable plus reconstructed-value-equal prefix attacks preserving every UI
+cache/rendered state. The primary static freeze audit passed all 32 AST/LF files,
+20 protected hashes, both preserved HEAD/status records and all 23 local files.
+Snapshot: results/test_tmp/process_ui_freeze_ready_20261011.json. All source/tests
+remain frozen; the primary alone owns the focused and complete environment runs.
+
+Corrected focused execution: **508 passed, 3 failed, 12 warnings, 38.99 s**.
+Retained tag: results/test_tmp/replay_process_ui_focus_20261011_fd3647f1ba9148c1958549d1d010fb13
+(.xml, .console.txt, .exit.txt). All newly added capacity and prefix-forgery tests
+passed. Remaining failures expose fixture mismatches: dtype rejection message,
+fake assuming a five-second start timeout in a one-second-configured runtime,
+and sparse-poll fixture recreating prior samples instead of retaining controller
+objects. Production remains frozen pending independent classification and narrow
+test correction. Post-run frozen hashes and all preservation checks passed:
+results/test_tmp/process_ui_focus_second_failed_20261011.json.
+
+Independent review classified all three residual failures as fixture defects and
+approved only the precise dtype diagnostic, configured 1.0-second fake timeout,
+and retention of first.trace_samples[0] in the sparse-poll fixture. Production
+did not change. After scoped corrections and renewed freeze, independent review
+again returned **ACCEPT**, no BLOCKER/HIGH/MEDIUM. Primary static preservation and
+AST/LF checks passed; new frozen snapshot:
+results/test_tmp/process_ui_freeze_ready2_20261011.json. A fresh focused rerun
+precedes the complete suite; previous failures and their exact assertions remain
+in their retained logs.
+
+Fresh focused gate **PASSED: 511 tests, 12 warnings, 38.53 s**, exit zero.
+Tag: results/test_tmp/replay_process_ui_focus_20261011_48c3f4a2f27c471d82318f751b8ef7d2
+(.xml, .console.txt, .exit.txt); external created parent:
+C:/Users/JOSEMS~1/AppData/Local/Temp/replay_process_ui_focus_20261011_48c3f4a2f27c471d82318f751b8ef7d2/pytest.
+Post-run hashes matched the exact freeze, and all preservation checks passed:
+results/test_tmp/process_ui_focus_pass_preserved_20261011.json. The primary then
+started the complete non-real-data suite serially, retaining all previous failures.
+
+Complete gate **PASSED: 4142 passed, 16 skipped, one real_data deselected,
+1790 warnings, 275.96 s**, exit zero. Tag:
+results/test_tmp/replay_process_ui_full_20261011_f5646d8a5f5748f8bb97d125211140b1
+(.xml, .console.txt, .exit.txt); JUnit SHA-256:
+927c068cdce2e94b80feb15f376a92b5be2903f68a05ddd43907109e98ec5c08.
+JUnit independently reports 4158 tests, 16 skips, zero failures/errors. Skips are
+optional all-bin/scoring artifacts, absent other real captures and old replay
+artifacts; neither opt-in/sealed authorization was enabled. Existing deprecation,
+quality-mask overflow and nested-child default-cache warnings remain recorded.
+Exact serial runner: results/test_tmp/run_replay_tests_20261011.ps1 -Scope full;
+created basetemp parent C:/Users/JOSEMS~1/AppData/Local/Temp/replay_process_ui_full_20261011_f5646d8a5f5748f8bb97d125211140b1,
+local cache/JUnit use the same unique tag. Post-run all 32 frozen hashes,
+20 protected files, both checkout HEAD/status records and 23 preserved local
+files passed (process_ui_full_pass_preserved_20261011.json). Independent reviewer
+accepted the automated software gate; actual native acceptance remains required.
