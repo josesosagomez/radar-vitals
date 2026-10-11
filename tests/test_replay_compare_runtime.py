@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import gc
 import threading
+import weakref
 from dataclasses import replace
 from pathlib import Path
 
@@ -10,6 +12,7 @@ import numpy as np
 import pytest
 import yaml
 
+import src.replay_compare.engine as engine_module
 from src.live_motion.runtime import ExecutedAnalysis
 from src.live_motion.scheduler import AnalysisResult, SelectionDecision
 from src.replay_compare.clock import PlaybackClock
@@ -220,8 +223,15 @@ def test_stop_while_analysis_active_persists_terminal_attempt_without_late_publi
     evidence = _RecordingEvidence()
     analysis_started = threading.Event()
     analysis_release = threading.Event()
+    materialized_job_ref = None
+    materialized_array_ref = None
 
     def analyze(job):
+        nonlocal materialized_job_ref, materialized_array_ref
+        assert isinstance(job, engine_module._FrozenReplayAnalysisJob)
+        assert job.raw_frames is not None and job.captured_frames == ()
+        materialized_job_ref = weakref.ref(job)
+        materialized_array_ref = weakref.ref(job.raw_frames)
         analysis_started.set()
         assert analysis_release.wait(timeout=3.0)
         return _successful_execution(job)
@@ -263,6 +273,9 @@ def test_stop_while_analysis_active_persists_terminal_attempt_without_late_publi
     )
     assert runtime.clean_shutdown is True
     assert source.closed.is_set()
+    gc.collect()
+    assert materialized_job_ref is not None and materialized_job_ref() is None
+    assert materialized_array_ref is not None and materialized_array_ref() is None
 
 
 def test_source_preflight_time_is_excluded_by_reanchoring_before_first_frame():
@@ -390,6 +403,12 @@ def test_real_production_attempt_runtime_writer_and_eof_verify_without_repair(
     analysis_done = threading.Event()
 
     def analyze(job):
+        assert isinstance(job, engine_module._FrozenReplayAnalysisJob)
+        assert job.captured_frames == ()
+        assert job.raw_frames is not None
+        assert job.raw_frames.flags.owndata is True
+        assert job.raw_frames.flags.writeable is False
+        np.testing.assert_array_equal(job.raw_frames, frames[:600])
         result = production(job)
         analysis_done.set()
         return result
@@ -418,6 +437,127 @@ def test_real_production_attempt_runtime_writer_and_eof_verify_without_repair(
     )
 
     assert verify_replay_artifacts(writer.pass_dir) == ()
+
+
+def test_worker_materializes_once_for_injected_callback_and_releases_idle_locals(
+    monkeypatch, request
+):
+    frame_count = 601
+    frames = np.stack(
+        [FRAME + np.complex64(index) for index in range(frame_count)], axis=0
+    )
+    source = _BarrierSource(
+        frame_count, block_index=600, frames=frames
+    )
+    evidence = _RecordingEvidence()
+    original_materialize = engine_module._materialize_replay_job
+    materialized_count = 0
+    callback_done = threading.Event()
+    job_ref = None
+    array_ref = None
+
+    def materialize_once(job):
+        nonlocal materialized_count
+        materialized_count += 1
+        return original_materialize(job)
+
+    def analyze(job):
+        nonlocal job_ref, array_ref
+        assert isinstance(job, engine_module._FrozenReplayAnalysisJob)
+        assert job.captured_frames == ()
+        assert job.raw_frames is not None
+        assert job.raw_frames.flags.owndata is True
+        assert job.raw_frames.flags.writeable is False
+        np.testing.assert_array_equal(job.raw_frames, frames[:600])
+        job_ref = weakref.ref(job)
+        array_ref = weakref.ref(job.raw_frames)
+        callback_done.set()
+        return _successful_execution(job)
+
+    monkeypatch.setattr(engine_module, "_materialize_replay_job", materialize_once)
+    runtime = _runtime(source, evidence, analyze, frame_limit=frame_count)
+    _arm_bounded_cleanup(request, runtime, source)
+    runtime.start()
+    assert source.block_entered.wait(timeout=3.0)
+    assert callback_done.wait(timeout=3.0)
+    source.block_release.set()
+    assert runtime._ended.wait(timeout=3.0)
+    runtime.stop(timeout_s=2.0)
+
+    assert materialized_count == 1
+    assert len(evidence.attempts) == 1
+    gc.collect()
+    assert job_ref is not None and job_ref() is None
+    assert array_ref is not None and array_ref() is None
+
+
+@pytest.mark.parametrize("failure_stage", ["assembly", "callback"])
+def test_worker_failure_is_timed_persisted_and_does_not_wedge(
+    monkeypatch, request, failure_stage
+):
+    # The barrier holds the controller immediately after the first request is
+    # dispatched.  Releasing it only after the failed result reaches the result
+    # queue makes recovery independent of thread scheduling speed.
+    source = _BarrierSource(662, block_index=600)
+    evidence = _RecordingEvidence()
+    original_materialize = engine_module._materialize_replay_job
+    assembly_calls = 0
+    callback_calls = 0
+    recovered = threading.Event()
+    after_start = False
+
+    def fake_monotonic():
+        return 12.0 if after_start else 10.0
+
+    def fail_once(job):
+        nonlocal assembly_calls, after_start
+        assembly_calls += 1
+        if failure_stage == "assembly" and assembly_calls == 1:
+            after_start = True
+            raise MemoryError("synthetic deferred assembly failure")
+        return original_materialize(job)
+
+    def analyze(job):
+        nonlocal callback_calls, after_start
+        callback_calls += 1
+        if failure_stage == "callback" and callback_calls == 1:
+            after_start = True
+            raise RuntimeError("synthetic deferred callback failure")
+        recovered.set()
+        return _successful_execution(job)
+
+    monkeypatch.setattr(engine_module.time, "monotonic", fake_monotonic)
+    monkeypatch.setattr(engine_module, "_materialize_replay_job", fail_once)
+    runtime = _runtime(source, evidence, analyze, frame_limit=662)
+    first_result_queued = threading.Event()
+    original_result_put = runtime._results.put
+
+    def signal_result_put(*args, **kwargs):
+        result = original_result_put(*args, **kwargs)
+        first_result_queued.set()
+        return result
+
+    monkeypatch.setattr(runtime._results, "put", signal_result_put)
+    _arm_bounded_cleanup(request, runtime, source)
+    runtime.start()
+    assert source.block_entered.wait(timeout=3.0)
+    assert first_result_queued.wait(timeout=3.0)
+    source.block_release.set()
+    assert recovered.wait(timeout=3.0)
+    assert runtime._ended.wait(timeout=3.0)
+    runtime.stop(timeout_s=2.0)
+
+    assert assembly_calls == 2
+    assert callback_calls == (1 if failure_stage == "assembly" else 2)
+    assert len(evidence.attempts) == 2
+    failed, failed_disposition = evidence.attempts[0]
+    assert failed.result.status == "failed"
+    assert f"synthetic deferred {failure_stage} failure" in failed.result.error
+    assert failed.selector_elapsed_s is None
+    assert failed.analysis_elapsed_s == pytest.approx(2.0)
+    assert failed_disposition.disposition == "rejected"
+    assert evidence.attempts[1][0].result.status == "completed"
+    assert runtime.controller.active_job is None
 
 
 def test_pause_ack_freezes_boundary_and_completion_waits_unpublished_until_resume(

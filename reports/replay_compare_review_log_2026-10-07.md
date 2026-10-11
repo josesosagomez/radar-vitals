@@ -650,3 +650,100 @@ The command was the same complete `python -m pytest tests -m 'not real_data'
 sealed opt-in stayed disabled. Primary rechecked all 31 ASTs/LF and all 20
 protected source hashes. No source/test edit occurred during either test run.
 This reviewed optimization is committed separately before actual native replay.
+
+### Completed replacement replay: artifacts valid, responsiveness not accepted
+
+Committed `b9ccd3432fc2a46e338d476fb6b2712246935344` completed all **12005**
+source/frame-telemetry rows and 600.25 recorded seconds, with clean shutdown,
+under `results/replay_compare/acceptance_full_1x_corrected_20261011`.
+Initial, streamed and final ADC hashes all match the registered hash. The
+independent guarded verifier exited 0 with accepted=true, source_binding_complete=true,
+and no internal/source issues; saved output and exit status are
+`verification_pass_0001.txt` and `verification_pass_0001.exit.txt` outside the
+pass manifest. This establishes artifact consistency, not native responsiveness.
+
+Native driver exit **1**: controller work max **0.375 s**, UI snapshot age max
+**0.422 s**, and Qt heartbeat max **0.641 s** failed the unchanged **0.25 s**
+acceptance gate (162 heartbeat breaches). UI callback max was **0.063 s**, with
+no callback breach. Actual playback wall time **600.36 s**, measured throughput
+**19.996335532014104 frames/s**, selector **4.468 s**. Coverage was HR **178/12005**,
+positive BR **9643/12005**, both **178/12005**, quiet **0**, and each PR/PI-qualified
+PR/RRp availability **11845/12005**. These are genuine diagnostic availability
+counts, not accuracy or final acceptance. Both real dashboard PNGs are retained.
+
+Driver RSS samples peaked at **1156190208 bytes**. Steady early/late quarter
+medians were **635920384 / 718245888 bytes**, difference **82325504 bytes**, late
+endpoint growth **207511.35263675736 bytes/s**. This is not an accepted memory
+plateau. Review found all controller breaches at 60-frame window-assembly
+boundaries; non-hop maximum was 0.110 s. The single-copy correction removed one
+copy but did not remove synchronous materialization from the controller.
+No code or tests changed during this complete invocation or verification.
+
+Next required revision is independently plan-reviewed worker-only window
+materialization: the controller captures exact individually owned/read-only
+frames in a bounded immutable tuple; the unchanged scheduler carries metadata
+and that recipe, and only the existing analysis worker builds the final owned
+read-only array. Cancellation/coalescing release recipes by object lifetime.
+No protected source, DSP, threshold, calibration/reference gate or raw input
+changes. Total analysis latency must include assembly. New deterministic
+ownership/order/release/lifecycle regressions, independent code review, focused
+and complete tests, commit/push, and a new full native run remain required.
+
+### Revised worker input and stable telemetry: research before implementation
+
+Independent plan reviewer returned READY with required exclusive request/execution
+representations, base validation, truthful scheduler strong-reference lifetime,
+assembly-failure evidence, timing including assembly, idle-worker release, and
+objective ownership/order/coalescing/lifecycle tests. These requirements are
+incorporated in plan section 6 before implementation authorization.
+
+Independent telemetry review confirmed per-call type creation/cache retention;
+research used primary sources: [Python 3.11 ctypes POINTER documentation](https://docs.python.org/3.11/library/ctypes.html#ctypes.POINTER),
+[CPython cache-growth issue #100926](https://github.com/python/cpython/issues/100926),
+[Microsoft GetProcessMemoryInfo](https://learn.microsoft.com/en-us/windows/win32/api/psapi/nf-psapi-getprocessmemoryinfo),
+[PROCESS_MEMORY_COUNTERS](https://learn.microsoft.com/en-us/windows/win32/api/psapi/ns-psapi-process_memory_counters),
+and [GetCurrentProcess](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-getcurrentprocess).
+The pointer-type cache retains each distinct local Structure type. This defect
+can explain growth but is not proof that every RSS change came from telemetry.
+A stable replay-only class/API binding under the existing lock preserves current
+working-set meaning and protected-file isolation; no new dependency or scientific
+method change. Final memory behavior requires fresh observed playback and review.
+
+### Worker/RSS frozen verification iteration
+
+Independent code reviewer accepted the production and test diff with no material
+findings. Primary rechecked all 20 protected hashes and both preserved checkout
+HEAD/status plus 23 dirty-file hashes: unchanged. Initial focused invocation
+used a Windows wildcard not expanded by PowerShell (zero tests); second lacked
+the required external temporary parent (141 passed, 192 fixture errors). These
+setup reports remain distinct and are not acceptance. The corrected invocation
+reported 332 passed, one failed, 12 warnings in 30.15 s, JUnit
+`results/test_tmp/replay_worker_rss_focus_20261011_49c6b481c7814c64bc31bad30d13e7ea.xml`.
+The failing stale-result evidence fixture called production analysis directly
+with the new request form, bypassing worker materialization. Test owner is
+adapting only that fixture to the real execution form; all lineage/tamper
+assertions remain. Source/tests were frozen throughout each invocation.
+
+Independent follow-up fixture review: ACCEPT. Original request stays scheduler
+active identity; materialization only precedes the two direct analysis calls.
+Reset timing, stale epoch, missing-reset and forged-publication rejection
+assertions are intact. Frozen focused rerun: **333 passed, 12 warnings in
+30.23 s**, exit 0. JUnit:
+`results/test_tmp/replay_worker_rss_focus_final_20261011_51b920818e83403f877d3e33c3d6e0f9.xml`.
+The matching unique suffix identifies repository-local cache and external
+`C:/Users/JOSEMS~1/AppData/Local/Temp/<suffix>/pytest` basetemp. Parent explicitly
+created its parent directory first. Complete frozen non-real-data suite follows.
+
+Complete frozen corrected suite: **3964 passed, 16 skipped, one real_data
+deselected, 1790 warnings in 262.34 s**, exit 0. JUnit:
+`results/test_tmp/replay_worker_rss_full_20261011_b346fae5d69a4fd2ba9882438e0f79e8.xml`.
+Unique matching cache suffix and external basetemp under
+`C:/Users/JOSEMS~1/AppData/Local/Temp/replay_worker_rss_full_20261011_b346fae5d69a4fd2ba9882438e0f79e8/pytest`.
+Command: pinned conda run python -m pytest tests -m 'not real_data' -q
+--tb=short --basetemp <external>/pytest -o cache_dir=<unique results/test_tmp cache>
+--junitxml <unique results/test_tmp XML>; M8_RUN_REAL_DATA_TESTS=0 and
+EXP004_RUN_DIR absent. Tests/source remained frozen; primary AST/LF check
+passed all 31 replay Python files, whitespace clean. Existing warnings and
+child cache-permission warning retained. All 20 protected hashes and both
+preserved checkout HEAD/status/23 dirty-file hashes passed. This is software
+verification; native recorded-playback acceptance remains a separate gate.

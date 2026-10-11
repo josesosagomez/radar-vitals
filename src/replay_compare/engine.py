@@ -7,7 +7,7 @@ import math
 import queue
 import threading
 import time
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Any, Callable, Literal
 
 import numpy as np
@@ -29,6 +29,72 @@ from .evidence import ReplayEvidenceWriter
 from .session import ReplaySessionSpec
 from .source import SequentialAdcSource
 from .telemetry import replay_rss_bytes
+
+
+_BASELINE_WINDOW_FRAMES = 600
+
+
+@dataclass(frozen=True)
+class _FrozenReplayAnalysisJob(AnalysisJob):
+    """Carry either a frozen frame recipe or its materialized worker array."""
+
+    raw_frames: np.ndarray | None = field(default=None, repr=False)
+    captured_frames: tuple[np.ndarray, ...] = field(default_factory=tuple, repr=False)
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        if type(self.captured_frames) is not tuple:
+            raise ValueError("captured replay frames must use an immutable tuple")
+        if self.frame_stop - self.frame_start != _BASELINE_WINDOW_FRAMES:
+            raise ValueError("baseline replay jobs require exactly 600 frame bounds")
+
+        request_state = self.raw_frames is None
+        if request_state:
+            if len(self.captured_frames) != _BASELINE_WINDOW_FRAMES:
+                raise ValueError(
+                    "baseline replay requests require exactly 600 captured frames"
+                )
+            first_frame = self.captured_frames[0]
+            if not isinstance(first_frame, np.ndarray) or first_frame.ndim != 3:
+                raise ValueError(
+                    "captured replay frames must be three-dimensional arrays"
+                )
+            first_shape = first_frame.shape
+            first_dtype = first_frame.dtype
+            for frame in self.captured_frames:
+                if not isinstance(frame, np.ndarray) or frame.ndim != 3:
+                    raise ValueError(
+                        "captured replay frames must be three-dimensional arrays"
+                    )
+                if frame.shape != first_shape or frame.dtype != first_dtype:
+                    raise ValueError("captured replay frames must share shape and dtype")
+                if not frame.flags.owndata or frame.flags.writeable:
+                    raise ValueError("captured replay frames must be owned and read-only")
+            return
+
+        if self.captured_frames:
+            raise ValueError("materialized replay jobs cannot retain captured frames")
+        assert self.raw_frames is not None
+        if self.raw_frames.ndim != 4 or (
+            self.raw_frames.shape[0] != _BASELINE_WINDOW_FRAMES
+        ):
+            raise ValueError(
+                "materialized baseline replay jobs require one 600-frame array"
+            )
+        if not self.raw_frames.flags.owndata or self.raw_frames.flags.writeable:
+            raise ValueError("materialized replay frames must be owned and read-only")
+
+
+def _materialize_replay_job(
+    request: _FrozenReplayAnalysisJob,
+) -> _FrozenReplayAnalysisJob:
+    """Build the analysis array on the worker from an immutable frame recipe."""
+
+    if request.raw_frames is not None or not request.captured_frames:
+        raise ValueError("only an unmaterialized replay request can be materialized")
+    window_frames = np.stack(request.captured_frames, axis=0)
+    window_frames.setflags(write=False)
+    return replace(request, raw_frames=window_frames, captured_frames=())
 
 
 @dataclass(frozen=True)
@@ -143,7 +209,7 @@ def baseline_analysis_function(
 class BaselineController:
     """Own baseline frame history, selection, admission, and publication state."""
 
-    ordinary_window_frames = 600
+    ordinary_window_frames = _BASELINE_WINDOW_FRAMES
     ordinary_hop_frames = 60
 
     def __init__(
@@ -242,7 +308,9 @@ class BaselineController:
             events.extend(self._reset_for_integrity(reason))
             self.processed_boundary += 1
             return BaselineUpdate(self.snapshot, tuple(events))
-        self._frames.append(np.array(raw, copy=True))
+        owned_frame = np.array(raw, copy=True)
+        owned_frame.setflags(write=False)
+        self._frames.append(owned_frame)
         self.processed_boundary += 1
 
         at_boundary = (
@@ -425,9 +493,7 @@ class BaselineController:
         start = stop - self.ordinary_window_frames
         self._job_sequence += 1
         selection_mode = "select" if self.selected_bin is None else "committed"
-        window_frames = np.stack(tuple(self._frames))
-        window_frames.setflags(write=False)
-        return AnalysisJob(
+        return _FrozenReplayAnalysisJob(
             job_id=(
                 f"g{self.generation}_e{self.epoch}_b{stop}_n{self._job_sequence}"
             ),
@@ -442,7 +508,8 @@ class BaselineController:
             frame_stop=stop,
             requested_bin=self.selected_bin,
             selection_mode=selection_mode,
-            raw_frames=window_frames,
+            raw_frames=None,
+            captured_frames=tuple(self._frames),
         )
 
     def _stale_reason(self, result: AnalysisResult, requested: AnalysisJob) -> str:
@@ -677,44 +744,71 @@ class ReplayRuntime:
 
     def _worker_loop(self) -> None:
         while True:
-            job = self._work.get()
-            if job is None:
+            original_request = self._work.get()
+            if original_request is None:
                 return
             with self._execution_condition:
                 while self._execution_paused:
                     self._execution_condition.wait(timeout=0.05)
             started = time.monotonic()
+            materialized_job: _FrozenReplayAnalysisJob | None = None
+            raw_frames: np.ndarray | None = None
+            executed: ExecutedAnalysis | None = None
             try:
-                executed = self.analysis_function(job)
+                if not isinstance(original_request, _FrozenReplayAnalysisJob):
+                    raise TypeError("baseline worker requires a frozen replay request")
+                materialized_job = _materialize_replay_job(original_request)
+                raw_frames = materialized_job.raw_frames
+                if raw_frames is None:
+                    raise RuntimeError("materialized replay job omitted its frame array")
+                executed = self.analysis_function(materialized_job)
+                executed = replace(
+                    executed,
+                    analysis_elapsed_s=time.monotonic() - started,
+                )
             except Exception as exc:
                 result = AnalysisResult(
-                    job_id=job.job_id, epoch=job.epoch,
-                    selection_revision=job.selection_revision, stage=job.stage,
-                    frame_start=job.frame_start, frame_stop=job.frame_stop,
-                    actual_bin=job.requested_bin, executed=True, status="failed",
+                    job_id=original_request.job_id, epoch=original_request.epoch,
+                    selection_revision=original_request.selection_revision,
+                    stage=original_request.stage,
+                    frame_start=original_request.frame_start,
+                    frame_stop=original_request.frame_stop,
+                    actual_bin=original_request.requested_bin,
+                    executed=True, status="failed",
                     error=f"{type(exc).__name__}: {exc}",
                 )
                 from src.live_motion.runtime import _exception_evidence
                 executed = ExecutedAnalysis(
                     result=result,
                     evidence=_exception_evidence(
-                        job, self.controller.config, result.error, job.requested_bin
+                        original_request,
+                        self.controller.config,
+                        result.error,
+                        original_request.requested_bin,
                     ),
                     analysis_elapsed_s=time.monotonic() - started,
                     selector_elapsed_s=None,
                 )
-            if job.job_id in self._tombstoned_jobs:
-                self._tombstoned_jobs.discard(job.job_id)
+            assert executed is not None
+            if original_request.job_id in self._tombstoned_jobs:
+                self._tombstoned_jobs.discard(original_request.job_id)
+                original_request = None
+                materialized_job = None
+                raw_frames = None
+                executed = None
                 continue
             while True:
                 try:
                     self._results.put(executed, timeout=0.05)
                     break
                 except queue.Full:
-                    if job.job_id in self._tombstoned_jobs:
-                        self._tombstoned_jobs.discard(job.job_id)
+                    if original_request.job_id in self._tombstoned_jobs:
+                        self._tombstoned_jobs.discard(original_request.job_id)
                         break
-                    continue
+            original_request = None
+            materialized_job = None
+            raw_frames = None
+            executed = None
 
     def _controller_loop(self) -> None:
         try:

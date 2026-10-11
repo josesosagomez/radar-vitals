@@ -13,6 +13,7 @@ import numpy as np
 import pytest
 import yaml
 
+import src.replay_compare.engine as engine_module
 from src.live_motion.runtime import ExecutedAnalysis, _exception_evidence
 from src.live_motion.scheduler import AnalysisJob, AnalysisResult, SelectionDecision
 from src.range_coordinates import bin_range_m
@@ -883,7 +884,9 @@ def test_stale_committed_result_after_integrity_reset_is_honestly_verifiable(
     selector_job = controller.claim_pending_job()
     assert selector_job is not None
     controller.register_dispatched_job(selector_job)
-    selector_executed = production(selector_job)
+    selector_executed = production(
+        engine_module._materialize_replay_job(selector_job)
+    )
     selector_update = controller.handle_executed(selector_executed)
     for event in selector_update.events:
         writer.write_controller_event(event)
@@ -896,7 +899,7 @@ def test_stale_committed_result_after_integrity_reset_is_honestly_verifiable(
     stale_job = controller.claim_pending_job()
     assert stale_job is not None and stale_job.selection_mode == "committed"
     controller.register_dispatched_job(stale_job)
-    stale_executed = production(stale_job)
+    stale_executed = production(engine_module._materialize_replay_job(stale_job))
 
     reset = controller.handle_frame(
         controller.processed_boundary,

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import gc
+import weakref
 from dataclasses import replace
 
 import numpy as np
@@ -128,8 +130,12 @@ def test_exact_600_frame_window_and_60_frame_hop_contract():
     assert (job.frame_start, job.frame_stop) == (0, 600)
     assert job.stage == "ordinary_30"
     assert job.selection_mode == "select"
-    assert job.raw_frames.shape == (600, 1, 1, 2)
-    assert job.raw_frames.flags.writeable is False
+    assert job.raw_frames is None
+    assert len(job.captured_frames) == 600
+    assert all(frame.shape == FRAME.shape for frame in job.captured_frames)
+    assert all(frame.dtype == FRAME.dtype for frame in job.captured_frames)
+    assert all(frame.flags.owndata for frame in job.captured_frames)
+    assert all(not frame.flags.writeable for frame in job.captured_frames)
     assert [event.kind for event in update.events] == ["analysis_requested"]
 
     _feed(controller, 59)
@@ -497,16 +503,43 @@ def test_job_owns_immutable_frame_copy():
     mutable = FRAME.copy()
     _feed(controller, 600, frame=mutable)
     job = controller.pending_job
-    before = job.raw_frames.copy()
+    assert job is not None and job.raw_frames is None
+    before = tuple(frame.copy() for frame in job.captured_frames)
     mutable[...] = 999 + 999j
 
-    np.testing.assert_array_equal(job.raw_frames, before)
-    assert job.raw_frames.flags.writeable is False
+    assert len(job.captured_frames) == 600
+    for captured, expected in zip(job.captured_frames, before, strict=True):
+        np.testing.assert_array_equal(captured, expected)
+        assert captured.flags.owndata is True
+        assert captured.flags.writeable is False
     with pytest.raises(ValueError):
-        job.raw_frames[0, 0, 0, 0] = 0
+        job.captured_frames[0][0, 0, 0] = 0
 
 
-def test_job_reuses_the_single_owned_readonly_stacked_window(monkeypatch):
+def test_controller_scheduling_never_stacks_and_captures_exact_600_660_windows(
+    monkeypatch,
+):
+    def forbidden_stack(*_args, **_kwargs):
+        raise AssertionError("controller scheduling must not materialize a window")
+
+    monkeypatch.setattr(engine_module.np, "stack", forbidden_stack)
+    controller = BaselineController({}, generation=1)
+    for index in range(660):
+        frame = FRAME + np.complex64(index)
+        controller.handle_frame(index, frame, valid=True)
+
+    job = controller.pending_job
+    assert job is not None
+    assert (job.frame_start, job.frame_stop) == (60, 660)
+    assert job.raw_frames is None
+    assert len(job.captured_frames) == 600
+    np.testing.assert_array_equal(job.captured_frames[0], FRAME + np.complex64(60))
+    np.testing.assert_array_equal(job.captured_frames[-1], FRAME + np.complex64(659))
+
+
+def test_worker_materializer_builds_one_owned_readonly_array_without_lookahead(
+    monkeypatch,
+):
     original_stack = engine_module.np.stack
     captured = []
 
@@ -515,17 +548,20 @@ def test_job_reuses_the_single_owned_readonly_stacked_window(monkeypatch):
         captured.append(stacked)
         return stacked
 
-    monkeypatch.setattr(engine_module.np, "stack", capture_stack)
     controller = BaselineController({}, generation=1)
     for index in range(600):
         frame = FRAME + np.complex64(index)
         controller.handle_frame(index, frame, valid=True)
 
+    request = controller.pending_job
+    assert request is not None
+    monkeypatch.setattr(engine_module.np, "stack", capture_stack)
+    job = engine_module._materialize_replay_job(request)
+
     assert len(captured) == 1
     stacked = captured[0]
-    job = controller.pending_job
-    assert job is not None
     assert job.raw_frames is stacked
+    assert job.captured_frames == ()
     assert job.raw_frames.flags.owndata is True
     assert job.raw_frames.flags.writeable is False
     assert job.raw_frames.shape == (600,) + FRAME.shape
@@ -533,6 +569,103 @@ def test_job_reuses_the_single_owned_readonly_stacked_window(monkeypatch):
     np.testing.assert_array_equal(job.raw_frames[0], FRAME)
     np.testing.assert_array_equal(job.raw_frames[137], FRAME + np.complex64(137))
     np.testing.assert_array_equal(job.raw_frames[-1], FRAME + np.complex64(599))
+    assert request.raw_frames is None
+    assert len(request.captured_frames) == 600
+
+
+def test_frozen_replay_job_rejects_mixed_or_malformed_storage_forms():
+    controller = BaselineController({}, generation=1)
+    _feed(controller, 600)
+    request = controller.pending_job
+    assert request is not None
+
+    writable = np.array(request.captured_frames[0], copy=True)
+    nonowned = np.array(request.captured_frames[0], copy=True).view()
+    nonowned.setflags(write=False)
+    wrong_shape = np.zeros((1, 2, 2), dtype=FRAME.dtype)
+    wrong_shape.setflags(write=False)
+    wrong_dtype = np.zeros(FRAME.shape, dtype=np.complex128)
+    wrong_dtype.setflags(write=False)
+    malformed_requests = (
+        {"captured_frames": request.captured_frames[:-1]},
+        {"captured_frames": list(request.captured_frames)},
+        {"captured_frames": (writable,) + request.captured_frames[1:]},
+        {"captured_frames": (nonowned,) + request.captured_frames[1:]},
+        {"captured_frames": (wrong_shape,) + request.captured_frames[1:]},
+        {"captured_frames": (wrong_dtype,) + request.captured_frames[1:]},
+        {"frame_stop": 599},
+    )
+    for changes in malformed_requests:
+        with pytest.raises((TypeError, ValueError)):
+            replace(request, **changes)
+
+    materialized = engine_module._materialize_replay_job(request)
+    with pytest.raises(ValueError, match="cannot retain captured"):
+        replace(materialized, captured_frames=request.captured_frames)
+    with pytest.raises(ValueError, match="unmaterialized replay request"):
+        engine_module._materialize_replay_job(materialized)
+
+
+def test_capture_lifetimes_are_bounded_by_scheduler_state(monkeypatch):
+    materialized_job_ids = []
+
+    def record_materialization(job):
+        materialized_job_ids.append(job.job_id)
+        raise AssertionError("canceled controller recipes must never execute")
+
+    monkeypatch.setattr(
+        engine_module,
+        "_materialize_replay_job",
+        record_materialization,
+    )
+    coalesced = BaselineController({}, generation=1)
+    _feed(coalesced, 600)
+    first_pending = coalesced.pending_job
+    assert first_pending is not None
+    first_ref = weakref.ref(first_pending)
+    del first_pending
+    _feed(coalesced, 60)
+    gc.collect()
+    assert first_ref() is None
+
+    reset = BaselineController({}, generation=1)
+    _feed(reset, 600)
+    reset_pending = reset.pending_job
+    assert reset_pending is not None
+    reset_ref = weakref.ref(reset_pending)
+    del reset_pending
+    reset.handle_frame(600, np.empty((1, 1, 2)), valid=False)
+    gc.collect()
+    assert reset_ref() is None
+
+    finished = BaselineController({}, generation=1)
+    _feed(finished, 600)
+    finished_pending = finished.pending_job
+    assert finished_pending is not None
+    finished_ref = weakref.ref(finished_pending)
+    del finished_pending
+    finished.finish()
+    gc.collect()
+    assert finished_ref() is None
+    assert materialized_job_ids == []
+
+
+def test_active_capture_is_retained_until_result_application_then_released():
+    controller = BaselineController({}, generation=1)
+    _feed(controller, 600)
+    request = _claim(controller)
+    executed = _executed(request, actual_bin=3, decision=_selection(3))
+    request_ref = weakref.ref(request)
+    del request
+
+    _feed(controller, 60)
+    gc.collect()
+    assert request_ref() is controller.active_job
+
+    controller.handle_executed(executed)
+    gc.collect()
+    assert controller.active_job is None
+    assert request_ref() is None
 
 
 def test_invalid_frame_resets_selection_history_and_requires_new_contiguous_window():

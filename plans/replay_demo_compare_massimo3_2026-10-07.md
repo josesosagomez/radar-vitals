@@ -789,3 +789,55 @@ Resolved disagreements:
 Physical training, held-out calibration, real-hardware responsiveness and rehearsal remain owner-run work. Calibration for a nonzero-bias live configuration does not automatically qualify historical zero-bias `massimo3`.
 
 The delivered baseline player can be accepted independently. The advanced replay capability remains clearly unavailable until its compatible calibration gate passes. Neither synthetic tests nor recorded-session replay establish clinical validity or physical accuracy at 3 bpm.
+
+## 6. Evidence-backed implementation revisions (2026-10-11)
+
+Full native playback at reviewed commit b9ccd343 completed all 12005 frames with
+verified ADC/reference/evidence/coverage, but failed the unchanged 0.25-second
+controller/UI/heartbeat gate. All controller breaches occurred while synchronously
+assembling the ordinary 600-frame input. Removing a redundant immutable copy
+helped but was insufficient. Move baseline materialization to the existing worker:
+
+- A frozen replay-local AnalysisJob subclass carries either the request form
+  (raw_frames=None plus exactly 600 individually owned/read-only frames in an
+  immutable tuple), or the execution form (owned/read-only 600-frame raw_frames
+  plus an empty captured tuple). Call base validation and enforce exclusive forms,
+  exact bounds, identical frame shapes/dtypes, and tuple ownership without recopy.
+- Controller requests capture frame references only; the existing bounded
+  scheduler owns job lifetime. No side map or protected scheduler changes.
+- The existing worker stacks in chronological order, marks the fresh owned array
+  read-only, and supplies the materialized execution job to every analyzer.
+  Start timing before assembly and retain selector latency separately.
+- Assembly/constructor/callback failures are caught inside the ordinary failed-
+  attempt lifecycle, preserving identity/bounds and evidence. A failed assembly
+  never invokes the analyzer and must not wedge the scheduler.
+- Scheduler retains the original active request and captured frames until result
+  application. This retention is bounded, not immediate release. Pending captures
+  alias current-ring frames; canceled/coalesced/reset/finished jobs release their
+  strong references when removed. Explicitly release worker locals after handoff,
+  including tombstoned paths, so the idle worker retains no extra signal window.
+- Regressions prove exact 600/660 chronological bounds, source mutation isolation,
+  no controller stack, exactly one stack per executed job, numerical equivalence,
+  canceled capture release/no execution, assembly failure persistence/recovery,
+  pause/reset/EOF/restart behavior, and bounded worker/scheduler lifetimes.
+
+Independent plan review: READY with these invariants, failure/lifetime/timing
+requirements and objective tests. No DSP, age threshold, reference or calibration
+rule changes. Advanced and protected live paths remain unchanged.
+
+The same native run showed continuing memory growth. Independent research and
+review identified the protected telemetry getter's per-call local ctypes Structure
+and POINTER(type) cache retention; replay serialization fixes its race but not
+that type growth. Use a replay-local stable Windows PROCESS_MEMORY_COUNTERS class,
+initialize GetCurrentProcess/GetProcessMemoryInfo signatures and pseudo-handle
+once under the existing lock, and sample current WorkingSetSize bytes. Cache
+unavailability as None, preserve serialization and exception-safe lock release;
+never substitute peak resource.ru_maxrss. The protected live getter remains
+unchanged. Tests prove one initialization, stable pointer/ABI/size, concurrent
+serialization, int/None behavior and repeated-call type stability. Fresh native
+RSS remains an observed gate, not a predicted plateau.
+
+Both revisions require independent code review, focused and complete non-real-
+data suites, separate reviewed commits/pushes, and fresh full 1x/native controls,
+other speeds, source-bound artifact verification and an actual screenshot.
+Failed runs remain diagnostic evidence; no responsiveness threshold is relaxed.
