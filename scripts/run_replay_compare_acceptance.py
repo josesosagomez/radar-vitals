@@ -20,11 +20,276 @@ import time
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any, Callable
 
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+
+
+class BoundedScreenshotCaptures:
+    """Own exactly two detached dashboard images until durable PNG completion."""
+
+    _slot_filenames = {
+        "during": "dashboard_during.png",
+        "final": "dashboard_final.png",
+    }
+
+    def __init__(
+        self,
+        output_root: Path,
+        *,
+        clock: Callable[[], float] = time.monotonic,
+    ):
+        resolved_output_root = output_root.resolve()
+        if resolved_output_root != output_root:
+            raise ValueError("screenshot output root must already be resolved")
+        self._output_root = resolved_output_root
+        self._clock = clock
+        self._records: dict[str, dict[str, Any]] = {}
+        self._images: dict[str, Any] = {}
+        self._admitted_count = 0
+        self._retained_bytes = 0
+        self._retained_bytes_peak = 0
+        self._encoding_finished = False
+
+        destinations: set[Path] = set()
+        for slot, filename in self._slot_filenames.items():
+            destination = (self._output_root / filename).resolve()
+            if not destination.is_relative_to(self._output_root):
+                raise ValueError(f"screenshot destination for {slot} escapes output root")
+            if destination in destinations:
+                raise ValueError("screenshot destinations must be unique")
+            if destination.exists():
+                raise FileExistsError(
+                    f"screenshot destination already exists: {destination}"
+                )
+            destinations.add(destination)
+            self._records[slot] = {
+                "slot": slot,
+                "destination": str(destination),
+                "capture_status": "not_captured",
+                "completion_status": "not_started",
+                "errors": [],
+            }
+
+    @property
+    def retained_bytes(self) -> int:
+        return self._retained_bytes
+
+    @property
+    def retained_bytes_peak(self) -> int:
+        return self._retained_bytes_peak
+
+    def records(self) -> list[dict[str, Any]]:
+        """Return JSON-safe slot records in their fixed capture order."""
+
+        return [dict(self._records[slot]) for slot in self._slot_filenames]
+
+    def capture(
+        self,
+        slot: str,
+        capture_image: Callable[[], Any],
+        *,
+        assert_ui_thread: Callable[[], None],
+    ) -> dict[str, Any]:
+        """Capture one preflighted slot without performing PNG encoding."""
+
+        if type(slot) is not str or slot not in self._records:
+            raise ValueError(f"unknown screenshot slot: {slot!r}")
+        record = self._records[slot]
+        if record["capture_status"] != "not_captured":
+            raise RuntimeError(f"screenshot slot {slot!r} was already admitted")
+        if self._admitted_count >= len(self._slot_filenames):
+            raise RuntimeError("detached screenshot capacity is full")
+        destination = Path(record["destination"])
+        if destination.exists():
+            raise FileExistsError(
+                f"screenshot destination already exists: {destination}"
+            )
+
+        # Admission and destination checks precede every Qt call.
+        self._admitted_count += 1
+        record["capture_status"] = "capturing"
+        capture_started = self._clock()
+        record["capture_begin_monotonic_s"] = capture_started
+        try:
+            assert_ui_thread()
+            image = capture_image()
+            if image is None or image.isNull():
+                raise RuntimeError("dashboard capture returned a null image")
+            width = int(image.width())
+            height = int(image.height())
+            retained_bytes = int(image.sizeInBytes())
+            device_pixel_ratio = float(image.devicePixelRatio())
+            image_format = image.format()
+            try:
+                format_value = int(image_format)
+            except TypeError:
+                format_value = int(image_format.value)
+            if width <= 0 or height <= 0 or retained_bytes <= 0:
+                raise RuntimeError("dashboard capture has invalid pixel dimensions")
+            if (
+                not math.isfinite(device_pixel_ratio)
+                or device_pixel_ratio <= 0.0
+            ):
+                raise RuntimeError("dashboard capture has invalid device pixel ratio")
+            self._images[slot] = image
+            self._retained_bytes += retained_bytes
+            self._retained_bytes_peak = max(
+                self._retained_bytes_peak, self._retained_bytes
+            )
+            record.update({
+                "capture_status": "captured",
+                "width": width,
+                "height": height,
+                "device_pixel_ratio": device_pixel_ratio,
+                "format": format_value,
+                "size_in_bytes": retained_bytes,
+            })
+        except BaseException as exc:
+            record["capture_status"] = "failed"
+            record["errors"].append(f"{type(exc).__name__}: {exc}")
+            raise
+        finally:
+            capture_finished = self._clock()
+            record["capture_end_monotonic_s"] = capture_finished
+            record["capture_elapsed_s"] = capture_finished - capture_started
+        return dict(record)
+
+    def encode_and_verify(
+        self,
+        image_loader: Callable[[str], Any],
+        *,
+        assert_ui_thread: Callable[[], None],
+    ) -> tuple[list[str], list[str]]:
+        """Save retained images sequentially and verify the actual PNG files."""
+
+        if self._encoding_finished:
+            completed = [
+                record["destination"]
+                for record in self._records.values()
+                if record["completion_status"] == "complete"
+            ]
+            errors = [
+                f"screenshot {record['slot']}: {message}"
+                for record in self._records.values()
+                for message in record["errors"]
+            ]
+            return completed, errors
+
+        completed: list[str] = []
+        errors: list[str] = []
+        try:
+            for slot in self._slot_filenames:
+                record = self._records[slot]
+                image = self._images.get(slot)
+                if record["capture_status"] != "captured" or image is None:
+                    message = "detached image was not captured"
+                    if message not in record["errors"]:
+                        record["errors"].append(message)
+                    record["completion_status"] = "failed"
+                    errors.append(f"screenshot {slot}: {message}")
+                    continue
+
+                destination = Path(record["destination"])
+                encode_started = self._clock()
+                record["encode_begin_monotonic_s"] = encode_started
+                try:
+                    assert_ui_thread()
+                    if destination.exists():
+                        raise FileExistsError(
+                            f"screenshot destination already exists: {destination}"
+                        )
+                    if not image.save(str(destination), "PNG"):
+                        raise RuntimeError("QImage PNG encoding returned false")
+                    png_bytes = destination.read_bytes()
+                    if not png_bytes.startswith(b"\x89PNG\x0d\x0a\x1a\x0a"):
+                        raise RuntimeError("saved screenshot is not a PNG file")
+                    reopened = image_loader(str(destination))
+                    if reopened is None or reopened.isNull():
+                        raise RuntimeError("saved PNG could not be reopened")
+                    if (
+                        int(reopened.width()) != record["width"]
+                        or int(reopened.height()) != record["height"]
+                    ):
+                        raise RuntimeError(
+                            "reopened PNG dimensions differ from captured pixels"
+                        )
+                    record.update({
+                        "completion_status": "complete",
+                        "png_bytes": len(png_bytes),
+                        "png_sha256": hashlib.sha256(png_bytes).hexdigest(),
+                        "reopened_width": int(reopened.width()),
+                        "reopened_height": int(reopened.height()),
+                    })
+                    completed.append(str(destination))
+                except BaseException as exc:
+                    record["completion_status"] = "failed"
+                    message = f"{type(exc).__name__}: {exc}"
+                    record["errors"].append(message)
+                    errors.append(f"screenshot {slot}: {message}")
+                finally:
+                    encode_finished = self._clock()
+                    record["encode_end_monotonic_s"] = encode_finished
+                    record["encode_elapsed_s"] = encode_finished - encode_started
+        finally:
+            self._images.clear()
+            self._retained_bytes = 0
+            self._encoding_finished = True
+        return completed, errors
+
+
+def finish_screenshot_captures_after_loop(
+    captures: BoundedScreenshotCaptures,
+    *,
+    stop_acceptance_timer: Callable[[], None],
+    stop_poll_timer: Callable[[], None],
+    shutdown_replay: Callable[[], None],
+    final_poll: Callable[[], None],
+    capture_final_image: Callable[[], Any],
+    image_loader: Callable[[str], Any],
+    assert_ui_thread: Callable[[], None],
+) -> tuple[list[str], list[str]]:
+    """Stop loop activity, capture final pixels, then encode both fixed slots."""
+
+    errors: list[str] = []
+    timers_stopped = True
+    for label, stop_timer in (
+        ("acceptance timer", stop_acceptance_timer),
+        ("dashboard poll timer", stop_poll_timer),
+    ):
+        try:
+            stop_timer()
+        except BaseException as exc:
+            timers_stopped = False
+            errors.append(f"{label} stop: {type(exc).__name__}: {exc}")
+
+    shutdown_succeeded = False
+    try:
+        shutdown_replay()
+        shutdown_succeeded = True
+    except BaseException as exc:
+        errors.append(f"Replay shutdown: {type(exc).__name__}: {exc}")
+
+    if timers_stopped and shutdown_succeeded:
+        try:
+            final_poll()
+            captures.capture(
+                "final",
+                capture_final_image,
+                assert_ui_thread=assert_ui_thread,
+            )
+        except BaseException as exc:
+            errors.append(f"Final screenshot capture: {type(exc).__name__}: {exc}")
+
+    completed, encode_errors = captures.encode_and_verify(
+        image_loader,
+        assert_ui_thread=assert_ui_thread,
+    )
+    errors.extend(encode_errors)
+    return completed, errors
 
 
 def memory_observation(samples: list[dict], field: str, generation: int) -> dict:
@@ -117,7 +382,7 @@ def main() -> int:
     if source_status.strip():
         parser.error("commit the reviewed replay sources/configuration before acceptance")
 
-    from PySide6 import QtCore, QtWidgets
+    from PySide6 import QtCore, QtGui, QtWidgets
 
     from src.replay_compare.telemetry import replay_rss_bytes
     from src.replay_compare.application import create_replay_application
@@ -153,9 +418,15 @@ def main() -> int:
         frame_limit=limit,
         initial_speed=args.speed,
     )
+    screenshot_captures = BoundedScreenshotCaptures(output)
     application = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     window = create_dashboard(manager, recording_name=spec.capture_id)
     window.show()
+
+    def assert_qt_thread() -> None:
+        current_thread = QtCore.QThread.currentThread()
+        if current_thread != application.thread() or current_thread != window.thread():
+            raise RuntimeError("dashboard screenshot work must run on the Qt thread")
 
     started = time.monotonic()
     observations: dict = {
@@ -207,7 +478,8 @@ def main() -> int:
     speed_two_request: float | None = None
     speed_four_request: float | None = None
     stop_requested = False
-    during_saved = False
+    during_admitted = False
+    screenshots_finalized = False
     exception_hook = sys.excepthook
 
     def record_error(message: str) -> None:
@@ -273,7 +545,8 @@ def main() -> int:
     def tick() -> None:
         nonlocal previous_tick, last_sample, finalizing_since
         nonlocal pause_request, paused_at, paused_snapshot, resumed
-        nonlocal restart_requested, restart_request_wall, restarted, speed_two, speed_four, during_saved
+        nonlocal restart_requested, restart_request_wall, restarted, speed_two, speed_four
+        nonlocal during_admitted
         nonlocal speed_two_request, speed_four_request
         now = time.monotonic()
         interval_begin = previous_tick
@@ -313,13 +586,23 @@ def main() -> int:
                     ),
                     "memory_sample_begin_monotonic_s": memory_begin,
                     "memory_sample_end_monotonic_s": time.monotonic(),
+                    "retained_screenshot_bytes": screenshot_captures.retained_bytes,
+                    "retained_screenshot_bytes_peak": (
+                        screenshot_captures.retained_bytes_peak
+                    ),
                     "coverage": asdict(snapshot.coverage),
                 })
                 last_sample = now
-            if not during_saved and snapshot.processed_boundary >= min(6000, limit - 1):
-                path = window.save_screenshot(output / "dashboard_during.png")
-                observations["screenshots"].append(str(path))
-                during_saved = True
+            if (
+                not during_admitted
+                and snapshot.processed_boundary >= min(6000, limit - 1)
+            ):
+                during_admitted = True
+                screenshot_captures.capture(
+                    "during",
+                    window.capture_screenshot_image,
+                    assert_ui_thread=assert_qt_thread,
+                )
             if args.scenario == "controls":
                 if pause_request is None and snapshot.generation == 1 and snapshot.processed_boundary >= 620:
                     pause_request = now
@@ -387,11 +670,26 @@ def main() -> int:
     print(f"Native {args.scenario} replay started: {output}", flush=True)
     try:
         application.exec()
-        manager.stop(timeout_s=6.0)
-        timed_ui_poll()
+        completed_screenshots, screenshot_errors = (
+            finish_screenshot_captures_after_loop(
+                screenshot_captures,
+                stop_acceptance_timer=timer.stop,
+                stop_poll_timer=window.poll_timer.stop,
+                shutdown_replay=lambda: manager.stop(timeout_s=6.0),
+                final_poll=timed_ui_poll,
+                capture_final_image=window.capture_screenshot_image,
+                image_loader=QtGui.QImage,
+                assert_ui_thread=assert_qt_thread,
+            )
+        )
+        screenshots_finalized = True
+        observations["screenshots"].extend(completed_screenshots)
+        observations["errors"].extend(screenshot_errors)
         final = manager.latest_snapshot
-        screenshot = window.save_screenshot(output / "dashboard_final.png")
-        observations["screenshots"].append(str(screenshot))
+        observations["screenshot_captures"] = screenshot_captures.records()
+        observations["retained_screenshot_bytes_peak"] = (
+            screenshot_captures.retained_bytes_peak
+        )
         observations.update({
             "wall_elapsed_s": time.monotonic() - started,
             "final_pass_dir": str(manager.pass_dir),
@@ -536,6 +834,20 @@ def main() -> int:
         observations["errors"].append(f"Acceptance shutdown: {type(exc).__name__}: {exc}")
     finally:
         timer.stop()
+        window.poll_timer.stop()
+        if not screenshots_finalized:
+            completed_screenshots, screenshot_errors = (
+                screenshot_captures.encode_and_verify(
+                    QtGui.QImage,
+                    assert_ui_thread=assert_qt_thread,
+                )
+            )
+            observations["screenshots"].extend(completed_screenshots)
+            observations["errors"].extend(screenshot_errors)
+        observations["screenshot_captures"] = screenshot_captures.records()
+        observations["retained_screenshot_bytes_peak"] = (
+            screenshot_captures.retained_bytes_peak
+        )
         ui_timing.close()
         sys.excepthook = exception_hook
         observations["finished_utc"] = datetime.now(timezone.utc).isoformat()

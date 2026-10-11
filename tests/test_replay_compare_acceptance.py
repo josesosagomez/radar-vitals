@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import math
+from pathlib import Path
 
 import pytest
 
 from scripts.run_replay_compare_acceptance import (
+    BoundedScreenshotCaptures,
+    finish_screenshot_captures_after_loop,
     memory_observation,
     process_performance_errors,
 )
@@ -272,3 +276,302 @@ def test_memory_observation_filters_generation_and_reports_diagnostic_slope():
             "Observed memory; inspect alongside bounded ownership tests."
         ),
     }
+
+
+PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+
+
+class _FakeImage:
+    def __init__(
+        self,
+        width=40,
+        height=24,
+        *,
+        size_in_bytes=3840,
+        null=False,
+        save_result=True,
+        events=None,
+        name="image",
+    ):
+        self._width = width
+        self._height = height
+        self._size_in_bytes = size_in_bytes
+        self._null = null
+        self._save_result = save_result
+        self._events = [] if events is None else events
+        self._name = name
+
+    def isNull(self):
+        return self._null
+
+    def width(self):
+        return self._width
+
+    def height(self):
+        return self._height
+
+    def sizeInBytes(self):
+        return self._size_in_bytes
+
+    def devicePixelRatio(self):
+        return 2.5
+
+    def format(self):
+        return 7
+
+    def save(self, path, image_format):
+        self._events.append(("save", self._name, Path(path).name, image_format))
+        if not self._save_result:
+            return False
+        Path(path).write_bytes(PNG_SIGNATURE + self._name.encode("ascii"))
+        return True
+
+
+def _clock():
+    values = iter(index / 10.0 for index in range(100))
+    return lambda: next(values)
+
+
+@pytest.mark.parametrize(
+    "filenames,expected_error",
+    [
+        (
+            {"during": "../escape.png", "final": "dashboard_final.png"},
+            ValueError,
+        ),
+        (
+            {"during": "same.png", "final": "same.png"},
+            ValueError,
+        ),
+    ],
+)
+def test_screenshot_destination_preflight_rejects_escape_or_duplicate(
+    tmp_path, monkeypatch, filenames, expected_error
+):
+    monkeypatch.setattr(BoundedScreenshotCaptures, "_slot_filenames", filenames)
+    with pytest.raises(expected_error):
+        BoundedScreenshotCaptures(tmp_path.resolve())
+
+
+def test_screenshot_preflight_requires_already_resolved_output_root(tmp_path):
+    unresolved = tmp_path / ".." / tmp_path.name
+    assert unresolved != unresolved.resolve()
+    with pytest.raises(ValueError, match="already be resolved"):
+        BoundedScreenshotCaptures(unresolved)
+
+
+def test_screenshot_destination_and_admission_fail_before_any_gui_work(tmp_path):
+    captures = BoundedScreenshotCaptures(tmp_path.resolve(), clock=_clock())
+    gui_calls = []
+
+    def ui_assertion():
+        gui_calls.append("thread")
+
+    def capture_image():
+        gui_calls.append("capture")
+        return _FakeImage()
+
+    with pytest.raises(ValueError, match="unknown screenshot slot"):
+        captures.capture("unknown", capture_image, assert_ui_thread=ui_assertion)
+    assert gui_calls == []
+
+    during_path = tmp_path / "dashboard_during.png"
+    during_path.write_bytes(b"preexisting")
+    with pytest.raises(FileExistsError):
+        captures.capture("during", capture_image, assert_ui_thread=ui_assertion)
+    assert gui_calls == []
+    during_path.unlink()
+
+    captures.capture("during", capture_image, assert_ui_thread=ui_assertion)
+    assert gui_calls == ["thread", "capture"]
+    gui_calls.clear()
+    with pytest.raises(RuntimeError, match="already admitted"):
+        captures.capture("during", capture_image, assert_ui_thread=ui_assertion)
+    assert gui_calls == []
+    assert not during_path.exists()
+    assert captures.records()[0]["completion_status"] == "not_started"
+    assert "png_sha256" not in captures.records()[0]
+
+
+def test_screenshot_capture_is_bounded_and_completion_hashes_actual_png_bytes(
+    tmp_path,
+):
+    events = []
+    captures = BoundedScreenshotCaptures(tmp_path.resolve(), clock=_clock())
+    during = _FakeImage(size_in_bytes=100, events=events, name="during")
+    final = _FakeImage(size_in_bytes=200, events=events, name="final")
+    thread_checks = []
+
+    for slot, image in (("during", during), ("final", final)):
+        captures.capture(
+            slot,
+            lambda image=image: image,
+            assert_ui_thread=lambda: thread_checks.append(("capture", slot)),
+        )
+
+    assert captures.retained_bytes == 300
+    assert captures.retained_bytes_peak == 300
+    assert all(not Path(row["destination"]).exists() for row in captures.records())
+    assert all(row["completion_status"] == "not_started" for row in captures.records())
+
+    def load_image(path):
+        events.append(("load", Path(path).name))
+        return _FakeImage(width=40, height=24)
+
+    completed, errors = captures.encode_and_verify(
+        load_image,
+        assert_ui_thread=lambda: events.append(("ui", "encode")),
+    )
+
+    assert errors == []
+    assert completed == [
+        str((tmp_path / "dashboard_during.png").resolve()),
+        str((tmp_path / "dashboard_final.png").resolve()),
+    ]
+    assert captures.retained_bytes == 0
+    assert captures.retained_bytes_peak == 300
+    records = captures.records()
+    for record in records:
+        png_bytes = Path(record["destination"]).read_bytes()
+        assert png_bytes.startswith(PNG_SIGNATURE)
+        assert record["completion_status"] == "complete"
+        assert record["png_bytes"] == len(png_bytes)
+        assert record["png_sha256"] == hashlib.sha256(png_bytes).hexdigest()
+        assert (record["reopened_width"], record["reopened_height"]) == (40, 24)
+
+    before = list(events)
+    assert captures.encode_and_verify(
+        lambda _path: pytest.fail("idempotent completion must not reload"),
+        assert_ui_thread=lambda: pytest.fail("idempotent completion must not touch Qt"),
+    ) == (completed, [])
+    assert events == before
+
+
+def test_screenshot_encode_failure_is_retained_and_releases_both_images(tmp_path):
+    captures = BoundedScreenshotCaptures(tmp_path.resolve(), clock=_clock())
+    captures.capture(
+        "during",
+        lambda: _FakeImage(size_in_bytes=100, save_result=False, name="during"),
+        assert_ui_thread=lambda: None,
+    )
+    captures.capture(
+        "final",
+        lambda: _FakeImage(size_in_bytes=200, name="final"),
+        assert_ui_thread=lambda: None,
+    )
+
+    completed, errors = captures.encode_and_verify(
+        lambda _path: _FakeImage(), assert_ui_thread=lambda: None
+    )
+
+    assert completed == [str((tmp_path / "dashboard_final.png").resolve())]
+    assert any("PNG encoding returned false" in error for error in errors)
+    assert captures.retained_bytes == 0
+    records = captures.records()
+    assert records[0]["completion_status"] == "failed"
+    assert records[0]["errors"]
+    assert records[1]["completion_status"] == "complete"
+    assert not (tmp_path / "dashboard_during.png").exists()
+
+
+def test_screenshot_capture_failure_is_recorded_without_claim_or_retention(tmp_path):
+    captures = BoundedScreenshotCaptures(tmp_path.resolve(), clock=_clock())
+    with pytest.raises(RuntimeError, match="null image"):
+        captures.capture(
+            "during",
+            lambda: _FakeImage(null=True),
+            assert_ui_thread=lambda: None,
+        )
+
+    record = captures.records()[0]
+    assert record["capture_status"] == "failed"
+    assert record["completion_status"] == "not_started"
+    assert record["errors"]
+    assert captures.retained_bytes == 0
+    assert not Path(record["destination"]).exists()
+
+
+def test_post_loop_screenshot_finalization_has_strict_order_and_releases_images(
+    tmp_path,
+):
+    events = []
+    captures = BoundedScreenshotCaptures(tmp_path.resolve(), clock=_clock())
+    captures.capture(
+        "during",
+        lambda: _FakeImage(size_in_bytes=100, events=events, name="during"),
+        assert_ui_thread=lambda: events.append("capture-during-thread"),
+    )
+    events.clear()
+
+    def callback(name, result=None):
+        def invoke():
+            events.append(name)
+            return result
+
+        return invoke
+
+    def load_image(path):
+        events.append(f"load-{Path(path).stem}")
+        return _FakeImage()
+
+    completed, errors = finish_screenshot_captures_after_loop(
+        captures,
+        stop_acceptance_timer=callback("stop-acceptance"),
+        stop_poll_timer=callback("stop-poll"),
+        shutdown_replay=callback("shutdown"),
+        final_poll=callback("final-poll"),
+        capture_final_image=callback(
+            "capture-final", _FakeImage(size_in_bytes=200, events=events, name="final")
+        ),
+        image_loader=load_image,
+        assert_ui_thread=callback("ui-thread"),
+    )
+
+    assert errors == []
+    assert completed == [
+        str((tmp_path / "dashboard_during.png").resolve()),
+        str((tmp_path / "dashboard_final.png").resolve()),
+    ]
+    assert events[:6] == [
+        "stop-acceptance",
+        "stop-poll",
+        "shutdown",
+        "final-poll",
+        "ui-thread",
+        "capture-final",
+    ]
+    first_save = next(index for index, event in enumerate(events) if isinstance(event, tuple))
+    assert first_save >= 7
+    assert captures.retained_bytes == 0
+
+
+def test_post_loop_timer_failure_still_stops_both_and_releases_during_image(tmp_path):
+    events = []
+    captures = BoundedScreenshotCaptures(tmp_path.resolve(), clock=_clock())
+    captures.capture(
+        "during",
+        lambda: _FakeImage(events=events, name="during"),
+        assert_ui_thread=lambda: None,
+    )
+    events.clear()
+
+    def fail_first_stop():
+        events.append("stop-acceptance")
+        raise RuntimeError("timer stuck")
+
+    completed, errors = finish_screenshot_captures_after_loop(
+        captures,
+        stop_acceptance_timer=fail_first_stop,
+        stop_poll_timer=lambda: events.append("stop-poll"),
+        shutdown_replay=lambda: events.append("shutdown"),
+        final_poll=lambda: pytest.fail("final poll must not run after timer failure"),
+        capture_final_image=lambda: pytest.fail("final capture must not run"),
+        image_loader=lambda _path: _FakeImage(),
+        assert_ui_thread=lambda: None,
+    )
+
+    assert events[:3] == ["stop-acceptance", "stop-poll", "shutdown"]
+    assert completed == [str((tmp_path / "dashboard_during.png").resolve())]
+    assert any("acceptance timer stop" in error for error in errors)
+    assert any("final" in error and "not captured" in error for error in errors)
+    assert captures.retained_bytes == 0
