@@ -7,6 +7,7 @@ from dataclasses import replace
 import numpy as np
 import pytest
 
+import src.replay_compare.engine as engine_module
 from src.live_motion.runtime import ExecutedAnalysis
 from src.live_motion.scheduler import (
     AnalysisResult,
@@ -503,6 +504,35 @@ def test_job_owns_immutable_frame_copy():
     assert job.raw_frames.flags.writeable is False
     with pytest.raises(ValueError):
         job.raw_frames[0, 0, 0, 0] = 0
+
+
+def test_job_reuses_the_single_owned_readonly_stacked_window(monkeypatch):
+    original_stack = engine_module.np.stack
+    captured = []
+
+    def capture_stack(*args, **kwargs):
+        stacked = original_stack(*args, **kwargs)
+        captured.append(stacked)
+        return stacked
+
+    monkeypatch.setattr(engine_module.np, "stack", capture_stack)
+    controller = BaselineController({}, generation=1)
+    for index in range(600):
+        frame = FRAME + np.complex64(index)
+        controller.handle_frame(index, frame, valid=True)
+
+    assert len(captured) == 1
+    stacked = captured[0]
+    job = controller.pending_job
+    assert job is not None
+    assert job.raw_frames is stacked
+    assert job.raw_frames.flags.owndata is True
+    assert job.raw_frames.flags.writeable is False
+    assert job.raw_frames.shape == (600,) + FRAME.shape
+    assert job.raw_frames.dtype == FRAME.dtype
+    np.testing.assert_array_equal(job.raw_frames[0], FRAME)
+    np.testing.assert_array_equal(job.raw_frames[137], FRAME + np.complex64(137))
+    np.testing.assert_array_equal(job.raw_frames[-1], FRAME + np.complex64(599))
 
 
 def test_invalid_frame_resets_selection_history_and_requires_new_contiguous_window():

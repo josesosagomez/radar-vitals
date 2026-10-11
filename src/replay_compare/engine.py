@@ -425,6 +425,8 @@ class BaselineController:
         start = stop - self.ordinary_window_frames
         self._job_sequence += 1
         selection_mode = "select" if self.selected_bin is None else "committed"
+        window_frames = np.stack(tuple(self._frames))
+        window_frames.setflags(write=False)
         return AnalysisJob(
             job_id=(
                 f"g{self.generation}_e{self.epoch}_b{stop}_n{self._job_sequence}"
@@ -440,7 +442,7 @@ class BaselineController:
             frame_stop=stop,
             requested_bin=self.selected_bin,
             selection_mode=selection_mode,
-            raw_frames=np.stack(tuple(self._frames)),
+            raw_frames=window_frames,
         )
 
     def _stale_reason(self, result: AnalysisResult, requested: AnalysisJob) -> str:

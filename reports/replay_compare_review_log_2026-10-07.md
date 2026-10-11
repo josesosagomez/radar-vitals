@@ -607,3 +607,46 @@ Primary independently rechecked 31 Python ASTs and LF, all 20 protected hashes,
 and both existing checkout HEAD/status plus all 23 preserved dirty-file hashes.
 All matched. A read-only performance assessment now examines the earlier failed
 run's hop-boundary copy costs before the replacement native acceptance.
+
+### Evidence-backed single-copy window correction
+
+Correction commit `e1b2ae8d39ed6e263be144c10fbdd9bd7918cd5c` was pushed and
+its exact remote SHA read back. Before starting the replacement native process,
+independent review identified a further HIGH responsiveness risk in saved
+telemetry: all 47 controller-work measurements above 0.25 s were at 60-frame
+hop boundaries; 8247 non-hop rows had no breach (maximum 0.141 s). Hop median
+was 0.219 s and maximum 0.453 s. The baseline stacked a fresh owned
+157286400-byte window, then AnalysisJob copied it again because it was writable.
+
+No native replacement process had yet started. Primary explicitly cancelled
+the announced freeze before granting a coordinated engine-only optimization
+and test-only regression. Mark the newly owned stack read-only before passing
+it through unchanged AnalysisJob; its existing owned/nonwriteable fast path
+avoids the redundant copy. Numeric values, frame ordering, shape/dtype, input
+isolation and immutable ownership are unchanged; no DSP or protected file edits.
+Independent final verdict ACCEPT, no BLOCKER/HIGH/MEDIUM. The new regression
+captures the actual stack object and proves exact identity, ownership,
+nonwriteability and first/middle/last values; the previous mutable-source
+isolation test remains unchanged. Trace-history costs are monitor-only until
+actual replacement full playback.
+
+All 13 focused files passed **323 tests**, 12 installed deprecation warnings,
+31.53 s, exit 0, JUnit
+`results/test_tmp/replay_owned_window_focus_20261011.xml`, cache
+`results/test_tmp/pytest_cache_replay_owned_window_focus_20261011`, external
+basetemp `C:/Users/JOSEMS~1/AppData/Local/Temp/replay_owned_window_focus_20261011_f28666d1ba8f4324a9192a894a1141fc/pytest`.
+The complete suite follows serially on the same frozen source/tests. An initial
+permission-review timeout did not execute the combined test command; the
+allowed single retry succeeded. No source/test edits occurred during testing.
+
+The fresh complete single-copy suite passed **3954 tests**, 16 optional skips,
+one real_data deselection, 1790 existing warnings, **267.99 s**, exit 0.
+All 323 replay cases passed. JUnit
+`results/test_tmp/replay_owned_window_final_20261011.xml`, cache
+`results/test_tmp/pytest_cache_replay_owned_window_final_20261011`, external
+basetemp `C:/Users/JOSEMS~1/AppData/Local/Temp/replay_owned_window_final_20261011_544db8d4fae5417da56b4965b0d036d2/pytest`.
+The command was the same complete `python -m pytest tests -m 'not real_data'
+-q --tb=short` with those explicit paths in the pinned serial environment;
+sealed opt-in stayed disabled. Primary rechecked all 31 ASTs/LF and all 20
+protected source hashes. No source/test edit occurred during either test run.
+This reviewed optimization is committed separately before actual native replay.
